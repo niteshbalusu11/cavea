@@ -14,8 +14,8 @@ use cavea_edit::{
     AlignTo, Applied, ArrayStep, Axis, CategoriesView, Command, CommandError, Contrast, Cursor,
     Draft, Drop, End, Field, FloorGuides, FloorsView, HistoryView, Input, InputResult,
     InspectorView, LayerClick, LayersPage, Level, Numbering, NumberingView, Order, Overlay,
-    Preview, Progress, Rect, SeatEdit, SelectionView, Session, SnapSettings, StatusView, ToolId,
-    ToolView, UserGuide, ValidationView, ViewName,
+    Preview, Progress, Rect, SeatEdit, SeatRef, SelectionView, Session, SnapSettings, StatusView,
+    ToolId, ToolView, UserGuide, ValidationView, ViewName,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -247,6 +247,9 @@ calls! {
     fn number(s, numbering: Numbering) -> Applied | CommandError { s.number(&numbering) }
     /// The hovered seat's full label, with the preview if one is shown.
     fn sample(s, node: u32, oid: u32) -> Option<String> { s.sample(node, oid) }
+    /// The seat of a selected row block or row under a chart point, at a
+    /// zoom (CSS px per chart unit): the seat `sample` describes.
+    fn seat_under(s, at: [f64; 2], zoom: f64) -> Option<SeatRef> { s.seat_under(at, zoom) }
 
     // Categories (07 §7).
 

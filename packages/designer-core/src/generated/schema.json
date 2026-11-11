@@ -417,6 +417,18 @@
         }
       }
     },
+    "seatUnder": {
+      "call": "seat_under",
+      "returns": {
+        "union": [
+          {
+            "args": [],
+            "ref": "SeatRef"
+          },
+          "null"
+        ]
+      }
+    },
     "select": {
       "call": "select",
       "returns": "null"
@@ -7577,6 +7589,23 @@
                 "number"
               ]
             }
+          }
+        ]
+      }
+    },
+    "SeatRef": {
+      "params": [],
+      "type": {
+        "object": [
+          {
+            "name": "node",
+            "optional": false,
+            "type": "number"
+          },
+          {
+            "name": "oid",
+            "optional": false,
+            "type": "number"
           }
         ]
       }

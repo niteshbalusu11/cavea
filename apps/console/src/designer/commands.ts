@@ -10,7 +10,7 @@ import type { Editor } from "./editor.ts";
 import type { PanelTab } from "./layout.ts";
 import { display, isMac, SHORTCUTS, type Group } from "./shortcuts.ts";
 
-export type CommandGroup = Group | "panels" | "file" | "theme";
+export type CommandGroup = Group | "insert" | "panels" | "file" | "theme";
 
 export interface Command {
   id: string;
@@ -26,11 +26,13 @@ export interface Command {
 /** What the shell does for the palette beyond the session. */
 export interface Hooks {
   help: () => void;
+  insert: () => void;
   numbering: () => void;
   tab: (tab: PanelTab) => void;
   inspector: () => void;
   newChart: () => void;
   open: () => void;
+  tour: () => void;
 }
 
 const TOOLS_WITHOUT_KEYS: ToolId[] = ["ellipse", "polygon", "line"];
@@ -108,6 +110,7 @@ export function commands(editor: Editor, act: Record<string, () => void>, hooks:
     keys: string | null = null,
   ) => out.push({ id, label, group, run, reason, keys });
 
+  add("insertRowBlock", msg("command.insertRowBlock"), "insert", hooks.insert);
   add("numbering", msg("command.numbering"), "edit", hooks.numbering, () =>
     numberable(editor) ? null : msg("reason.selectBlocks"),
   );
@@ -193,6 +196,7 @@ export function commands(editor: Editor, act: Record<string, () => void>, hooks:
   add("panel.inspector", msg("command.panel.inspector"), "panels", hooks.inspector);
   add("newChart", msg("menu.new"), "file", hooks.newChart);
   add("open", msg("menu.open"), "file", hooks.open);
+  add("tour", msg("command.tour"), "general", hooks.tour);
   for (const theme of ["system", "light", "dark"] as const) {
     add(`theme.${theme}`, msg(`command.theme.${theme}`), "theme", () => setThemeChoice(theme));
   }

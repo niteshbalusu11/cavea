@@ -1,5 +1,5 @@
 // The tool rail and the status bar (07 §3).
-import type { ToolId } from "@cavea/designer-core";
+import type { Readout, ToolId } from "@cavea/designer-core";
 import { For, Show } from "solid-js";
 import { formatNumber, msg } from "../i18n/messages.ts";
 import { IconButton } from "../ui/controls.tsx";
@@ -13,6 +13,38 @@ const GROUPS: ToolId[][] = [
   ["rect", "ellipse", "polygon", "line", "text"],
   ["section", "brush", "focal"],
 ];
+
+const r1 = (n: number) => Math.round(n * 10) / 10;
+
+/** The live readout of the gesture in progress (07 §4), in words. */
+function readoutText(r: Readout | null): string {
+  if (r === null) return "";
+  switch (r.kind) {
+    case "block":
+      return msg("readout.block", { rows: r.data.rows, seats: r.data.seats });
+    case "arc":
+      return msg("readout.arc", {
+        radius: r1(r.data.radius),
+        span: r1(r.data.span),
+        rows: r.data.rows,
+        seats: r.data.seats,
+      });
+    case "row":
+      return msg("readout.row", { length: r1(r.data.length), seats: r.data.seats });
+    case "size":
+      return msg("readout.size", { width: r1(r.data.width), height: r1(r.data.height) });
+    case "line":
+      return msg("readout.line", { length: r1(r.data.length), angle: r1(r.data.angle) });
+    case "points":
+      return msg("readout.points", { n: r.data });
+    case "rotate":
+      return msg("readout.rotate", { angle: r1(r.data.angle) });
+    case "curve":
+      return r.data.radius === null
+        ? msg("readout.curve", { depth: r1(r.data.depth) })
+        : msg("readout.curveArc", { depth: r1(r.data.depth), radius: r1(r.data.radius) });
+  }
+}
 
 /** Moves focus among a toolbar's buttons with the arrow keys, Home and End. */
 export function rove(e: KeyboardEvent, vertical: boolean): void {
@@ -29,7 +61,10 @@ export function rove(e: KeyboardEvent, vertical: boolean): void {
   target.focus();
 }
 
-export function ToolRail(props: { editor: Editor }) {
+/** The tool rail. The row-block tool chosen with the keyboard (Enter or
+ * Space on its button) also opens "Insert row block…" (07 §15): drawing
+ * needs a pointer, the form does not. */
+export function ToolRail(props: { editor: Editor; onInsert: () => void }) {
   const active = () => props.editor.views.tool.tool;
   return (
     <nav
@@ -54,7 +89,11 @@ export function ToolRail(props: { editor: Editor }) {
                   placement="right"
                   pressed={active() === tool}
                   tabIndex={active() === tool ? 0 : -1}
-                  onClick={() => props.editor.setTool(tool)}
+                  onClick={(e) => {
+                    props.editor.setTool(tool);
+                    // A click from the keyboard has no pointer position (detail 0).
+                    if (tool === "rowBlock" && e.detail === 0) props.onInsert();
+                  }}
                 />
               )}
             </For>
@@ -126,6 +165,16 @@ export function StatusBar(props: {
           </span>
         </Show>
       </button>
+      <Show when={props.editor.readout()}>
+        {(r) => (
+          <span class="font-mono text-xs text-fg tabular-nums" aria-live="polite">
+            {readoutText(r().readout)}
+            <Show when={r().entry !== ""}>
+              <span class="ml-2 text-accent">{msg("readout.entry", { entry: r().entry })}</span>
+            </Show>
+          </span>
+        )}
+      </Show>
       <Show when={props.editor.pointer()}>
         {(p) => (
           <span class="ml-auto font-mono text-xs tabular-nums">

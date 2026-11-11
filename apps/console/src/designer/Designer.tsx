@@ -14,7 +14,7 @@ import {
 } from "solid-js";
 import { msg } from "../i18n/messages.ts";
 import { load, save } from "../storage.ts";
-import { Button, IconButton } from "../ui/controls.tsx";
+import { IconButton } from "../ui/controls.tsx";
 import { Confirm, notify } from "../ui/overlays.tsx";
 import { Splitter } from "../ui/Splitter.tsx";
 import { CanvasHost } from "./CanvasHost.tsx";
@@ -23,16 +23,24 @@ import { createEditor, type Editor } from "./editor.ts";
 import { failureMessage, failureOf } from "./errors.ts";
 import { commands } from "./commands.ts";
 import { Help } from "./Help.tsx";
+import { InsertForm } from "./InsertForm.tsx";
 import { Inspector } from "./Inspector.tsx";
 import { actions, bindKeys } from "./keys.ts";
 import { LayersPanel } from "./LayersPanel.tsx";
+import { NewChart, NewChartDialog, type Choices } from "./NewChart.tsx";
 import { NumberingPanel } from "./NumberingPanel.tsx";
 import { Palette } from "./Palette.tsx";
 import { LAYOUT_KEY, parseLayout, SIDE, SPLIT, type Layout, type PanelTab } from "./layout.ts";
 import { StatusBar, ToolRail } from "./Rails.tsx";
 import { emptyChart, fileName, type ChartSource } from "./source.ts";
 import { TopBar } from "./TopBar.tsx";
+import { Tour } from "./Tour.tsx";
+import { TOUR_KEY } from "./tour.ts";
 import { ValidationPanel } from "./ValidationPanel.tsx";
+
+/** The numbering panel's share of the right column at least, while it is
+ * open in the inspector's place: it has more fields than the inspector. */
+const NUMBERING_SPLIT = 0.7;
 
 /** 09 §8: the designer needs 1,280 px. */
 const MIN_WIDTH = 1280;
@@ -47,6 +55,7 @@ export function DesignerPage(props: { source: ChartSource }) {
   const [pending, setPending] = createSignal<Session | null>(null);
   const [width, setWidth] = createSignal(window.innerWidth);
   const [dragging, setDragging] = createSignal(false);
+  const [newOpen, setNewOpen] = createSignal(false);
   let picker: HTMLInputElement | undefined;
 
   const resize = () => setWidth(window.innerWidth);
@@ -119,7 +128,7 @@ export function DesignerPage(props: { source: ChartSource }) {
 
   onMount(() => {
     void props.source.open().then((text) => {
-      if (text !== null) void request(text, msg("app.name"));
+      if (text !== null) void request(text, msg("designer.untitled"));
     });
   });
 
@@ -137,8 +146,17 @@ export function DesignerPage(props: { source: ChartSource }) {
     void readFile(file);
   };
 
+  const choices: Choices = {
+    empty: () => void request(emptyChart(msg("designer.untitled")), ""),
+    template: (t) =>
+      void t.load().then(
+        (text) => request(text, msg(`template.${t.id}`)),
+        () => setFailed({ file: msg(`template.${t.id}`), message: msg("new.loadFailed") }),
+      ),
+    open: () => picker?.click(),
+  };
   const ui = {
-    onNew: () => void request(emptyChart(msg("designer.untitled")), ""),
+    onNew: () => setNewOpen(true),
     onOpen: () => picker?.click(),
     onSave: saveNow,
   };
@@ -178,14 +196,9 @@ export function DesignerPage(props: { source: ChartSource }) {
           {(e) => <Shell editor={e} save={saveNow} ui={ui} />}
         </Match>
         <Match when={true}>
-          <Centre title={msg("designer.empty")} body={msg("designer.emptyBody")}>
-            <div class="mt-4 flex gap-2">
-              <Button variant="primary" icon="file" onClick={ui.onOpen}>
-                {msg("menu.open")}
-              </Button>
-              <Button icon="plus" onClick={ui.onNew}>
-                {msg("menu.new")}
-              </Button>
+          <Centre title={msg("new.title")} body={msg("new.body")}>
+            <div class="mt-6 w-full max-w-2xl">
+              <NewChart choices={choices} />
             </div>
           </Centre>
         </Match>
@@ -199,6 +212,7 @@ export function DesignerPage(props: { source: ChartSource }) {
         </div>
       </Show>
 
+      <NewChartDialog open={newOpen()} choices={choices} onClose={() => setNewOpen(false)} />
       <Confirm
         open={failed() !== null}
         title={msg("import.failed", { file: failed()?.file || msg("designer.empty") })}
@@ -266,7 +280,14 @@ function Shell(props: {
   };
   const [palette, setPalette] = createSignal(false);
   const [help, setHelp] = createSignal(false);
+  const [insert, setInsert] = createSignal(false);
   const [numbering, setNumbering] = createSignal(false);
+  // The first-run tour: once per browser, then from the palette.
+  const [tour, setTour] = createSignal(load(TOUR_KEY, (v) => v !== "done", true));
+  const endTour = () => {
+    setTour(false);
+    save(TOUR_KEY, "done");
+  };
   const openNumbering = () => {
     setLayout({ inspectorOpen: true });
     setNumbering(true);
@@ -279,11 +300,13 @@ function Shell(props: {
   onCleanup(bindKeys(editor, act));
   const all = commands(editor, act, {
     help: () => setHelp(true),
+    insert: () => setInsert(true),
     numbering: openNumbering,
     tab: (tab) => setLayout({ tab, panelsOpen: true }),
     inspector: () => setLayout({ inspectorOpen: !layout().inspectorOpen }),
     newChart: props.ui.onNew,
     open: props.ui.onOpen,
+    tour: () => setTour(true),
   });
   let column: HTMLElement | undefined;
 
@@ -294,11 +317,12 @@ function Shell(props: {
       <TopBar
         editor={editor}
         {...props.ui}
+        onInsert={() => setInsert(true)}
         onPalette={() => setPalette(true)}
         onHelp={() => setHelp(true)}
       />
       <div class="flex min-h-0 flex-1">
-        <ToolRail editor={editor} />
+        <ToolRail editor={editor} onInsert={() => setInsert(true)} />
         <CanvasHost editor={editor} />
         <Splitter
           orientation="vertical"
@@ -322,7 +346,7 @@ function Shell(props: {
               flex: !layout().inspectorOpen
                 ? "0 0 auto"
                 : layout().panelsOpen
-                  ? `0 0 ${layout().split * 100}%`
+                  ? `0 0 ${(numbering() ? Math.max(layout().split, NUMBERING_SPLIT) : layout().split) * 100}%`
                   : "1 1 0",
             }}
           >
@@ -415,6 +439,8 @@ function Shell(props: {
       />
       <Palette open={palette()} commands={() => all} onClose={() => setPalette(false)} />
       <Help open={help()} onClose={() => setHelp(false)} />
+      <InsertForm editor={editor} open={insert()} onClose={() => setInsert(false)} />
+      <Tour editor={editor} open={tour()} onClose={endTour} />
     </div>
   );
 }

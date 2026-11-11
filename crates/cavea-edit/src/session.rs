@@ -17,7 +17,7 @@ use crate::guides::{FloorGuides, Guides, UserGuide};
 use crate::import::{self, ImportError};
 use crate::index::{P, Rect, SpatialIndex};
 use crate::layers::Layers;
-use crate::numbering::{self, Numbering, NumberingView, Preview};
+use crate::numbering::{self, Numbering, NumberingView, Preview, SeatRef};
 use crate::rows;
 use crate::section;
 use crate::selection::{self, Level, Selection, View, floor_of};
@@ -529,6 +529,28 @@ impl Session {
         let overflow = proposal.map_or(doc.settings().alpha_overflow, |p| p.overflow);
         let value = previewed.map(|(_, n)| n).or(doc.node(node))?;
         numbering::sample(doc, node, value, oid, overflow)
+    }
+
+    /// The present seat of a node the numbering acts on (the selected row
+    /// blocks and rows, as `numbering`) under `point`, within half the seat
+    /// size and the mouse's hit tolerance at `zoom` (CSS px per chart unit),
+    /// the topmost first: the hovered seat whose `sample` the numbering
+    /// panel shows (07 §6).
+    pub fn seat_under(&self, point: P, zoom: f64) -> Option<SeatRef> {
+        if !(zoom.is_finite() && zoom > 0.0 && point.iter().all(|c| c.is_finite())) {
+            return None;
+        }
+        let tol = crate::tool::tuning::HIT_MOUSE / zoom;
+        let targets = numbering::targets(&self.view(), &self.selection);
+        targets.into_iter().rev().find_map(|node| {
+            let seat = self
+                .index
+                .seat_at(node, point, self.index.seat_pad(node) + tol)?;
+            (!seat.removed).then_some(SeatRef {
+                node,
+                oid: seat.oid,
+            })
+        })
     }
 
     /// The categories panel's list (07 §7).
