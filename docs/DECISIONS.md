@@ -164,3 +164,9 @@ Each entry records what was decided, what was rejected and what would make us re
 - **Rejected:** per-floor tables of decoration (a second index for the same thing); `lyon`'s stroke tessellator; filling the union of overlapping stroke pieces.
 - **Cost:** a join whose segments are too short for it keeps butt ends and overlaps on its inner side. Only butt caps and miter or bevel joins.
 - **Revisit if:** designers need round caps or joins, or dashes.
+
+## D-26 · Compiled charts are served by content hash alone, brotli or raw (2026-11-11)
+
+- **Decision:** The compiled chart URL is `/v1/public/charts/{hash}.ccf`, without the chart key and without a credential; the server finds the file by the public artefact's content hash, in any workspace. It stores the brotli form at publish time and serves it or the raw file; there is no gzip form. Versions are deduplicated per chart by the full artefact's hash (migration 2), so two versions that differ only in full-only data share one public file.
+- **Why:** 03 §4.6 and 08 §6.2 had `/v1/public/charts/{chart_key}/versions/{hash}.ccf` under the publishable key, but chart keys are unique only within a workspace, a credential in a header defeats CDN caching and forces a CORS preflight, and a key in the URL changes the URL on every rotation. A content hash names identical bytes wherever they come from, and the file is public to every buyer of the event anyway. Every browser that runs the renderer accepts brotli, so a gzip form would add a column and a compressor for no client. The schema's `UNIQUE (chart_id, hash)` on the public hash would have refused a version that only changed oids, ranks or section priorities.
+- **Revisit if:** private charts (signed URLs, P2) are built, or a supported client turns out not to accept brotli.

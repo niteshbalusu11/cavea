@@ -22,7 +22,7 @@ A script-tag build (`cavea.min.js` plus `cavea.wasm`) is published for sites wit
 import { createSeatMap, caveaServer } from '@cavea/renderer';
 
 const map = await createSeatMap(document.getElementById('map')!, {
-  chart: { url: 'https://tickets.example.com/cavea/v1/public/charts/royal/versions/9f2c….ccf' },
+  chart: { url: 'https://tickets.example.com/cavea/v1/public/charts/9f2c….ccf' },
   state: caveaServer({
     baseUrl: 'https://tickets.example.com/cavea',
     publishableKey: 'pk_live_…',
