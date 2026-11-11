@@ -12,7 +12,7 @@ Read the first five in order. The rest are reference documents for the component
 
 | # | Document | What it decides |
 |---|---|---|
-| 00 | Product brief (kept out of this repository) | Who buys, what v1 contains, what it does not, pricing hypothesis, kill criteria |
+| 00 | [Product brief](00-product.md) | Who buys, what v1 contains, what it does not, pricing hypothesis, kill criteria |
 | 01 | [Architecture](01-architecture.md) | Components, repo layout, tech stack, performance budgets |
 | 02 | [Domain model](02-domain-model.md) | Vocabulary, identifiers, the seat state machine, invariants |
 | — | [Decisions](DECISIONS.md) | The 21 architectural decisions, with alternatives and revisit triggers |
@@ -28,7 +28,8 @@ Read the first five in order. The rest are reference documents for the component
 | 11 | [Accessibility](11-accessibility.md) | Keyboard model, screen-reader model, list view, test matrix |
 | 12 | [Security and licensing](12-security-licensing.md) | Threat model, keys, abuse controls, licence enforcement |
 | 13 | [Testing and benchmarks](13-testing-benchmarks.md) | Test strategy, simulation testing, benchmark methodology |
-| 14 | Go to market (kept out of this repository) | Validation plan, pricing tests, launch checklist |
+| 14 | [Go to market](14-go-to-market.md) | Validation plan, pricing tests, launch checklist |
+| — | [Orchestration](ORCHESTRATION.md) | How the build is run: one orchestrator, Opus builders, Sol reviewers |
 | — | [TODO](TODO.md) | The full task list, grouped by milestone, each item pointing at a spec section |
 
 ## The stack on one page
@@ -47,12 +48,10 @@ Read the first five in order. The rest are reference documents for the component
 | Designer and console UI | SolidJS, TypeScript, Vite; the canvas is the same Rust renderer |
 | Mobile bindings | UniFFI for Swift and Kotlin; React Native and Flutter wrappers |
 
-Documents 00 and 14 are business documents and are not published here. Task-list references to `00 §…` and `14 §…` point at them; those tasks are done by the owner, not by build agents.
-
 ## Rules for these documents
 
 - A number marked **target** is a goal that has not been measured. A number marked **measured** has a benchmark behind it in `13-testing-benchmarks.md`.
-- Anything said about a competitor is dated November 2026.
+- Anything said about a competitor is dated November 2026 and sourced in `00-product.md` §4.
 - When a spec and the code disagree, fix one of them in the same change. Record reversals in `DECISIONS.md`.
 - Each TODO item names the spec section it implements, for example `(04 §6.2)`.
 
