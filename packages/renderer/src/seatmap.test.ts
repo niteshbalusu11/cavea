@@ -76,6 +76,7 @@ function fakeView() {
   });
   return {
     engine,
+    answers,
     calls,
     emit: (...events: RendererEvent[]) => queue.push(...events),
     names: () => calls.map((c) => c[0]),
@@ -334,6 +335,16 @@ describe("load sequence", () => {
       ],
       // While the WASM is still loading, and with the adapter's own CaveaError.
       ["state_connect_failed", () => {}],
+      // A first state the engine refuses.
+      [
+        "refused",
+        (f) => {
+          f.view.answers["setSnapshotLabels"] = () => {
+            throw new Error("InvalidInput: snapshot length");
+          };
+          f.load();
+        },
+      ],
     ];
     for (const [code, fail] of cases) {
       const f = fakeEnv();
@@ -342,7 +353,9 @@ describe("load sequence", () => {
         connect: () =>
           code === "state_connect_failed"
             ? Promise.reject(new CaveaError("state_failed", "503"))
-            : new Promise(() => {}),
+            : code === "refused"
+              ? Promise.resolve({ kind: "map", unavailable: [] })
+              : new Promise(() => {}),
         disconnect: () => (disconnected += 1),
       });
       const promise = createMap(f.env, {} as HTMLElement, {
@@ -350,7 +363,10 @@ describe("load sequence", () => {
         state: adapter,
       });
       fail(f);
-      await expect(promise).rejects.toMatchObject({ code, fatal: true });
+      await expect(promise).rejects.toMatchObject({
+        code: code === "refused" ? "state_connect_failed" : code,
+        fatal: true,
+      });
       expect([disconnected, f.state.removed]).toEqual([1, true]);
     }
 
@@ -554,6 +570,32 @@ describe("callbacks", () => {
     });
     expect(() => drain({ type: "selectionChanged", expiresAt: null, selected: [] })).not.toThrow();
     expect(errors).toEqual(["callback_failed"]);
+  });
+
+  test("events a callback causes are delivered after the batch it is in", async () => {
+    const got: unknown[] = [];
+    let cleared = false;
+    const { map, view, drain } = await loaded({
+      selection: { min: 1 },
+      onSelectionChange: (s) => {
+        got.push(["change", s.objects.length]);
+        if (!cleared) {
+          cleared = true;
+          view.emit(
+            { type: "selectionChanged", expiresAt: null, selected: [] },
+            { type: "selectionInvalid", rule: "min", objects: [] },
+          );
+          map.clearSelection();
+        }
+      },
+      onSelectionValid: () => got.push("valid"),
+      onSelectionInvalid: (rule) => got.push(["invalid", rule]),
+    });
+    drain(
+      { type: "selectionChanged", expiresAt: null, selected: [seat("A-1-1")] },
+      { type: "selectionValid" },
+    );
+    expect(got).toEqual([["change", 1], "valid", ["change", 0], ["invalid", "min"]]);
   });
 
   test("a callback that destroys the map ends the batch; no callback or error follows", async () => {
