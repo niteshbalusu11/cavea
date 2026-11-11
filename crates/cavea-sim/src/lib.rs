@@ -1,4 +1,4 @@
-//! The seat engine's reference model and model-based tests (13 §3.1).
+//! Proof that the seat engine is correct under faults (13 §3.1, §3.2).
 //!
 //! - [`model`]: a reference model of the seat state machine, written from the
 //!   specs for obviousness (maps, one command at a time), and a replay of the
@@ -7,12 +7,16 @@
 //!   sequences, each runs against the model and the real `EventState`, and a
 //!   failing one shrinks to a small case that can be saved as a text file and
 //!   replayed.
+//! - [`sim`]: a deterministic simulation of nodes, the registry, actors, the
+//!   feed, clients and subscribers against a fault-injecting store on manual
+//!   clocks, all driven by one seed.
 //!
 //! Every check returns a [`Violation`] rather than panicking, so that a failing
 //! case can be shrunk.
 
 pub mod case;
 pub mod model;
+pub mod sim;
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -21,7 +25,7 @@ use std::task::{Context, Poll, Waker};
 
 use cavea_engine::{ChartView, EventId, Idx, Oid};
 
-/// The event every run uses.
+/// The event every run uses (the simulation adds a second).
 pub const EVENT: EventId = EventId(7);
 
 /// The `oid` of object `idx`: a permutation, so that ordering by `oid` and by
@@ -175,5 +179,29 @@ pub fn poll_now<F: Future>(f: F) -> Option<F::Output> {
     match f.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
         Poll::Ready(v) => Some(v),
         Poll::Pending => None,
+    }
+}
+
+/// FNV-1a, for trace hashes that are the same on every machine and run.
+#[derive(Debug, Clone, Copy)]
+pub struct TraceHash(pub u64);
+
+impl Default for TraceHash {
+    fn default() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl TraceHash {
+    pub fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 ^= u64::from(b);
+            self.0 = self.0.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+
+    pub fn line(&mut self, line: impl std::fmt::Display) {
+        self.write(line.to_string().as_bytes());
+        self.write(b"\n");
     }
 }
