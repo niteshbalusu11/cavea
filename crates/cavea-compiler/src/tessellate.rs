@@ -19,6 +19,10 @@ use crate::geometry::P;
 
 /// Vertices in the whole `MESH` table.
 pub(crate) const MAX_VERTICES: usize = 1 << 18;
+/// `lyon`'s tolerance, in chart units. With no curves to flatten it only
+/// sets how close vertices must be to merge; the default, 0.1, swallows thin
+/// but valid outlines.
+const TOLERANCE: f32 = 1e-3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TessError {
@@ -68,8 +72,9 @@ impl FillGeometryBuilder for Sink<'_> {
 
 /// Fills a simple polygon (non-zero rule) into the mesh. Its coordinates are
 /// world chart units that `f32` holds exactly, so the vertices written are
-/// exactly its points. Returns the range of indices added; on error the mesh
-/// is unchanged.
+/// exactly its points. The triangles must cover the polygon: their areas add
+/// up to its area within a millionth, else [`TessError::Failed`]. Returns the
+/// range of indices added; on error the mesh is unchanged.
 pub(crate) fn fill(
     poly: &[P],
     color: Rgba,
@@ -101,9 +106,40 @@ pub(crate) fn fill(
         full: false,
         start: (v0, i0),
     };
-    let result = FillTessellator::new().tessellate(events, &FillOptions::non_zero(), &mut sink);
+    let options = FillOptions::non_zero().with_tolerance(TOLERANCE);
+    let result = FillTessellator::new().tessellate(events, &options, &mut sink);
     let full = sink.full;
-    if result.is_err() {
+    let covered = || {
+        // Relative to the first point: differences of values `f32` holds
+        // are exact in `f64`, so far from the origin nothing cancels.
+        let n = poly.len();
+        let rel = |p: P| [p[0] - first[0], p[1] - first[1]];
+        let want = (0..n)
+            .map(|i| {
+                let (a, b) = (rel(poly[i]), rel(poly[(i + 1) % n]));
+                a[0] * b[1] - b[0] * a[1]
+            })
+            .sum::<f64>()
+            .abs();
+        let at = |i: u32| {
+            vertices
+                .get(i as usize)
+                .map_or([0.0; 2], |v| v.pos.map(f64::from))
+        };
+        let got: f64 = indices
+            .get(i0..)
+            .unwrap_or_default()
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|&[i, j, k]| {
+                let (a, b, c) = (at(i), at(j), at(k));
+                ((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])).abs()
+            })
+            .sum();
+        want > 0.0 && (got - want).abs() <= want * 1e-6
+    };
+    if result.is_err() || !covered() {
         vertices.truncate(v0);
         indices.truncate(i0);
         return Err(if full {

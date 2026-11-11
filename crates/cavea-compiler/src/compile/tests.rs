@@ -900,7 +900,7 @@ fn explicit_outlines_are_tessellated_in_world_space() {
     // Far from the origin, where `f32` steps by 8 cu: the bounds still cover
     // every vertex written, and a thin U gets an anchor inside its walls.
     let json = r##"{"schema":1,"name":"o","nextOid":99,"nodes":[
-      {"id":1,"type":"section","label":"A","origin":[100000003,0],"outline":{"points":[[0,0],[100,0],[100,100],[0,100]]}},
+      {"id":1,"type":"section","label":"A","origin":[100000003,-500000000],"outline":{"points":[[0,0],[100,0],[100,100],[0,100]]}},
       {"id":2,"type":"section","label":"A","outline":{"points":[[0,0],[10000,0],[10000,10000],[9999,10000],[9999,1],[1,1],[1,10000],[0,10000]]}}]}"##;
     let c = decode_both(&compile_json(json).unwrap());
     assert_mesh_partition(&c);
@@ -916,6 +916,14 @@ fn explicit_outlines_are_tessellated_in_world_space() {
             );
         }
     }
+    // A sliver 0.007 cu thick, thinner than lyon's default tolerance, still
+    // gets its triangle.
+    let json = r##"{"schema":1,"name":"t","nextOid":9,"nodes":[
+      {"id":1,"type":"section","label":"A","outline":{"points":[[100,100],[200,200],[149.99,150]]}}]}"##;
+    let sliver = decode_both(&compile_json(json).unwrap());
+    let s = sliver.sections[0];
+    assert_eq!(s.mesh_count, 3);
+    assert!((tri_area(&sliver, s.mesh_first, s.mesh_count) - 0.5).abs() < 1e-3);
     let [ax, ay] = c.sections[1].label_anchor.map(|v| f64::from(v) / 4.0);
     let wall = |v: f64| (0.0..=1.0).contains(&v) || (9999.0..=10000.0).contains(&v);
     assert!(
