@@ -1,12 +1,13 @@
 //! The select tool (`docs/07-designer.md` §5.1): click, shift-click, box
-//! selection, entering and leaving levels, dragging and nudging nodes, and
-//! the rotate, pivot and resize handles.
+//! selection, entering and leaving levels, dragging and nudging nodes, the
+//! rotate, pivot and resize handles, and editing a text node's string.
 
 use std::collections::BTreeSet;
 use std::mem::take;
 
 use super::draw::{Live, budget};
 use super::handles::{self, HandleKind, Step};
+use super::text::TextEdit;
 use super::{
     Button, Context, Cursor, Input, Key, Modifiers, Overlay, Pointer, Readout, Tool, tuning,
 };
@@ -86,6 +87,8 @@ enum State {
         readout: Option<Readout>,
         live: Live,
     },
+    /// Editing a text node's string.
+    Text(TextEdit),
     /// A press already acted on (a double click) or abandoned (a second
     /// press): nothing happens until it is released.
     Swallow,
@@ -110,6 +113,7 @@ impl Tool for SelectTool {
                 let _ = cx.editor.cancel_gesture();
             }
             State::Resizing { mut live, .. } => live.cancel(cx),
+            State::Text(mut edit) => edit.cancel(cx),
             State::Pivot { before } => self.pivot = before,
             State::Pressed { before, .. } | State::Marquee { before, .. } => {
                 *cx.selection = before;
@@ -133,9 +137,18 @@ impl Tool for SelectTool {
             State::Marquee { start, end, .. } => out.marquee = Some(Rect::new(*start, *end)),
             State::Rotating { angle, .. } => out.readout = Some(Readout::Rotate { angle: *angle }),
             State::Resizing { readout, .. } => out.readout = *readout,
+            State::Text(edit) => out.text = Some(edit.field(view)),
             _ => {}
         }
-        out.handles = handles::handles(view, sel, self.pivot_for(sel));
+        if !matches!(self.state, State::Text(_)) {
+            out.handles = handles::handles(view, sel, self.pivot_for(sel));
+        }
+    }
+
+    fn text(&mut self, cx: &mut Context<'_>, text: &str) {
+        if let State::Text(edit) = &mut self.state {
+            edit.set(cx, text);
+        }
     }
 }
 
@@ -213,6 +226,12 @@ impl SelectTool {
     }
 
     fn down(&mut self, cx: &mut Context<'_>, p: Pointer) {
+        if let State::Text(edit) = &mut self.state {
+            // A click away commits the text.
+            edit.commit(cx);
+            self.state = State::Swallow;
+            return;
+        }
         if !matches!(self.state, State::Idle) {
             // A second press during a drag abandons it (04 §14).
             self.reset(cx);
@@ -243,8 +262,17 @@ impl SelectTool {
             sel.set(view.doc, level, []);
         }
         if double {
-            if let Some(id) = item {
-                selection::enter(&view, sel, id, Some(p.world));
+            let text = item.filter(|&id| matches!(view.doc.node(id), Some(Node::Text(_))));
+            match (text, item) {
+                (Some(id), _) => {
+                    let level = sel.level();
+                    if let Some(edit) = TextEdit::edit(cx, id, level) {
+                        self.state = State::Text(edit);
+                        return;
+                    }
+                }
+                (None, Some(id)) => drop(selection::enter(&view, sel, id, Some(p.world))),
+                (None, None) => {}
             }
             self.state = State::Swallow;
             return;
@@ -395,7 +423,7 @@ impl SelectTool {
                     Step::Keep => {}
                 }
             }
-            State::Swallow => {}
+            State::Text(_) | State::Swallow => {}
         }
     }
 
@@ -428,6 +456,7 @@ impl SelectTool {
                 let _ = cx.editor.end_gesture();
             }
             State::Resizing { mut live, .. } => drop(live.commit(cx)),
+            State::Text(edit) => self.state = State::Text(edit),
             // Not dragged: an ordinary click.
             State::Handle { down, .. } => {
                 self.press(cx, down);
@@ -438,6 +467,11 @@ impl SelectTool {
     }
 
     fn key(&mut self, cx: &mut Context<'_>, key: Key, mods: Modifiers) {
+        if let (State::Text(edit), Key::Enter) = (&mut self.state, key) {
+            edit.commit(cx);
+            self.state = State::Idle;
+            return;
+        }
         let idle = matches!(self.state, State::Idle);
         let step = if mods.shift { 10.0 } else { 1.0 };
         match key {

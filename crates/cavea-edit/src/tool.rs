@@ -13,12 +13,18 @@ use crate::selection::{Selection, View};
 mod block;
 mod draw;
 mod handles;
+mod row;
 mod select;
+mod shape;
+mod text;
 
 pub(crate) use block::{ArcTool, BlockTool};
 pub(crate) use draw::Spot;
 pub use handles::{Corner, Handle, HandleKind, Side};
+pub(crate) use row::RowTool;
 pub(crate) use select::{SelectTool, select_all, step_in};
+pub(crate) use shape::{ShapeKindTool, ShapeTool};
+pub(crate) use text::TextTool;
 
 #[cfg(test)]
 mod draw_tests;
@@ -164,6 +170,12 @@ pub enum ToolId {
     Select,
     RowBlock,
     ArcBlock,
+    Row,
+    Rect,
+    Ellipse,
+    Polygon,
+    Line,
+    Text,
 }
 
 /// What the canvas draws over the chart, in chart coordinates; sizes in
@@ -179,10 +191,14 @@ pub struct Overlay {
     pub marquee: Option<Rect>,
     /// The select tool's handles on the frame.
     pub handles: Vec<Handle>,
+    /// A line through these points: a polygon being clicked, to the pointer.
+    pub preview: Vec<P>,
     /// The live readout of the gesture in progress, for the status bar.
     pub readout: Option<Readout>,
     /// The numbers typed so far during a drag (07 §4, numeric entry).
     pub entry: String,
+    /// A text field the chrome should show while text is typed.
+    pub text: Option<TextField>,
 }
 
 /// The numbers a gesture shows while it runs (07 §4). Lengths in chart
@@ -204,6 +220,11 @@ pub enum Readout {
         rows: u32,
         seats: u32,
     },
+    /// A single row: its length along the path and its seats.
+    Row {
+        length: f64,
+        seats: u32,
+    },
     Size {
         width: f64,
         height: f64,
@@ -212,10 +233,22 @@ pub enum Readout {
         length: f64,
         angle: f64,
     },
+    /// Corners of a polygon so far.
+    Points(u32),
     /// The angle a rotation has turned the selection by.
     Rotate {
         angle: f64,
     },
+}
+
+/// Text being typed (07 §2.3): the chrome shows a field at `at` (world)
+/// holding `text`, and sends each change with `Session::set_text`. `node`
+/// is the text node being edited, once it exists.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextField {
+    pub node: Option<u32>,
+    pub at: [f64; 2],
+    pub text: String,
 }
 
 /// What a tool works on.
@@ -259,4 +292,7 @@ pub(crate) trait Tool: std::fmt::Debug {
     /// Adds the tool's own overlay (a selection box being dragged, handles,
     /// a readout) to the selection's.
     fn overlay(&self, view: &View<'_>, selection: &Selection, out: &mut Overlay);
+
+    /// Takes the whole string of a text field the tool asked for.
+    fn text(&mut self, _cx: &mut Context<'_>, _text: &str) {}
 }
