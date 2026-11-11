@@ -143,7 +143,9 @@ DELETE FROM object_state WHERE event_id = $event AND oid = ANY($freed);
 
 -- 6. The log: one row per command.
 -- `detail` holds what replaying the log needs beyond the columns: the status set
--- by change-status, a hold's expiry, a booking's per-object ticket type and extra.
+-- by change-status, a hold's expiry and object limit (absent: unlimited), a
+-- booking's per-object ticket type and extra. Replaying it rebuilds
+-- `object_state` and `holds` except the token hash, which is never logged.
 INSERT INTO event_log (event_id, seq, op, actor, hold_id, order_ref, oids, detail)
 SELECT ... FROM UNNEST(...);
 
@@ -161,6 +163,8 @@ ON CONFLICT (workspace_id, key) DO UPDATE SET ...
 All eight parts go in one round trip as one statement: each is a data-modifying CTE fed by `UNNEST` arrays, every write is gated on the fence (`WHERE EXISTS (SELECT FROM fence)`), and the statement returns how many rows the fence updated. A single statement is its own transaction, so it needs no `BEGIN` or `COMMIT`; any error in any part aborts all of it. `sqlx` cannot pipeline separate statements (D-23). When the fence matches nothing, a second query reads the event's epoch and `seq` to report `fenced`, a `seq` mismatch or a missing hold. The fence also renews the lease by the database clock; it checks the epoch only, so a lapsed lease that no other node has taken still commits. A record is replaced once the stored one is 24 hours old or more, matching the engine, for which a record is expired from that instant.
 
 A batch carries the net effect of its commands as of its last one: each object appears at most once, in either the upsert list (with the `seq` of the last command that changed it) or the freed list, and a hold created and extended in the same batch is inserted once with its final expiry; a hold created and deleted in the same batch is not written at all. The statement order above is then correct without the store knowing engine internals.
+
+The log is sufficient on its own: replaying it from an empty state rebuilds `object_state`, `holds` (but for the token hash) and `events.seq` (INV-6), which the reconciler checks (13 §3.3, `cavea-server verify`). A hold's token hash is not logged (D-36): it is the SHA-256 of a bearer secret, kept in `holds` only while the hold lives, whereas the log is kept for `CAVEA_LOG_RETENTION_DAYS` and exported by reports.
 
 ### 4.5 Reads
 
@@ -443,6 +447,8 @@ CREATE TABLE audit_log (
 ```
 
 Migration 2 adds `chart_versions.full_hash bytea NOT NULL` (16 bytes, the full artefact's content hash), replaces `UNIQUE (chart_id, hash)` with `UNIQUE (chart_id, full_hash)`, and indexes `hash`, by which the public chart route finds a file (§6.2).
+
+`event_log` is what the reconciler replays (13 §3.3); its `detail` is described with statement 6 of §4.4.
 
 Migration 3 indexes `holds (event_id, session_sub) WHERE session_sub IS NOT NULL`, for the per-`sub` token cap (§11). `holds.session_sub` holds the SHA-256 of a session token's `sub` as 64 hex digits, never the `sub` itself; the server writes it, the engine never reads it.
 
