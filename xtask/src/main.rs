@@ -366,7 +366,8 @@ fn check_deps() -> Result<()> {
                 "cavea-core" => dep == "cavea-format",
                 "cavea-format" => dep == "cavea-core",
                 "cavea-telemetry" => false,
-                _ => dep != "cavea-server",
+                // Test tools: nothing depends on them.
+                _ => !matches!(dep, "cavea-server" | "cavea-loadgen"),
             };
             if !allowed {
                 violations.push(format!("{name} -> {dep}"));
