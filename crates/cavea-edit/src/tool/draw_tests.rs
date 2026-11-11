@@ -1684,6 +1684,20 @@ fn snapping() {
     t.key(Key::Escape);
     t.up([380.0, 280.0], NONE);
     assert_eq!(lefts, [0.0; 4]);
+    // So does a line's end.
+    t.s.set_tool(ToolId::Line);
+    t.down([100.0, -2_000.0], NONE);
+    let mut ends = Vec::new();
+    for x in [2.4, 2.6, 2.4, 2.6] {
+        t.to([x, -1_900.0], NONE);
+        let id = *t.s.document().children(None).last().expect("line");
+        let s = shape(&t.node(id)).clone();
+        ends.push(s.origin[0] + s.points.expect("points")[1][0]);
+    }
+    t.key(Key::Escape);
+    t.up([2.6, -1_900.0], NONE);
+    assert_eq!(ends, [0.0; 4]);
+    t.s.set_tool(ToolId::Select);
     t.s.set_snap(all);
     // No flicker: C's left edge (203) and A's right edge (200) both in
     // reach; the one held first stays while it is.

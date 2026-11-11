@@ -221,10 +221,13 @@ pub(crate) fn line_end(
     parent: Option<u32>,
 ) -> P {
     let exclude = (node, parent);
+    let held = cx.snap.held;
     let (at, hit) = point_with(cx, p, exclude, false);
     if hit {
         return at;
     }
+    // Nothing caught: the grid lines held stay for the grid's turn.
+    cx.snap.held = held;
     match direction(cx, p, from, at) {
         Some(at) => at,
         None => point_with(cx, p, exclude, true).0,
