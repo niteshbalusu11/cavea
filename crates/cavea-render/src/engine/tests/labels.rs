@@ -298,7 +298,7 @@ fn section_labels_show_at_overview_and_cross_fade_at_their_anchor_within_the_cla
 }
 
 /// The row labels placed (`text` instances in the muted colour): centre and
-/// box in chart units, by the raster's width and the capital height.
+/// the rectangle drawn, in chart units.
 fn rows(e: &E) -> Vec<([f32; 2], [f32; 4])> {
     let muted = e.theme.fg_muted;
     let buffer = &e.backend.buffers[&labels(e).text_buffer().unwrap().0];
@@ -308,10 +308,7 @@ fn rows(e: &E) -> Vec<([f32; 2], [f32; 4])> {
             let b = &buffer[i as usize * TEXT_STRIDE..][..TEXT_STRIDE];
             let f = |at: usize| f32::from_le_bytes(b[at..at + 4].try_into().unwrap());
             let u = |at: usize| f32::from(u16::from_le_bytes(b[at..at + 2].try_into().unwrap()));
-            let (w, h) = (
-                u(16) / u(24) * f(8) / 2.0,
-                crate::text::CAP_HEIGHT_EM * f(8) / 2.0,
-            );
+            let (w, h) = (u(16) / u(24) * f(8) / 2.0, u(18) / u(24) * f(8) / 2.0);
             let [x, y] = [f(0), f(4)];
             (b[32..36] == muted).then_some(([x, y], [x - w, y - h, x + w, y + h]))
         })

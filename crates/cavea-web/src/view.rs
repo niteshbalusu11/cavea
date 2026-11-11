@@ -108,10 +108,6 @@ impl View {
             self.canvas.set_height(px_height);
         }
         self.need_frame = false;
-        // The `webglcontextlost` event comes later than the loss itself.
-        if self.context.is_context_lost() {
-            self.send(Command::ContextLost)?;
-        }
         self.send(Command::Tick { time_ms })?;
         #[cfg(feature = "demo")]
         {
@@ -719,6 +715,12 @@ impl View {
     }
 
     fn send(&mut self, command: Command) -> Result<(), JsError> {
+        // The `webglcontextlost` event comes later than the loss itself: a
+        // chart, an atlas or a frame arriving in between must not make GPU
+        // calls (the engine ignores a second loss).
+        if self.context.is_context_lost() {
+            self.engine.handle(Command::ContextLost);
+        }
         self.engine.handle(command);
         self.drain()
     }

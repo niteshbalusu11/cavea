@@ -520,8 +520,11 @@ impl MapLabels {
                     };
                     let pos = at.map(|v| v as f32 * 0.25);
                     let (bytes, em) = centred(pos, fit, raster, theme.fg_muted);
+                    // The raster as drawn, so ink beyond the capitals
+                    // (descenders, marks) is inside it.
+                    let (w, h) = em_size(raster);
                     self.cands.push(Cand {
-                        bbox: Some(around(pos, em_size(raster).0 * em, CAP_HEIGHT_EM * em)),
+                        bbox: Some(around(pos, w * em, h * em)),
                         kind: Kind::Text,
                         bytes,
                         second: None,

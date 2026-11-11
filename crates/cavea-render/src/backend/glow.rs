@@ -44,24 +44,69 @@ pub struct GlowBackend {
     textures: Vec<Option<(glow::Texture, TextureDesc)>>,
 }
 
-/// Sets the fixed state and compiles the pipelines.
+/// Sets the fixed state and compiles the pipelines; on a failure, deletes
+/// what it made (a restore may fail and be tried again).
 fn compile(gl: &glow::Context) -> Result<Programs, BackendError> {
+    let mut made = Vec::with_capacity(4);
+    let mut buffers = Vec::with_capacity(2);
+    let result = compile_into(gl, &mut made, &mut buffers);
+    // SAFETY: see the module documentation.
+    unsafe {
+        if result.is_err() {
+            for p in &made {
+                gl.delete_program(p.program);
+                gl.delete_vertex_array(p.vao);
+            }
+            for &b in &buffers {
+                gl.delete_buffer(b);
+            }
+        }
+    }
+    result?;
+    let mut made = made.into_iter();
+    match (
+        made.next(),
+        made.next(),
+        made.next(),
+        made.next(),
+        &buffers[..],
+    ) {
+        (Some(shape), Some(mesh), Some(glyph), Some(text), &[font, globals]) => Ok(Programs {
+            shape,
+            mesh,
+            glyph,
+            text,
+            globals,
+            font,
+        }),
+        _ => Err(BackendError::Create("pipelines".to_owned())),
+    }
+}
+
+/// The pipelines in `made` (shape, mesh, glyph, text) and the uniform
+/// buffers in `buffers` (font, globals), each pushed as soon as it exists.
+fn compile_into(
+    gl: &glow::Context,
+    made: &mut Vec<Program>,
+    buffers: &mut Vec<glow::Buffer>,
+) -> Result<(), BackendError> {
     // SAFETY: see the module documentation.
     unsafe {
         gl.enable(glow::BLEND);
         // Premultiplied alpha (04 §8).
         gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
         gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
-        let shape = shape_program(gl)?;
-        let mesh = mesh_program(gl)?;
-        let glyph = glyph_program(gl)?;
-        let text = text_program(gl)?;
+        for make in [shape_program, mesh_program, glyph_program, text_program] {
+            made.push(make(gl)?);
+        }
         // The glyph metrics never change: one block at binding point 1.
         let font = gl.create_buffer().map_err(BackendError::Create)?;
+        buffers.push(font);
         gl.bind_buffer(glow::UNIFORM_BUFFER, Some(font));
         gl.buffer_data_u8_slice(glow::UNIFORM_BUFFER, &text::font_block(), glow::STATIC_DRAW);
         gl.bind_buffer_base(glow::UNIFORM_BUFFER, 1, Some(font));
         let globals = gl.create_buffer().map_err(BackendError::Create)?;
+        buffers.push(globals);
         gl.bind_buffer(glow::UNIFORM_BUFFER, Some(globals));
         gl.buffer_data_size(
             glow::UNIFORM_BUFFER,
@@ -69,15 +114,8 @@ fn compile(gl: &glow::Context) -> Result<Programs, BackendError> {
             glow::DYNAMIC_DRAW,
         );
         gl.bind_buffer_base(glow::UNIFORM_BUFFER, 0, Some(globals));
-        Ok(Programs {
-            shape,
-            mesh,
-            glyph,
-            text,
-            globals,
-            font,
-        })
     }
+    Ok(())
 }
 
 impl GlowBackend {
@@ -397,7 +435,13 @@ unsafe fn program(
             gl.uniform_1_i32(location.as_ref(), unit);
         }
         gl.use_program(None);
-        let vao = gl.create_vertex_array().map_err(BackendError::Create)?;
+        let vao = match gl.create_vertex_array() {
+            Ok(vao) => vao,
+            Err(error) => {
+                gl.delete_program(program);
+                return Err(BackendError::Create(error));
+            }
+        };
         gl.bind_vertex_array(Some(vao));
         for location in 0..attributes {
             gl.enable_vertex_attrib_array(location);
