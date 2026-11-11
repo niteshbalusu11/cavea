@@ -5,8 +5,9 @@
 // tabs of one chart never delete or overwrite each other's work. While an
 // editor is open it holds a Web Lock named by its record's key: opening the
 // chart offers only records whose lock nobody holds (their tab closed or
-// crashed), and removes one only while holding its lock, so a live
-// editor's record is never offered or removed by another tab. IndexedDB is
+// crashed), and acts on one (copies it, removes it) only while holding its
+// lock and only if it is still exactly what was offered, so a live
+// editor's record, or one rewritten since it was read, is never removed. IndexedDB is
 // used directly: one object store, four operations.
 import type { LocalStore } from "./autosave.ts";
 
@@ -26,6 +27,17 @@ export interface Recovery {
   /** When it was written, Unix ms. */
   at: number;
 }
+
+/** What became of a recovery action on a record (`claim`). */
+export type Claimed =
+  /** Done, holding the record's lock, the record as offered. */
+  | "done"
+  /** The record was rewritten or removed since it was read: read again. */
+  | "changed"
+  /** Another tab holds its lock: left alone. */
+  | "busy"
+  /** No Web Locks here: not done, the record kept. */
+  | "unlocked";
 
 /** Every record of a chart, and the keys of those that could not be read. */
 export interface Stored {
@@ -132,6 +144,23 @@ export function draftStore(prefix: string) {
     /** Every record of the chart no open editor holds, newest first. */
     async read(): Promise<Stored> {
       const range = IDBKeyRange.bound(prefix, `${prefix}\uffff`);
+      // The locks first, the records after: an editor lets its lock go only
+      // after its last write, so a record whose lock was free before it was
+      // read is final. (One whose editor took its lock after the query is
+      // caught by `claim`.) Without Web Locks nothing is known live.
+      const locks = lockManager();
+      let live: Set<string>;
+      try {
+        live = new Set(
+          locks === null
+            ? []
+            : ((await locks.query()).held ?? []).flatMap((l) =>
+                l.name === undefined ? [] : [l.name],
+              ),
+        );
+      } catch {
+        return { records: [], corrupt: [] };
+      }
       // One cursor in one transaction: each key with its own value.
       const pairs: [string, unknown][] = [];
       try {
@@ -150,11 +179,7 @@ export function draftStore(prefix: string) {
         return { records: [], corrupt: [] };
       }
       // A live editor's record (its lock held, in this tab or another) is
-      // its own, not to be offered. Without Web Locks nothing is known live.
-      const locks = lockManager();
-      const live = new Set(
-        locks === null ? [] : ((await locks.query()).held ?? []).map((l) => l.name),
-      );
+      // its own, not to be offered.
       const out: Stored = { records: [], corrupt: [] };
       for (const [key, value] of pairs) {
         if (live.has(key)) continue;
@@ -166,14 +191,35 @@ export function draftStore(prefix: string) {
       out.records.sort((a, b) => b.at - a.at);
       return out;
     },
-    /** Removes one record (a recovered or discarded one), by its key, only
-     * while holding its lock: never a live editor's. Without Web Locks a
-     * record is kept (offered again later) rather than risk that. */
+    /** Removes a record that could not be read, by its key, only while
+     * holding its lock: never a live editor's. Without Web Locks a record is
+     * kept (offered again later) rather than risk that. */
     async remove(key: string): Promise<void> {
       const locks = lockManager();
       if (locks === null) return;
       await locks.request(key, { ifAvailable: true }, async (lock) => {
         if (lock !== null) await run("readwrite", (s) => s.delete(key));
+      });
+    },
+    /** Runs `act` on `record` holding its lock, once the record is read
+     * again and found exactly as offered; `drop` removes it. */
+    async claim(
+      record: Recovery,
+      act: (drop: () => Promise<void>) => Promise<void>,
+    ): Promise<Claimed> {
+      const locks = lockManager();
+      if (locks === null) return "unlocked";
+      const key = record.key;
+      return locks.request(key, { ifAvailable: true }, async (lock): Promise<Claimed> => {
+        if (lock === null) return "busy";
+        const now = parseRecovery(await run("readonly", (s) => s.get(key)), key);
+        if (now?.at !== record.at || now.draft !== record.draft || now.etag !== record.etag) {
+          return "changed";
+        }
+        await act(async () => {
+          await run("readwrite", (s) => s.delete(key));
+        });
+        return "done";
       });
     },
   };

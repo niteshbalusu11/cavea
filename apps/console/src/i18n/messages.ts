@@ -1320,6 +1320,7 @@ const serverDesigner = {
     "The draft on the server was saved again since those changes were made. Restoring them replaces that newer draft.",
   "recovery.restore": "Restore my changes",
   "recovery.discard": "Keep the server’s draft",
+  "recovery.changed": "Those kept changes were updated meanwhile: here they are as they are now.",
   "recovery.corrupt":
     "A copy of this chart kept in this browser could not be read, and was discarded.",
   "recovery.unreadable": "The kept changes could not be opened ({message}), and were discarded.",

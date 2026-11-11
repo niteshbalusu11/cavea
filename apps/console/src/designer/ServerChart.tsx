@@ -102,6 +102,9 @@ export function serverChart(props: {
   let designer: Designer | null = null;
   /** The draft's etag as opened: the base for a restored record. */
   let serverEtag = "";
+  /** The draft as opened, as the session exports it: a record equal to it
+   * holds nothing to recover. */
+  let serverDraft = "";
   /** Navigating away on purpose: no guard. */
   let left = false;
   /** Each operation that installs an editor (open, restore, a file over the
@@ -221,46 +224,72 @@ export function serverChart(props: {
     }
     // Changes kept by earlier editors: offered unless they are what the
     // server has.
-    const stored = await drafts.read();
-    if (stored.corrupt.length > 0) notify(msg("recovery.corrupt"));
-    for (const key of stored.corrupt) await drafts.remove(key).catch(() => {});
-    const server = session.export();
-    const offered: Recovery[] = [];
-    for (const record of stored.records) {
-      if (record.draft === server) await drafts.remove(record.key).catch(() => {});
-      else offered.push(record);
-    }
+    serverDraft = session.export();
+    const offered = await offers();
     if (stale(mine)) return session.dispose();
     setKept(offered);
     attach(session, { etag: opened.etag, revision: session.status().revision });
     setPhase({ kind: "ready" });
   };
 
+  /** The records to offer: those no open editor holds, less any equal to
+   * the server's draft (removed, if still as read) and any unreadable. */
+  const offers = async (): Promise<Recovery[]> => {
+    const stored = await drafts.read();
+    if (stored.corrupt.length > 0) notify(msg("recovery.corrupt"));
+    for (const key of stored.corrupt) await drafts.remove(key).catch(() => {});
+    const offered: Recovery[] = [];
+    for (const record of stored.records) {
+      if (record.draft !== serverDraft) offered.push(record);
+      else await drafts.claim(record, (drop) => drop()).catch(() => {});
+    }
+    return offered;
+  };
+
+  /** The record changed since it was offered (its editor wrote again before
+   * it closed): offered again as it is now. */
+  const reoffer = async (mine: number) => {
+    notify(msg("recovery.changed"));
+    const offered = await offers();
+    if (!stale(mine)) setKept(offered);
+  };
+
   /** The person restores the record offered; the others stay for later. */
   const restore = async () => {
     const mine = ++generation;
     const r = recovery();
-    setKept([]);
     if (r === null) return;
     const session = open(r.record.draft);
     if (typeof session === "string") {
       notify(msg("recovery.unreadable", { message: session }), "error");
-      await drafts.remove(r.record.key).catch(() => {});
+      setKept((k) => k.slice(1));
+      await drafts.claim(r.record, (drop) => drop()).catch(() => {});
       return;
     }
+    // The new editor's own record takes the work, then the old one goes,
+    // holding the old one's lock and only if it is still as offered.
+    const store = drafts.editor();
+    let stored = false;
+    const copy = async () => {
+      await store.put(r.record.draft, autosave?.etag ?? serverEtag);
+      stored = true;
+    };
+    const claimed = await drafts
+      .claim(r.record, async (drop) => {
+        await copy();
+        await drop();
+      })
+      .catch(() => "failed" as const);
+    if (claimed === "changed" || claimed === "busy") {
+      session.dispose();
+      store.release?.();
+      return reoffer(mine);
+    }
+    // No Web Locks: a copy, the original kept for later.
+    if (claimed === "unlocked") await copy().catch(() => {});
+    setKept([]);
     // Onto the draft as it is now: the person chose to replace it.
     const etag = (await autosave?.abandon()) ?? serverEtag;
-    if (stale(mine)) return session.dispose();
-    // The new editor's own record holds the work before the old one goes,
-    // and until the server has it.
-    const store = drafts.editor();
-    let stored = true;
-    try {
-      await store.put(r.record.draft, etag);
-      await drafts.remove(r.record.key);
-    } catch {
-      stored = false;
-    }
     if (stale(mine)) {
       // Kept: the copy is recoverable once its lock is let go.
       store.release?.();
@@ -270,10 +299,13 @@ export function serverChart(props: {
   };
 
   /** The server's draft is kept over the record offered; the next is offered. */
-  const discardRecovery = () => {
+  const discardRecovery = async () => {
+    const mine = generation;
     const r = recovery();
-    setKept((k) => k.slice(1));
-    if (r !== null) void drafts.remove(r.record.key).catch(() => {});
+    if (r === null) return;
+    const claimed = await drafts.claim(r.record, (drop) => drop()).catch(() => "failed" as const);
+    if (claimed === "changed") return reoffer(mine);
+    setKept((k) => (k[0] === r.record ? k.slice(1) : k));
   };
 
   /** The person keeps the server's draft over theirs, after a conflict. */
@@ -406,7 +438,7 @@ export function serverChart(props: {
             <Button onClick={downloadKept} icon="download">
               {msg("conflict.download")}
             </Button>
-            <Button variant="danger" onClick={discardRecovery}>
+            <Button variant="danger" onClick={() => void discardRecovery()}>
               {msg("recovery.discard")}
             </Button>
             <Button variant="primary" onClick={() => void restore()}>
