@@ -808,7 +808,7 @@ API keys:
 
 Admin key and workspaces:
 
-- `CAVEA_ADMIN_KEY` has no default. Set, it must be 32 to 512 printable ASCII characters or the server will not start; unset, the server starts with a warning and the admin endpoints answer every request `401` (`DECISIONS.md` D-24). The presented token is hashed and the digests are compared in constant time. The admin key is checked before API keys; it is never logged.
+- `CAVEA_ADMIN_KEY` has no default. Set, it must be 32 to 512 printable ASCII characters or the server will not start; unset, the server starts with a warning and the admin endpoints refuse every request (`401`, or `403` for a valid API key, as on any admin route) (`DECISIONS.md` D-24). The presented token is hashed and the digests are compared in constant time. The admin key is checked before API keys; it is never logged.
 - `POST /v1/workspaces` creates the workspace and its first secret key in one statement and returns the key once. From there the workspace manages its own keys.
 
 ## 12. Rate limiting and overload
