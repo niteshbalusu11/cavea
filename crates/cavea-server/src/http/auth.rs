@@ -1,9 +1,11 @@
 //! Credentials and tenancy (08 §11): API keys, the admin key, and the
 //! extractors a handler declares to say which credential it needs.
 //!
-//! A handler that takes [`SecretKey`] or [`PublishableKey`] gets an [`Auth`],
-//! and [`Auth::workspace`] is the only way to obtain a [`WorkspaceId`]: every
-//! query is scoped by the workspace of the credential, never of the request.
+//! A handler that takes [`super::staff::Staff`] or [`PublishableKey`] gets an
+//! [`Auth`], and [`Auth::workspace`] is the only way to obtain a
+//! [`WorkspaceId`]: every query is scoped by the workspace of the credential
+//! (a key's own, or one a console session's user is a member of), never of
+//! the request alone.
 
 use std::convert::Infallible;
 use std::fmt;
@@ -20,6 +22,7 @@ use subtle::ConstantTimeEq as _;
 use tracing::Instrument as _;
 
 use super::{ApiError, AppState, Code};
+use crate::console::Role;
 use crate::limiter::{Budget, Limited};
 use crate::net::{client_addr, group};
 
@@ -204,46 +207,103 @@ impl fmt::Debug for KeyId {
     }
 }
 
-/// An authenticated API key: what a handler acts as.
+/// An authenticated caller in one workspace: what a handler acts as.
 #[derive(Debug, Clone)]
 pub struct Auth {
     workspace: WorkspaceId,
-    key: KeyId,
-    kind: KeyKind,
+    principal: Principal,
+}
+
+#[derive(Debug, Clone)]
+enum Principal {
+    Key {
+        key: KeyId,
+        kind: KeyKind,
+    },
+    /// A signed-in console user (32 hex digits of the UUID) and their role in
+    /// the workspace, already checked against the route's permission.
+    Member {
+        user: String,
+        role: Role,
+    },
 }
 
 impl Auth {
+    /// A console user acting in `workspace` (a UUID as 32 hex digits) with
+    /// `role`: made only once the membership was read for the session.
+    pub(super) fn member(workspace: String, user: String, role: Role) -> Self {
+        Self {
+            workspace: WorkspaceId(workspace),
+            principal: Principal::Member { user, role },
+        }
+    }
+
     /// The workspace every query of this request is scoped to.
     #[must_use]
     pub fn workspace(&self) -> &WorkspaceId {
         &self.workspace
     }
 
+    /// The API key, unless a console user is acting.
     #[must_use]
-    pub fn key_id(&self) -> &KeyId {
-        &self.key
-    }
-
-    /// The engine authority of this key (`cavea_engine::Request::authority`).
-    #[must_use]
-    pub fn authority(&self) -> Authority {
-        match self.kind {
-            KeyKind::Secret => Authority::Secret,
-            KeyKind::Publishable => Authority::Publishable,
+    pub fn key_id(&self) -> Option<&KeyId> {
+        match &self.principal {
+            Principal::Key { key, .. } => Some(key),
+            Principal::Member { .. } => None,
         }
     }
 
-    /// The identity written to the event log (`cavea_engine::Request::actor`):
-    /// the key id.
+    /// The console user's UUID as 32 hex digits (bind as `$n::uuid`), when a
+    /// console user is acting.
+    #[must_use]
+    pub fn user(&self) -> Option<&str> {
+        match &self.principal {
+            Principal::Key { .. } => None,
+            Principal::Member { user, .. } => Some(user),
+        }
+    }
+
+    fn kind(&self) -> Option<KeyKind> {
+        match &self.principal {
+            Principal::Key { kind, .. } => Some(*kind),
+            Principal::Member { .. } => None,
+        }
+    }
+
+    /// The engine authority (`cavea_engine::Request::authority`): a key's
+    /// kind; a console member acts with the secret key's authority, their
+    /// role having been checked against the route's permission (09 §2).
+    #[must_use]
+    pub fn authority(&self) -> Authority {
+        match &self.principal {
+            Principal::Key {
+                kind: KeyKind::Publishable,
+                ..
+            } => Authority::Publishable,
+            Principal::Key { .. } | Principal::Member { .. } => Authority::Secret,
+        }
+    }
+
+    /// The identity written to the event log (`cavea_engine::Request::actor`)
+    /// and to logs as `by`: the key id (`key_…`), or the console user's id
+    /// (`usr_…`), never an email.
     #[must_use]
     pub fn actor(&self) -> Arc<str> {
-        self.key.to_string().into()
+        match &self.principal {
+            Principal::Key { key, .. } => key.to_string().into(),
+            Principal::Member { user, .. } => format!("usr_{user}").into(),
+        }
+    }
+
+    /// The console member's role, if a console user is acting.
+    #[must_use]
+    pub fn role(&self) -> Option<Role> {
+        match &self.principal {
+            Principal::Key { .. } => None,
+            Principal::Member { role, .. } => Some(*role),
+        }
     }
 }
-
-/// Requires a secret key (`sk_…`) of the workspace.
-#[derive(Debug, Clone)]
-pub struct SecretKey(pub Auth);
 
 /// Requires a publishable key (`pk_…`), from an allowed origin if the key has
 /// an allow-list.
@@ -263,23 +323,12 @@ pub struct QueryKey(pub Auth);
 pub struct AdminKeyAuth;
 
 /// What the bearer token turned out to be.
-enum Credential {
+pub(super) enum Credential {
     Admin,
     Key {
         auth: Auth,
         allowed_origins: Option<Vec<String>>,
     },
-}
-
-impl FromRequestParts<AppState> for SecretKey {
-    type Rejection = ApiError;
-
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
-        match credential(parts, state).await? {
-            Credential::Key { auth, .. } if auth.kind == KeyKind::Secret => Ok(Self(auth)),
-            _ => Err(wrong_kind("This endpoint requires a secret key.")),
-        }
-    }
 }
 
 impl FromRequestParts<AppState> for PublishableKey {
@@ -290,7 +339,7 @@ impl FromRequestParts<AppState> for PublishableKey {
             Credential::Key {
                 auth,
                 allowed_origins,
-            } if auth.kind == KeyKind::Publishable => {
+            } if auth.kind() == Some(KeyKind::Publishable) => {
                 check_origin(parts, allowed_origins.as_deref())?;
                 limit(parts, state, &auth)?;
                 Ok(Self(auth))
@@ -308,7 +357,7 @@ impl FromRequestParts<AppState> for QueryKey {
             Credential::Key {
                 auth,
                 allowed_origins,
-            } if auth.kind == KeyKind::Publishable => {
+            } if auth.kind() == Some(KeyKind::Publishable) => {
                 check_origin(parts, allowed_origins.as_deref())?;
                 limit(parts, state, &auth)?;
                 Ok(Self(auth))
@@ -335,7 +384,7 @@ impl FromRequestParts<AppState> for AdminKeyAuth {
 pub struct ClientIp(pub Option<IpAddr>);
 
 impl ClientIp {
-    fn of(parts: &Parts, state: &AppState) -> Self {
+    pub(super) fn of(parts: &Parts, state: &AppState) -> Self {
         let peer = parts.extensions.get::<ConnectInfo<SocketAddr>>();
         Self(peer.map(|ConnectInfo(peer)| {
             group(client_addr(
@@ -364,7 +413,10 @@ fn limit(parts: &Parts, state: &AppState, auth: &Auth) -> Result<(), ApiError> {
     } else {
         Budget::Reads
     };
-    let key = u128::from_str_radix(auth.key.uuid(), 16).unwrap_or_default();
+    let key = auth
+        .key_id()
+        .and_then(|k| u128::from_str_radix(k.uuid(), 16).ok())
+        .unwrap_or_default();
     let ClientIp(addr) = ClientIp::of(parts, state);
     let now = state.seats.clock.now().0;
     state
@@ -377,19 +429,19 @@ fn limit(parts: &Parts, state: &AppState, auth: &Auth) -> Result<(), ApiError> {
         })
 }
 
-fn wrong_kind(message: &'static str) -> ApiError {
+pub(super) fn wrong_kind(message: &'static str) -> ApiError {
     ApiError::new(Code::Forbidden)
         .with_message(message)
         .with_detail("reason", "key_kind")
 }
 
-fn unauthorized(reason: &'static str) -> ApiError {
+pub(super) fn unauthorized(reason: &'static str) -> ApiError {
     ApiError::new(Code::Unauthorized).with_detail("reason", reason)
 }
 
 /// Resolve the bearer token: `401` unless it is the admin key or an unrevoked
 /// API key.
-async fn credential(parts: &Parts, state: &AppState) -> Result<Credential, ApiError> {
+pub(super) async fn credential(parts: &Parts, state: &AppState) -> Result<Credential, ApiError> {
     resolve(bearer(parts)?, state).await
 }
 
@@ -412,8 +464,10 @@ async fn resolve(token: &str, state: &AppState) -> Result<Credential, ApiError> 
     };
     let auth = Auth {
         workspace: WorkspaceId(workspace),
-        key: KeyId(key),
-        kind: KeyKind::from_db(&kind)?,
+        principal: Principal::Key {
+            key: KeyId(key),
+            kind: KeyKind::from_db(&kind)?,
+        },
     };
     cavea_telemetry::record_workspace(&auth.workspace.to_string());
     Ok(Credential::Key {

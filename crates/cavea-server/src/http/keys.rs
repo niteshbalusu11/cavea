@@ -5,24 +5,26 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument as _;
 
-use super::auth::{KeyId, KeyKind, NewKey, SecretKey, normalise_origin};
+use super::auth::{KeyId, KeyKind, NewKey, normalise_origin};
 use super::extract::{Json, Page, Path, Query, check_text, invalid_field};
 use super::openapi::{Needs, Op, Routes};
+use super::staff::Staff;
 use super::{ApiError, AppState, Code, List};
+use crate::console::Permission;
 
 pub(super) fn routes() -> Routes {
     Routes::new()
         .add(
             Op::get("/v1/keys", "listKeys", "List the workspace's API keys")
                 .about("Revoked keys included; never a key or its hash.")
-                .needs(Needs::Secret)
+                .needs(Needs::Staff(Permission::Developers))
                 .page()
                 .reply(200, "KeyList", "A page of keys"),
             list,
         )
         .add(
             Op::post("/v1/keys", "createKey", "Create an API key")
-                .needs(Needs::Secret)
+                .needs(Needs::Staff(Permission::Developers))
                 .body("CreateKey")
                 .reply(201, "KeyCreated", "The key, shown only here"),
             create,
@@ -30,7 +32,7 @@ pub(super) fn routes() -> Routes {
         .add(
             Op::delete("/v1/keys/{id}", "revokeKey", "Revoke an API key")
                 .about("Idempotent. A key may not revoke itself (`403`, `reason: \"self_revocation\"`).")
-                .needs(Needs::Secret)
+                .needs(Needs::Staff(Permission::Developers))
                 .reply(200, "Key", "The key, revoked"),
             revoke,
         )
@@ -122,7 +124,7 @@ const LIST: &str = concat!(
 );
 
 async fn list(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Query(page): Query<Page>,
     state: axum::extract::State<AppState>,
 ) -> Result<axum::Json<List<KeyView>>, ApiError> {
@@ -166,7 +168,7 @@ const CREATE: &str = concat!(
 );
 
 async fn create(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     state: axum::extract::State<AppState>,
     Json(body): Json<CreateKey>,
 ) -> Result<(StatusCode, axum::Json<KeyView>), ApiError> {
@@ -211,7 +213,7 @@ async fn create(
         .instrument(cavea_telemetry::db_span("create_key"))
         .await?;
     let view = KeyView::new(row, Some(new.key))?;
-    tracing::info!(key_id = %view.id, kind = body.kind.as_str(), by = %auth.key_id(), "api key created");
+    tracing::info!(key_id = %view.id, kind = body.kind.as_str(), by = %auth.actor(), "api key created");
     Ok((StatusCode::CREATED, axum::Json(view)))
 }
 
@@ -229,15 +231,16 @@ const REVOKE: &str = concat!(
 );
 
 /// Revoke a key of the caller's workspace. A key may not revoke itself: every
-/// revocation is made by another unrevoked secret key, so a workspace always
-/// keeps one (08 §11).
+/// revocation by a key is made by another unrevoked secret key, so a
+/// workspace keeps one unless a console member revokes it, who can mint
+/// another (08 §11).
 async fn revoke(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(id): Path<String>,
     state: axum::extract::State<AppState>,
 ) -> Result<axum::Json<KeyView>, ApiError> {
     let id = KeyId::parse(&id).ok_or_else(|| ApiError::new(Code::NotFound))?;
-    if &id == auth.key_id() {
+    if auth.key_id() == Some(&id) {
         return Err(ApiError::new(Code::Forbidden)
             .with_message("A key cannot revoke itself; revoke it with another secret key.")
             .with_detail("reason", "self_revocation"));
@@ -249,13 +252,15 @@ async fn revoke(
             .execute(&mut *tx)
             .await?;
         // Read after taking the lock: a concurrent revocation of the caller
-        // has committed or not yet begun.
-        let active: bool = sqlx::query_scalar(CALLER_ACTIVE)
-            .bind(auth.key_id().uuid())
-            .fetch_one(&mut *tx)
-            .await?;
-        if !active {
-            return Err(ApiError::new(Code::Unauthorized).with_detail("reason", "invalid"));
+        // has committed or not yet begun. A console member has no key.
+        if let Some(caller) = auth.key_id() {
+            let active: bool = sqlx::query_scalar(CALLER_ACTIVE)
+                .bind(caller.uuid())
+                .fetch_one(&mut *tx)
+                .await?;
+            if !active {
+                return Err(ApiError::new(Code::Unauthorized).with_detail("reason", "invalid"));
+            }
         }
         let row: Option<KeyRow> = sqlx::query_as(REVOKE)
             .bind(auth.workspace().uuid())
@@ -268,6 +273,6 @@ async fn revoke(
     let row = revoke
         .instrument(cavea_telemetry::db_span("revoke_key"))
         .await?;
-    tracing::info!(key_id = %id, by = %auth.key_id(), "api key revoked");
+    tracing::info!(key_id = %id, by = %auth.actor(), "api key revoked");
     Ok(axum::Json(KeyView::new(row, None)?))
 }

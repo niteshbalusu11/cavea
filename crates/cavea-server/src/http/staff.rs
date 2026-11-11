@@ -1,14 +1,19 @@
-//! The staff's console session as a credential (09 §2, §10; 08 §11): the
-//! cookie, the CSRF token and the origin checks, and [`ConsoleUser`], the
-//! extractor of the `/console/api` routes of a signed-in user. The `/v1`
-//! routes take API keys only, as before (CON-004 adds the session there).
+//! The console session as a credential (09 §2, §10; 08 §11): the cookie, the
+//! CSRF token and the origin checks, and the two extractors that accept it.
+//!
+//! - [`Staff`]: the `/v1` routes a secret key may call. With
+//!   `Authorization`, exactly the secret key as before; without it and with
+//!   the console cookie, a signed-in member acting in the workspace named by
+//!   `Cavea-Workspace`, whose role grants the route's permission (declared in
+//!   the route table, `openapi::Needs::Staff`).
+//! - [`ConsoleUser`]: the `/console/api` routes of a signed-in user.
 //!
 //! Every non-safe method authenticated by the cookie must carry the session's
 //! CSRF token in `Cavea-Csrf-Token`, and must come from the server's own
-//! origin (`Sec-Fetch-Site`, else `Origin` against `Host`). No route answers
-//! cross-origin with credentials: CORS is only on `/v1/public/`, without
-//! `Access-Control-Allow-Credentials`, and those routes take no cookie (08
-//! §11).
+//! origin (`Sec-Fetch-Site`, else `Origin` against `Host`). A request with an
+//! API key is never read for a cookie, so neither check applies to it. No
+//! route answers cross-origin with credentials: CORS is only on
+//! `/v1/public/`, without `Access-Control-Allow-Credentials` (08 §11).
 
 use axum::extract::FromRequestParts;
 use axum::http::header::{self, HeaderName};
@@ -16,12 +21,15 @@ use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, Method};
 use subtle::ConstantTimeEq as _;
 
+use super::auth::{Auth, Credential, credential, unauthorized, wrong_kind};
 use super::{ApiError, AppState, Code};
 use crate::console::sessions::{self, Found};
-use crate::console::{ABSOLUTE, SessionId};
+use crate::console::{ABSOLUTE, Permission, SessionId};
 
 /// The CSRF token's header.
 pub const CSRF: HeaderName = HeaderName::from_static("cavea-csrf-token");
+/// The workspace a console session acts on, on `/v1`.
+pub const WORKSPACE: HeaderName = HeaderName::from_static("cavea-workspace");
 const SEC_FETCH_SITE: HeaderName = HeaderName::from_static("sec-fetch-site");
 
 /// The cookie's name: `__Host-` prefixed (only over HTTPS, for this host
@@ -119,7 +127,8 @@ fn is_safe(method: &Method) -> bool {
 fn cookie_session(parts: &Parts, state: &AppState) -> Result<SessionId, ApiError> {
     let id = match session_cookie(&parts.headers, state) {
         Some(Some(id)) => id,
-        Some(None) | None => return Err(console_session_refused()),
+        Some(None) => return Err(console_session_refused()),
+        None => return Err(unauthorized("missing")),
     };
     if !is_safe(&parts.method) {
         same_origin(&parts.headers)?;
@@ -134,6 +143,79 @@ fn cookie_session(parts: &Parts, state: &AppState) -> Result<SessionId, ApiError
     Ok(id)
 }
 
+/// The workspace a console request names: `ws_` and 32 lowercase hex digits.
+fn named_workspace(headers: &HeaderMap) -> Result<String, ApiError> {
+    let refused = |reason| {
+        let error = ApiError::new(if reason == "missing" {
+            Code::InvalidRequest
+        } else {
+            Code::Forbidden
+        });
+        error
+            .with_message("Name a workspace you are a member of in `Cavea-Workspace`.")
+            .with_detail("reason", "workspace")
+    };
+    let value = headers
+        .get(WORKSPACE)
+        .ok_or_else(|| refused("missing"))?
+        .to_str()
+        .map_err(|_| refused("not a member"))?;
+    super::auth::has_hex_tail(value, "ws_", 32)
+        .then(|| value[3..].to_owned())
+        .ok_or_else(|| refused("not a member"))
+}
+
+/// Requires the workspace's secret key, or a console session of a member
+/// whose role grants the route's permission (09 §2). Every query is scoped by
+/// `auth.workspace()`, which for a member is the workspace they named and
+/// belong to.
+#[derive(Debug, Clone)]
+pub struct Staff(pub Auth);
+
+impl FromRequestParts<AppState> for Staff {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
+        let cookie = session_cookie(&parts.headers, state).is_some();
+        if parts.headers.contains_key(header::AUTHORIZATION) || !cookie {
+            return match credential(parts, state).await? {
+                Credential::Key { auth, .. }
+                    if auth.authority() == cavea_engine::Authority::Secret =>
+                {
+                    Ok(Self(auth))
+                }
+                _ => Err(wrong_kind(
+                    "This endpoint requires a secret key or a console session.",
+                )),
+            };
+        }
+        let permission = parts
+            .extensions
+            .get::<Permission>()
+            .copied()
+            .ok_or_else(|| ApiError::internal("the route declares no permission"))?;
+        let id = cookie_session(parts, state)?;
+        let workspace = named_workspace(&parts.headers)?;
+        let found = sessions::find(&state.db, &id.hash(), Some(&workspace))
+            .await?
+            .ok_or_else(console_session_refused)?;
+        let Some(role) = found.role else {
+            return Err(ApiError::new(Code::Forbidden)
+                .with_message("Name a workspace you are a member of in `Cavea-Workspace`.")
+                .with_detail("reason", "workspace"));
+        };
+        let auth = Auth::member(workspace, found.user, role);
+        cavea_telemetry::record_workspace(&auth.workspace().to_string());
+        if !role.allows(permission) {
+            return Err(ApiError::new(Code::Forbidden)
+                .with_message("Your role in this workspace does not allow this.")
+                .with_detail("reason", "role")
+                .with_detail("permission", permission.as_str()));
+        }
+        Ok(Self(auth))
+    }
+}
+
 /// Requires a console session: the `/console/api` routes of a signed-in user.
 #[derive(Debug, Clone)]
 pub struct ConsoleUser {
@@ -145,7 +227,13 @@ impl FromRequestParts<AppState> for ConsoleUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
-        let id = cookie_session(parts, state)?;
+        let id = cookie_session(parts, state).map_err(|e| {
+            if e.code() == Code::Unauthorized {
+                console_session_refused()
+            } else {
+                e
+            }
+        })?;
         let session = sessions::find(&state.db, &id.hash(), None)
             .await?
             .ok_or_else(console_session_refused)?;

@@ -354,9 +354,7 @@ fn console(id: &SessionId, workspace: Option<&str>) -> Vec<(header::HeaderName, 
         (crate::http::staff::CSRF, id.csrf()),
     ];
     if let Some(ws) = workspace {
-        // Ignored until `/v1` takes console sessions (CON-004).
-        let name = header::HeaderName::from_static("cavea-workspace");
-        headers.push((name, ws.to_owned()));
+        headers.push((crate::http::staff::WORKSPACE, ws.to_owned()));
     }
     headers
 }
@@ -936,7 +934,7 @@ async fn identical_keys_never_cross() {
             let (needs, _) = op_of(method, template);
             let path = a.path(template);
             for (mine, theirs) in [(&a, &b), (&b, &a)] {
-                let key = if needs == Needs::Secret {
+                let key = if matches!(needs, Needs::Staff(_)) {
                     &mine.secret
                 } else {
                     &mine.publishable
@@ -1078,17 +1076,21 @@ const CREDS: [Cred; 19] = [
 /// The declared table (13 §10): what each credential gets on a route that
 /// needs `needs`, as the refusal's code and `reason`. `None` is allowed: the
 /// route's success, or for another workspace's credential `404` when the
-/// route names one of the tenant's identifiers. A console session is a
-/// credential on the console's routes only: on every other it is none.
+/// route names one of the tenant's identifiers. A console member is allowed
+/// exactly what 09 §2's role table gives the route's permission.
 fn expect(needs: Needs, cred: Cred) -> Option<(Code, &'static str)> {
     use Cred as C;
     let member = matches!(cred, C::Member(_) | C::ForeignMember | C::Outsider);
     match (needs, cred) {
         (Needs::Nothing, _)
         | (Needs::Admin, C::Admin)
-        | (Needs::Secret, C::Secret | C::ForeignSecret)
+        | (Needs::Staff(_), C::Secret | C::ForeignSecret | C::ForeignMember)
         | (Needs::Console, C::Member(_) | C::ForeignMember | C::Outsider)
         | (Needs::Publishable | Needs::QueryKey, C::Publishable | C::ForeignPublishable) => None,
+        (Needs::Staff(p), C::Member(role)) => {
+            (!role.allows(p)).then_some((Code::Forbidden, "role"))
+        }
+        (Needs::Staff(_), C::Outsider) => Some((Code::Forbidden, "workspace")),
         (Needs::Console, _) => Some((Code::Unauthorized, "console_session")),
         // A cookie is no credential on key routes.
         (_, C::None) => Some((Code::Unauthorized, "missing")),
@@ -1157,11 +1159,12 @@ impl Members {
 }
 
 /// 13 §10 and T5: every route × every credential, compared with [`expect`];
-/// with workspace B's key of the right kind and workspace A's identifiers,
-/// `404` if the route names one, never revealing anything of A; console
-/// sessions of five roles and of another workspace's members, refused on
-/// every route but the console's; on every non-safe console route, the
-/// session without its CSRF token and from another site; an expired or another workspace's session
+/// with workspace B's key or member of the right kind and workspace A's
+/// identifiers, `404` if the route names one, never revealing anything of A;
+/// the five roles of 09 §2 against each route's permission; a member of B
+/// naming A's workspace; on every non-safe route a console session takes,
+/// the session without its CSRF token, from another site, and on `/v1`
+/// without naming a workspace; an expired or another workspace's session
 /// token on the routes that take one; and another event's hold token where a
 /// body names a token and an event.
 #[tokio::test]
@@ -1305,7 +1308,10 @@ async fn authorisation_matrix() {
                     }
                     None if foreign
                         && names_identifier
-                        && !matches!(needs, Needs::Nothing | Needs::Console) =>
+                        && matches!(
+                            needs,
+                            Needs::Staff(_) | Needs::Publishable | Needs::QueryKey | Needs::Admin
+                        ) =>
                     {
                         assert_problem(&response, &answer, Code::NotFound);
                     }
@@ -1322,9 +1328,9 @@ async fn authorisation_matrix() {
                 }
             }
             // A console session on a non-safe route: refused without its CSRF
-            // token, and from another site.
+            // token, from another site, and on `/v1` without a workspace.
             let safe = *method == Method::GET;
-            if needs == Needs::Console && !safe {
+            if matches!(needs, Needs::Staff(_) | Needs::Console) && !safe {
                 let owner = members.headers(Cred::Member(Role::Owner), &a, &b);
                 let without = |name: &header::HeaderName| {
                     owner
@@ -1338,10 +1344,14 @@ async fn authorisation_matrix() {
                     header::HeaderName::from_static("sec-fetch-site"),
                     "cross-site",
                 ));
-                let cases = [
+                let mut cases = vec![
                     (without(&crate::http::staff::CSRF), Code::Forbidden, "csrf"),
                     (cross_site, Code::Forbidden, "origin"),
                 ];
+                if needs != Needs::Console {
+                    let no_workspace = without(&crate::http::staff::WORKSPACE);
+                    cases.push((no_workspace, Code::InvalidRequest, "workspace"));
+                }
                 for (headers, code, reason) in cases {
                     let (response, answer) = send_with(None, &headers, *body, 0).await;
                     cells += 1;
@@ -1364,7 +1374,7 @@ async fn authorisation_matrix() {
             // Another event's hold token, where the body names a token for
             // the event in the path.
             if template.contains("{event}") && body.is_some_and(|b| b.contains("{token}")) {
-                let key = if needs == Needs::Secret {
+                let key = if matches!(needs, Needs::Staff(_)) {
                     &a.secret
                 } else {
                     &a.publishable

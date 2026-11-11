@@ -17,11 +17,12 @@ use serde::Serialize;
 use serde_json::value::RawValue;
 use tracing::Instrument as _;
 
-use super::auth::SecretKey;
 use super::extract::{Page, Path, Query, check_object_count};
 use super::openapi::{Needs, Op, Routes};
 use super::seats::{Find, chart, rfc3339, target};
+use super::staff::Staff;
 use super::{ApiError, AppState, Code};
+use crate::console::Permission;
 use crate::seats::Chart;
 
 pub(super) fn routes() -> Routes {
@@ -36,7 +37,7 @@ pub(super) fn routes() -> Routes {
             "By label (`label`, repeated, at most 1,000), or a page in `idx` order \
 (`status`, `limit`, `after`); not both. Read from committed state.",
         )
-        .needs(Needs::Secret)
+        .needs(Needs::Staff(Permission::EventsRead))
         .query(
             "label",
             serde_json::json!({ "type": "array", "items": string(), "maxItems": 1_000 }),
@@ -197,7 +198,7 @@ impl Params {
 }
 
 async fn objects(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(event): Path<String>,
     Query(pairs): Query<Vec<(String, String)>>,
     State(state): State<AppState>,

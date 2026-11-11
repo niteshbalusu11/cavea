@@ -1,6 +1,6 @@
 //! `/console/api` (09 §10): first-run setup, sign-in and sign-out, the
-//! signed-in user, and changing one's password. The console session is not
-//! yet a credential on `/v1` (CON-004).
+//! signed-in user, and changing one's password. Everything else the console
+//! does goes through `/v1` with the session as a credential (`http::staff`).
 //!
 //! Sign-in answers an unknown email, a disabled user and a wrong password
 //! alike, with `401` and the reason `credentials`, after the same argon2id
@@ -170,7 +170,7 @@ async fn me_json(
             let role = Role::from_db(&role)?;
             Some(json!({
                 "id": format!("ws_{ws}"), "key": key, "name": name,
-                "role": role.as_str(),
+                "role": role.as_str(), "permissions": role.permissions(),
             }))
         })
         .collect();
