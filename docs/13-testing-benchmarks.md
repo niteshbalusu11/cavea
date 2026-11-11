@@ -77,7 +77,7 @@ Faults injected:
 - **Determinism:** the same document produces identical bytes on Linux, macOS and Windows, and in the WASM build.
 - **Validation:** one test per error and warning code, plus a property that a document passing validation always compiles.
 - **Migration:** every past schema version has stored sample documents that must migrate and compile.
-- **Size:** the synthetic corpus is compiled in CI and sizes are compared with the targets in `03-chart-format.md` §4.5.
+- **Size:** the synthetic corpus is compiled with `cavea compile` and its sizes are recorded against the targets in `03-chart-format.md` §4.5. Each preset's public artefact hash is pinned in a test, so any change to a preset or to the compiler's output fails it, and the sizes are measured again in the pull request that re-pins them. The corpus is not compiled in CI: CI builds in debug, where compiling and compressing the 100,000-seat preset takes 10 to 20 seconds, and the hashes catch every change the sizes would (`DECISIONS.md` D-28).
 
 ## 5. Fuzzing
 
@@ -148,10 +148,14 @@ Faults injected:
 
 | Gate | Where | Fails when |
 |---|---|---|
-| Payload size | Every pull request | Over the hard cap, or +3% without a justification label |
+| Payload size | Every pull request | Over the hard cap, or more than 3% over the committed baseline |
 | Micro-benchmarks (decode, hit test, delta apply, label build, best-available) | Every pull request | More than 10% slower than the baseline |
 | Headless frame-time smoke | Every pull request | Soft warning only; software rendering is not representative |
 | Device benchmarks S1–S5 | Every release | Any budget in `01-architecture.md` §5 is missed |
+
+**Payload gate.** `cargo xtask build-web` measures the renderer payload, the brotli size (quality 11) of the production JavaScript glue plus the WASM after `wasm-opt -Oz` (plus the font atlas once there is one), and compares it with `xtask/payload-baseline.json`, which records the last accepted size and the `wasm-opt` version it was measured with. The build fails when the payload is over the hard cap of 200,000 B (`01-architecture.md` §5), or more than 3% over the baseline. It refuses to compare a build made without `wasm-opt` (about a fifth larger) or with another `wasm-opt` version than the baseline's: either is an error, not a pass. CI installs binaryen 132, the version `flake.nix` provides; upgrading binaryen changes the flake, CI and the baseline together. The `--demo` build is never measured.
+
+The justification is the baseline file itself, not a label: a pull request that grows the payload by more than 3% on purpose runs `cargo xtask build-web --update-baseline` and commits the file, so the new size is in its diff and its description says why. Growth under 3% passes without an update, and so does a decrease; growth then adds up against the same baseline until it crosses 3%. Refresh the baseline in any pull request that moves the payload more than 3% either way (the build says so when it shrinks), and when the orchestrator asks after another pull request has changed it.
 
 ## 7. Server load and chaos
 

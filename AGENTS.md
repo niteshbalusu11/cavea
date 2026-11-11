@@ -23,7 +23,7 @@ Layout and dependency rules are in `docs/01-architecture.md` §3. `cavea-core` a
 
 Run everything from the repository root. Prefix every cargo command with `CARGO_BUILD_JOBS=8` (shown once here, implied below).
 
-Toolchains: Rust is pinned in `rust-toolchain.toml` (with the `wasm32-unknown-unknown` target); bun is pinned in `package.json` (`packageManager`). `flake.nix` provides every system tool at those versions (Rust with `rust-lld`, bun, `wasm-opt` from binaryen, `psql`, `brotli`): enter it with `nix develop` or `direnv allow`, or run one command as `nix develop -c <command>`. A new system tool goes into the flake, not onto the machine by hand. Docker is the only host requirement. Outside the flake, `wasm-opt` is optional; without it `build-web` warns and reports unoptimised sizes.
+Toolchains: Rust is pinned in `rust-toolchain.toml` (with the `wasm32-unknown-unknown` target); bun is pinned in `package.json` (`packageManager`). `flake.nix` provides every system tool at those versions (Rust with `rust-lld`, bun, `wasm-opt` from binaryen, `psql`, `brotli`): enter it with `nix develop` or `direnv allow`, or run one command as `nix develop -c <command>`. A new system tool goes into the flake, not onto the machine by hand. Docker is the only host requirement. Outside the flake, without `wasm-opt`, `build-web` still writes the bindings but the payload gate fails: unoptimised sizes are not comparable with the baseline.
 
 **Rust**
 
@@ -32,7 +32,8 @@ Toolchains: Rust is pinned in `rust-toolchain.toml` (with the `wasm32-unknown-un
 - `cargo build --workspace`
 - `cargo test --workspace`
 - `cargo xtask check-deps`: enforces the dependency rule in `docs/01-architecture.md` §3
-- `cargo xtask build-web`: builds `cavea-web` for wasm32 with the `wasm-release` profile, writes the bindings to `packages/renderer/wasm/` (gitignored), runs `wasm-opt` if present, and prints raw and brotli sizes. `--demo` adds the debug-only exports `apps/demo` needs (synthetic seats); never measure or ship that build
+- `cargo xtask build-web`: builds `cavea-web` for wasm32 with the `wasm-release` profile, writes the bindings to `packages/renderer/wasm/` (gitignored), runs `wasm-opt`, prints raw and brotli sizes, and enforces the payload gate (`docs/13-testing-benchmarks.md` §6.3): the build fails when JavaScript plus WASM is over 200,000 B brotli, more than 3% over the baseline in `xtask/payload-baseline.json`, built without `wasm-opt`, or built with a `wasm-opt` version other than the baseline's. A pull request that grows the payload on purpose runs `cargo xtask build-web --update-baseline` and commits the file, so the new size shows in the diff. `--demo` adds the debug-only exports `apps/demo` needs (synthetic seats); it is never gated, measured or shipped
+- `cargo run --release -p cavea-cli -- <command>` (binary `cavea`): `gen <preset> [--seed n] [-o file]` writes a synthetic preset's chart document (`gen --list` lists them), `compile [doc.json] [-o dir]` writes the public and full artefacts named by content hash, `validate [doc.json] [--json]` prints findings, `inspect <chart.ccf>` prints counts and chunk sizes. A missing path reads standard input: `cavea gen theatre | cavea compile`. Exit codes: 0 ok, 1 invalid input, 2 usage, 3 other failure. Changing a preset or the compiler's output changes the preset hashes pinned in `crates/cavea-testkit/src/presets/tests.rs`; re-measure the sizes in `docs/03-chart-format.md` §4.5 when they change
 - `CAVEA_DATABASE_URL=postgres://cavea:cavea@127.0.0.1:5432/cavea CAVEA_LISTEN=127.0.0.1:<port> cargo run -p cavea-server`: the server; it migrates the database at startup and refuses to start without `CAVEA_DATABASE_URL`. `GET /healthz` answers `ok`. Settings are `CAVEA_` environment variables (`docs/08-server.md` §13); add `CAVEA_LOG_FORMAT=text` for readable logs
 
 **TypeScript** (run `cargo xtask build-web` first; `typecheck`, `build` and `test` need the WASM output)
@@ -54,7 +55,7 @@ Toolchains: Rust is pinned in `rust-toolchain.toml` (with the `wasm32-unknown-un
 - The same with `--release` and `measure_ -- --ignored --nocapture --test-threads=1`: prints commit latency, actor throughput and load time
 - A schema change is a new file in `crates/cavea-server/migrations/`, listed in `crates/cavea-server/src/store/migrations.rs`; never edit a released one
 
-CI (`.github/workflows/ci.yml`) runs the Rust checks, `check-deps` and `build-web`, then the TypeScript `lint`, `format:check`, `typecheck` and `build`. It runs no tests.
+CI (`.github/workflows/ci.yml`) runs the Rust checks, `check-deps` and `build-web` (with binaryen 132 installed, so the payload gate runs), then the TypeScript `lint`, `format:check`, `typecheck` and `build`. It runs no tests.
 
 ## Quality gates
 

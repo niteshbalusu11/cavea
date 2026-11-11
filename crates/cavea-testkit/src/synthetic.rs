@@ -1,6 +1,6 @@
-//! Seeded synthetic charts (`docs/03-chart-format.md` §7). For now one stadium
-//! generator; the presets of §7 and `cavea gen` (FMT-024, FMT-025) build on it
-//! or replace it.
+//! A quick seeded stadium of any seat count, for the renderer demo and tests
+//! that need a chart of a given size. The named presets of
+//! `docs/03-chart-format.md` §7 are in [`crate::presets`].
 
 use std::f64::consts::TAU;
 
@@ -133,10 +133,10 @@ pub fn stadium(seats: u32, seed: u64) -> ChartDocument {
 }
 
 /// A tiny deterministic generator, so the output never depends on a crate version.
-struct SplitMix64(u64);
+pub(crate) struct SplitMix64(pub(crate) u64);
 
 impl SplitMix64 {
-    fn next(&mut self) -> u64 {
+    pub(crate) fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);

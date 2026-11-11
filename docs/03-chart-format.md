@@ -551,6 +551,21 @@ Targets for the public artefact, to be measured with the synthetic corpus:
 | Arena, 20,000 seats | ≤ 250 KB | ≤ 60 KB |
 | Stadium, 100,000 seats | ≤ 1 MB | ≤ 300 KB |
 
+KB and MB are 1,000 and 1,000,000 bytes. Brotli is quality 11 with a 4 MiB window, as the server stores artefacts (§4.6).
+
+**Measured locally, 2026-11-11** (FMT-026), on an AMD Ryzen 9 7900X under Linux, with `cavea compile` on each preset of §7 at the default seed. Bytes; compile time is the release build's, JSON parsing included.
+
+| Preset | Seats | Public raw | Public brotli | Full raw | Full brotli | Compile |
+|---|---|---|---|---|---|---|
+| `theatre` | 2,000 | 16,721 | 6,622 | 22,749 | 8,928 | 2 ms |
+| `arena` | 20,000 | 219,789 | 53,808 | 272,789 | 74,901 | 18 ms |
+| `stadium-60k` | 60,000 | 567,205 | 124,181 | 717,525 | 177,591 | 55 ms |
+| `stadium-100k` | 100,000 | 864,477 | 181,233 | 1,109,662 | 268,054 | 89 ms |
+| `stress-250k` | 250,000 | 1,807,089 | 351,554 | 2,370,198 | 522,678 | 208 ms |
+| `stress-500k` | 500,000 | 3,147,461 | 542,026 | 4,173,154 | 809,152 | 388 ms |
+
+All three targets are met: the theatre at 42% of its raw target and 66% of its brotli target, the arena at 88% and 90%, the 100,000-seat stadium at 86% and 60%. The arena is closest. `cavea inspect` shows where the bytes go: in `stadium-100k`, `SPOS` (seat positions; curved rows do not repeat their deltas) is 41% of the raw file and 61 KB brotli, `ROWS` (60 bytes a row, 5,340 rows) 37% and 60 KB, `MESH` (section outlines and the pitch) 12% and 30 KB, and `RSEG` 7% and 22 KB; in `arena`, `ROWS` is 43% and `SPOS` 32%. The preset hashes are pinned in `cavea-testkit`'s tests, so a change to the compiler's output fails them; re-measure this table when it does.
+
 ### 4.6 Delivery
 
 - URL: `/v1/public/charts/{hash}.ccf`, `{hash}` being the public artefact's content hash in 32 lowercase hex digits. No credential: the hash alone names the file, across workspaces (`08-server.md` §6.2). The full artefact is never served.
@@ -592,3 +607,12 @@ Targets for the public artefact, to be measured with the synthetic corpus:
 | `festival` | 50 objects | Areas and booths only |
 
 Presets are seeded and deterministic, so benchmark runs are comparable.
+
+The presets are in `cavea-testkit` (`presets`), and each compiles with no findings for every seed. They are generated with `+ − × ÷` only: every angle is a section rotation or an `arc` row block, which the compiler expands with its own trigonometry, so a preset and seed give the same bytes on every platform. The seed moves some sections to a cheaper category and picks which sections hold wheelchair spaces; the geometry does not depend on it. The default seed is 1.
+
+- `theatre`: three stalls sections in a fan of arcs (house left numbered in even seats, the centre from 101, house right in odd seats), and one balcony section on a second floor; a stage and its label on both floors.
+- `arena`: one tier of 40 sections around a 60 × 30 m floor: straight rows along the sides, arcs at the corners.
+- `stadium-60k`, `stadium-100k`: the same bowl around a 105 × 68 m pitch, 60 sections a tier: two tiers (120 sections) and three (180).
+- `stress-250k`, `stress-500k`: tiers of 30 rows and 60 sections, as many as the seats need (6 and 7).
+
+Every preset has four categories (premium, standard, value, and an accessible one used by wheelchair spaces, with companion seats beside them), a focal point on every floor, section labels, alphabetic or numeric row labels, and decoration: a filled shape, a stroked line, a text label and icons. `banquet` and `festival` wait for tables, booths and areas, which the compiler does not compile yet (§3.1.1); `cavea gen` names them as not yet available.
