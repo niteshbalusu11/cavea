@@ -6,7 +6,7 @@ use cavea_compiler::document::{BlockRow, Node, RowBlock};
 use super::*;
 use crate::{
     hit::{distance2, hit_test},
-    protocol::ObjectRef,
+    protocol::{HoldOutcome, ObjectFailure, ObjectRef, SessionMode},
     theme::visual,
 };
 
@@ -43,6 +43,7 @@ fn visuals(e: &E) -> String {
         .map(|&v| match v {
             visual::AVAILABLE => '.',
             visual::UNAVAILABLE => 'u',
+            visual::SELECTED_PENDING => 'p',
             visual::SELECTED_HELD => 'h',
             _ => '?',
         })
@@ -51,22 +52,23 @@ fn visuals(e: &E) -> String {
 
 /// The selection events, one line each.
 fn summary(events: &[Event]) -> Vec<String> {
-    let line = |kind: &str, labels: &mut dyn Iterator<Item = &str>| {
-        labels.fold(kind.to_owned(), |l, label| format!("{l} {label}"))
-    };
     events
         .iter()
         .filter_map(|event| {
             Some(match event {
-                Event::SelectionChanged { selected } => {
-                    line("changed", &mut selected.iter().map(|o| o.label.as_str()))
+                Event::HoldRequest { request, labels } => format!("hold {request} {labels:?}"),
+                Event::ReleaseRequest { request, labels } => {
+                    format!("release {request} {labels:?}")
                 }
-                Event::SelectionInvalid { rule, objects } => line(
-                    &format!("invalid {rule}"),
-                    &mut objects.iter().map(String::as_str),
-                ),
+                Event::SelectionChanged { selected, .. } => {
+                    let labels: Vec<&str> = selected.iter().map(|o| o.label.as_str()).collect();
+                    format!("changed {labels:?}")
+                }
+                Event::SelectionInvalid { rule, objects } => format!("invalid {rule} {objects:?}"),
                 Event::SelectionValid => "valid".to_owned(),
                 Event::ObjectUnavailable { label } => format!("unavailable {label}"),
+                Event::HoldLost { labels } => format!("lost {labels:?}"),
+                Event::Resync { seq } => format!("resync {seq:?}"),
                 Event::Error { code, .. } => format!("error {code:?}"),
                 _ => return None,
             })
@@ -74,127 +76,405 @@ fn summary(events: &[Event]) -> Vec<String> {
         .collect()
 }
 
-/// Runs one scripted scenario: a step per line, `step => events`, the
-/// events as `summary` writes them, separated by `;`. Steps: `tap idx`,
-/// `status idx code`, `rules max min` (`-` for none), `select labels`,
-/// `select# idx…`, `deselect labels`, `clear`, `reload`, and `visual` with
-/// the visual states of seats 0 to 9 (`.` available, `u` unavailable, `h`
-/// selected).
-fn run(script: &str) {
+#[derive(Clone, Copy)]
+enum Step {
+    Tap(u32),
+    Ok(u32),
+    /// A failed hold: code, and the seats named (none: the whole request).
+    Fail(u32, &'static str, &'static [u32]),
+    /// A delta setting one seat's status.
+    Status(u32, u8),
+    /// A snapshot with these seats unavailable.
+    Snapshot(&'static [u32]),
+    /// The buyer's private set.
+    Private(&'static [u32]),
+    Rules(Option<u32>, Option<u32>),
+    Manual,
+    Select(&'static [&'static str]),
+    SelectIdx(&'static [u32]),
+    Deselect(&'static [&'static str]),
+    Clear,
+    Reload,
+    /// The visual states of seats 0 to 9.
+    Visual(&'static str),
+}
+
+fn run(steps: &[(Step, &str)]) {
+    use Step::*;
     let mut e = hall();
     let mut t = 1000.0;
-    for line in script.lines().map(str::trim).filter(|l| !l.is_empty()) {
-        let (step, expected) = line.split_once("=>").unwrap_or((line, ""));
-        let mut words = step.split_whitespace();
-        let verb = words.next().unwrap();
-        let args: Vec<&str> = words.collect();
-        let num = |i: usize| args[i].parse::<u32>().unwrap();
-        let opt = |i: usize| (args[i] != "-").then(|| num(i));
-        let labels = || {
-            args.iter()
-                .map(|l| ObjectRef::Label((*l).to_owned()))
-                .collect()
-        };
+    snapshot(&mut e, 0, &[]);
+    let mut seq = 0;
+    let label = |s: &&str| ObjectRef::Label((*s).to_owned());
+    for (i, &(step, expected)) in steps.iter().enumerate() {
         e.drain_events().for_each(drop);
-        let events: Vec<Event> = match verb {
-            "tap" => {
+        let events = match step {
+            Tap(idx) => {
                 t += 1000.0;
-                let at = seat_pos(&e, num(0));
+                let at = seat_pos(&e, idx);
                 click(&mut e, MOUSE, at, t)
             }
-            "visual" => {
-                assert_eq!(visuals(&e), args[0], "{line}");
-                continue;
+            Ok(request) | Fail(request, ..) => {
+                let outcome = match step {
+                    Fail(_, code, seats) => HoldOutcome::Failed(
+                        seats
+                            .iter()
+                            .map(|&idx| ObjectFailure {
+                                object: ObjectRef::Idx(idx),
+                                code: code.to_owned(),
+                            })
+                            .chain(seats.is_empty().then(|| ObjectFailure {
+                                object: ObjectRef::Label("elsewhere".into()),
+                                code: code.to_owned(),
+                            }))
+                            .collect(),
+                    ),
+                    _ => HoldOutcome::Ok,
+                };
+                e.handle(Command::HoldResult { request, outcome });
+                e.drain_events().collect()
             }
-            _ => {
-                match verb {
-                    "status" => e.apply_status(num(0)..num(0) + 1, num(1) as u8),
-                    "rules" => e.handle(Command::SetRules {
-                        max: opt(0),
-                        min: opt(1),
-                        validators: Vec::new(),
-                        group_size: None,
-                    }),
-                    "select" => e.handle(Command::Select { objects: labels() }),
-                    "select#" => {
-                        let objects = (0..args.len()).map(|i| ObjectRef::Idx(num(i))).collect();
-                        e.handle(Command::Select { objects });
-                    }
-                    "deselect" => e.handle(Command::Deselect { objects: labels() }),
-                    "clear" => e.handle(Command::ClearSelection),
-                    "reload" => e.handle(Command::LoadChart { ccf: compile(HALL) }),
-                    _ => panic!("unknown step {line}"),
-                }
+            Status(idx, status) => {
+                seq += 1;
+                delta(&mut e, seq - 1, &[(idx, status)])
+            }
+            Snapshot(unavailable) => {
+                seq += 1;
+                snapshot(&mut e, seq, unavailable)
+            }
+            Private(objects) => {
+                let objects = objects.to_vec();
+                let expires_at_ms = 9000;
+                e.handle(Command::SetPrivateHolds {
+                    objects,
+                    expires_at_ms,
+                });
+                e.drain_events().collect()
+            }
+            Rules(max, min) => {
+                e.handle(Command::SetRules {
+                    max,
+                    min,
+                    validators: Vec::new(),
+                    group_size: None,
+                });
+                e.drain_events().collect()
+            }
+            Manual => {
+                e.handle(Command::SetSessionMode(SessionMode::Manual));
+                e.drain_events().collect()
+            }
+            Select(labels) => {
+                let objects = labels.iter().map(label).collect();
+                e.handle(Command::Select { objects });
+                e.drain_events().collect()
+            }
+            SelectIdx(seats) => {
+                let objects = seats.iter().map(|&i| ObjectRef::Idx(i)).collect();
+                e.handle(Command::Select { objects });
+                e.drain_events().collect()
+            }
+            Deselect(labels) => {
+                let objects = labels.iter().map(label).collect();
+                e.handle(Command::Deselect { objects });
+                e.drain_events().collect()
+            }
+            Clear => {
+                e.handle(Command::ClearSelection);
+                e.drain_events().collect()
+            }
+            Reload => {
+                e.handle(Command::LoadChart { ccf: compile(HALL) });
                 let events = e.drain_events().collect();
                 tick(&mut e, t);
                 events
             }
+            Visual(v) => {
+                assert_eq!(visuals(&e), v, "step {i}");
+                continue;
+            }
         };
-        let expected: Vec<&str> = expected
-            .split(';')
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .collect();
-        assert_eq!(summary(&events), expected, "{line}");
+        assert_eq!(summary(&events).join("; "), expected, "step {i}");
     }
 }
 
 #[test]
 fn selection_state_machine() {
-    // Select and deselect.
-    run("
-        tap 0 => changed S-A-1
-        visual h.........
-        tap 0 => changed
-        visual ..........
-    ");
-    // The maximum refuses a tap; the minimum reports readiness.
-    run("
-        rules 2 2 => invalid min
-        tap 0 => changed S-A-1
-        tap 1 => changed S-A-1 S-A-2 ; valid
-        tap 2 => invalid max S-A-3
-        rules 1 - => error InvalidInput
-        tap 1 => changed S-A-1 ; invalid min S-A-1
-        rules 0 - => error InvalidInput
-        rules 101 - => error InvalidInput
-        rules 1 2 => error InvalidInput
-        rules - - => valid
-        visual h.........
-    ");
-    // A selected seat taken by someone else leaves the selection; a taken
-    // seat cannot be selected; a seat becoming free again keeps its state.
-    run("
-        tap 0 => changed S-A-1
-        tap 1 => changed S-A-1 S-A-2
-        status 0 1 => unavailable S-A-1 ; changed S-A-2
-        tap 0 => invalid not_free S-A-1
-        status 1 0 =>
-        visual uh........
-        status 0 0 =>
-        tap 0 => changed S-A-2 S-A-1
-    ");
-    // Host commands, by label or idx, all or nothing.
-    run("
-        select S-A-1 S-B-2 S-A-1 => changed S-A-1 S-B-2
-        select S-A-3 nope => error InvalidInput
-        select# 2 9999 => error InvalidInput
-        status 2 1 =>
-        select S-A-3 S-A-4 => invalid not_free S-A-3
-        select# 3 0 => changed S-A-1 S-B-2 S-A-4
-        deselect S-A-1 nope => error InvalidInput
-        deselect S-A-1 S-A-9 => changed S-B-2 S-A-4
-        clear => changed
-        clear =>
-        visual ..u.......
-    ");
-    // A new chart forgets the selection.
-    run("
-        tap 0 => changed S-A-1
-        reload => changed
-        visual ..........
-        tap 1 => changed S-A-2
-    ");
+    use Step::*;
+    // Each scenario: steps, each with the selection events it emits ("; "
+    // between events).
+    let scenarios: &[&[(Step, &str)]] = &[
+        // Select, then the hold succeeds; deselecting a held seat releases it.
+        &[
+            (Tap(0), r#"changed ["S-A-1"]; hold 1 ["S-A-1"]"#),
+            (Visual("p........."), ""),
+            (Ok(1), ""),
+            (Visual("h........."), ""),
+            (Tap(0), r#"changed []; release 2 ["S-A-1"]"#),
+            (Visual(".........."), ""),
+        ],
+        // The hold fails: taken by someone else, or refused by a rule. Seats
+        // the server does not name are requested again.
+        &[
+            (Tap(0), r#"changed ["S-A-1"]; hold 1 ["S-A-1"]"#),
+            (Fail(1, "not_free", &[0]), "unavailable S-A-1; changed []"),
+            (Tap(0), r#"changed ["S-A-1"]; hold 2 ["S-A-1"]"#),
+            (Tap(1), r#"changed ["S-A-1", "S-A-2"]"#),
+            (Ok(2), r#"hold 3 ["S-A-2"]"#),
+            (Tap(2), r#"changed ["S-A-1", "S-A-2", "S-A-3"]"#),
+            (
+                Fail(3, "orphan_rule_violated", &[1]),
+                r#"invalid orphan_rule_violated ["S-A-2"]; changed ["S-A-1", "S-A-3"]; hold 4 ["S-A-3"]"#,
+            ),
+            (
+                Fail(4, "hold_limit_exceeded", &[]),
+                r#"invalid hold_limit_exceeded ["S-A-3"]; changed ["S-A-1"]"#,
+            ),
+            (Visual("h........."), ""),
+        ],
+        // Deselected while the hold is in flight: released if it succeeded,
+        // nothing if it failed.
+        &[
+            (Tap(0), r#"changed ["S-A-1"]; hold 1 ["S-A-1"]"#),
+            (Tap(0), "changed []"),
+            (Ok(1), r#"release 2 ["S-A-1"]"#),
+            (Tap(1), r#"changed ["S-A-2"]; hold 3 ["S-A-2"]"#),
+            (Tap(1), "changed []"),
+            (Fail(3, "not_free", &[1]), ""),
+            (Visual(".........."), ""),
+        ],
+        // On, off and on again: before the request went out, no request;
+        // while in flight, the result applies.
+        &[
+            (Tap(0), r#"changed ["S-A-1"]; hold 1 ["S-A-1"]"#),
+            (Tap(1), r#"changed ["S-A-1", "S-A-2"]"#),
+            (Tap(1), r#"changed ["S-A-1"]"#),
+            (Tap(0), "changed []"),
+            (Tap(0), r#"changed ["S-A-1"]"#),
+            (Ok(1), ""),
+            (Visual("h........."), ""),
+            // A held seat deselected and reselected while a hold is in
+            // flight is never released.
+            (Tap(2), r#"changed ["S-A-1", "S-A-3"]; hold 2 ["S-A-3"]"#),
+            (Tap(0), r#"changed ["S-A-3"]"#),
+            (Tap(0), r#"changed ["S-A-3", "S-A-1"]"#),
+            (Ok(2), ""),
+            (Visual("h.h......."), ""),
+        ],
+        // One request in flight; the rest coalesce, releases first.
+        &[
+            (Tap(0), r#"changed ["S-A-1"]; hold 1 ["S-A-1"]"#),
+            (Ok(1), ""),
+            (Tap(1), r#"changed ["S-A-1", "S-A-2"]; hold 2 ["S-A-2"]"#),
+            (Tap(0), r#"changed ["S-A-2"]"#),
+            (Tap(3), r#"changed ["S-A-2", "S-A-4"]"#),
+            (Tap(4), r#"changed ["S-A-2", "S-A-4", "S-A-5"]"#),
+            (Ok(2), r#"release 3 ["S-A-1"]; hold 4 ["S-A-4", "S-A-5"]"#),
+            // Late, repeated and unknown results change nothing.
+            (Ok(2), "error InvalidInput"),
+            (Ok(99), "error InvalidInput"),
+            (Visual(".h.pp....."), ""),
+        ],
+        // The maximum refuses a tap; the minimum reports readiness.
+        &[
+            (Rules(Some(2), Some(2)), "invalid min []"),
+            (Tap(0), r#"changed ["S-A-1"]; hold 1 ["S-A-1"]"#),
+            (Tap(1), r#"changed ["S-A-1", "S-A-2"]; valid"#),
+            (Tap(2), r#"invalid max ["S-A-3"]"#),
+            (Tap(1), r#"changed ["S-A-1"]; invalid min ["S-A-1"]"#),
+            (Rules(Some(0), None), "error InvalidInput"),
+            (Rules(Some(101), None), "error InvalidInput"),
+            (Rules(Some(1), Some(2)), "error InvalidInput"),
+            (Rules(None, None), "valid"),
+            (Visual("p........."), ""),
+        ],
+        // Manual session: no requests; a selected seat taken by someone else
+        // leaves the selection; an unavailable seat cannot be selected.
+        &[
+            (Manual, ""),
+            (Tap(0), r#"changed ["S-A-1"]"#),
+            (Visual("h........."), ""),
+            (Status(0, 1), "unavailable S-A-1; changed []"),
+            (Tap(0), r#"invalid not_free ["S-A-1"]"#),
+            (Visual("u........."), ""),
+            (Tap(1), r#"changed ["S-A-2"]"#),
+            (Tap(1), "changed []"),
+            // A snapshot knocks out what is not the buyer's.
+            (Tap(2), r#"changed ["S-A-3"]"#),
+            (Snapshot(&[0, 2]), "unavailable S-A-3; changed []"),
+        ],
+        // The private set: restores the selection after a reload, survives
+        // snapshots, and a held seat that leaves it is lost.
+        &[
+            (Reload, ""),
+            (Snapshot(&[0, 1, 5]), ""),
+            (Private(&[0, 1]), r#"changed ["S-A-1", "S-A-2"]"#),
+            (Snapshot(&[0, 1, 5]), ""),
+            (Visual("hh...u...."), ""),
+            (Private(&[1]), r#"lost ["S-A-1"]; changed ["S-A-2"]"#),
+            (Visual("uh...u...."), ""),
+            // Released: drawn available until a set without it confirms the
+            // release; a set still listing it restores nothing.
+            (Tap(1), r#"changed []; release 1 ["S-A-2"]"#),
+            (Private(&[1]), ""),
+            (Visual("u....u...."), ""),
+            (Private(&[]), "changed []"),
+            (Visual("uu...u...."), ""),
+            (Status(1, 0), ""),
+            (Visual("u....u...."), ""),
+        ],
+        // A status change confirms a release over an older set: selecting
+        // the seat again asks for a new hold.
+        &[
+            (Reload, ""),
+            (Snapshot(&[0]), ""),
+            (Private(&[0]), r#"changed ["S-A-1"]"#),
+            (Tap(0), r#"changed []; release 1 ["S-A-1"]"#),
+            (Status(0, 0), ""),
+            (Tap(0), r#"changed ["S-A-1"]; hold 2 ["S-A-1"]"#),
+            (Private(&[]), r#"changed ["S-A-1"]"#),
+            (Visual("p........."), ""),
+            // Deselected in flight, then taken: a failed hold no longer
+            // draws it as the buyer's.
+            (Tap(0), "changed []"),
+            (Visual(".........."), ""),
+            (Status(0, 1), ""),
+            (Visual(".........."), ""),
+            (Fail(2, "object_not_free", &[0]), ""),
+            (Visual("u........."), ""),
+        ],
+        // The set confirms a hold in flight; a lost token loses everything.
+        &[
+            (Tap(0), r#"changed ["S-A-1"]; hold 1 ["S-A-1"]"#),
+            (Status(0, 1), ""),
+            (Private(&[0]), r#"changed ["S-A-1"]"#),
+            (Visual("h........."), ""),
+            (Ok(1), ""),
+            (Tap(1), r#"changed ["S-A-1", "S-A-2"]; hold 2 ["S-A-2"]"#),
+            (Tap(2), r#"changed ["S-A-1", "S-A-2", "S-A-3"]"#),
+            (
+                Fail(2, "not_found", &[]),
+                r#"lost ["S-A-1", "S-A-2", "S-A-3"]; changed []"#,
+            ),
+            (Visual("u........."), ""),
+            (Tap(1), r#"changed ["S-A-2"]; hold 3 ["S-A-2"]"#),
+        ],
+        // The buyer's own hold turns the public status unavailable; that
+        // never knocks out the seat. A seat whose request has not gone out
+        // is knocked out.
+        &[
+            (Tap(0), r#"changed ["S-A-1"]; hold 1 ["S-A-1"]"#),
+            (Status(0, 1), ""),
+            (Visual("p........."), ""),
+            (Tap(1), r#"changed ["S-A-1", "S-A-2"]"#),
+            (Status(1, 1), r#"unavailable S-A-2; changed ["S-A-1"]"#),
+            (Ok(1), ""),
+            (Status(0, 1), ""),
+            (Visual("hu........"), ""),
+            // Deselected, it is drawn available until the release is
+            // confirmed; tapped again before the release goes out, it is
+            // still the buyer's.
+            (Tap(2), r#"changed ["S-A-1", "S-A-3"]; hold 2 ["S-A-3"]"#),
+            (Tap(0), r#"changed ["S-A-3"]"#),
+            (Visual(".up......."), ""),
+            (Tap(0), r#"changed ["S-A-3", "S-A-1"]"#),
+            (Visual("hup......."), ""),
+        ],
+        // Host commands, by label or idx, all or nothing.
+        &[
+            (
+                Select(&["S-A-1", "S-B-2", "S-A-1"]),
+                r#"changed ["S-A-1", "S-B-2"]; hold 1 ["S-A-1", "S-B-2"]"#,
+            ),
+            (Select(&["S-A-3", "nope"]), "error InvalidInput"),
+            (SelectIdx(&[2, 9999]), "error InvalidInput"),
+            (Status(2, 1), ""),
+            (Select(&["S-A-3", "S-A-4"]), r#"invalid not_free ["S-A-3"]"#),
+            (SelectIdx(&[3, 0]), r#"changed ["S-A-1", "S-B-2", "S-A-4"]"#),
+            (Deselect(&["S-A-1", "nope"]), "error InvalidInput"),
+            (
+                Deselect(&["S-A-1", "S-A-9"]),
+                r#"changed ["S-B-2", "S-A-4"]"#,
+            ),
+            (Clear, "changed []"),
+            (Ok(1), r#"release 2 ["S-A-1", "S-B-2"]"#),
+            (Visual("..u......."), ""),
+        ],
+        // A new chart forgets the selection without requests; a result for
+        // the old chart is unknown.
+        &[
+            (Tap(0), r#"changed ["S-A-1"]; hold 1 ["S-A-1"]"#),
+            (Reload, "changed []"),
+            (Ok(1), "error InvalidInput"),
+            (Visual(".........."), ""),
+            (Tap(1), r#"changed ["S-A-2"]; hold 2 ["S-A-2"]"#),
+            (Manual, "error InvalidInput"),
+        ],
+    ];
+    for steps in scenarios {
+        run(steps);
+    }
+}
+
+/// A hold result, the private set confirming it and the delta showing the
+/// seat unavailable, in every order: the seat is never drawn unavailable and
+/// ends held. Restoring before the chart arrives works the same.
+#[test]
+fn own_holds_in_any_order() {
+    #[derive(Clone, Copy, Debug)]
+    enum S {
+        Result,
+        Set,
+        Delta,
+    }
+    use S::*;
+    let orders = [
+        [Result, Set, Delta],
+        [Result, Delta, Set],
+        [Set, Result, Delta],
+        [Set, Delta, Result],
+        [Delta, Result, Set],
+        [Delta, Set, Result],
+    ];
+    let private = |e: &mut E| {
+        e.handle(Command::SetPrivateHolds {
+            objects: vec![0],
+            expires_at_ms: 1,
+        });
+    };
+    for order in orders {
+        let mut e = hall();
+        snapshot(&mut e, 0, &[]);
+        let at = seat_pos(&e, 0);
+        click(&mut e, MOUSE, at, 1000.0);
+        for step in order {
+            match step {
+                Result => e.handle(Command::HoldResult {
+                    request: 1,
+                    outcome: HoldOutcome::Ok,
+                }),
+                Set => private(&mut e),
+                Delta => drop(delta(&mut e, 0, &[(0, 1)])),
+            }
+            assert!(matches!(&visuals(&e)[..1], "p" | "h"), "{order:?}");
+        }
+        assert_eq!(visuals(&e), "h.........", "{order:?}");
+        let events: Vec<Event> = e.drain_events().collect();
+        assert!(!summary(&events).iter().any(|l| l.starts_with("error")));
+    }
+    let mut e = Engine::new(Fake::default());
+    private(&mut e);
+    let mut state = vec![0; 20];
+    state[0] = 1;
+    e.handle(Command::SetSnapshot { seq: 3, state });
+    e.handle(Command::LoadChart { ccf: compile(HALL) });
+    let events: Vec<Event> = e.drain_events().collect();
+    assert_eq!(summary(&events), [r#"changed ["S-A-1"]"#]);
+    assert!(events.contains(&Event::SelectionChanged {
+        selected: vec![e.info(0)],
+        expires_at_ms: Some(1),
+    }));
+    assert_eq!(visuals(&e), "h.........");
 }
 
 #[test]
@@ -204,7 +484,7 @@ fn hostile_selection_commands_are_bounded() {
     let objects = vec![ObjectRef::Label("S-A-1".into()); 5000];
     e.handle(Command::Select { objects });
     let events: Vec<Event> = e.drain_events().collect();
-    assert_eq!(summary(&events), ["changed S-A-1"]);
+    assert_eq!(summary(&events).len(), 2, "{events:?}");
     let objects = (0..5000)
         .map(|i| ObjectRef::Label(format!("x{i}")))
         .collect();
@@ -248,9 +528,9 @@ fn a_tap_is_one_frame_and_one_sub_range_upload() {
     assert_eq!(e.backend.buffer_writes[writes..], [(dynamic, 5 * 4, 4)]);
     assert_eq!(
         e.scene.as_ref().unwrap().scene.visual[5],
-        visual::SELECTED_HELD
+        visual::SELECTED_PENDING
     );
-    assert_eq!(summary(&events), ["changed S-A-6"]);
+    assert!(summary(&events).iter().any(|l| l.starts_with("hold 1")));
     // Nothing more is drawn or asked for.
     assert!(!wants_frame(&tick(&mut e, 1100.0)));
     assert_eq!(e.backend.draws.len(), draws + 1);
@@ -293,7 +573,7 @@ fn tolerances_differ_for_touch_and_mouse() {
         let [x, y] = seat_pos(&e, 5);
         let off = 11.0 * 20.0 / seat_px(&e);
         click(&mut e, ty, [x + off, y], 1000.0);
-        let selected = e.scene.as_ref().unwrap().scene.visual[5] == visual::SELECTED_HELD;
+        let selected = e.scene.as_ref().unwrap().scene.visual[5] == visual::SELECTED_PENDING;
         assert_eq!(selected, hits, "{ty:?}");
     }
 }

@@ -50,9 +50,9 @@ The engine is driven only by commands and emits only events. Both are plain data
 | Command | Payload |
 |---|---|
 | `LoadChart` | CCF bytes (public or full artefact); replaces the loaded chart |
-| `SetSnapshot` | `seq`, state bytes |
-| `ApplyDelta` | `from_seq`, `to_seq`, changes |
-| `SetPrivateHolds` | List of `idx`, expiry |
+| `SetSnapshot` | `seq`, one public code per object (§17) |
+| `ApplyDelta` | `from_seq`, `to_seq`, changes (`idx`, code) in increasing `idx` |
+| `SetPrivateHolds` | The `idx` the buyer's hold token holds (increasing, at most 100), and its expiry |
 | `Resize` | Width, height, device pixel ratio, maximum ratio (`maxDpr`) |
 | `Pointer` | Kind (down, move, up, cancel), pointer id, type, position, time |
 | `Wheel` | Delta in CSS pixels, position, modifier flags, time |
@@ -61,11 +61,12 @@ The engine is driven only by commands and emits only events. Both are plain data
 | `SetGestureHandling` | `greedy`, `cooperative`, `none` (§14) |
 | `SetReducedMotion` | On or off (§13, `11-accessibility.md` §6) |
 | `Select` / `Deselect` / `ClearSelection` | Labels or `idx` |
-| `HoldResult` | Request id, success or per-object failures |
+| `HoldResult` | Request id, success, or the failure code and the objects it names |
 | `SetPricing` | Category keys with display prices |
 | `SetFilter` | Categories, price range, accessible only |
 | `SetTheme` | A built-in theme (`light`, `dark`, `high-contrast`) and token values to apply over it (§19) |
 | `SetMode` | `picker`, `static`, `spotlight`, `manager` |
+| `SetSessionMode` | `hold` (default: a selection emits `HoldRequest`) or `manual` (no hold or release requests; the host holds at checkout). Refused while anything is selected or a request is outstanding |
 | `SetRules` | Maximum (1 to 100, default 100), minimum, validators, group size |
 | `SetFloor` | Floor id |
 | `Tick` | Frame time |
@@ -78,11 +79,13 @@ The engine is driven only by commands and emits only events. Both are plain data
 | `Ready` | Chart metadata: name; floors (name, level, seats); sections (label, floor, seats); categories (key, label, colour, objects); seat and object counts |
 | `NeedFrame` | — |
 | `HoldRequest` / `ReleaseRequest` | Request id, labels |
-| `SelectionChanged` | Selected objects with label, category, section, row, seat, flags |
+| `SelectionChanged` | Selected objects with label, category, section, row, seat, flags; when the buyer's holds expire, if known |
 | `SelectionInvalid` / `SelectionValid` | Rule and offending objects (§16) |
 | `ObjectHover` / `ObjectFocus` | Object details, anchor position in screen space (the object's centre in CSS pixels); none when it leaves every object |
 | `SectionEnter` | Section |
-| `ObjectUnavailable` | A selected object was taken by someone else; it is no longer selected |
+| `ObjectUnavailable` | A selected object was taken by someone else, or its hold failed with `not_free`; it is no longer selected |
+| `HoldLost` | The buyer's hold on these selected objects is gone (the token expired or is unknown, or the objects were released elsewhere); they are no longer selected |
+| `Resync` | A delta did not follow the state shown: the adapter fetches a new snapshot. Carries the engine's `seq`, if any; emitted once until a snapshot arrives |
 | `CameraChanged` | Centre, zoom, level of detail |
 | `Announce` | Text for assistive technology |
 | `Metrics` | Timing marks and frame statistics |
@@ -131,7 +134,7 @@ Decoded from CCF into structure-of-arrays, indexed by `idx` (`cavea_render::scen
 Plus per-row, per-segment, per-section, per-chunk and per-floor tables: the decoded chart itself, kept whole.
 
 - **Active floor.** Only the active floor's `idx` range is drawn, and the camera fits that floor (§13). Until `SetFloor` exists it is the first floor; the other floors' seats are loaded and uploaded but not drawn.
-- **Status entry point.** Setting the status of an `idx` range updates `status` and `visual` and grows the dynamic buffer's dirty range; `SetSnapshot` and `ApplyDelta` (§17) call it once per run of equal status.
+- **Status.** `SetSnapshot` and `ApplyDelta` (§17) are the only ways status changes; each updates `status` and `visual` and grows the dynamic buffer's dirty range.
 - **Memory at 100,000 seats:** 18 bytes per seat, 1.8 MB, for these arrays, plus the chart's tables (about 0.2 MB for the synthetic 100,000-seat stadium, measured locally). Loading also holds the 16 bytes per seat of buffer data being uploaded until the upload returns.
 
 Derived at load:
@@ -356,25 +359,41 @@ tap → hit test → rules check ──fail──▶ SelectionInvalid (no state 
    visual = selected-held    revert, ObjectUnavailable or SelectionInvalid
 ```
 
-- Rules run locally first (`02-domain-model.md` §12) using the same code the server uses (`cavea_core::rules`). A seat that is not available (public status other than 0) is refused with `SelectionInvalid` rule `not_free`; one over the maximum with rule `max`. Neither changes anything.
+- Rules run locally first (`02-domain-model.md` §12) using the same code the server uses (`cavea_core::rules`). A seat that is not available (public status other than 0, and not still held by this buyer) is refused with `SelectionInvalid` rule `not_free`; one over the maximum with rule `max`. Neither changes anything.
 - The visual state changes in the frame of the `Tick` that takes the tap: one dynamic-buffer sub-range upload.
-- At most `MAX_SELECTED` (100) seats are selected, kept in the order selected.
-- Hold requests for one token are sent in order, one in flight at a time; taps made meanwhile are coalesced into the next request. (Hold requests, results and revert are REN-034. Until then the engine selects as in a manual session: a tap selects at once, visual state selected-held, and deselecting sends nothing.)
-- **Readiness:** `SelectionValid` and `SelectionInvalid` with rule `min` (objects: the selection) report, when it changes, whether the selection meets the minimum for checkout. Every other `SelectionInvalid` reports objects that were refused; the selection is as it was. `SetRules` refuses a maximum below the current selection.
+- Per seat, the selection is: not selected, selected and pending (hold not yet requested, or in flight), or selected and held. At most `MAX_SELECTED` (100) seats are selected.
+- Hold requests for one token are sent in order, one in flight at a time; taps made meanwhile are coalesced into the next request. Precisely:
+  - Taps of one frame, and all taps made while a hold is in flight, go out together in the next `HoldRequest`.
+  - A seat tapped on and off again before its request went out is in no request.
+  - A seat deselected while its hold is in flight stays in that request; if the hold succeeds the seat is released in the next `ReleaseRequest`, otherwise nothing is sent. Tapped on again before the result, it is selected again and the result applies to it.
+  - A held seat deselected while a hold is in flight is released after the result; tapped on again before that, it is held again with no request.
+  - Releases go out before holds, and only while no hold is in flight, so a release never overtakes the hold of the same seat. Releases have no result; the host sends requests in the order emitted.
+- `HoldResult` ok: the request's seats become held. Failed: holds are all or nothing (`02-domain-model.md` §4.3), so no seat of the request is held. Each seat the failure names reverts: `ObjectUnavailable` for `not_free` (or `object_not_free`), otherwise `SelectionInvalid` with the code as the rule. Seats the failure does not name stay pending and go out in the next request; if it names none of the request's seats, all revert with the first code. A result for an unknown request id, or a second result, is an `InvalidInput` error and changes nothing.
+- **Readiness:** `SelectionValid` and `SelectionInvalid` with rule `min` (objects: the selection) report, when it changes, whether the selection meets the minimum for checkout. Every other `SelectionInvalid` reports objects that were refused; the selection is as it was.
 - `Select`, `Deselect` and `ClearSelection` behave as taps and take labels or `idx`; `Select` is all or nothing (any unavailable seat, or too many, refuses the whole command). An unknown label or `idx` is an `InvalidInput` error for the whole command. Labels resolve through an index of every seat's full label, built on the first lookup by label (8 bytes per seat; 9 ms for 100,000 seats, measured locally).
 - **Group selection:** with a group size *n*, one tap selects the *n* seats in the tapped seat's segment that contain it and create the fewest orphans, preferring the window centred on the tap.
-- `session: "manual"` skips hold requests; the host holds at checkout.
-- If a status change (a delta) makes a selected object unavailable, it is removed from the selection and `ObjectUnavailable` fires. (With hold requests, the buyer's own hold also makes the public status unavailable; telling it from someone else's is REN-034, through `SetPrivateHolds` or the engine's own requests.)
+- `session: "manual"` (`SetSessionMode`) skips hold requests; a tap selects at once (visual state selected-held) and deselecting sends no release.
+- **Token gone.** A failure with code `not_found` means the hold token expired or never existed, and every hold with it (`08-server.md` §6.4; the engine's labels all come from the chart, so no object can be unknown). The whole selection leaves with one `HoldLost` naming it and one `SelectionChanged`; no release is sent, the private set is forgotten, and the next tap sends a new `HoldRequest` (the adapter creates a token or reports the session over).
+- **Hostile results.** A result for an unknown request id, a release's id, or a second result is an `InvalidInput` error and changes nothing. Failures naming objects outside the request are ignored; if none is in it, the whole request reverts. Every scan is bounded by the request (at most 100 seats) and the input's length.
+- If a status change (a snapshot or a delta) makes a selected object unavailable and that is not the buyer's own hold, it is removed from the selection and `ObjectUnavailable` fires. Own holds (§17): a held seat, a seat whose hold is in flight (its `HoldResult` decides), and any seat in the private set or released but not yet confirmed. So a seat whose request has not gone out, or any seat in a manual session outside the private set, is knocked out.
 - Deselecting sends a release.
-- `LoadChart` forgets the selection, hover and focus, and emits `SelectionChanged` if anything was selected.
+- `LoadChart` forgets the selection, hover and focus without release requests (the holds stay on the token, which the host owns) and emits `SelectionChanged` if anything was selected. It also forgets `seq`, the state and the private set: the adapter sends them again for the new chart (CLOSE 2 is followed by a resubscribe, `08-server.md` §8.6).
 
 ## 17. Applying state
 
-- **Snapshot:** one pass computes `visual` for every object and uploads the dynamic buffer once.
-- **Delta:** changed objects update `status`, `visual`, the section counters and a dirty range. Dirty ranges are merged and uploaded once per frame.
-- **Private holds:** objects held under the buyer's own token are restored as selected-held after a reload (`restoreHold`).
+State arrives as commands with decoded data. `Command::from_frame` turns a SNAPSHOT, DELTA or PRIVATE frame of `08-server.md` §8 into `SetSnapshot`, `ApplyDelta` or `SetPrivateHolds` (one allocation, nothing per seat across the JavaScript boundary); on the web `View.applyFrame(bytes)` does that for the `caveaServer` adapter, and `View.setSnapshot(seq, codes)` takes one `Uint8Array` of codes from a custom adapter that has no server frames. A frame that does not decode is refused whole, as is one naming any `idx` at or past the chart's object count, in its area entries too (`08-server.md` §8.6). Before a chart is loaded no count is known, so a DELTA or PRIVATE frame with area entries is refused then (servers send none yet); the engine then checks the decoded state against its chart, and anything that does not fit is an `InvalidInput` error that changes nothing: a snapshot whose length is not the object count, a code above 1, a delta or private set whose `idx` are not increasing or reach past the objects, a private set of more than 100. Codes of objects past the seats (tables, booths, areas) are accepted and not drawn yet.
+
+- **Snapshot:** replaces all state. One pass copies the codes and computes `visual` for every seat, the selection's seats are then drawn as theirs, and the whole dynamic buffer is uploaded once at the next frame. It records `seq`. Selected seats it shows unavailable that are not the buyer's own (§16) leave with `ObjectUnavailable`. A snapshot (and a private set) that arrives before any chart is kept and applied when the chart loads (§4).
+- **Delta:** applied only when its `from_seq` is the engine's `seq`, which becomes `to_seq`; it may carry no changes. A gap, a repeat, or a delta before any snapshot changes nothing and emits `Resync` (once until a snapshot arrives); the adapter fetches a new snapshot and the engine never guesses. Changed seats update `status` and `visual` and grow the dirty range; selected seats it makes unavailable leave as for a snapshot. Section counters come with REN-022.
+- **One dirty range.** All changes between two frames merge into one range, uploaded once per frame: two far-apart changes upload everything between them. Measured locally (release build, AMD Ryzen 9 7900X, synthetic 100,000-seat stadium, the test backend's upload): a 9,502-change delta spread over the chart (10,000 random changes, coalesced) decodes and applies in 0.11 ms, and with encoding the 400 KB it uploads, 0.19 ms, against the 2 ms budget for 10,000 changes; a 100,000-seat snapshot (12.5 KB frame) applies in 0.04 ms, 0.12 ms with its upload. A spread-out delta covers most of the buffer under any small set of ranges, so a set of ranges would save upload bytes only for sparse deltas; that is left until a device measurement shows the bytes matter.
+- **Own holds.** The buyer's hold makes the seat's public status unavailable, so status alone cannot tell the buyer's seats from others'. `SetPrivateHolds` carries the full set of seats the buyer's token holds, replacing the previous one:
+  - A seat that enters the set and is selected becomes held (the set confirms a hold whose result has not arrived; the result then changes nothing, or reverts the seat if it failed). One that is not selected is selected as held: that restores the selection after a reload, with one `SelectionChanged`. The restore stops at 100 selected seats; it ignores the maximum rule, since the seats are already held.
+  - A held seat that leaves the set without the buyer deselecting it (the token's hold expired, or another tab released it) leaves the selection with `HoldLost`. A pending seat that leaves it is decided by its `HoldResult`.
+  - Seats the buyer gave up (deselected while their hold is in flight, waiting to be released, or released but not yet absent from a set) are ignored by the set: a set still listing them is older than the release. A set without the seat, a status change for it, or a snapshot confirms the release; a status change or snapshot also drops the seat from the older set, so selecting it again requests a new hold. Until then the seat is drawn available, and tapping it again takes it back (with no request if its release has not gone out).
+  - Orderings. For one tapped seat, the hold result, the private set confirming it and the delta marking it unavailable may arrive in any order: the seat is selected-pending until the first of the result and the set, then selected-held, and never drawn unavailable. A delta marking a pending or held seat unavailable never knocks it out. After a reload, the snapshot and the private set may arrive in either order, before or after the chart.
+  - The one ordering the engine cannot tell apart: a seat deselected, released and selected again whose new hold result arrives before the set that confirms the release. That set looks like a lost hold, so the seat leaves with `HoldLost` and comes back held with the next set. It is transient, and nothing is left stuck.
+  - The expiry of a non-empty set is reported in `SelectionChanged` (`expiresAt` on the web) whenever it changes, for the SDK's hold timer.
 - **Pulse:** objects that just became unavailable set the pulse bit for 400 ms, unless reduced motion is requested.
-- Sequence gaps trigger a resync through the adapter; the engine never guesses.
 
 ## 18. Frame scheduling
 
