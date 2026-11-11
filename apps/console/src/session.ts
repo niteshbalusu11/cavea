@@ -154,3 +154,28 @@ export async function signOut(signal: AbortSignal): Promise<void> {
   }
   end("left");
 }
+
+/** Accepts an invitation (09 §7): signed in, as the session's user (no
+ * password); otherwise as a new account with `password`, signed in by the
+ * answer. The joined workspace becomes the selected one. */
+export async function acceptInvitation(
+  token: string,
+  password: string | undefined,
+  signal: AbortSignal,
+): Promise<void> {
+  const before = new Set(me()?.workspaces.map((w) => w.id) ?? []);
+  settle();
+  const body = password === undefined ? { token } : { token, password };
+  const answer = checkMe(await call("acceptInvitation", { body }, signal));
+  const joined = answer.workspaces.find((w) => !before.has(w.id));
+  if (joined !== undefined) chooseWorkspace(joined.id);
+  adoptNew(answer);
+}
+
+/** Shows a workspace's new name at once, after a rename. */
+export function adoptWorkspaceName(id: string, name: string): void {
+  const s = session();
+  if (s.kind !== "signedIn") return;
+  const workspaces = s.me.workspaces.map((w) => (w.id === id ? { ...w, name } : w));
+  setSession({ kind: "signedIn", me: { ...s.me, workspaces } });
+}
