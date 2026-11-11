@@ -53,6 +53,11 @@ impl Settings {
         self.hold_ttl_seconds.unwrap_or(DEFAULT_HOLD_TTL)
     }
 
+    /// The object limit of this event's publishable-key hold tokens.
+    pub(super) fn max_objects(self) -> u32 {
+        self.max_objects.unwrap_or(DEFAULT_MAX_OBJECTS)
+    }
+
     fn check(self) -> Result<Self, ApiError> {
         let ttl = cavea_engine::limits::MIN_HOLD_TTL_SECS..=cavea_engine::limits::MAX_HOLD_TTL_SECS;
         if !ttl.contains(&self.hold_ttl()) {
@@ -74,7 +79,7 @@ impl Settings {
     fn effective(self) -> Value {
         json!({
             "hold_ttl_seconds": self.hold_ttl(),
-            "max_objects": self.max_objects.unwrap_or(DEFAULT_MAX_OBJECTS),
+            "max_objects": self.max_objects(),
         })
     }
 }

@@ -61,8 +61,8 @@ where
     }
 }
 
-/// The real routes, plus `GET /test/public` standing in for the public
-/// endpoints (SRV-015) until they exist.
+/// The real routes, plus `GET /test/public`: a bare publishable-key route for
+/// the credential matrix.
 fn api(pool: &PgPool, admin: Option<&str>) -> Router {
     api_with(pool, admin, ServerClock::System, "test").0
 }
@@ -687,6 +687,63 @@ const ROUTES: &[(Method, &str, Needs, u16, Option<&str>)] = &[
         Some(r#"{"hold_token":"{token}"}"#),
     ),
     (
+        Method::POST,
+        "/v1/events/{event}/book",
+        Needs::Secret,
+        200,
+        Some(r#"{"objects":{"version":"{hash}","idx":[1]},"order_ref":"o-1"}"#),
+    ),
+    (
+        Method::POST,
+        "/v1/events/{event}/release",
+        Needs::Secret,
+        200,
+        Some(r#"{"objects":{"version":"{hash}","idx":[1]}}"#),
+    ),
+    (
+        Method::POST,
+        "/v1/events/{event}/change-status",
+        Needs::Secret,
+        200,
+        Some(r#"{"objects":{"version":"{hash}","idx":[2]},"status":"blocked"}"#),
+    ),
+    (
+        Method::GET,
+        "/v1/public/events/{event}",
+        Needs::Publishable,
+        200,
+        None,
+    ),
+    (
+        Method::POST,
+        "/v1/public/hold-tokens",
+        Needs::Publishable,
+        201,
+        Some(r#"{"event":"{event}"}"#),
+    ),
+    // The token goes in `Cavea-Hold-Token` (see `HEADER_TOKEN`).
+    (
+        Method::GET,
+        "/v1/public/hold-tokens/current",
+        Needs::Publishable,
+        200,
+        None,
+    ),
+    (
+        Method::POST,
+        "/v1/public/events/{event}/hold",
+        Needs::Publishable,
+        200,
+        Some(r#"{"hold_token":"{token}","objects":{"version":"{hash}","idx":[3]}}"#),
+    ),
+    (
+        Method::POST,
+        "/v1/public/events/{event}/release",
+        Needs::Publishable,
+        200,
+        Some(r#"{"hold_token":"{token}"}"#),
+    ),
+    (
         Method::DELETE,
         "/v1/hold-tokens/{token}",
         Needs::Secret,
@@ -712,6 +769,11 @@ const ROUTES: &[(Method, &str, Needs, u16, Option<&str>)] = &[
 /// Placeholders that name an identifier of the tenant under test.
 const IDENTIFIERS: [&str; 5] = ["{key}", "{chart}", "{hash}", "{event}", "{token}"];
 
+/// The route that takes the tenant's hold token in `Cavea-Hold-Token`.
+const HEADER_TOKEN: &str = "/v1/public/hold-tokens/current";
+
+const HOLD_TOKEN: header::HeaderName = header::HeaderName::from_static("cavea-hold-token");
+
 /// T5: every route, called with each wrong kind of credential, is refused;
 /// called with workspace B's key of the right kind and workspace A's
 /// identifiers, it is `404` if it names one, and never reveals anything of A.
@@ -728,15 +790,17 @@ async fn tenant_isolation() {
         let a = Tenant::create(&app, "a").await;
         let b = Tenant::create(&app, "b").await;
         for (method, template, needs, ok, body) in ROUTES {
-            let names_identifier = IDENTIFIERS
-                .iter()
-                .any(|p| template.contains(p) || body.is_some_and(|b| b.contains(p)));
+            let names_identifier = *template == HEADER_TOKEN
+                || IDENTIFIERS
+                    .iter()
+                    .any(|p| template.contains(p) || body.is_some_and(|b| b.contains(p)));
             let body = body.map(|b| serde_json::from_str::<Value>(&a.path(b)).unwrap());
             let path = a.path(template);
-            // `If-Match: *` for the routes that need one; the others ignore it.
-            let if_match = [(header::IF_MATCH, "*")];
+            // `If-Match: *` and A's hold token for the routes that need them;
+            // the others ignore them.
+            let headers = [(header::IF_MATCH, "*"), (HOLD_TOKEN, a.token.as_str())];
             let call = async |token: Option<&str>| {
-                call_with(&app, method.clone(), &path, token, &if_match, body.clone()).await
+                call_with(&app, method.clone(), &path, token, &headers, body.clone()).await
             };
             if *needs == Needs::Nothing {
                 // Any credential, of any workspace, or none: the same answer.

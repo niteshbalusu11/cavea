@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
+use axum::middleware;
 use axum::routing::get;
 use cavea_telemetry::RequestLayer;
 use serde::Serialize;
@@ -63,8 +64,8 @@ fn routes() -> Router<AppState> {
         .merge(public::routes())
 }
 
-/// Add the problem+json fallbacks, the default body limit and the request span
-/// layer. The layers only wrap routes added before them, so every route goes
+/// Add the problem+json fallbacks, the default body limit, CORS for the public
+/// routes and the request span layer. The layers only wrap routes added before them, so every route goes
 /// in before this.
 fn finish(routes: Router<AppState>, state: AppState) -> Router {
     routes
@@ -73,6 +74,7 @@ fn finish(routes: Router<AppState>, state: AppState) -> Router {
             ApiError::new(Code::NotFound).with_message("No such endpoint for this method.")
         })
         .layer(DefaultBodyLimit::max(extract::DEFAULT_BODY_LIMIT))
+        .layer(middleware::from_fn_with_state(state.clone(), public::cors))
         .layer(RequestLayer::new().quiet(&["/healthz"]))
         .with_state(state)
 }

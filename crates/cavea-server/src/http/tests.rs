@@ -49,6 +49,7 @@ fn state() -> AppState {
         lease_secs: std::num::NonZeroU32::MIN.saturating_add(14),
         heartbeat_secs: std::num::NonZeroU32::MIN.saturating_add(4),
         admin_key: None,
+        cors_origins: crate::config::CorsOrigins::Any,
     };
     // Never connects: no route under test reaches the database.
     let db = sqlx::postgres::PgPoolOptions::new().connect_lazy_with(Default::default());
@@ -552,6 +553,129 @@ async fn body_size_and_json_depth_limits() {
             }
             None => assert_eq!(response.status(), 200, "{uri} {len}: {json}"),
         }
+    }
+}
+
+/// CORS (08 §11) without a database: preflights for every public route,
+/// requests refused before the database (no credential) from an allowed and a
+/// disallowed origin under `*` and under a list, and none of it on a
+/// secret-key route or the chart files' open policy.
+#[tokio::test]
+async fn cors_on_public_routes_only() {
+    use crate::config::CorsOrigins;
+    let _serial = serial();
+    let allowed = "https://tickets.example";
+    let public = [
+        ("GET", "/v1/public/events/e"),
+        ("POST", "/v1/public/hold-tokens"),
+        ("GET", "/v1/public/hold-tokens/current"),
+        ("POST", "/v1/public/events/e/hold"),
+        ("POST", "/v1/public/events/e/release"),
+    ];
+    let send_from = async |app: &Router, method: &str, uri: &str, origin: &str, preflight| {
+        let mut request = Request::builder().uri(uri).header(header::ORIGIN, origin);
+        request = if preflight {
+            request
+                .method("OPTIONS")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, method)
+                .header(
+                    header::ACCESS_CONTROL_REQUEST_HEADERS,
+                    "authorization,content-type",
+                )
+        } else {
+            request.method(method)
+        };
+        send(app.clone(), request.body(Body::empty()).unwrap()).await
+    };
+    let cors_headers = |response: &Response<Body>| {
+        response
+            .headers()
+            .keys()
+            .filter(|k| k.as_str().starts_with("access-control-"))
+            .count()
+    };
+    for policy in [
+        CorsOrigins::Any,
+        CorsOrigins::List(vec![allowed.to_owned(), "http://localhost:5173".to_owned()]),
+    ] {
+        let mut state = state();
+        Arc::make_mut(&mut state.config).cors_origins = policy.clone();
+        let app = finish(super::routes(), state);
+        let listed = policy != CorsOrigins::Any;
+        let expected_allow = if listed { allowed } else { "*" };
+        for (method, uri) in public {
+            for (origin, ok) in [
+                (allowed, true),
+                ("https://TICKETS.example", true),
+                ("https://evil.example", !listed),
+            ] {
+                let label = format!("{policy:?} {method} {uri} {origin}");
+                // The preflight: no credential, answered from the setting.
+                let (response, _) = send_from(&app, method, uri, origin, true).await;
+                assert_eq!(response.status(), 204, "{label}");
+                let h = response.headers();
+                assert_eq!(h.get(header::VARY).is_some(), listed, "{label}");
+                assert!(h.get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS).is_none());
+                if ok {
+                    let allow = if listed { origin } else { "*" };
+                    assert_eq!(h[header::ACCESS_CONTROL_ALLOW_ORIGIN], allow, "{label}");
+                    assert!(
+                        h[header::ACCESS_CONTROL_ALLOW_METHODS]
+                            .to_str()
+                            .unwrap()
+                            .contains(method)
+                    );
+                    let headers = h[header::ACCESS_CONTROL_ALLOW_HEADERS].to_str().unwrap();
+                    for name in ["Authorization", "Content-Type", "Cavea-Hold-Token"] {
+                        assert!(headers.contains(name), "{label}: {headers}");
+                    }
+                    assert_eq!(h[header::ACCESS_CONTROL_MAX_AGE], "7200");
+                } else {
+                    assert_eq!(cors_headers(&response), 0, "{label}");
+                }
+                // The request itself, refused without a credential: the error
+                // is readable by an allowed page.
+                let (response, problem) = send_from(&app, method, uri, origin, false).await;
+                assert_problem(&response, &problem, Code::Unauthorized);
+                let h = response.headers();
+                if ok {
+                    let allow = if listed { origin } else { expected_allow };
+                    assert_eq!(h[header::ACCESS_CONTROL_ALLOW_ORIGIN], allow, "{label}");
+                    assert_eq!(
+                        h[header::ACCESS_CONTROL_EXPOSE_HEADERS],
+                        "Cavea-Request-Id, Retry-After"
+                    );
+                    assert!(h.get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS).is_none());
+                } else {
+                    assert_eq!(cors_headers(&response), 0, "{label}");
+                }
+            }
+        }
+        // Secret-key routes: no CORS at all; `OPTIONS` is an unknown method.
+        for (method, uri) in [
+            ("POST", "/v1/events/e/hold"),
+            ("GET", "/v1/hold-tokens/x"),
+            ("POST", "/v1/hold-tokens"),
+        ] {
+            let (response, problem) = send_from(&app, method, uri, allowed, true).await;
+            assert_problem(&response, &problem, Code::NotFound);
+            assert_eq!(cors_headers(&response), 0, "{uri}");
+            let (response, problem) = send_from(&app, method, uri, allowed, false).await;
+            assert_problem(&response, &problem, Code::Unauthorized);
+            assert_eq!(cors_headers(&response), 0, "{uri}");
+        }
+        // The chart files stay open to every origin, with no `Vary: Origin`.
+        let (response, _) = send_from(
+            &app,
+            "GET",
+            "/v1/public/charts/x.ccf",
+            "https://evil.example",
+            false,
+        )
+        .await;
+        assert_eq!(response.status(), 404);
+        assert_eq!(response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
+        assert!(response.headers().get(header::VARY).is_none());
     }
 }
 

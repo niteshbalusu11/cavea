@@ -85,7 +85,7 @@ pub(super) fn encode(reply: &Reply) -> String {
 }
 
 /// `None` if the text is not a reply this module wrote.
-pub(super) fn decode(text: &str) -> Option<Reply> {
+pub fn decode(text: &str) -> Option<Reply> {
     let v: Value = serde_json::from_str(text).ok()?;
     let u64_of = |key: &str| v.get(key)?.as_u64();
     let seq = || u64_of("seq");
