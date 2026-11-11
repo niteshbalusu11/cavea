@@ -189,8 +189,8 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **SRV-025** `cavea-telemetry` crate: structured logging setup, HTTP request spans with request id, child spans for mailbox wait, apply and commit (AGENTS.md Logging, 08 §15)
 - [x] **SRV-002** Schema and embedded migrations under an advisory lock (08 §5)
 - [x] **SRV-003** PostgreSQL store: pipelined batch commit transaction (08 §4.4)
-- [ ] **SRV-004** API keys: generation, hashing, prefixes, extractors (08 §11)
-- [ ] **SRV-005** Workspaces and admin-key bootstrap (08 §11)
+- [x] **SRV-004** API keys: generation, hashing, prefixes, extractors (08 §11)
+- [x] **SRV-005** Workspaces and admin-key bootstrap (08 §11)
 - [x] **SRV-006** Problem+json errors with the stable code table (08 §6.4)
 - [ ] **SRV-007** Chart endpoints: create, draft with etag, validate, publish, versions (08 §6.2)
 - [ ] **SRV-008** Compile on publish; store public, precompressed and full artefacts (03 §4.6)
@@ -209,7 +209,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [ ] **SRV-021** Graceful shutdown: flush, close subscribers, release leases (08 §14)
 - [ ] **SRV-022** Startup load of events with outstanding holds (08 §4.7)
 - [ ] **SRV-023** Dockerfile (distroless, multi-arch) and compose file (08 §14)
-- [ ] **SRV-024** Body size, object count and JSON depth limits (12 §3 T19)
+- [x] **SRV-024** Body size, object count and JSON depth limits (12 §3 T19)
 
 ### Realtime
 

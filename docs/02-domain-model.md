@@ -69,7 +69,7 @@ Rules:
 - A label is composed from a chart-level template, by default `{section}-{row}-{seat}`. Labels must be unique within a chart version; the compiler rejects duplicates.
 - The API accepts labels. Responses include both `label` and `oid`. Bookings store both, so a later rename does not lose history.
 - Customers choose their own keys for charts and events (`chart_key`, `event_key`): strings of up to 128 characters, unique in a workspace.
-- Server-generated identifiers are prefixed: `ws_` workspace, `cv_` chart version, `ht_` hold token, `sk_` secret key, `pk_` publishable key, `wh_` webhook endpoint, `req_` request.
+- Server-generated identifiers are prefixed: `ws_` workspace, `cv_` chart version, `ht_` hold token, `sk_` secret key, `pk_` publishable key, `key_` API key id (the id is not the key), `wh_` webhook endpoint, `req_` request.
 
 ## 4. Statuses
 

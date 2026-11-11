@@ -150,3 +150,9 @@ Each entry records what was decided, what was rejected and what would make us re
 - **Rejected:** a multi-statement transaction (more round trips, same atomicity); the simple-query protocol, which does pipeline several statements but takes no bind parameters, so values would have to be spliced into SQL text; a second PostgreSQL driver with pipelining (`tokio-postgres`), which duplicates `sqlx` in the build.
 - **Cost:** one long statement instead of eight short ones, and a gate (`WHERE EXISTS (SELECT FROM fence)`) on every part. A refused commit costs a second query to say why.
 - **Revisit if:** `sqlx` gains pipelining, or a part needs to read another part's writes (CTEs in one statement share a snapshot and cannot).
+
+## D-24 · The server starts without an admin key; it never has a default one (2026-11-11)
+
+- **Decision:** `CAVEA_ADMIN_KEY` is optional. When it is set it must be 32 to 512 printable ASCII characters, or the server refuses to start; when it is unset the server starts, logs a warning, and the admin endpoints (`/v1/workspaces`) answer every request `401`. Each new workspace is created with its first secret key, returned once in the creation response (08 §11).
+- **Why:** 12 §4 read "required to be set explicitly". What it guards against is a default key. Requiring one at every start would make operators keep a key that can create tenants configured long after the last workspace exists; unsetting it is the safer steady state. A short key is refused because the admin key is not rate limited.
+- **Revisit if:** console users and roles (09) give the operator another way to create workspaces, or an endpoint other than workspace creation needs the admin key.

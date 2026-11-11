@@ -8,12 +8,17 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-axum = { workspace = true, features = ["tokio", "http1", "json", "matched-path"] }
+# `query` adds serde_urlencoded, for the problem+json `Query` extractor.
+axum = { workspace = true, features = ["tokio", "http1", "json", "matched-path", "query"] }
 cavea-engine.workspace = true
 cavea-telemetry.workspace = true
-# The bound on the JSON extractor; already in the tree through serde_json.
-serde = { version = "1", default-features = false }
+# The secure random source for API keys; already in the tree through sqlx-postgres.
+getrandom = { version = "0.4.3", default-features = false }
+# Request and response bodies; `derive` adds serde_derive (its syn is in the tree).
+serde = { version = "1", default-features = false, features = ["derive"] }
 serde_json.workspace = true
+# SHA-256 of API keys and the admin key; already in the tree through sqlx-postgres.
+sha2 = { version = "0.11.1", default-features = false }
 # Runtime queries only (no `macros`: they need a database or offline data at
 # build time); `migrate` adds no crates; one TLS backend for managed PostgreSQL.
 sqlx = { workspace = true, features = [
@@ -22,6 +27,8 @@ sqlx = { workspace = true, features = [
   "migrate",
   "tls-rustls-ring-webpki",
 ] }
+# Constant-time comparison of the admin key; already in the tree through rustls.
+subtle = { version = "2.6.1", default-features = false }
 # `time` for the commit timeout.
 tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true

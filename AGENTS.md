@@ -50,7 +50,7 @@ Toolchains: Rust is pinned in `rust-toolchain.toml` (with the `wasm32-unknown-un
 
 - `docker compose -f deploy/compose.yaml up -d --wait`: PostgreSQL 18 on `127.0.0.1:${CAVEA_PG_PORT:-5432}`, user, password and database all `cavea`
 - `docker compose -f deploy/compose.yaml down`
-- `CAVEA_TEST_DATABASE_URL=postgres://cavea:cavea@127.0.0.1:5432/cavea cargo test -p cavea-server --test store -- --include-ignored --skip measure_`: the database tests (migrations, `PgStore`, the actor on PostgreSQL). Each creates and drops its own database. Without the variable `cargo test` lists them as ignored
+- `CAVEA_TEST_DATABASE_URL=postgres://cavea:cavea@127.0.0.1:5432/cavea cargo test -p cavea-server -- --include-ignored --skip measure_`: the database tests (migrations, `PgStore`, the actor on PostgreSQL, keys, workspaces and tenant isolation through the router). Each creates and drops its own database. Without the variable `cargo test` lists them as ignored
 - The same with `--release` and `measure_ -- --ignored --nocapture --test-threads=1`: prints commit latency, actor throughput and load time
 - A schema change is a new file in `crates/cavea-server/migrations/`, listed in `crates/cavea-server/src/store/migrations.rs`; never edit a released one
 
@@ -96,6 +96,8 @@ Structured, never ad hoc.
 - No `println!`, `eprintln!` or `dbg!` outside `xtask` and CLI output.
 - Never log secrets: API keys, hold tokens, session tokens, request bodies (`docs/12-security-licensing.md` §4).
 - In a handler: add the route in `cavea_server::http::router` (before `finish`, which adds the request layer); return `Result<_, ApiError>` (`ApiError::new(Code::…)`, `.with_detail(..)`, `?` on an engine `Failure`); take bodies with `http::Json`, not `axum::Json`, so rejections are problem+json (wrap other extractors the same way); call `cavea_telemetry::record_workspace(..)` and `record_event(..)` once known; wrap database calls with `.instrument(cavea_telemetry::db_span("name"))`. Span names are in `cavea_telemetry::span` (`docs/08-server.md` §15).
+- Credentials (`docs/08-server.md` §11): declare one extractor from `cavea_server::http`: `SecretKey(auth)`, `PublishableKey(auth)` or `AdminKeyAuth`. It answers `401`/`403` and records the workspace. Scope every query by `auth.workspace().uuid()` (bind as `$n::uuid`); never take a workspace from the request. Pass `auth.authority()` and `auth.actor()` to the engine. Take `http::Path` and `http::Query` (problem+json rejections); paginate lists with `extract::Page` and `List`. A route needing more than the 256 KiB default body adds `.layer(DefaultBodyLimit::max(n))` to its method router.
+- Every new endpoint adds a row to `ROUTES` in `crates/cavea-server/src/http/tests/api.rs` (the tenant isolation test, 12 §3 T5), with a placeholder and fixture in `Tenant` if its path names an identifier.
 
 ## Tests
 

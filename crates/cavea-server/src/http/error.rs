@@ -2,8 +2,6 @@
 
 use std::borrow::Cow;
 
-use axum::extract::rejection::JsonRejection;
-use axum::extract::{FromRequest, Request};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use cavea_engine::{Failure, Missing, ObjectFailure, ObjectRef};
@@ -16,6 +14,7 @@ pub enum Code {
     Unauthorized,
     Forbidden,
     NotFound,
+    AlreadyExists,
     ObjectNotFree,
     ObjectNotHeldByToken,
     ObjectStatusConflict,
@@ -36,11 +35,12 @@ pub enum Code {
 
 impl Code {
     /// Every code, in table order.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::InvalidRequest,
         Self::Unauthorized,
         Self::Forbidden,
         Self::NotFound,
+        Self::AlreadyExists,
         Self::ObjectNotFree,
         Self::ObjectNotHeldByToken,
         Self::ObjectStatusConflict,
@@ -66,6 +66,11 @@ impl Code {
             Self::Unauthorized => ("unauthorized", 401, "The API key is missing or invalid."),
             Self::Forbidden => ("forbidden", 403, "The key may not do this."),
             Self::NotFound => ("not_found", 404, "Not found."),
+            Self::AlreadyExists => (
+                "already_exists",
+                409,
+                "Something with this key already exists.",
+            ),
             Self::ObjectNotFree => ("object_not_free", 409, "At least one object is not free."),
             Self::ObjectNotHeldByToken => (
                 "object_not_held_by_token",
@@ -182,8 +187,14 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        if let Some(cause) = &self.cause {
-            tracing::error!(code = self.code.as_str(), error = %cause, "internal error");
+        match &self.cause {
+            Some(cause) if self.code == Code::InternalError => {
+                tracing::error!(code = self.code.as_str(), error = %cause, "internal error");
+            }
+            Some(cause) => {
+                tracing::warn!(code = self.code.as_str(), error = %cause, "request failed");
+            }
+            None => {}
         }
         let body = json!({
             "code": self.code.as_str(),
@@ -242,6 +253,21 @@ impl From<Failure> for ApiError {
     }
 }
 
+/// A database error: `503 unavailable` when PostgreSQL cannot be reached or the
+/// pool is exhausted (08 §12), else `500`. A handler that expects a particular
+/// error, such as a unique violation, checks for it before using `?`.
+impl From<sqlx::Error> for ApiError {
+    fn from(error: sqlx::Error) -> Self {
+        match error {
+            sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed | sqlx::Error::Io(_) => Self {
+                cause: Some(error.into()),
+                ..Self::new(Code::Unavailable)
+            },
+            _ => Self::internal(error),
+        }
+    }
+}
+
 fn object_ref(object: &ObjectRef) -> Value {
     match object {
         ObjectRef::Label(label) => json!({ "label": &**label }),
@@ -254,38 +280,4 @@ fn object_failures(objects: &[ObjectFailure]) -> Value {
         .iter()
         .map(|o| json!({ "idx": o.idx, "reason": o.reason.code() }))
         .collect()
-}
-
-/// A JSON request body. Use it instead of `axum::Json` so that a malformed,
-/// mistyped or oversized body is a problem+json `invalid_request`.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Json<T>(pub T);
-
-impl<T, S> FromRequest<S> for Json<T>
-where
-    axum::Json<T>: FromRequest<S, Rejection = JsonRejection>,
-    S: Send + Sync,
-{
-    type Rejection = ApiError;
-
-    async fn from_request(request: Request, state: &S) -> Result<Self, ApiError> {
-        match axum::Json::<T>::from_request(request, state).await {
-            Ok(axum::Json(value)) => Ok(Self(value)),
-            Err(rejection) => Err(json_rejection(&rejection)),
-        }
-    }
-}
-
-fn json_rejection(rejection: &JsonRejection) -> ApiError {
-    let reason = match rejection {
-        JsonRejection::MissingJsonContentType(_) => "content_type",
-        JsonRejection::JsonSyntaxError(_) => "json_syntax",
-        JsonRejection::JsonDataError(_) => "json_data",
-        _ if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => "body_too_large",
-        _ => "body_unreadable",
-    };
-    // axum's text may quote the body: it goes back to the caller, never to the log.
-    ApiError::new(Code::InvalidRequest)
-        .with_message(rejection.body_text())
-        .with_detail("reason", reason)
 }

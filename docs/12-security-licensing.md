@@ -59,7 +59,7 @@ Everything arriving from a browser is untrusted, including chart files and realt
 - CORS for secret-key routes: none.
 - Logs: no hold tokens, no order references unless enabled, no request bodies.
 - TLS: required in production; the server warns when `CAVEA_PUBLIC_URL` is not HTTPS.
-- Admin key: required to be set explicitly; the server will not start with a default.
+- Admin key: there is no default; it must be set explicitly (`CAVEA_ADMIN_KEY`, at least 32 characters, or the server will not start). Unset, the admin endpoints refuse every request (`DECISIONS.md` D-24).
 
 ## 5. Data and privacy
 
