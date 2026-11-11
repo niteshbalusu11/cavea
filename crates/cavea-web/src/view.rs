@@ -266,7 +266,10 @@ impl View {
     /// makes a seat unavailable; `not_found`, a token that expired or never
     /// existed, drops the whole selection). `labels`: the objects the server
     /// named (08 §6.4: `label` of each failing object), each with its reason
-    /// in `reasons` or else `code`; empty for the whole request.
+    /// in `reasons` or else `code`. `code` also goes as a failure naming no
+    /// object, so a request-level `not_found` drops the selection whatever
+    /// the objects' reasons; a failure naming none of the request's objects
+    /// reverts all of them.
     #[wasm_bindgen(js_name = holdFailed)]
     pub fn hold_failed(
         &mut self,
@@ -282,12 +285,10 @@ impl View {
                 code: reasons.next().unwrap_or_else(|| code.clone()),
             })
             .collect();
-        if failures.is_empty() {
-            failures.push(ObjectFailure {
-                object: ObjectRef::Label(String::new()),
-                code,
-            });
-        }
+        failures.push(ObjectFailure {
+            object: ObjectRef::Label(String::new()),
+            code,
+        });
         let outcome = HoldOutcome::Failed(failures);
         self.send(Command::HoldResult { request, outcome })
     }
