@@ -17,6 +17,7 @@ mod events;
 pub mod extract;
 mod keys;
 mod public;
+mod realtime;
 mod seats;
 mod workspaces;
 
@@ -31,9 +32,10 @@ use serde::Serialize;
 use sqlx::PgPool;
 
 use crate::config::Config;
+use crate::realtime::Realtime;
 use crate::seats::Seats;
 
-pub use auth::{AdminKey, AdminKeyAuth, Auth, PublishableKey, SecretKey};
+pub use auth::{AdminKey, AdminKeyAuth, Auth, PublishableKey, QueryKey, SecretKey};
 pub use error::{ApiError, Code};
 pub use extract::{Json, Path, Query};
 
@@ -46,6 +48,8 @@ pub struct AppState {
     pub db: PgPool,
     /// The actor registry and chart cache: seat commands go through it.
     pub seats: Seats,
+    /// Realtime connections: their limits, counters and shutdown.
+    pub realtime: Realtime,
 }
 
 /// The whole HTTP surface.
@@ -62,6 +66,7 @@ fn routes() -> Router<AppState> {
         .merge(events::routes())
         .merge(seats::routes())
         .merge(public::routes())
+        .merge(realtime::routes())
 }
 
 /// Add the problem+json fallbacks, the default body limit, CORS for the public
@@ -108,4 +113,4 @@ impl<T> List<T> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

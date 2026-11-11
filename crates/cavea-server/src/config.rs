@@ -42,6 +42,15 @@ pub struct Config {
     /// `CAVEA_CORS_ORIGINS`: the browser origins the public endpoints answer
     /// (08 §11): `*` (the default) or a comma-separated list.
     pub cors_origins: CorsOrigins,
+    /// `CAVEA_SNAPSHOT_MAX_AGE`: seconds a shared cache may serve the public
+    /// snapshot and polling answers as fresh (08 §8.5).
+    pub snapshot_max_age: u32,
+    /// `CAVEA_RT_MAX_CONNECTIONS`: WebSocket and SSE connections this node
+    /// holds open at most (12 §3 T11).
+    pub rt_max_connections: NonZeroU32,
+    /// `CAVEA_RT_MAX_PER_IP`: WebSocket and SSE connections one client IP may
+    /// hold open at once.
+    pub rt_max_per_ip: NonZeroU32,
 }
 
 impl Config {
@@ -69,6 +78,13 @@ impl Config {
             heartbeat_secs: setting("CAVEA_HEARTBEAT_SECS", || NonZeroU32::MIN.saturating_add(4))?,
             admin_key: optional("CAVEA_ADMIN_KEY")?,
             cors_origins: setting("CAVEA_CORS_ORIGINS", || CorsOrigins::Any)?,
+            snapshot_max_age: setting("CAVEA_SNAPSHOT_MAX_AGE", || 1)?,
+            rt_max_connections: setting("CAVEA_RT_MAX_CONNECTIONS", || {
+                NonZeroU32::MIN.saturating_add(59_999)
+            })?,
+            rt_max_per_ip: setting("CAVEA_RT_MAX_PER_IP", || {
+                NonZeroU32::MIN.saturating_add(199)
+            })?,
         }
         .checked()
     }

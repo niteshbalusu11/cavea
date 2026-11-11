@@ -206,7 +206,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [ ] **SRV-018** Rate limiting per key and IP with trusted-proxy handling (08 §12)
 - [ ] **SRV-019** OpenAPI document generated and served (08 §6.1)
 - [ ] **SRV-020** Health, readiness and Prometheus metrics (08 §15)
-- [ ] **SRV-021** Graceful shutdown: flush, close subscribers, release leases (08 §14). Done so far: on SIGTERM or Ctrl-C the server drains HTTP for up to 10 s, then stops the registry (every actor commits and releases its lease) within the 20 s deadline; closing realtime subscribers remains
+- [x] **SRV-021** Graceful shutdown: flush, close subscribers, release leases (08 §14)
 - [x] **SRV-022** Startup load of events with outstanding holds (08 §4.7)
 - [ ] **SRV-023** Dockerfile (distroless, multi-arch) and compose file (08 §14)
 - [x] **SRV-024** Body size, object count and JSON depth limits (12 §3 T19)
@@ -215,14 +215,14 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 - [x] **RT-001** Frame codecs in `cavea-format`, shared by server and clients (08 §8.1, §8.2)
 - [x] **RT-002** Snapshot encodings: raw, run-length, bitset; pick the smallest (08 §8.1)
-- [ ] **RT-003** WebSocket endpoint: subscribe, hello, resume from `last_seq` (08 §8.3)
-- [ ] **RT-004** Fan-out of shared pre-encoded frames (08 §4.5)
-- [ ] **RT-005** Slow-consumer detection and RESYNC (08 §8.3)
-- [ ] **RT-006** Ping, pong and idle timeouts (08 §8.3)
+- [x] **RT-003** WebSocket endpoint: subscribe, hello, resume from `last_seq` (08 §8.3)
+- [x] **RT-004** Fan-out of shared pre-encoded frames (08 §4.5)
+- [x] **RT-005** Slow-consumer detection and RESYNC (08 §8.3)
+- [x] **RT-006** Ping, pong and idle timeouts (08 §8.3)
 - [ ] **RT-007** SSE transport (08 §8.4)
 - [ ] **RT-008** Polling with `after_seq` (08 §8.4)
-- [ ] **RT-009** HTTP snapshot with ETag and cache headers (08 §8.5)
-- [ ] **RT-010** PRIVATE frames for the caller's holds (08 §8.1)
+- [x] **RT-009** HTTP snapshot with ETag and cache headers (08 §8.5)
+- [x] **RT-010** PRIVATE frames for the caller's holds (08 §8.1)
 
 ### Web SDK
 
