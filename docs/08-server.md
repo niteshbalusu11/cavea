@@ -327,7 +327,7 @@ CREATE TABLE object_state (
   channel     smallint,
   order_ref   text,
   ticket_type text,
-  extra       json,                              -- json, not jsonb: kept byte for byte as the engine gave it
+  extra       json,                              -- not jsonb: kept byte for byte, and jsonb rejects \u0000
   seq         bigint NOT NULL,
   PRIMARY KEY (event_id, oid)
 );
@@ -355,7 +355,7 @@ CREATE TABLE event_log (
   hold_id   bigint,
   order_ref text,
   oids      int[] NOT NULL,
-  detail    jsonb,
+  detail    json,                                -- not jsonb, which rejects \u0000 in valid JSON
   PRIMARY KEY (event_id, seq, at)
 ) PARTITION BY RANGE (at);                       -- monthly partitions, configurable retention
 -- Until monthly partitions are created (SRV-040), every row lands here, so an
@@ -394,7 +394,7 @@ CREATE TABLE idempotency (
   key          text NOT NULL,
   request_hash bytea NOT NULL,                   -- the caller's fingerprint of the request
   status       int NOT NULL,                     -- the reply's HTTP status, for reports
-  response     jsonb NOT NULL,                   -- the engine's reply, as the store encodes it
+  response     json NOT NULL,                    -- the engine's reply, as the store encodes it; not jsonb (\u0000)
   created_at   timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (workspace_id, key)
 );

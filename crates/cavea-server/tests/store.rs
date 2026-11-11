@@ -289,7 +289,8 @@ async fn round_trip<H: Harness>(h: &H) {
         expires_at: Timestamp(t + 600_000),
         max_objects: None,
     };
-    let extra = r#"{"b": [1,2],  "a":"é"}"#;
+    // Valid JSON that `jsonb` would reject.
+    let extra = r#"{"b": [1,2],  "a":"é\u0000"}"#;
     let object = |oid, status, hold_id: Option<u64>, booking, seq| ObjectRow {
         oid,
         status,
@@ -352,8 +353,13 @@ async fn round_trip<H: Harness>(h: &H) {
         idx: 3,
         reason: ObjectReason::NotFree,
     }]));
+    // A refusal echoes the caller's labels, which may hold any character.
+    let missing = Err(Failure::NotFound(Missing::Objects(vec![ObjectRef::Label(
+        "A\0B".into(),
+    )])));
     b1.idempotency = vec![
         key_record("k-created", 1, t, created),
+        key_record("k-missing", 3, t, missing),
         key_record("k-refused", 2, t, refused),
     ];
     h.store().commit_batch(b1.clone()).await.unwrap();
@@ -589,7 +595,7 @@ async fn pg_store_conformance() {
         assert_eq!(t(4).1.as_deref(), Some("77120"));
         assert_eq!(
             parse(&t(4).2),
-            json(r#"{"objects": [[101, "adult", {"a": "é", "b": [1, 2]}]]}"#)
+            json(r#"{"objects": [[101, "adult", {"a": "é\u0000", "b": [1, 2]}]]}"#)
         );
         assert_eq!(parse(&t(5).2), json(r#"{"status": 3}"#));
     })

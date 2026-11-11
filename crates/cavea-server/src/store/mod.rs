@@ -3,7 +3,7 @@
 //!
 //! Values cross the boundary as plain integers, bytes and text: event ids as
 //! 32 hex digits cast to `uuid`, times as Unix milliseconds converted in SQL,
-//! JSON as text cast to `json`/`jsonb`. That keeps `sqlx`'s type integrations
+//! JSON as text cast to `json`. That keeps `sqlx`'s type integrations
 //! (and a date-time crate) out of the build.
 
 mod migrations;
@@ -120,7 +120,7 @@ WITH fence AS (                                                 -- 1
   -- 5, area allocations, has no producer yet.
   INSERT INTO event_log (event_id, seq, op, actor, hold_id, order_ref, oids, detail)
   SELECT $1::uuid, u.seq, u.op, u.actor, u.hold_id, u.order_ref,
-         ($25::int4[])[u.lo:u.hi], u.detail::jsonb
+         ($25::int4[])[u.lo:u.hi], u.detail::json
     FROM unnest($20::int8[], $21::int2[], $22::text[], $23::int8[], $24::text[], $26::int4[],
                 $27::int4[], $28::text[])
          AS u(seq, op, actor, hold_id, order_ref, lo, hi, detail)
@@ -130,7 +130,7 @@ WITH fence AS (                                                 -- 1
   -- A live record is never overwritten: a key another event used is kept.
   INSERT INTO idempotency (workspace_id, event_id, key, request_hash, status, response, created_at)
   SELECT (SELECT workspace_id FROM fence), $1::uuid, u.key, u.request_hash, u.status,
-         u.response::jsonb, to_timestamp(0) + u.created_ms * interval '1 millisecond'
+         u.response::json, to_timestamp(0) + u.created_ms * interval '1 millisecond'
     FROM unnest($29::text[], $30::bytea[], $31::int4[], $32::text[], $33::int8[])
          AS u(key, request_hash, status, response, created_ms)
    WHERE EXISTS (SELECT FROM fence)
