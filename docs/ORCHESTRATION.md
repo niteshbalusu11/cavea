@@ -84,8 +84,22 @@ Carry these into briefs where relevant:
 - Run `cargo xtask build-web` before `bun run typecheck`, `build` or `test`; the WASM output is gitignored.
 - Vite runs under the bun runtime; Node is not needed. `@cavea/renderer` ships TypeScript source directly.
 - CI is one workflow: a `rust` job (format, clippy, build, `check-deps`, `build-web`) that uploads the WASM as an artefact, then a `web` job. The Rust cache is saved only from `main`.
-- The machine's Nix-provided Rust has no `rust-lld`, and binaryen is not installed. Slice D's flake must provide both.
-- Still open from the scaffold: measure a cached CI run on `main` against the first run and record both durations.
+- The machine's Nix-provided Rust has no `rust-lld`, and binaryen is not installed. The flake (`FND-010`) provides both; builders run everything as `nix develop -c <command>`.
+- CI duration on `main`, measured 2026-11-11 on the scaffold commit: first run 1m16s (rust 57s, web 14s); cached rerun 35s (rust 20s, web 13s).
+
+### What the first waves established
+
+Carry these into every brief:
+
+- **Run the bun checks on Rust-only slices too.** `bun run format:check` (oxfmt) also checks TOML, so a hand-edited `Cargo.toml` can fail CI's `web` job. Every brief lists `bun install --frozen-lockfile`, `bun run lint` and `bun run format:check` next to the cargo checks.
+- **Stop processes by process id only.** A builder once ran `pkill` with a pattern that matched every Vite dev server on the machine. Briefs forbid `pkill` and `killall` with patterns.
+- **Slices run large.** Builders report 2,000 to 2,600 changed lines for slices briefed at 1,500, of which a third or more is tests. Name the natural cut in each brief; a builder that splits must say where the unreviewed remainder is, and a follow-up builder takes it through review.
+- **A builder's brief lists what exists.** Each brief names the modules, types and decisions already on `main` that the slice builds on, taken from the previous builders' final reports. Builders start from nothing else.
+- **Rebasing a waiting pull request** onto a new `main` is done with `gh pr update-branch <n> --rebase` when there is no conflict; check with `git range-diff` that the commits are unchanged, so the reviewer's approval still covers them, then wait for CI on the new head. A conflict goes to a builder.
+- **Browser proof** works with Chromium from Nix (`nix shell nixpkgs#chromium`), headless, WebGL2 on SwiftShader, driven over the DevTools protocol. It is software rendering: say so. Firefox's headless screenshot fires before the WASM starts and proves nothing.
+- **Determinism of compiled charts.** No platform maths library call anywhere on the compile path; `cavea-compiler::detmath` supplies sine and cosine. A pinned-hash test runs natively and for wasm32 under bun (command in the test's doc comment). Not automated; `TST-014` is open.
+- **The shared PostgreSQL container** (`cavea-postgres-1`, compose project `cavea`, port 5432) is started by the orchestrator and left running while server work is in flight. Builders never run `down` on it; database tests run only when a test database URL variable is set, and are reported as skipped otherwise.
+- **Crate ownership so far:** document types and the compiler pipeline are in `cavea-compiler`; the label engine and limits are in `cavea-core`; the compiled `Chart`, `encode` and `decode` are in `cavea-format`, which computes no hash (the compiler does); camera maths sits in `cavea-render` for now.
 
 ## 6. Concurrency and the machine
 
@@ -139,3 +153,44 @@ Ask only when a decision is genuinely the owner's and work cannot route around i
 - `SRV-025` (the `cavea-telemetry` crate) lands before or with the first server endpoints, so that every endpoint is traced from the start.
 - No secrets in briefs, commits or pull requests.
 - Commit and pull-request attribution follows the harness's instructions.
+
+## 11. Slice plan and open notes
+
+The orchestrator keeps this section current so that the plan survives a context summary. Done work is whatever `docs/TODO.md` ticks on `main`; this lists only what is planned and what to remember.
+
+Three chains run side by side, one builder each, because each chain's slices edit the same crates.
+
+**Renderer chain** (`cavea-render`, `cavea-web`, `packages/renderer`, `apps/demo`); the longest chain in M1:
+
+1. Load compiled charts, palette and visual states, themes, culling: `REN-012`, `REN-018`, `REN-023`, `REN-041`.
+2. Hit testing and selection: `REN-005`, `REN-032` to `REN-035`, `REN-042`.
+3. State: `REN-036`, `REN-037`, `REN-043`, `REN-022`. Needs the realtime codecs (`RT-001`, `RT-002`) first.
+4. Level of detail, `mesh` and `image` programs: `REN-019` to `REN-021`. Needs the compiler geometry slice.
+5. Text: `REN-024` to `REN-028`.
+6. Context loss, timing marks, headless render, golden images: `REN-040`, `REN-044`, `REN-045`, `REN-006`, `TST-010`.
+7. Web SDK (`WEB-001` onwards), then the accessibility baseline, benchmark page and remaining M1 tests.
+
+**Format and compiler chain** (`cavea-compiler`, `cavea-format`, `cavea-cli`, `cavea-testkit`):
+
+1. Geometry: `FMT-010` (outline), `FMT-017` to `FMT-019`.
+2. CLI and presets: `FMT-024`, `FMT-025`, `FMT-026`.
+3. Realtime frame codecs in `cavea-format`: `RT-001`, `RT-002`.
+4. Validation and migrations: `FMT-013`, `FMT-014`, `FMT-023`; then fuzz targets and determinism automation (`TST-013`, `TST-014`), the payload gate (`FND-005`), generated TypeScript types (`FND-007`).
+
+**Server chain** (`cavea-engine`, `cavea-server`):
+
+1. PostgreSQL schema, migrations and store: `SRV-002`, `SRV-003`.
+2. Engine ownership, load and eviction, poison and reload, registry: `ENG-012` to `ENG-014`, `ENG-016`.
+3. Snapshot and deltas: `ENG-010`, `ENG-011` (after the realtime codecs).
+4. API keys and workspaces, then chart, event, hold-token and seat endpoints, then realtime transports, then the M2 tests.
+
+Notes for milestone reports and later briefs:
+
+- An expired hold token is answered `404 not_found`, not `410 hold_token_expired`: the engine deletes a token at expiry (08 §6.4, §7.1). The web SDK must treat an unknown token as an ended session. Owner may want to revisit.
+- A wrong HTTP method is answered `404 not_found` because the error table has no 405; `500 internal_error` and `409 object_status_conflict` were added to the table.
+- The CCF reader does not reject duplicate `oid`s; the compiler does, and the engine's `oid` to `idx` map must tolerate a hostile file.
+- `CreateHold` log rows lack the token hash and object limit, so holds cannot yet be rebuilt from the log alone; the reconciler (`TST-022`) will need that.
+- The `hold.expired` webhook row is not written yet (webhooks are M5); the seam is marked in the engine's expiry function.
+- Tables, booths and areas are M5: the compiler reports them as unsupported instead of dropping them.
+- Renderer payload, measured locally: 37,298 B brotli after the first slice, 44,403 B after camera and gestures; the CCF reader is estimated at about 8.7 KB more. Budget 150 KB.
+- All browser proof so far is software rendering in headless Chromium. Nothing has run on a hardware GPU, a second browser engine or a phone.
