@@ -38,6 +38,11 @@ export interface EngineView {
   object(label: string): string | undefined;
   sectionsOpen(): Uint32Array;
   resize(width: number, height: number, dpr: number, maxDpr: number): void;
+  /** The canvas lost its WebGL context, or got it back (04 §20.2). */
+  contextLost(): void;
+  contextRestored(): void;
+  /** The last frame: draw calls, seats drawn, level (0 to 3, -1 none), pixel ratio. */
+  frameStats(): Float64Array;
   frame(time: number): boolean;
   pointer(kind: number, id: number, type: number, x: number, y: number, time: number): void;
   wheel(dx: number, dy: number, x: number, y: number, ctrl: boolean, time: number): boolean;

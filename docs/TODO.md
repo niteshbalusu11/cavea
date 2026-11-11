@@ -38,7 +38,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **REN-003** Spike: measure the WASM and JavaScript size of the minimal renderer after `wasm-opt` and brotli; record it (01 §5)
 - [x] **REN-004** Spike: pan, pinch and wheel zoom with inertia (04 §14)
 - [x] **REN-005** Spike: hit test and tap-to-select with local state (04 §15)
-- [ ] **REN-006** Spike: frame-time meter and timing marks on the page (04 §24)
+- [x] **REN-006** Spike: frame-time meter and timing marks on the page (04 §24)
 - [ ] **TST-001** Choose and buy the reference devices (01 §5)
 - [ ] **TST-002** Record spike frame times and load times on each reference device (13 §6.2)
 
@@ -104,8 +104,8 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **REN-024** MSDF atlas bake tool and `glyph` program (04 §12)
 - [x] **REN-025** Seat labels from row rules, built per chunk with an LRU of 64 (04 §12)
 - [x] **REN-026** Dynamic text atlas, size buckets, `text` program, browser rasteriser (04 §12)
-- [ ] **REN-027** Row labels, section labels, text objects with greedy collision (04 §12)
-- [ ] **REN-028** Icon atlas and seat icons: accessible, tick, cross (04 §7)
+- [x] **REN-027** Row labels, section labels, text objects with greedy collision (04 §12)
+- [x] **REN-028** Icon atlas and seat icons: accessible, tick, cross (04 §7). Signed-distance strokes in the `shape` program instead of an atlas (D-42)
 - [x] **REN-029** Camera: fit, limits, clamping, `FlyTo` in log-zoom space (04 §13)
 - [x] **REN-030** Gesture recogniser: drag, pinch, wheel, trackpad, double tap, two-finger tap, long press, inertia (04 §14)
 - [x] **REN-031** Gesture handling modes and `touch-action` (04 §14)
@@ -117,11 +117,11 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **REN-037** Delta application with merged dirty ranges (04 §17)
 - [x] **REN-038** On-demand frame scheduling with dirty flags and an animation list (04 §18)
 - [x] **REN-039** Resize and device-pixel-ratio handling with caps (04 §21)
-- [ ] **REN-040** Context loss and restoration (04 §20.2)
+- [x] **REN-040** Context loss and restoration (04 §20.2)
 - [x] **REN-041** Theme tokens to palette; light, dark and high-contrast themes (04 §19)
 - [x] **REN-042** Overlay pass: hover ring and focus ring (04 §7)
 - [x] **REN-043** Pulse on change, and reduced-motion handling (04 §17, §13)
-- [ ] **REN-044** Timing marks and frame statistics (04 §24)
+- [x] **REN-044** Timing marks and frame statistics (04 §24)
 - [ ] **REN-045** Headless render to a pixel buffer for golden tests (04 §26)
 
 ### Web SDK

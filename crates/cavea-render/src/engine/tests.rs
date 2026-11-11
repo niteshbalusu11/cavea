@@ -10,6 +10,7 @@ use crate::{
 };
 
 mod chart;
+mod context;
 mod labels;
 mod overview;
 mod select;
@@ -42,12 +43,17 @@ struct Fake {
     calls: Vec<(Pipeline, Vec<Range<u32>>, f32)>,
     /// The dim factor of each `draw`.
     dims: Vec<f32>,
-    /// Ranges and label buffer bases of each `glyph` draw.
+    /// Ranges and label buffer bases of each `glyph` draw of seat labels.
     glyph_draws: Vec<(Vec<Range<u32>>, Vec<u32>)>,
-    /// Every `text` draw: pipeline, buffer, ranges, opacity.
+    /// Every `glyph` draw of row labels and `text` draw: pipeline, buffer,
+    /// ranges, opacity.
     text_draws: Vec<(Pipeline, u32, Vec<Range<u32>>, f32)>,
+    /// The mode of each `shape` draw.
+    modes: Vec<f32>,
     targets: Vec<Target>,
     clears: Vec<[f32; 4]>,
+    restores: u32,
+    fail_restore: bool,
 }
 
 type E = Engine<Fake>;
@@ -128,8 +134,11 @@ impl GpuBackend for Fake {
             Pipeline::Shape => {
                 self.draws.push(ranges);
                 self.dims.push(call.uniforms.dim);
+                self.modes.push(call.uniforms.mode);
             }
-            Pipeline::Glyph => self.glyph_draws.push((ranges, call.bases.to_vec())),
+            Pipeline::Glyph if call.uniforms.mode == crate::backend::mode::SEAT_ICONS => {
+                self.glyph_draws.push((ranges, call.bases.to_vec()));
+            }
             Pipeline::Mesh => {}
             pipeline => {
                 let alpha = call.uniforms.alpha;
@@ -139,6 +148,17 @@ impl GpuBackend for Fake {
         Ok(())
     }
     fn end_frame(&mut self) {}
+    fn restore(&mut self) -> Result<(), BackendError> {
+        self.restores += 1;
+        // Every resource of the lost context is gone.
+        self.buffers.clear();
+        self.textures.clear();
+        if self.fail_restore {
+            Err(BackendError::Create("context".to_owned()))
+        } else {
+            Ok(())
+        }
+    }
     fn destroy(&mut self, id: ResourceId) {
         match id {
             ResourceId::Buffer(b) => self.buffers.remove(&b.0).map(drop),
@@ -812,4 +832,9 @@ fn a_recorded_trace_replays_identically() {
             > 20
     );
     assert_eq!(first, trace(&mut engine()));
+}
+
+/// The loaded chart's GPU resources.
+fn gpu(e: &E) -> &Gpu {
+    e.scene.as_ref().unwrap().gpu.as_ref().unwrap()
 }

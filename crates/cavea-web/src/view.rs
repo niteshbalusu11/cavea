@@ -24,6 +24,7 @@ use web_sys::{
 pub struct View {
     engine: Engine<GlowBackend>,
     canvas: HtmlCanvasElement,
+    context: WebGl2RenderingContext,
     need_frame: bool,
     /// Events for the host since the last `takeEvents`.
     events: Vec<Event>,
@@ -60,11 +61,17 @@ impl View {
             .ok_or_else(|| JsError::new("WebGL2 is not available"))?
             .dyn_into::<WebGl2RenderingContext>()
             .map_err(|_| JsError::new("context is not WebGL2"))?;
-        let backend = GlowBackend::new(glow::Context::from_webgl2_context(context))
+        // `glow` reads the version and extensions, which a lost context does
+        // not answer.
+        if context.is_context_lost() {
+            return Err(JsError::new("WebGL2 context is lost"));
+        }
+        let backend = GlowBackend::new(glow::Context::from_webgl2_context(context.clone()))
             .map_err(|e| JsError::new(&e.to_string()))?;
         let mut view = View {
             engine: Engine::new(backend),
             canvas,
+            context,
             need_frame: false,
             events: Vec::new(),
             gestures: GestureHandling::Greedy,
@@ -115,6 +122,36 @@ impl View {
             DEMO_STATS.with(|cell| cell.set(stats));
         }
         Ok(self.need_frame)
+    }
+
+    /// The canvas's `webglcontextlost` (04 §20.2): nothing is drawn and no
+    /// GL call is made until `contextRestored`. Safe to call more than once.
+    #[wasm_bindgen(js_name = contextLost)]
+    pub fn context_lost(&mut self) -> Result<(), JsError> {
+        self.send(Command::ContextLost)
+    }
+
+    /// The canvas's `webglcontextrestored`: the programs are compiled again
+    /// and the next frame makes every resource again from the engine's
+    /// copies; strings are asked of the rasteriser again.
+    #[wasm_bindgen(js_name = contextRestored)]
+    pub fn context_restored(&mut self) -> Result<(), JsError> {
+        self.send(Command::ContextRestored)
+    }
+
+    /// The last frame drawn (04 §24): draw calls, seats in the ranges drawn,
+    /// level of detail (0 overview, 1 cross-fade, 2 seats, 3 detail, -1
+    /// none) and the device pixel ratio rendered at.
+    #[wasm_bindgen(js_name = frameStats)]
+    pub fn frame_stats(&self) -> Vec<f64> {
+        let s = self.engine.frame_stats();
+        let lod = s.lod.map_or(-1.0, |l| f64::from(l as u8));
+        vec![
+            f64::from(s.draw_calls),
+            f64::from(s.visible_seats),
+            lod,
+            f64::from(s.ratio),
+        ]
     }
 
     /// A pointer event: `kind` 0 down, 1 move, 2 up, 3 cancel (or leave);
@@ -500,7 +537,9 @@ impl View {
     /// rounded, 2 chair. A translucent band across the floor is added above
     /// the seats, to see the upper mesh layer. With `script` 1 the section
     /// labels and text objects are replaced by strings in other scripts,
-    /// right-to-left ones among them, to see the platform shape them.
+    /// right-to-left ones among them, to see the platform shape them, and
+    /// some sections' seats numbered in lower-case letters and rows prefixed
+    /// "Ряд ", which the baked atlas cannot draw.
     /// Returns public CCF bytes for `loadChart`.
     #[cfg(feature = "demo")]
     #[wasm_bindgen(js_name = demoChart)]
@@ -512,7 +551,7 @@ impl View {
         script: u8,
     ) -> Result<Vec<u8>, JsError> {
         use cavea_compiler::document::{
-            ChartDocument, Layer, Node, SeatShape, Shape, ShapeKind, Style,
+            ChartDocument, LabelScheme, Layer, Node, SeatShape, Shape, ShapeKind, Style,
         };
         let compile = |doc: &ChartDocument| {
             cavea_compiler::compile(doc)
@@ -581,6 +620,17 @@ impl View {
                             let word = WORDS.get(n % WORDS.len()).copied().unwrap_or_default();
                             n += 1;
                             section.label = Some(format!("{word} {n}"));
+                            // Row and seat labels the baked atlas lacks.
+                            for child in &mut section.children {
+                                if let Node::RowBlock(block) = child {
+                                    if n % 2 == 1 {
+                                        block.seat_labels.scheme = LabelScheme::AlphaLower;
+                                    }
+                                    if n % 3 == 1 {
+                                        "Ряд ".clone_into(&mut block.row_labels.prefix);
+                                    }
+                                }
+                            }
                         }
                         Node::Text(text) => "المسرح · במה".clone_into(&mut text.text),
                         _ => {}
@@ -665,6 +715,12 @@ impl View {
     }
 
     fn send(&mut self, command: Command) -> Result<(), JsError> {
+        // The `webglcontextlost` event comes later than the loss itself: a
+        // chart, an atlas or a frame arriving in between must not make GPU
+        // calls (the engine ignores a second loss).
+        if self.context.is_context_lost() {
+            self.engine.handle(Command::ContextLost);
+        }
         self.engine.handle(command);
         self.drain()
     }

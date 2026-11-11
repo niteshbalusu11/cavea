@@ -11,7 +11,8 @@ use std::{fmt, ops::Range};
 /// nothing creates pipelines at run time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pipeline {
-    /// Instanced signed-distance quads: seats, tables, booths, overlays.
+    /// Instanced signed-distance quads: seats and their icons, tables,
+    /// booths, overlays, decoration icons.
     Shape,
     /// Indexed triangles: decoration and section fills.
     Mesh,
@@ -133,6 +134,18 @@ pub struct Uniforms {
     /// The pass's opacity, multiplying everything it draws: the
     /// level-of-detail cross-fade (04 §10). 1 otherwise.
     pub alpha: f32,
+    /// What the pass draws. `Shape`: [`mode::PLAIN`], [`mode::SEAT_ICONS`]
+    /// (seats with their icons, at detail) or [`mode::DECORATION_ICONS`].
+    /// `Glyph`: [`mode::SEAT_ICONS`] hides the label of a seat that shows a
+    /// state icon. `Text`: unused.
+    pub mode: f32,
+}
+
+/// Values of [`Uniforms::mode`].
+pub mod mode {
+    pub const PLAIN: f32 = 0.0;
+    pub const SEAT_ICONS: f32 = 1.0;
+    pub const DECORATION_ICONS: f32 = 2.0;
 }
 
 impl Uniforms {
@@ -149,6 +162,7 @@ impl Uniforms {
             self.dim,
             self.time,
             self.alpha,
+            self.mode,
         ];
         let columns = self.view.iter().enumerate().flat_map(|(i, column)| {
             column
@@ -243,4 +257,8 @@ pub trait GpuBackend {
     fn draw(&mut self, call: &DrawCall<'_>) -> Result<(), BackendError>;
     fn end_frame(&mut self);
     fn destroy(&mut self, id: ResourceId);
+    /// The context was lost and is back (04 §20.2): compile the pipelines
+    /// again. Every resource of the lost context is gone and its id unknown;
+    /// ids are not reused, so a stale one never names a new resource.
+    fn restore(&mut self) -> Result<(), BackendError>;
 }

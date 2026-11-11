@@ -1,11 +1,17 @@
-//! Dynamic text, section labels, text objects and seat labels from the
-//! dynamic atlas (04 §7 passes 9–10, §12), through `Engine::handle` with a
-//! fake rasteriser that answers every request with a deterministic raster.
+//! Dynamic text, section and row labels, text objects, collision, seat and
+//! decoration icons (04 §7 passes 8–11, §12), through `Engine::handle` with
+//! a fake rasteriser that answers every request with a deterministic raster.
 
 use super::*;
 use crate::{
+    backend::mode,
     label::{MAX_TEXT_INSTANCES, SECTION_MAX_PX, SECTION_MIN_PX, TEXT_STRIDE},
-    text::atlas::{BUCKETS, Key, MAX_SIDE, REQUESTS_PER_BUILD, START_SIDE, Source, TextAtlas},
+    protocol::ObjectRef,
+    seat,
+    text::{
+        LABEL_STRIDE,
+        atlas::{BUCKETS, Key, MAX_SIDE, REQUESTS_PER_BUILD, START_SIDE, Source, TextAtlas},
+    },
 };
 
 /// One range, as draws record them.
@@ -13,34 +19,41 @@ fn one(range: Range<u32>) -> Vec<Range<u32>> {
     vec![range]
 }
 
-/// Two floors. Ground: sections North (four rows of ten) and South (two
-/// rows of ten), the text objects STAGE (centred, always shown) and Left
-/// (left-aligned, turned 90°, from zoom 0.5). Upper: section Upper and a
-/// text.
-fn chart() -> Vec<u8> {
-    compile(
-        r##"{"schema":1,"name":"Labels","settings":{"seatSize":10},"nextOid":900,
-  "categories":[{"key":"a","label":"A","color":"#2563EB"}],
-  "floors":[{"id":1,"name":"Ground","level":0},{"id":2,"name":"Upper","level":1}],
+/// Two floors. Ground: section North (four rows of ten, the first seat
+/// accessible), section South (two rows of ten, one labelled `Ä`), the text
+/// objects STAGE (centred, always shown) and Left (left-aligned, turned
+/// 90°, from zoom 0.5), an exit and a bar icon. Upper: section Upper, a
+/// text and a lift icon.
+pub(super) fn chart(display: &str) -> Vec<u8> {
+    compile(&format!(
+        r##"{{"schema":1,"name":"Labels","settings":{{"seatSize":10,"rowLabelDisplay":"{display}"}},"nextOid":900,
+  "categories":[{{"key":"a","label":"A","color":"#2563EB"}}],
+  "floors":[{{"id":1,"name":"Ground","level":0}},{{"id":2,"name":"Upper","level":1}}],
   "nodes":[
-   {"id":101,"type":"section","floor":1,"label":"North","category":"a","children":[
-     {"id":102,"type":"rowBlock","rows":[{"rid":103,"seats":10,"oids":[[10,10]]},{"rid":104,"seats":10,"oids":[[20,10]]},
-       {"rid":105,"seats":10,"oids":[[30,10]]},{"rid":106,"seats":10,"oids":[[40,10]]}]}]},
-   {"id":107,"type":"section","floor":1,"label":"South","category":"a","origin":[0,1000],"children":[
-     {"id":108,"type":"rowBlock","rows":[{"rid":109,"seats":10,"oids":[[50,10]]},{"rid":110,"seats":10,"oids":[[60,10]]}]}]},
-   {"id":111,"type":"text","floor":1,"origin":[250,-400],"text":"STAGE","size":40,"color":"#112233","align":"center"},
-   {"id":112,"type":"text","floor":1,"origin":[-700,100],"rotation":90,"text":"Left","size":20,"color":"#445566","align":"left","minZoom":0.5},
-   {"id":115,"type":"section","floor":2,"label":"Upper","category":"a","origin":[0,5000],"children":[
-     {"id":116,"type":"rowBlock","rows":[{"rid":117,"seats":2,"oids":[[70,2]]}]}]},
-   {"id":118,"type":"text","floor":2,"origin":[0,5500],"text":"Hidden","size":40,"color":"#000000"}]}"##,
-    )
+   {{"id":101,"type":"section","floor":1,"label":"North","category":"a","children":[
+     {{"id":102,"type":"rowBlock","rows":[{{"rid":103,"seats":10,"oids":[[10,10]]}},{{"rid":104,"seats":10,"oids":[[20,10]]}},
+       {{"rid":105,"seats":10,"oids":[[30,10]]}},{{"rid":106,"seats":10,"oids":[[40,10]]}}],
+       "seatOverrides":{{"10":{{"flags":["accessible"]}}}}}}]}},
+   {{"id":107,"type":"section","floor":1,"label":"South","category":"a","origin":[0,1000],"children":[
+     {{"id":108,"type":"rowBlock","rows":[{{"rid":109,"seats":10,"oids":[[50,10]]}},{{"rid":110,"seats":10,"label":"Ä","oids":[[60,10]]}}]}}]}},
+   {{"id":111,"type":"text","floor":1,"origin":[250,-400],"text":"STAGE","size":40,"color":"#112233","align":"center"}},
+   {{"id":112,"type":"text","floor":1,"origin":[-700,100],"rotation":90,"text":"Left","size":20,"color":"#445566","align":"left","minZoom":0.5}},
+   {{"id":113,"type":"icon","floor":1,"origin":[700,0],"icon":"exit","size":30}},
+   {{"id":114,"type":"icon","floor":1,"origin":[700,200],"icon":"bar","size":30}},
+   {{"id":115,"type":"section","floor":2,"label":"Upper","category":"a","origin":[0,5000],"children":[
+     {{"id":116,"type":"rowBlock","rows":[{{"rid":117,"seats":2,"oids":[[70,2]]}}]}}]}},
+   {{"id":118,"type":"text","floor":2,"origin":[0,5500],"text":"Hidden","size":40,"color":"#000000"}},
+   {{"id":119,"type":"icon","floor":2,"origin":[0,5600],"icon":"lift","size":30}}]}}"##
+    ))
 }
 
 /// The chart with the glyph atlas after its first frames, at the fit zoom,
 /// with the text they asked for.
-fn labelled() -> E {
+pub(super) fn labelled(display: &str) -> E {
     let mut e = Engine::new(Fake::default());
-    e.handle(Command::LoadChart { ccf: chart() });
+    e.handle(Command::LoadChart {
+        ccf: chart(display),
+    });
     e.handle(super::text::atlas());
     resize(&mut e, W, H, 1.0, 3.0);
     rasterise(&mut e, 0.0);
@@ -48,7 +61,7 @@ fn labelled() -> E {
 }
 
 /// The text requests among `events`: id, text, px.
-fn requests(events: &[Event]) -> Vec<(u32, String, u16)> {
+pub(super) fn requests(events: &[Event]) -> Vec<(u32, String, u16)> {
     let request = |e: &Event| match e {
         Event::TextRequest { id, text, px, .. } => Some((*id, text.clone(), *px)),
         _ => None,
@@ -58,7 +71,7 @@ fn requests(events: &[Event]) -> Vec<(u32, String, u16)> {
 
 /// The fake rasteriser: answers each request with a raster 0.6 em a
 /// character wide and 1.25 em tall, fully covered.
-fn answer(e: &mut E, asked: &[(u32, String, u16)]) {
+pub(super) fn answer(e: &mut E, asked: &[(u32, String, u16)]) {
     for (id, text, px) in asked {
         let px = u32::from(*px);
         let width = (text.chars().count() as u32 * px * 3).div_ceil(5) + 4;
@@ -75,7 +88,7 @@ fn answer(e: &mut E, asked: &[(u32, String, u16)]) {
 }
 
 /// Ticks at `t` and answers what was asked, until nothing more is asked.
-fn rasterise(e: &mut E, t: f64) -> Vec<(u32, String, u16)> {
+pub(super) fn rasterise(e: &mut E, t: f64) -> Vec<(u32, String, u16)> {
     let mut all = Vec::new();
     for i in 0..20 {
         let asked = requests(&tick(e, t + f64::from(i)));
@@ -90,7 +103,7 @@ fn rasterise(e: &mut E, t: f64) -> Vec<(u32, String, u16)> {
 }
 
 /// Puts the camera on `centre` with the default seat `s` CSS pixels large.
-fn look(e: &mut E, centre: [f64; 2], s: f64) {
+pub(super) fn look(e: &mut E, centre: [f64; 2], s: f64) {
     let seat = f64::from(e.scene.as_ref().unwrap().scene.seat_size);
     e.camera = Some(Camera {
         centre,
@@ -133,12 +146,12 @@ fn draws_since(e: &E, from: usize) -> Vec<(Pipeline, Vec<Range<u32>>, f32)> {
     draws.map(|(p, _, r, a)| (*p, r.clone(), *a)).collect()
 }
 
-fn view_section(e: &mut E, section: usize, s: f64) {
+pub(super) fn view_section(e: &mut E, section: usize, s: f64) {
     let centre = centre_of(e, section);
     look(e, centre, s);
 }
 
-fn centre_of(e: &E, section: usize) -> [f64; 2] {
+pub(super) fn centre_of(e: &E, section: usize) -> [f64; 2] {
     let b = e.scene.as_ref().unwrap().scene.chart.sections[section].bounds;
     [f64::from(b[0] + b[2]) / 8.0, f64::from(b[1] + b[3]) / 8.0]
 }
@@ -146,7 +159,7 @@ fn centre_of(e: &E, section: usize) -> [f64; 2] {
 #[test]
 fn a_string_is_asked_for_once_per_bucket_drawn_once_supplied_and_never_when_idle() {
     let mut e = Engine::new(Fake::default());
-    e.handle(Command::LoadChart { ccf: chart() });
+    e.handle(Command::LoadChart { ccf: chart("none") });
     resize(&mut e, W, H, 1.0, 3.0);
     // The first frame, at the fit zoom (the cross-fade), then overview.
     let mut asked = requests(&tick(&mut e, 0.0));
@@ -214,7 +227,7 @@ fn a_string_is_asked_for_once_per_bucket_drawn_once_supplied_and_never_when_idle
 
 #[test]
 fn section_labels_show_at_overview_and_cross_fade_at_their_anchor_within_the_clamp() {
-    let mut e = labelled();
+    let mut e = labelled("none");
     let centre = centre_of(&e, 0);
     look(&mut e, centre, 1.0);
     rasterise(&mut e, 16.0);
@@ -284,9 +297,54 @@ fn section_labels_show_at_overview_and_cross_fade_at_their_anchor_within_the_cla
     assert!(rasterise(&mut e, 700.0).iter().any(|a| a.1 == "Épuisé"));
 }
 
+/// The row labels placed (`text` instances in the muted colour): centre and
+/// the rectangle drawn, in chart units.
+fn rows(e: &E) -> Vec<([f32; 2], [f32; 4])> {
+    let muted = e.theme.fg_muted;
+    let buffer = &e.backend.buffers[&labels(e).text_buffer().unwrap().0];
+    let range = labels(e).ranges[2].clone();
+    range
+        .filter_map(|i| {
+            let b = &buffer[i as usize * TEXT_STRIDE..][..TEXT_STRIDE];
+            let f = |at: usize| f32::from_le_bytes(b[at..at + 4].try_into().unwrap());
+            let u = |at: usize| f32::from(u16::from_le_bytes(b[at..at + 2].try_into().unwrap()));
+            let (w, h) = (u(16) / u(24) * f(8) / 2.0, u(18) / u(24) * f(8) / 2.0);
+            let [x, y] = [f(0), f(4)];
+            (b[32..36] == muted).then_some(([x, y], [x - w, y - h, x + w, y + h]))
+        })
+        .collect()
+}
+
+#[test]
+fn row_labels_show_from_8_px_seats_at_the_ends_the_chart_asks_for() {
+    for (display, ends) in [("both", 2), ("start", 1), ("end", 1), ("none", 0)] {
+        let mut e = labelled(display);
+        let centre = centre_of(&e, 0);
+        look(&mut e, centre, 7.5);
+        rasterise(&mut e, 16.0);
+        assert!(rows(&e).is_empty(), "{display}: none below 8 px");
+        look(&mut e, centre, 8.0);
+        let asked = rasterise(&mut e, 100.0);
+        // Rows A to D of North at least; `Ä` too when South is in view.
+        let placed = rows(&e);
+        assert!(placed.len() >= 4 * ends, "{display}: {}", placed.len());
+        let asked_a = asked.iter().any(|a| a.1 == "Ä");
+        assert_eq!(asked_a, ends > 0 && e.visible.len() > 1, "{display}");
+        // Each sits at a compiled row end: row A's first.
+        let chart = &e.scene.as_ref().unwrap().scene.chart;
+        let at = match display {
+            "end" => Some(chart.rows[0].label_end),
+            "none" => None,
+            _ => Some(chart.rows[0].label_start),
+        };
+        let first = placed.first().map(|p| p.0);
+        assert_eq!(first, at.map(|a| a.map(|v| v as f32 * 0.25)), "{display}");
+    }
+}
+
 #[test]
 fn text_objects_follow_floor_angle_alignment_and_minimum_zoom() {
-    let mut e = labelled();
+    let mut e = labelled("none");
     let centre = centre_of(&e, 0);
     look(&mut e, centre, 2.0);
     let asked = rasterise(&mut e, 16.0);
@@ -311,6 +369,181 @@ fn text_objects_follow_floor_angle_alignment_and_minimum_zoom() {
 }
 
 #[test]
+fn collision_keeps_the_priority_order_no_overlap_and_ignores_small_pans() {
+    let mut e = labelled("both");
+    let centre = centre_of(&e, 0);
+    look(&mut e, centre, 9.0);
+    rasterise(&mut e, 16.0);
+    let row = e.scene.as_ref().unwrap().scene.chart.rows[0];
+    let boxes: Vec<[f32; 4]> = rows(&e).into_iter().map(|r| r.1).collect();
+    assert!(!boxes.is_empty());
+    // No two placed row labels overlap.
+    for (i, a) in boxes.iter().enumerate() {
+        for b in &boxes[i + 1..] {
+            let overlap = a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+            assert!(!overlap, "{a:?} {b:?}");
+        }
+    }
+    // The same view in another engine, or reached again after a pan away,
+    // places the same labels: the order is the chart's, never a hash map's.
+    let placed = |e: &E| rows(e);
+    let mut other = labelled("both");
+    look(&mut other, centre, 9.0);
+    rasterise(&mut other, 16.0);
+    assert_eq!(placed(&other), placed(&e));
+    view_section(&mut other, 1, 9.0);
+    rasterise(&mut other, 200.0);
+    look(&mut other, centre, 9.0);
+    rasterise(&mut other, 400.0);
+    assert_eq!(placed(&other), placed(&e));
+    // The grid is at most 1,025 cells a side however far the labels spread.
+    assert!(labels(&e).grid_words() <= 1025 * 17);
+    // A one-pixel pan, and a zoom inside the √2 step, build nothing.
+    let builds = labels(&e).builds;
+    let writes = e.backend.buffer_writes.len();
+    for (dx, s) in [(0.1, 9.0), (-0.1, 9.0), (0.0, 9.5)] {
+        look(&mut e, [centre[0] + dx, centre[1]], s);
+        tick(&mut e, 100.0);
+    }
+    assert_eq!(labels(&e).builds, builds);
+    assert!(
+        e.backend.buffer_writes[writes..]
+            .iter()
+            .all(|w| Some(BufferId(w.0)) != labels(&e).text_buffer())
+    );
+
+    // A text object over row A's start hides that row label: text objects
+    // come before row labels.
+    let [x, y] = row.label_start.map(|v| v as f32 * 0.25);
+    let json = format!(
+        r##"{{"schema":1,"name":"T","settings":{{"seatSize":10,"rowLabelDisplay":"start"}},"nextOid":900,
+  "categories":[{{"key":"a","label":"A","color":"#2563EB"}}],
+  "nodes":[{{"id":101,"type":"section","label":"North","category":"a","children":[
+     {{"id":102,"type":"rowBlock","rows":[{{"rid":103,"seats":10,"oids":[[10,10]]}},{{"rid":104,"seats":10,"oids":[[20,10]]}}]}}]}},
+   {{"id":111,"type":"text","origin":[{x},{y}],"text":"Over","size":10,"color":"#112233"}}]}}"##
+    );
+    let mut e = Engine::new(Fake::default());
+    e.handle(Command::LoadChart {
+        ccf: compile(&json),
+    });
+    e.handle(super::text::atlas());
+    resize(&mut e, W, H, 1.0, 3.0);
+    tick(&mut e, 0.0);
+    look(&mut e, [f64::from(x), f64::from(y)], 9.0);
+    rasterise(&mut e, 16.0);
+    let placed = rows(&e);
+    assert_eq!(labels(&e).ranges[2].len(), 1 + placed.len());
+    assert_eq!(placed.len(), 1, "row B only");
+    assert_ne!(placed[0].0, [x, y]);
+}
+
+#[test]
+fn seat_icons_follow_state_and_flags_and_nothing_is_uploaded_for_them() {
+    // The shader's table: by visual state, then accessible.
+    let shader = include_str!("../../../shaders/shape.wgsl");
+    let table = shader.split("SEAT_ICONS = array<u32, 8>(").nth(1).unwrap();
+    let icons: Vec<u32> = table
+        .split(')')
+        .next()
+        .unwrap()
+        .split(',')
+        .map(|v| v.trim().trim_end_matches('u').parse().unwrap())
+        .collect();
+    let (none, tick_, cross, access) = (0, 1, 2, 3);
+    let expect = [
+        (visual::AVAILABLE, false, none),
+        (visual::AVAILABLE, true, access),
+        (visual::UNAVAILABLE, false, cross),
+        (visual::UNAVAILABLE, true, cross),
+        (visual::SELECTED_PENDING, true, tick_),
+        (visual::SELECTED_HELD, false, tick_),
+        (visual::SELECTED_HELD, true, tick_),
+    ];
+    for (v, accessible, icon) in expect {
+        assert_eq!(
+            icons[usize::from(v) * 2 + usize::from(accessible)],
+            icon,
+            "{v} {accessible}"
+        );
+    }
+
+    let mut e = labelled("none");
+    snapshot(&mut e, 1, &[]);
+    // Seat 0 is accessible: its static shape carries the flag, and its
+    // label is left out for its mark.
+    let loaded = e.scene.as_ref().unwrap();
+    let statics = loaded.scene.encode_static();
+    assert_eq!(
+        statics[11] & seat::shape::ACCESSIBLE,
+        seat::shape::ACCESSIBLE
+    );
+    assert_eq!(statics[12 + 11] & seat::shape::ACCESSIBLE, 0);
+    view_section(&mut e, 0, 20.0);
+    let from = e.backend.modes.len();
+    tick(&mut e, 16.0);
+    // The seats' draw, before the decoration icons'.
+    assert_eq!(
+        e.backend.modes[from..],
+        [mode::SEAT_ICONS, mode::DECORATION_ICONS]
+    );
+    let slot = e.scene.as_ref().unwrap().seat_labels.slot(0).unwrap();
+    let labels_buf = e.scene.as_ref().unwrap().seat_labels.buffer().unwrap().0;
+    let at = usize::from(slot) * 40 * LABEL_STRIDE;
+    let first = &e.backend.buffers[&labels_buf][at..at + LABEL_STRIDE];
+    assert_eq!(
+        first, &[0; LABEL_STRIDE],
+        "no number under the accessible mark"
+    );
+
+    // A hold, a delta and a theme change redraw the seats with their icons
+    // and upload nothing but seat state and the palette.
+    let writes = e.backend.buffer_writes.len();
+    e.handle(Command::Select {
+        objects: vec![ObjectRef::Idx(3)],
+    });
+    tick(&mut e, 32.0);
+    delta(&mut e, 1, &[(5, 1)]);
+    tick(&mut e, 48.0);
+    e.handle(Command::SetTheme {
+        base: crate::protocol::BuiltinTheme::HighContrast,
+        tokens: Vec::new(),
+    });
+    tick(&mut e, 64.0);
+    // (The mesh's vertices carry the section tints, 04 §10.)
+    let state = [gpu(&e).dynamic_buf.0, gpu(&e).mesh.unwrap()[0].0];
+    let written: Vec<u32> = e.backend.buffer_writes[writes..]
+        .iter()
+        .map(|w| w.0)
+        .collect();
+    assert!(written.iter().all(|b| state.contains(b)), "{written:?}");
+    // Below the detail level, seats are drawn without icons.
+    view_section(&mut e, 0, 10.0);
+    let from = e.backend.modes.len();
+    tick(&mut e, 80.0);
+    assert_eq!(e.backend.modes[from], mode::PLAIN);
+}
+
+#[test]
+fn decoration_icons_are_the_active_floors_drawn_every_frame() {
+    let mut e = labelled("none");
+    let ml = &e.scene.as_ref().unwrap().map_labels;
+    let [statics, _] = ml.icon_buffers().unwrap();
+    let bytes = &e.backend.buffers[&statics.0];
+    // Shapes are the pictogram after the seat icons: exit 1, bar 4.
+    assert_eq!((bytes[11], bytes[12 + 11]), (1, 4));
+    assert_eq!(f32::from_le_bytes(bytes[0..4].try_into().unwrap()), 700.0);
+    for s in [1.0, 20.0] {
+        view_section(&mut e, 0, s);
+        let from = e.backend.calls.len();
+        tick(&mut e, s);
+        let last = e.backend.calls[from..].last().unwrap();
+        // Exit and bar; not the upper floor's lift.
+        assert_eq!((last.0, last.1.clone()), (Pipeline::Shape, one(0..2)));
+        assert_eq!(e.backend.modes.last(), Some(&mode::DECORATION_ICONS));
+    }
+}
+
+#[test]
 fn seat_labels_outside_the_baked_atlas_come_from_the_dynamic_one_a_few_a_frame() {
     // Section 1 of the line chart: `W1♿`, `ABCDE` and `7`; more such
     // labels in a row of forty.
@@ -318,7 +551,7 @@ fn seat_labels_outside_the_baked_atlas_come_from_the_dynamic_one_a_few_a_frame()
         .map(|i| format!(r#""{}":{{"label":"№{i}"}}"#, 100 + i))
         .collect();
     let json = format!(
-        r##"{{"schema":1,"name":"N","settings":{{"seatSize":40}},"nextOid":200,
+        r##"{{"schema":1,"name":"N","settings":{{"seatSize":40,"rowLabelDisplay":"none"}},"nextOid":200,
   "categories":[{{"key":"a","label":"A","color":"#2563EB"}}],
   "nodes":[{{"id":1,"type":"rowBlock","category":"a","rows":[{{"rid":2,"seats":40,"oids":[[100,40]]}}],
      "seatOverrides":{{{}}}}}]}}"##,
@@ -501,6 +734,7 @@ fn measure_map_labels() {
     let section = [f64::from(x) / 4.0, f64::from(y) / 4.0];
     for (name, centre, s) in [
         ("overview", fit, 1.2),
+        ("8 px seats", section, 8.0),
         ("detail, 20 px seats", section, 20.0),
     ] {
         look(&mut e, centre, s);
@@ -520,11 +754,22 @@ fn measure_map_labels() {
             tick(&mut e, 1000.0 + f64::from(i));
         }
         let build = start.elapsed().as_secs_f64() * 1000.0 / f64::from(runs);
+        // The collision pass alone, over the same candidates.
+        let cell = e.scene.as_ref().unwrap().scene.seat_size / 2.0;
+        let mut l = std::mem::take(&mut e.scene.as_mut().unwrap().map_labels);
+        let start = std::time::Instant::now();
+        for _ in 0..runs {
+            l.place_for_measurement(cell);
+        }
+        let place = start.elapsed().as_secs_f64() * 1000.0 / f64::from(runs);
+        let cands = l.candidates();
+        e.scene.as_mut().unwrap().map_labels = l;
         let atlas = &e.scene.as_ref().unwrap().text_atlas;
         println!(
-            "{name}: a frame in {frame:.1} µs, {} draw calls; a build of {} labels in {build:.3} ms (CPU, test backend); atlas {} KiB, {} strings",
+            "{name}: a frame in {frame:.1} µs, {} draw calls; a build in {build:.3} ms of {cands} candidates, collision {place:.3} ms, {} labels placed, {} of them rows (CPU, test backend); atlas {} KiB, {} strings",
             e.label_stats().frame_draws,
             labels(&e).ranges[2].end,
+            rows(&e).len(),
             atlas.bytes() / 1024,
             atlas.rasterised,
         );
@@ -585,11 +830,11 @@ fn the_atlas_never_stalls_on_pending_entries_empty_answers_or_many_strings() {
 #[test]
 fn an_answer_for_the_previous_chart_is_never_taken_for_the_new_ones() {
     let mut e = Engine::new(Fake::default());
-    e.handle(Command::LoadChart { ccf: chart() });
+    e.handle(Command::LoadChart { ccf: chart("none") });
     resize(&mut e, W, H, 1.0, 3.0);
     let old: Vec<u32> = requests(&tick(&mut e, 0.0)).iter().map(|r| r.0).collect();
     assert!(!old.is_empty());
-    e.handle(Command::LoadChart { ccf: chart() });
+    e.handle(Command::LoadChart { ccf: chart("none") });
     let new = requests(&tick(&mut e, 16.0));
     assert!(!new.is_empty());
     assert!(new.iter().all(|r| !old.contains(&r.0)), "{old:?} {new:?}");

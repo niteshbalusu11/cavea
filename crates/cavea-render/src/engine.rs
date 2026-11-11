@@ -3,15 +3,20 @@
 //! `ApplyDelta`, `SetPrivateHolds`, `SetTheme`, `Resize`, `Pointer`, `Wheel`,
 //! `SetCamera` and `FlyTo` (bounds, section, seat), `SetGestureHandling`,
 //! `SetReducedMotion`, `Select`, `Deselect`, `ClearSelection`, `HoldResult`,
-//! `SetRules`, `SetSessionMode`, `SetGlyphAtlas`, `Tick` and `ContextLost`;
-//! every other command
-//! is answered with an `Unsupported` error event. Taps, hover and selection
+//! `SetRules`, `SetSessionMode`, `SetGlyphAtlas`, `SetText`, `SetMessage`,
+//! `Tick`, `ContextLost` and `ContextRestored`; every other command is
+//! answered with an `Unsupported` error event. Taps, hover and selection
 //! are in [`select`], seat state in [`state`].
 //!
 //! Frames (04 §18): input, camera commands and resizes are queued and applied
 //! at the start of the next `Tick`. A frame is drawn only when something is
 //! dirty, and `NeedFrame` is emitted only while there is queued work, a running
 //! animation or a pending long press, so an idle engine asks for nothing.
+//!
+//! GPU resources are a cache of what the engine keeps on the CPU (04 §20.2):
+//! after `ContextLost` the engine makes no GPU call; after `ContextRestored`
+//! the backend compiles its programs again and the next frame makes every
+//! resource again from the CPU arrays, once.
 
 use std::ops::Range;
 
@@ -21,7 +26,7 @@ use crate::{
     backend::{
         BackendError, BufferDesc, BufferId, BufferKind, BufferUsage, DrawCall, GpuBackend,
         Pipeline, Rect as TexRect, ResourceId, Sampling, Target, TextureDesc, TextureFormat,
-        TextureId, Uniforms,
+        TextureId, Uniforms, mode,
     },
     camera::{self, Camera, Limits, Rect, Size},
     cull,
@@ -74,22 +79,29 @@ struct Viewport {
     css: Size,
 }
 
-/// A loaded chart (04 §5) and its GPU resources (04 §6).
-struct Loaded {
-    scene: Scene,
+/// A chart's GPU resources (04 §6), made from the scene and palette bytes.
+struct Gpu {
     static_buf: BufferId,
     dynamic_buf: BufferId,
     palette: TextureId,
+    /// Instance buffers of the overlay pass (04 §7 pass 12), in CSS pixels.
+    overlay: [BufferId; 2],
+    /// The chart's `MESH` vertex and index buffers (04 §6), if it has any.
+    mesh: Option<[BufferId; 2]>,
+}
+
+/// A loaded chart (04 §5) and its GPU resources (04 §6).
+struct Loaded {
+    scene: Scene,
+    /// `None` while the context is lost, until the next frame after it is
+    /// restored.
+    gpu: Option<Gpu>,
     /// Seats whose dynamic bytes changed since the last upload.
     dirty: Option<Range<usize>>,
-    /// Instance buffers of the overlay pass (04 §7 pass 12), in CSS pixels,
-    /// and the bytes last written to them (static, then dynamic).
-    overlay: [BufferId; 2],
+    /// The bytes last written to the overlay buffers (static, then dynamic).
     overlay_bytes: Vec<u8>,
     /// Label to `idx`, built on the first lookup by label.
     labels: Option<LabelIndex>,
-    /// The chart's `MESH` vertex and index buffers (04 §6), if it has any.
-    mesh: Option<[BufferId; 2]>,
     /// Mesh vertices whose colour (a section tint) changed since the upload.
     mesh_dirty: Option<Range<usize>>,
     /// Per-section counters and tints (04 §5, §10).
@@ -105,11 +117,11 @@ struct Loaded {
     palette_bytes: Vec<u8>,
 }
 
-/// The glyph atlas as the host sent it, kept so the texture can be made again.
+/// The glyph atlas as the host sent it, kept so the texture can be made
+/// again after a lost context.
 struct Atlas {
-    #[allow(dead_code, reason = "kept for context restoration, REN-046")]
     rgba: Vec<u8>,
-    texture: TextureId,
+    texture: Option<TextureId>,
 }
 
 /// Seat label counters, for the demo's readout and tests.
@@ -128,6 +140,19 @@ pub struct LabelStats {
     pub rasterised: u32,
     /// Draw calls in the last frame drawn, all passes.
     pub frame_draws: u32,
+}
+
+/// The engine's part of the frame statistics (04 §24).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameStats {
+    /// Draw calls in the last frame drawn, all passes.
+    pub draw_calls: u32,
+    /// Seats in the ranges the last frame drew (off-screen seats a merge
+    /// draws included); 0 when it drew none.
+    pub visible_seats: u32,
+    pub lod: Option<Lod>,
+    /// The device pixel ratio rendered at.
+    pub ratio: f32,
 }
 
 /// Input and camera commands waiting for the next `Tick`, in arrival order.
@@ -229,6 +254,9 @@ pub struct Engine<B: GpuBackend> {
     /// the dynamic atlas.
     draws: [u32; 2],
     last_draws: [u32; 2],
+    /// Seats in the ranges drawn this frame and the last one.
+    seats_drawn: u32,
+    last_seats: u32,
     start_ms: Option<f64>,
     /// Intents seen, for tests.
     #[cfg(test)]
@@ -275,6 +303,8 @@ impl<B: GpuBackend> Engine<B> {
             sold_out_gen: 0,
             draws: [0; 2],
             last_draws: [0; 2],
+            seats_drawn: 0,
+            last_seats: 0,
             start_ms: None,
             #[cfg(test)]
             intents: Vec::new(),
@@ -391,7 +421,8 @@ impl<B: GpuBackend> Engine<B> {
             } => self.set_text(id, [width, height, px], &pixels),
             Command::SetMessage { key, text } => self.set_message(&key, text),
             Command::Tick { time_ms } => self.frame(time_ms),
-            Command::ContextLost => self.context_lost = true,
+            Command::ContextLost => self.lose_context(),
+            Command::ContextRestored => self.restore_context(),
             _ => self.error(
                 ErrorCode::Unsupported,
                 "command not implemented in this build",
@@ -515,88 +546,17 @@ impl<B: GpuBackend> Engine<B> {
             &scene.chart.strings,
             &mut palette_bytes,
         );
-        let seats = scene.pos.len();
-        let dynamic = seat::encode_dynamic(
-            &scene.chart.seat_category,
-            &scene.visual,
-            &scene.fx,
-            0..seats,
-        );
-        let vertex = |usage| BufferDesc {
-            kind: BufferKind::Vertex,
-            usage,
-        };
-        let static_buf = self
-            .backend
-            .create_buffer(vertex(BufferUsage::Static), &scene.encode_static())
-            .map_err(gpu)?;
-        let dynamic_buf = match self
-            .backend
-            .create_buffer(vertex(BufferUsage::Dynamic), &dynamic)
-        {
-            Ok(id) => id,
-            Err(error) => {
-                self.backend.destroy(ResourceId::Buffer(static_buf));
-                return Err(gpu(error));
-            }
-        };
-        let desc = TextureDesc {
-            width: PALETTE_WIDTH,
-            height: rows,
-            format: TextureFormat::Rgba8,
-            sampling: Sampling::Nearest,
-        };
-        let mut created = vec![static_buf, dynamic_buf];
-        let mut buffer = |backend: &mut B, usage, len| {
-            let id = backend.create_buffer(vertex(usage), &vec![0; len]);
-            id.inspect(|&id| created.push(id))
-        };
-        let overlay = buffer(
-            &mut self.backend,
-            BufferUsage::Dynamic,
-            OVERLAYS * seat::STATIC_STRIDE,
-        )
-        .and_then(|a| {
-            buffer(
-                &mut self.backend,
-                BufferUsage::Dynamic,
-                OVERLAYS * seat::DYNAMIC_STRIDE,
-            )
-            .map(|b| [a, b])
-        });
         let mut sections = Sections::new(&scene.chart, scene.floor, &scene.visual, &self.theme);
         sections.write_tints(&mut scene.chart, &self.theme);
-        let mesh = &scene.chart.mesh;
-        let resources = overlay.and_then(|overlay| {
-            let mesh = if mesh.indices.is_empty() {
-                None
-            } else {
-                let index = BufferDesc {
-                    kind: BufferKind::Index,
-                    usage: BufferUsage::Static,
-                };
-                let indices: Vec<u8> = mesh.indices.iter().flat_map(|i| i.to_le_bytes()).collect();
-                let vertices = encode_vertices(mesh.vertices.iter());
-                let v = self
-                    .backend
-                    .create_buffer(vertex(BufferUsage::Dynamic), &vertices)?;
-                created.push(v);
-                let i = self.backend.create_buffer(index, &indices)?;
-                created.push(i);
-                Some([v, i])
-            };
-            let texture = self.backend.create_texture(desc, Some(&palette_bytes));
-            texture.map(|palette| (overlay, mesh, palette))
-        });
-        let (overlay, mesh, palette) = match resources {
-            Ok(ids) => ids,
-            Err(error) => {
-                for id in created {
-                    self.backend.destroy(ResourceId::Buffer(id));
-                }
-                return Err(gpu(error));
-            }
+        // Made now, so a failure leaves the chart shown; while the context
+        // is lost, at the first frame after it comes back.
+        let gpu = if self.context_lost {
+            None
+        } else {
+            Some(Gpu::new(&mut self.backend, &scene, &palette_bytes).map_err(gpu)?)
         };
+        let mut map_labels = MapLabels::default();
+        map_labels.load_icons(&scene);
 
         // Request ids carry on from the old chart's atlas, so a late answer
         // for it is ignored.
@@ -609,19 +569,15 @@ impl<B: GpuBackend> Engine<B> {
         self.events.push(Event::Ready(scene.info()));
         self.scene = Some(Loaded {
             scene,
-            static_buf,
-            dynamic_buf,
-            palette,
+            gpu,
             dirty: None,
-            overlay,
             overlay_bytes: Vec::new(),
             labels: None,
-            mesh,
             mesh_dirty: None,
             sections,
             seat_labels: Labels::default(),
             text_atlas,
-            map_labels: MapLabels::default(),
+            map_labels,
             palette_bytes,
         });
         self.flush_selection();
@@ -636,22 +592,66 @@ impl<B: GpuBackend> Engine<B> {
     }
 
     fn release_scene(&mut self) {
-        if let Some(loaded) = self.scene.take() {
-            self.backend.destroy(ResourceId::Buffer(loaded.static_buf));
-            self.backend.destroy(ResourceId::Buffer(loaded.dynamic_buf));
-            self.backend.destroy(ResourceId::Texture(loaded.palette));
-            for id in loaded
-                .overlay
-                .into_iter()
-                .chain(loaded.mesh.into_iter().flatten())
-                .chain(loaded.seat_labels.buffer())
-                .chain(loaded.map_labels.text_buffer())
-            {
-                self.backend.destroy(ResourceId::Buffer(id));
-            }
-            let mut atlas = loaded.text_atlas;
-            atlas.reset(&mut self.backend);
+        if let Some(mut loaded) = self.scene.take() {
+            loaded.release(&mut self.backend);
         }
+    }
+
+    /// The context is gone (04 §20.2): forget every GPU resource and make no
+    /// GPU call until it is restored. The engine keeps everything they were
+    /// made from. Deleting objects of a lost context does nothing, so the
+    /// backend's tables are emptied without effect on the GPU.
+    fn lose_context(&mut self) {
+        if self.context_lost {
+            return;
+        }
+        self.context_lost = true;
+        if let Some(loaded) = &mut self.scene {
+            loaded.release(&mut self.backend);
+        }
+        if let Some(texture) = self.atlas.as_mut().and_then(|a| a.texture.take()) {
+            self.backend.destroy(ResourceId::Texture(texture));
+        }
+    }
+
+    /// The context is back: the backend compiles its programs again and the
+    /// next frame makes every resource again from the CPU arrays. A restore
+    /// that fails leaves the engine lost; a restore without a loss is
+    /// ignored.
+    fn restore_context(&mut self) {
+        if !self.context_lost {
+            return;
+        }
+        match self.backend.restore() {
+            Ok(()) => {
+                self.context_lost = false;
+                self.redraw();
+            }
+            Err(error) => self.error(ErrorCode::Gpu, error.to_string()),
+        }
+    }
+
+    /// Makes what a lost context took: the chart's resources and the glyph
+    /// atlas's texture. Labels and the dynamic atlas make theirs as they
+    /// build, and the dynamic atlas asks the host for its strings again.
+    fn make_resources(&mut self) -> Result<(), BackendError> {
+        if let Some(atlas) = self.atlas.as_mut().filter(|a| a.texture.is_none()) {
+            atlas.texture = Some(
+                self.backend
+                    .create_texture(glyph_desc(), Some(&atlas.rgba))?,
+            );
+        }
+        if let Some(loaded) = self.scene.as_mut().filter(|l| l.gpu.is_none()) {
+            let gpu = Gpu::new(&mut self.backend, &loaded.scene, &loaded.palette_bytes)?;
+            loaded.gpu = Some(gpu);
+            // Everything was written fresh; labels of the dynamic atlas take
+            // their ink from the state as built.
+            loaded.dirty = None;
+            loaded.mesh_dirty = None;
+            loaded.overlay_bytes.clear();
+            self.state_gen = self.state_gen.wrapping_add(1);
+        }
+        Ok(())
     }
 
     /// Seat label counters (04 §12).
@@ -666,6 +666,17 @@ impl<B: GpuBackend> Engine<B> {
             atlas_bytes: atlas.map_or(0, TextAtlas::bytes),
             rasterised: atlas.map_or(0, |a| a.rasterised),
             frame_draws: self.last_draws[0],
+        }
+    }
+
+    /// What the last frame drew (04 §24), for the host's frame statistics;
+    /// the host times frames, the engine counts.
+    pub fn frame_stats(&self) -> FrameStats {
+        FrameStats {
+            draw_calls: self.last_draws[0],
+            visible_seats: self.last_seats,
+            lod: self.lod,
+            ratio: self.viewport.map_or(1.0, |v| v.ratio),
         }
     }
 
@@ -715,21 +726,21 @@ impl<B: GpuBackend> Engine<B> {
                 "glyph atlas does not match the compiled metrics",
             );
         }
-        let desc = TextureDesc {
-            width,
-            height,
-            format: TextureFormat::Rgba8,
-            sampling: Sampling::Linear,
-        };
-        match self.backend.create_texture(desc, Some(&rgba)) {
-            Ok(texture) => {
-                if let Some(old) = self.atlas.replace(Atlas { rgba, texture }) {
-                    self.backend.destroy(ResourceId::Texture(old.texture));
-                }
-                self.redraw();
+        // While the context is lost, the texture is made when it returns.
+        let texture = if self.context_lost {
+            None
+        } else {
+            match self.backend.create_texture(glyph_desc(), Some(&rgba)) {
+                Ok(texture) => Some(texture),
+                Err(error) => return self.error(ErrorCode::Gpu, error.to_string()),
             }
-            Err(error) => self.error(ErrorCode::Gpu, error.to_string()),
+        };
+        if let Some(old) = self.atlas.replace(Atlas { rgba, texture })
+            && let Some(old) = old.texture
+        {
+            self.backend.destroy(ResourceId::Texture(old));
         }
+        self.redraw();
     }
 
     /// Replaces the theme and rewrites the palette texture and clear colour;
@@ -762,7 +773,10 @@ impl<B: GpuBackend> Engine<B> {
                 width: PALETTE_WIDTH,
                 height: u32::try_from(chart.categories.len() + 1).unwrap_or(u32::MAX),
             };
-            if let Err(error) = self.backend.update_texture(loaded.palette, region, palette) {
+            // Without resources, the palette is made from these bytes.
+            if let Some(gpu) = &loaded.gpu
+                && let Err(error) = self.backend.update_texture(gpu.palette, region, palette)
+            {
                 self.error(ErrorCode::Gpu, error.to_string());
             }
         }
@@ -856,14 +870,17 @@ impl<B: GpuBackend> Engine<B> {
         );
         let time = ((time_ms - start) / 1000.0) as f32;
         self.draws = [0; 2];
-        let drawn = self
-            .upload()
+        self.seats_drawn = 0;
+        let drawn = (self.make_resources())
+            .map_err(|error| (ErrorCode::Gpu, error.to_string()))
+            .and_then(|()| self.upload())
             .and_then(|()| self.draw_world(viewport, time))
             .and_then(|()| self.draw_overlays(viewport, time));
         if let Err((code, message)) = drawn {
             self.error(code, message);
         }
         self.last_draws = self.draws;
+        self.last_seats = self.seats_drawn;
         self.backend.end_frame();
     }
 
@@ -1091,6 +1108,9 @@ impl<B: GpuBackend> Engine<B> {
         let Some(loaded) = &mut self.scene else {
             return Ok(());
         };
+        let Some(res) = &loaded.gpu else {
+            return Ok(());
+        };
         let scene = &mut loaded.scene;
         if let Some(range) = loaded.dirty.take() {
             self.state_gen = self.state_gen.wrapping_add(1);
@@ -1103,13 +1123,13 @@ impl<B: GpuBackend> Engine<B> {
             let offset = u32::try_from(range.start * seat::DYNAMIC_STRIDE)
                 .map_err(|_| gpu(BackendError::InvalidData))?;
             self.backend
-                .update_buffer(loaded.dynamic_buf, offset, &bytes)
+                .update_buffer(res.dynamic_buf, offset, &bytes)
                 .map_err(gpu)?;
         }
         if let Some(range) = loaded.sections.write_tints(&mut scene.chart, &self.theme) {
             grow_dirty(&mut loaded.mesh_dirty, range);
         }
-        if let (Some(range), Some([vertex_buf, _])) = (loaded.mesh_dirty.take(), loaded.mesh) {
+        if let (Some(range), Some([vertex_buf, _])) = (loaded.mesh_dirty.take(), res.mesh) {
             let vertices = scene.chart.mesh.vertices.get(range.clone());
             let bytes = encode_vertices(vertices.unwrap_or_default().iter());
             let offset = u32::try_from(range.start * MESH_STRIDE)
@@ -1137,6 +1157,7 @@ impl<B: GpuBackend> Engine<B> {
             dim: self.theme.dim,
             time,
             alpha,
+            mode: mode::PLAIN,
         };
         // Extreme but finite bounds (a huge offset, a tiny size) can still overflow.
         if !uniforms.view.iter().flatten().all(|v| v.is_finite()) || !uniforms.px_per_cu.is_finite()
@@ -1157,6 +1178,9 @@ impl<B: GpuBackend> Engine<B> {
         let (Some(loaded), Some(camera)) = (&self.scene, self.camera) else {
             return Ok(());
         };
+        let Some(gpu) = &loaded.gpu else {
+            return Ok(());
+        };
         let alpha = self.seat_alpha();
         let floor = loaded.scene.floor;
         let decoration = |layer| {
@@ -1168,7 +1192,7 @@ impl<B: GpuBackend> Engine<B> {
         };
         let (below, above) = (decoration(Layer::Below), decoration(Layer::Above));
         let fills = loaded.sections.fills.clone();
-        let mesh = loaded.mesh;
+        let mesh = gpu.mesh;
         let draw_mesh = |engine: &mut Self, range: Option<Range<u32>>, alpha: f32| {
             let (Some(range), Some(buffers)) = (range.filter(|r| !r.is_empty()), mesh) else {
                 return Ok(());
@@ -1192,12 +1216,14 @@ impl<B: GpuBackend> Engine<B> {
         }
         self.draw_labels(camera, viewport, time)?;
         self.draw_text(camera, viewport, time)?;
-        draw_mesh(self, above, 1.0)
+        draw_mesh(self, above, 1.0)?;
+        let uniforms = self.world_uniforms(camera, viewport, time, 1.0)?;
+        self.draw_icons(uniforms)
     }
 
     /// Seat labels from the dynamic atlas (with pass 9's), then pass 10
-    /// (04 §7, §12): section labels, faded with the fills, and text objects;
-    /// rebuilt only when what they show changes.
+    /// (04 §7, §12): row labels, section labels (faded with the fills) and
+    /// text objects; rebuilt only when what they show changes.
     fn draw_text(
         &mut self,
         camera: Camera,
@@ -1205,6 +1231,7 @@ impl<B: GpuBackend> Engine<B> {
         time: f32,
     ) -> Result<(), (ErrorCode, String)> {
         let seat_alpha = self.seat_alpha();
+        let seat_px = self.seat_px().unwrap_or(0.0);
         let uniforms = self.world_uniforms(camera, viewport, time, 1.0)?;
         let Some(loaded) = &mut self.scene else {
             return Ok(());
@@ -1217,6 +1244,7 @@ impl<B: GpuBackend> Engine<B> {
             px_per_cu: uniforms.px_per_cu,
             ratio: viewport.ratio,
             sections: seat_alpha < 1.0 && loaded.sections.any(),
+            rows: seat_alpha > 0.0 && seat_px >= label::ROW_LABEL_SEAT_PX,
             seats: self.lod == Some(Lod::Detail),
             chunks: if seat_alpha > 0.0 { &self.visible } else { &[] },
             theme_gen: self.theme_gen,
@@ -1277,8 +1305,36 @@ impl<B: GpuBackend> Engine<B> {
         Ok(())
     }
 
+    /// Pass 11's icons (04 §7): the active floor's decoration icons, drawn
+    /// by the `shape` program at every level.
+    fn draw_icons(&mut self, uniforms: Uniforms) -> Result<(), (ErrorCode, String)> {
+        let Some(loaded) = &mut self.scene else {
+            return Ok(());
+        };
+        let Some(palette) = loaded.gpu.as_ref().map(|g| g.palette) else {
+            return Ok(());
+        };
+        let icons = loaded.map_labels.icons(&mut self.backend);
+        let Some((buffers, n)) = icons.map_err(|e| (ErrorCode::Gpu, e.to_string()))? else {
+            return Ok(());
+        };
+        let range = 0..n;
+        let call = DrawCall {
+            pipeline: Pipeline::Shape,
+            buffers: buffers.map(Some),
+            textures: [Some(palette), None],
+            uniforms: Uniforms {
+                mode: mode::DECORATION_ICONS,
+                ..uniforms
+            },
+            ranges: std::slice::from_ref(&range),
+            bases: &[],
+        };
+        submit(&mut self.backend, &mut self.draws, &call)
+    }
+
     /// Draws the active floor's seats in the render chunks the view meets
-    /// (04 §11).
+    /// (04 §11), with their icons at the detail level (pass 8).
     fn draw_seats(
         &mut self,
         camera: Camera,
@@ -1287,7 +1343,7 @@ impl<B: GpuBackend> Engine<B> {
         alpha: f32,
     ) -> Result<(), (ErrorCode, String)> {
         let uniforms = self.world_uniforms(camera, viewport, time, alpha)?;
-        let Some(loaded) = &self.scene else {
+        let Some((loaded, Some(gpu))) = self.scene.as_ref().map(|l| (l, l.gpu.as_ref())) else {
             return Ok(());
         };
         let scene = &loaded.scene;
@@ -1318,11 +1374,19 @@ impl<B: GpuBackend> Engine<B> {
         if self.ranges.is_empty() {
             return Ok(());
         }
+        self.seats_drawn = self.ranges.iter().map(|r| r.end - r.start).sum();
         let call = DrawCall {
             pipeline: Pipeline::Shape,
-            buffers: [Some(loaded.static_buf), Some(loaded.dynamic_buf)],
-            textures: [Some(loaded.palette), None],
-            uniforms,
+            buffers: [Some(gpu.static_buf), Some(gpu.dynamic_buf)],
+            textures: [Some(gpu.palette), None],
+            uniforms: Uniforms {
+                mode: if self.lod == Some(Lod::Detail) {
+                    mode::SEAT_ICONS
+                } else {
+                    mode::PLAIN
+                },
+                ..uniforms
+            },
             ranges: &self.ranges,
             bases: &[],
         };
@@ -1339,9 +1403,14 @@ impl<B: GpuBackend> Engine<B> {
         time: f32,
     ) -> Result<(), (ErrorCode, String)> {
         self.label_ranges.clear();
-        let (Some(loaded), Some(atlas)) = (&mut self.scene, &self.atlas) else {
+        let atlas = self.atlas.as_ref().and_then(|a| a.texture);
+        let (Some(loaded), Some(atlas)) = (&mut self.scene, atlas) else {
             return Ok(());
         };
+        let Some(gpu) = &loaded.gpu else {
+            return Ok(());
+        };
+        let (palette, dynamic) = (gpu.palette, gpu.dynamic_buf);
         if self.lod != Some(Lod::Detail) {
             return Ok(());
         }
@@ -1356,12 +1425,7 @@ impl<B: GpuBackend> Engine<B> {
                 &mut self.label_bases,
             )
             .map_err(gpu)?;
-        let (Some(buffer), atlas, palette, dynamic) = (
-            loaded.seat_labels.buffer(),
-            atlas.texture,
-            loaded.palette,
-            loaded.dynamic_buf,
-        ) else {
+        let Some(buffer) = loaded.seat_labels.buffer() else {
             return Ok(());
         };
         if self.label_ranges.is_empty() {
@@ -1369,6 +1433,8 @@ impl<B: GpuBackend> Engine<B> {
         }
         let mut uniforms = self.world_uniforms(camera, viewport, time, 1.0)?;
         uniforms.stroke_min_px = LABEL_MIN_EM_PX * viewport.ratio;
+        // A seat showing a state icon shows no number.
+        uniforms.mode = mode::SEAT_ICONS;
         let call = DrawCall {
             pipeline: Pipeline::Glyph,
             buffers: [Some(buffer), Some(dynamic)],
@@ -1394,6 +1460,9 @@ impl<B: GpuBackend> Engine<B> {
         let (Some(loaded), Some(camera)) = (&mut self.scene, self.camera) else {
             return Ok(());
         };
+        let Some(res) = &loaded.gpu else {
+            return Ok(());
+        };
         let scene = &loaded.scene;
         let cat = u16::try_from(scene.chart.categories.len()).unwrap_or(u16::MAX);
         let mut statics = [0; OVERLAYS * seat::STATIC_STRIDE];
@@ -1412,7 +1481,7 @@ impl<B: GpuBackend> Engine<B> {
             };
             let [x, y] = camera.to_screen(seat.pos.map(f64::from), viewport.css);
             let half = f64::from(seat.half) * 0.25 * camera.zoom;
-            let shape = match seat.shape {
+            let shape = match seat.shape & !seat::shape::ACCESSIBLE {
                 seat::shape::CHAIR => seat::shape::ROUNDED_SQUARE,
                 other => other,
             };
@@ -1448,7 +1517,7 @@ impl<B: GpuBackend> Engine<B> {
         );
         let bytes = loaded.overlay_bytes.iter().copied();
         if !bytes.eq(statics.iter().chain(dynamics).copied()) {
-            let [static_buf, dynamic_buf] = loaded.overlay;
+            let [static_buf, dynamic_buf] = res.overlay;
             self.backend
                 .update_buffer(static_buf, 0, statics)
                 .map_err(gpu)?;
@@ -1470,12 +1539,13 @@ impl<B: GpuBackend> Engine<B> {
             dim: self.theme.dim,
             time,
             alpha: 1.0,
+            mode: mode::PLAIN,
         };
         let range = 0..n as u32;
         let call = DrawCall {
             pipeline: Pipeline::Shape,
-            buffers: loaded.overlay.map(Some),
-            textures: [Some(loaded.palette), None],
+            buffers: res.overlay.map(Some),
+            textures: [Some(res.palette), None],
             uniforms,
             ranges: std::slice::from_ref(&range),
             bases: &[],
@@ -1484,13 +1554,122 @@ impl<B: GpuBackend> Engine<B> {
     }
 }
 
+impl Gpu {
+    /// Makes a chart's resources from its scene and palette bytes, the
+    /// mesh's vertices with their current tints; none if one fails.
+    fn new(
+        backend: &mut impl GpuBackend,
+        scene: &Scene,
+        palette: &[u8],
+    ) -> Result<Self, BackendError> {
+        let mut made = Vec::new();
+        let gpu = Self::make(backend, scene, palette, &mut made);
+        if gpu.is_err() {
+            for id in made {
+                backend.destroy(id);
+            }
+        }
+        gpu
+    }
+
+    fn make(
+        backend: &mut impl GpuBackend,
+        scene: &Scene,
+        palette: &[u8],
+        made: &mut Vec<ResourceId>,
+    ) -> Result<Self, BackendError> {
+        let mut buffer = |backend: &mut _, kind, usage, data: &[u8]| {
+            let id = GpuBackend::create_buffer(backend, BufferDesc { kind, usage }, data)?;
+            made.push(ResourceId::Buffer(id));
+            Ok::<_, BackendError>(id)
+        };
+        let (vertex, index) = (BufferKind::Vertex, BufferKind::Index);
+        let (fixed, dynamic) = (BufferUsage::Static, BufferUsage::Dynamic);
+        let seats = scene.pos.len();
+        let chart = &scene.chart;
+        let static_buf = buffer(backend, vertex, fixed, &scene.encode_static())?;
+        let states = seat::encode_dynamic(&chart.seat_category, &scene.visual, &scene.fx, 0..seats);
+        let dynamic_buf = buffer(backend, vertex, dynamic, &states)?;
+        let overlay = [
+            buffer(
+                backend,
+                vertex,
+                dynamic,
+                &[0; OVERLAYS * seat::STATIC_STRIDE],
+            )?,
+            buffer(
+                backend,
+                vertex,
+                dynamic,
+                &[0; OVERLAYS * seat::DYNAMIC_STRIDE],
+            )?,
+        ];
+        let mesh = if chart.mesh.indices.is_empty() {
+            None
+        } else {
+            let indices: Vec<u8> = chart
+                .mesh
+                .indices
+                .iter()
+                .flat_map(|i| i.to_le_bytes())
+                .collect();
+            let vertices = encode_vertices(chart.mesh.vertices.iter());
+            let v = buffer(backend, vertex, dynamic, &vertices)?;
+            Some([v, buffer(backend, index, fixed, &indices)?])
+        };
+        let desc = TextureDesc {
+            width: PALETTE_WIDTH,
+            height: u32::try_from(chart.categories.len() + 1).unwrap_or(u32::MAX),
+            format: TextureFormat::Rgba8,
+            sampling: Sampling::Nearest,
+        };
+        let palette = backend.create_texture(desc, Some(palette))?;
+        Ok(Self {
+            static_buf,
+            dynamic_buf,
+            palette,
+            overlay,
+            mesh,
+        })
+    }
+}
+
+impl Loaded {
+    /// Destroys every GPU resource of the chart, its labels and its dynamic
+    /// atlas, keeping what they are made from.
+    fn release(&mut self, backend: &mut impl GpuBackend) {
+        if let Some(gpu) = self.gpu.take() {
+            let buffers = [gpu.static_buf, gpu.dynamic_buf]
+                .into_iter()
+                .chain(gpu.overlay);
+            for id in buffers.chain(gpu.mesh.into_iter().flatten()) {
+                backend.destroy(ResourceId::Buffer(id));
+            }
+            backend.destroy(ResourceId::Texture(gpu.palette));
+        }
+        self.seat_labels.release(backend);
+        self.map_labels.release(backend);
+        self.text_atlas.reset(backend);
+    }
+}
+
+fn glyph_desc() -> TextureDesc {
+    let [width, height] = text::ATLAS_SIZE;
+    TextureDesc {
+        width,
+        height,
+        format: TextureFormat::Rgba8,
+        sampling: Sampling::Linear,
+    }
+}
+
 /// Dropping the engine (the web view's `free`, at `destroy`) deletes every
 /// GPU resource it made, so nothing outlives it on the context.
 impl<B: GpuBackend> Drop for Engine<B> {
     fn drop(&mut self) {
         self.release_scene();
-        if let Some(atlas) = self.atlas.take() {
-            self.backend.destroy(ResourceId::Texture(atlas.texture));
+        if let Some(texture) = self.atlas.take().and_then(|a| a.texture) {
+            self.backend.destroy(ResourceId::Texture(texture));
         }
     }
 }

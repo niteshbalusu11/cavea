@@ -153,11 +153,20 @@ impl Scene {
         } else {
             binary_angle(b[0] - a[0], b[1] - a[1])
         };
+        let accessible = self
+            .chart
+            .seat_flags
+            .get(i as usize)
+            .is_some_and(|f| f & 1 != 0);
         Some(SeatStatic {
             pos: at(i),
             half: row.seat_size.div_ceil(2),
             angle,
-            shape,
+            shape: if accessible {
+                shape | seat::shape::ACCESSIBLE
+            } else {
+                shape
+            },
         })
     }
 

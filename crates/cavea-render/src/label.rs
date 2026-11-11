@@ -1,35 +1,56 @@
-//! Section labels, text objects and the seat labels the baked atlas cannot
-//! draw (`docs/04-renderer.md` §7 passes 9–10, §12), from the dynamic atlas.
+//! Section labels, row labels, text objects, the seat labels the baked atlas
+//! cannot draw, and decoration icons (`docs/04-renderer.md` §7 passes 9–11,
+//! §12).
 //!
-//! Everything here is built on the CPU into one instance buffer only when
-//! what it depends on changes: the sections and text objects in view, the
-//! visible render chunks (for seat labels), the zoom's √2 step, the level,
-//! the theme, sold-out sections, the dynamic atlas, and for seat labels the
-//! seats' state. A frame that changes none of these (an idle one, or a pan
-//! that brings no section, text object or chunk into view) builds and
-//! uploads nothing.
+//! Labels are built on the CPU into instance buffers only when what they
+//! depend on changes: the sections and text objects in view, the visible
+//! render chunks (their rows, and seat labels), the zoom's √2 step, the
+//! level, the theme, sold-out sections, the dynamic atlas, and for seat
+//! labels the seats' state. A frame that changes none of these (an idle one,
+//! or a pan inside the same chunks) builds and uploads nothing.
+//!
+//! **Collision** (`place`). Text objects and row labels scale with the chart,
+//! and a section label is never drawn larger than its compiled box, so
+//! whether two labels overlap does not depend on the zoom: each build places
+//! its candidates greedily once, in chart units, on a grid of half the
+//! chart's seat size (coarser if they span more than 1,024 cells), in
+//! priority order: section labels, then text objects, then row labels, each
+//! in chart order. A label that meets a cell already taken is hidden.
 
 use std::ops::Range;
 
-use cavea_format::{TextAlign, full_label::seat_label};
+use cavea_format::{RowLabelDisplay, TextAlign, full_label::seat_label};
 
 use crate::{
-    backend::{BackendError, BufferDesc, BufferId, BufferKind, BufferUsage, GpuBackend},
+    backend::{
+        BackendError, BufferDesc, BufferId, BufferKind, BufferUsage, GpuBackend, ResourceId,
+    },
     overview::Sections,
     protocol::Event,
     scene::Scene,
+    seat::{DYNAMIC_STRIDE, SeatDynamic, SeatStatic},
     text::{
         CAP_HEIGHT_EM, LABEL_FIT, LABEL_MIN_EM_PX, Labels,
         atlas::{Key, Raster, Source, TextAtlas, bucket},
         label_em,
     },
-    theme::{PALETTE_WIDTH, Rgba, Theme},
+    theme::{PALETTE_WIDTH, Rgba, Theme, visual},
 };
 
 /// Bytes per `text` instance (`shaders/text.wgsl`).
 pub const TEXT_STRIDE: usize = 36;
 /// `text` instances in one build at most.
 pub const MAX_TEXT_INSTANCES: usize = 2048;
+/// Row labels show from this default seat size on screen (CSS pixels).
+pub const ROW_LABEL_SEAT_PX: f64 = 8.0;
+/// A row label's box fits a circle this fraction of its row's seat size: a
+/// little larger than a seat label, so two glyphs reach 7 px at 8 px seats.
+pub const ROW_LABEL_FIT: f32 = 1.1;
+/// The decoration icons' keys (`ICON`, 03 §2.7), in the order of the `shape`
+/// program's pictograms after the three seat icons.
+pub const ICON_KEYS: [&str; 6] = ["entrance", "exit", "stairs", "toilets", "bar", "lift"];
+/// The collision grid's cells per side at most.
+const GRID_SIDE: usize = 1024;
 /// Section labels on screen: hidden below the smallest em, never above the
 /// largest (CSS pixels).
 pub const SECTION_MIN_PX: f32 = 10.0;
@@ -47,9 +68,10 @@ pub struct View<'a> {
     /// Device pixels per chart unit, and per CSS pixel.
     pub px_per_cu: f32,
     pub ratio: f32,
-    /// Section labels (overview and cross-fade), seat labels from the
-    /// dynamic atlas (detail).
+    /// Section labels (overview and cross-fade), row labels (from 8 px
+    /// seats), seat labels from the dynamic atlas (detail).
     pub sections: bool,
+    pub rows: bool,
     pub seats: bool,
     /// The render chunks in view.
     pub chunks: &'a [u32],
@@ -61,8 +83,10 @@ pub struct View<'a> {
     pub sold_out_gen: u32,
 }
 
-/// One label: its kind and its instance(s).
+/// One label that may be placed: its box in chart units for collision
+/// (`None`: it never collides), its kind and its instance(s).
 struct Cand {
+    bbox: Option<[f32; 4]>,
     kind: Kind,
     bytes: [u8; TEXT_STRIDE],
     second: Option<[u8; TEXT_STRIDE]>,
@@ -72,6 +96,7 @@ struct Cand {
 enum Kind {
     Section,
     Seat,
+    /// Text objects and row labels.
     Text,
 }
 
@@ -119,12 +144,19 @@ pub struct MapLabels {
     sec: Vec<u32>,
     txt: Vec<u32>,
     cands: Vec<Cand>,
+    /// The collision grid, a bit per cell, rows of whole words.
+    grid: Vec<u64>,
     text_bytes: Vec<u8>,
     /// What the buffer holds, so a build that changes nothing uploads
     /// nothing.
     text_held: Vec<u8>,
     text_buf: Option<BufferId>,
-    /// Ranges of the text buffer: section labels, seat labels, text objects.
+    /// Decoration icons: `shape` instances, static then dynamic bytes, made
+    /// at load; their buffers on first draw.
+    icon_bytes: [Vec<u8>; 2],
+    icon_bufs: Option<[BufferId; 2]>,
+    /// Ranges of the text buffer: section labels, seat labels, then text
+    /// objects and row labels.
     pub ranges: [Range<u32>; 3],
     /// Builds since the chart loaded, for tests and the demo.
     pub builds: u32,
@@ -133,6 +165,58 @@ pub struct MapLabels {
 impl MapLabels {
     pub fn text_buffer(&self) -> Option<BufferId> {
         self.text_buf
+    }
+
+    /// Destroys every GPU buffer and forgets what they held, so the next
+    /// build makes and fills them again: a new chart, or a lost context.
+    pub fn release(&mut self, backend: &mut impl GpuBackend) {
+        let icons = self.icon_bufs.take().into_iter().flatten();
+        for id in self.text_buf.take().into_iter().chain(icons) {
+            backend.destroy(ResourceId::Buffer(id));
+        }
+        self.text_held.clear();
+        self.built.clear();
+    }
+
+    /// The active floor's decoration icons (`ICON`, 04 §7 pass 11) as
+    /// `shape` instances: the shape byte is the pictogram, the ink the
+    /// palette's muted ink (unavailable, in the row without a category).
+    pub fn load_icons(&mut self, scene: &Scene) {
+        let chart = &scene.chart;
+        let cat = u16::try_from(chart.categories.len()).unwrap_or(u16::MAX);
+        let [statics, dynamics] = &mut self.icon_bytes;
+        for icon in chart.icons.iter().filter(|i| i.floor == scene.floor) {
+            let key = chart.strings.get(icon.key).unwrap_or_default();
+            let Some(id) = ICON_KEYS.iter().position(|&k| k == key) else {
+                continue;
+            };
+            let instance = SeatStatic {
+                pos: icon.pos.map(|v| v as f32 * 0.25),
+                half: icon.size.div_ceil(2),
+                angle: (icon.angle >> 8) as u8,
+                shape: id as u8,
+            };
+            statics.extend_from_slice(&instance.encode());
+            let visual = visual::UNAVAILABLE;
+            dynamics.extend_from_slice(&SeatDynamic { cat, visual, fx: 0 }.encode());
+        }
+    }
+
+    /// The decoration icons' buffers and count, made on first need.
+    pub fn icons(
+        &mut self,
+        backend: &mut impl GpuBackend,
+    ) -> Result<Option<([BufferId; 2], u32)>, BackendError> {
+        let [statics, dynamics] = &self.icon_bytes;
+        let n = (dynamics.len() / DYNAMIC_STRIDE) as u32;
+        if n == 0 {
+            return Ok(None);
+        }
+        let buffers = match self.icon_bufs {
+            Some(b) => b,
+            None => *self.icon_bufs.insert(pair(backend, statics, dynamics)?),
+        };
+        Ok(Some((buffers, n)))
     }
 
     /// Builds the instances again if what they depend on changed, asking the
@@ -188,8 +272,13 @@ impl MapLabels {
                 .chunks
                 .iter()
                 .any(|&c| !seat_labels.skipped(c).is_empty());
-        let chunks = if dynamic_seats { view.chunks } else { &[] };
-        let flags = u32::from(view.sections) | u32::from(view.seats) << 1;
+        let chunks = if view.rows || dynamic_seats {
+            view.chunks
+        } else {
+            &[]
+        };
+        let flags =
+            u32::from(view.sections) | u32::from(view.rows) << 1 | u32::from(view.seats) << 2;
         // Seat labels: the seats' state, and which chunks' labels are built
         // (two a frame), since a chunk built later may add some.
         let state = if dynamic_seats { view.state_gen } else { 0 };
@@ -260,7 +349,7 @@ impl MapLabels {
             // reach below the box). It has its own smallest em, so a section
             // too narrow for it still shows its name.
             let (w1, h1) = em_size(name);
-            let (w2, _) = second.map_or((0.0, 0.0), em_size);
+            let (w2, h2) = second.map_or((0.0, 0.0), em_size);
             let box_w = 0.6 * label.chars().count() as f32 * most;
             let em = most.min(box_w / w1).min(1.2 * most / h1);
             let em2 = (k * em).min(box_w / w2.max(f32::MIN_POSITIVE));
@@ -291,7 +380,12 @@ impl MapLabels {
                 let oy2 = (rh2 - rh1 * px2 / (r * px1)) / 2.0;
                 instance(m, em2, oy2, k * SECTION_MIN_PX, r * SECTION_MAX_PX)
             });
+            // It reserves its box (an upper bound: it is drawn smaller when
+            // capped) only if it can show at this zoom step.
+            let h2 = if second.is_some() { h2 } else { 0.0 };
+            let block = around(pos, (w1 * em).max(w2 * em2), h1 * em + h2 * em2);
             self.cands.push(Cand {
+                bbox: (em * zoom >= SECTION_MIN_PX * view.ratio).then_some(block),
                 kind: Kind::Section,
                 bytes: instance(name, em, oy1, SECTION_MIN_PX, SECTION_MAX_PX),
                 second,
@@ -299,7 +393,8 @@ impl MapLabels {
         }
 
         // Seat labels the baked atlas cannot draw (pass 9), at most half the
-        // instances, in the ink of the seat's state as built.
+        // instances, in the ink of the seat's state as built; never placed
+        // by collision. A seat showing a state icon shows no number.
         if dynamic_seats {
             let mut left = MAX_TEXT_INSTANCES / 2;
             let seats = view.chunks.iter().flat_map(|&c| seat_labels.skipped(c));
@@ -309,7 +404,7 @@ impl MapLabels {
                 let Ok(label) = seat_label(chart, idx) else {
                     continue;
                 };
-                if left == 0 {
+                if left == 0 || (visual::UNAVAILABLE..=visual::SELECTED_HELD).contains(&v) {
                     continue;
                 }
                 let seat_cu = (scene.row.get(i))
@@ -333,6 +428,7 @@ impl MapLabels {
                 let pos = scene.pos.get(i).copied().unwrap_or_default();
                 let (bytes, _) = centred(pos, seat_cu * LABEL_FIT, raster, color);
                 self.cands.push(Cand {
+                    bbox: None,
                     kind: Kind::Seat,
                     bytes,
                     second: None,
@@ -357,6 +453,18 @@ impl MapLabels {
                 TextAlign::Right => w,
             };
             let pos = t.pos.map(|v| v as f32 * 0.25);
+            let scale = em / f32::from(raster.px.max(1));
+            // Turned, the square that holds every turn of its box.
+            let bbox = if t.angle == 0 {
+                around(
+                    [pos[0] + (w / 2.0 - ax) * scale, pos[1]],
+                    w * scale,
+                    h * scale,
+                )
+            } else {
+                let r = (ax.max(w - ax).powi(2) + h * h / 4.0).sqrt() * scale;
+                around(pos, 2.0 * r, 2.0 * r)
+            };
             let instance = TextInstance {
                 pos,
                 em,
@@ -369,29 +477,117 @@ impl MapLabels {
                 color: t.color,
             };
             self.cands.push(Cand {
+                bbox: Some(bbox),
                 kind: Kind::Text,
                 bytes: instance.encode(),
                 second: None,
             });
         }
 
-        self.place();
+        // Row labels at the ends the chart asks for, for the rows of the
+        // chunks in view (a row across two chunks once), upright, in the
+        // muted text colour.
+        let (start, end) = match chart.meta.row_label_display {
+            RowLabelDisplay::None => (false, false),
+            RowLabelDisplay::Start => (true, false),
+            RowLabelDisplay::End => (false, true),
+            RowLabelDisplay::Both => (true, true),
+        };
+        let mut next = 0;
+        for &c in chunks.iter().filter(|_| view.rows && (start || end)) {
+            let Some(chunk) = chart.chunks.get(c as usize) else {
+                continue;
+            };
+            let row = |i: u32| scene.row.get(i as usize).copied();
+            let last = chunk.seat_first + chunk.seat_count.saturating_sub(1);
+            let (Some(first), Some(last)) = (row(chunk.seat_first), row(last)) else {
+                continue;
+            };
+            for r in first.max(next)..=last {
+                let Some(row) = chart.rows.get(r as usize) else {
+                    continue;
+                };
+                let label = strings.get(row.label).unwrap_or_default();
+                // Sized as a seat label of a seat `ROW_LABEL_FIT / LABEL_FIT`
+                // times the row's.
+                let fit = f32::from(row.seat_size) * 0.25 * ROW_LABEL_FIT;
+                let px = label_em(fit / LABEL_FIT, 2, 1.0) * zoom;
+                let ends = [(start, row.label_start), (end, row.label_end)];
+                for (_, at) in ends.into_iter().filter(|e| e.0) {
+                    let Some(raster) = ask(Source::String(row.label), LABEL_WEIGHT, px, label)
+                    else {
+                        continue;
+                    };
+                    let pos = at.map(|v| v as f32 * 0.25);
+                    let (bytes, em) = centred(pos, fit, raster, theme.fg_muted);
+                    // The raster as drawn, so ink beyond the capitals
+                    // (descenders, marks) is inside it.
+                    let (w, h) = em_size(raster);
+                    self.cands.push(Cand {
+                        bbox: Some(around(pos, w * em, h * em)),
+                        kind: Kind::Text,
+                        bytes,
+                        second: None,
+                    });
+                }
+            }
+            next = last + 1;
+        }
+
+        self.place(scene.seat_size / 2.0);
         self.upload(backend)?;
         Ok(atlas.capped)
     }
 
-    /// The instance bytes in draw order: candidates were pushed sections
-    /// first, then seat labels, then text objects.
-    fn place(&mut self) {
+    /// Greedy placement (the module documentation), then the instance bytes
+    /// in draw order. Each box tests and sets whole words of its grid rows,
+    /// so a candidate costs its rows times its words, at most 1,025 × 17.
+    fn place(&mut self, cell: f32) {
+        let mut min = [f32::MAX; 2];
+        let mut max = [f32::MIN; 2];
+        for b in self.cands.iter().filter_map(|c| c.bbox) {
+            min = [min[0].min(b[0]), min[1].min(b[1])];
+            max = [max[0].max(b[2]), max[1].max(b[3])];
+        }
+        let extent = (max[0] - min[0]).max(max[1] - min[1]);
+        let cell = cell.max(extent / GRID_SIDE as f32).max(f32::MIN_POSITIVE);
+        // `as` saturates: NaN and negative become 0.
+        let at = |v: f32, origin: f32| (((v - origin) / cell) as usize).min(GRID_SIDE);
+        let words = (GRID_SIDE + 1)
+            .div_ceil(64)
+            .min(at(max[0], min[0]) / 64 + 1);
+        self.grid.clear();
+        self.grid.resize(words * (at(max[1], min[1]) + 1), 0);
         self.text_bytes.clear();
         let mut kept = [0u32; 3];
         for cand in &self.cands {
-            for bytes in [Some(cand.bytes), cand.second].into_iter().flatten() {
-                if self.text_bytes.len() + TEXT_STRIDE <= MAX_TEXT_INSTANCES * TEXT_STRIDE {
-                    self.text_bytes.extend_from_slice(&bytes);
-                    if let Some(n) = kept.get_mut(cand.kind as usize) {
-                        *n += 1;
+            if self.text_bytes.len() + 2 * TEXT_STRIDE > MAX_TEXT_INSTANCES * TEXT_STRIDE {
+                break;
+            }
+            if let Some(b) = cand.bbox {
+                let [x0, x1] = [at(b[0], min[0]), at(b[2], min[0])];
+                let spans = (at(b[1], min[1])..=at(b[3], min[1])).flat_map(|y| {
+                    (x0 / 64..=x1 / 64).map(move |w| {
+                        let lo = x0.max(w * 64) - w * 64;
+                        let hi = x1.min(w * 64 + 63) - w * 64;
+                        (y * words + w, (u64::MAX >> (63 - hi)) & (u64::MAX << lo))
+                    })
+                });
+                let grid = &mut self.grid;
+                let taken = |(i, mask): (usize, u64)| grid.get(i).is_some_and(|w| w & mask != 0);
+                if spans.clone().any(taken) {
+                    continue;
+                }
+                for (i, mask) in spans {
+                    if let Some(w) = grid.get_mut(i) {
+                        *w |= mask;
                     }
+                }
+            }
+            for bytes in [Some(cand.bytes), cand.second].into_iter().flatten() {
+                self.text_bytes.extend_from_slice(&bytes);
+                if let Some(n) = kept.get_mut(cand.kind as usize) {
+                    *n += 1;
                 }
             }
         }
@@ -406,10 +602,7 @@ impl MapLabels {
                 Some(b) => b,
                 None => {
                     let zeros = vec![0; MAX_TEXT_INSTANCES * TEXT_STRIDE];
-                    let desc = BufferDesc {
-                        kind: BufferKind::Vertex,
-                        usage: BufferUsage::Dynamic,
-                    };
+                    let desc = vertex(BufferUsage::Dynamic);
                     *self.text_buf.insert(backend.create_buffer(desc, &zeros)?)
                 }
             };
@@ -468,8 +661,51 @@ fn centred(pos: [f32; 2], fit: f32, raster: Raster, color: Rgba) -> ([u8; TEXT_S
     (instance.encode(), em)
 }
 
+fn around([x, y]: [f32; 2], w: f32, h: f32) -> [f32; 4] {
+    [x - w / 2.0, y - h / 2.0, x + w / 2.0, y + h / 2.0]
+}
+
+fn vertex(usage: BufferUsage) -> BufferDesc {
+    BufferDesc {
+        kind: BufferKind::Vertex,
+        usage,
+    }
+}
+
+/// Two vertex buffers written once; neither if one fails.
+fn pair(backend: &mut impl GpuBackend, a: &[u8], b: &[u8]) -> Result<[BufferId; 2], BackendError> {
+    let a = backend.create_buffer(vertex(BufferUsage::Static), a)?;
+    match backend.create_buffer(vertex(BufferUsage::Static), b) {
+        Ok(b) => Ok([a, b]),
+        Err(e) => {
+            backend.destroy(ResourceId::Buffer(a));
+            Err(e)
+        }
+    }
+}
+
 /// Whether a quantised box meets `rect`.
 fn meets(b: &[i32; 4], rect: [f32; 4]) -> bool {
     let [x0, y0, x1, y1] = b.map(|v| v as f32 * 0.25);
     x0 <= rect[2] && x1 >= rect[0] && y0 <= rect[3] && y1 >= rect[1]
+}
+
+#[cfg(test)]
+impl MapLabels {
+    pub fn icon_buffers(&self) -> Option<[BufferId; 2]> {
+        self.icon_bufs
+    }
+
+    /// Places the last build's candidates again, to time it.
+    pub fn place_for_measurement(&mut self, cell: f32) {
+        self.place(cell);
+    }
+
+    pub fn grid_words(&self) -> usize {
+        self.grid.len()
+    }
+
+    pub fn candidates(&self) -> usize {
+        self.cands.len()
+    }
 }

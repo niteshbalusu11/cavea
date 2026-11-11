@@ -101,14 +101,34 @@ export interface SeatMapOptions {
   onObjectHover?: (object: SeatObject | null, at: [number, number] | null) => void;
   onObjectFocus?: (object: SeatObject | null, at: [number, number] | null) => void;
   onCameraChange?: (camera: { centre: [number, number]; zoom: number; level: string }) => void;
+  /** Frame statistics and timing marks, at most once a second while frames are drawn (04 §24). */
+  onMetrics?: (metrics: Metrics) => void;
   onError?: (error: CaveaError) => void;
+}
+
+/** `onMetrics`' payload (05 §5, 04 §24). */
+export interface Metrics {
+  /** Frames timed: the last 120 at most. */
+  frames: number;
+  /** The page's work for a frame in ms (the map's frame, text drawing and its callbacks; not GPU time). */
+  frameMs: { median: number; p95: number; max: number };
+  /** In the last frame drawn. */
+  drawCalls: number;
+  /** Seats in the ranges the last frame drew. */
+  visibleSeats: number;
+  level: "overview" | "crossFade" | "seats" | "detail" | null;
+  backend: "webgl2";
+  /** The device pixel ratio rendered at. */
+  pixelRatio: number;
+  /** Timing marks in ms since `createSeatMap`, as `onReady`'s, with `interactive` once drawn. */
+  marks: Record<string, number>;
 }
 
 /** Options of 05 §3 and callbacks of §5 not built yet: ignored, with a development warning. */
 const LATER = new Set(
   (
     "pricing formatPrice floor spotlight zoomToSelect sectionDrillDown ui colorblind locale " +
-    "messages dir fallback worker onSectionEnter onFloorChange onMetrics"
+    "messages dir fallback worker onSectionEnter onFloorChange"
   ).split(" "),
 );
 const SELECTION_LATER = new Set("groupSize validators categories selectable restore".split(" "));
@@ -116,7 +136,7 @@ const CALLBACKS =
   "onReady onSelectionChange onObjectSelect onObjectDeselect onSelectionInvalid onSelectionValid " +
   "onHoldPending onHoldSettled onHoldFailed onHoldLost onHoldExpiring onHoldExpired " +
   "onObjectUnavailable onObjectHover onObjectFocus " +
-  "onCameraChange onError";
+  "onCameraChange onMetrics onError";
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 const isUrl = (v: unknown): boolean => typeof v === "string" || v instanceof URL;

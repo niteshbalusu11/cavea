@@ -23,6 +23,7 @@ export { caveaServer, type CaveaServerOptions } from "./server.ts";
 export type { GestureHandling } from "./host.ts";
 export type {
   Bounds,
+  Metrics,
   ReadyInfo,
   SeatMapOptions,
   SeatObject,
