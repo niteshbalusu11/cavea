@@ -70,6 +70,9 @@ pub struct LogRecord {
     pub oids: Vec<Oid>,
     /// The hold's expiry after the command, for `CreateHold` and `ExtendHold`.
     pub expires_at: Option<Timestamp>,
+    /// For `CreateHold`: the hold's object limit, `None` for unlimited, so
+    /// that replaying the log rebuilds `holds` (the token hash aside).
+    pub max_objects: Option<u32>,
     /// For `Book`.
     pub order_ref: Option<Arc<str>>,
     /// The status set, for `ChangeStatus` (`detail`).
@@ -91,6 +94,7 @@ impl std::fmt::Debug for LogRecord {
             .field("hold_id", &self.hold_id)
             .field("oids", &self.oids)
             .field("expires_at", &self.expires_at)
+            .field("max_objects", &self.max_objects)
             .field("status", &self.status)
             .finish_non_exhaustive()
     }

@@ -23,8 +23,9 @@ use cavea_engine::{
     Request, SeatStore, Status, Timestamp, TokenHash,
 };
 
-use crate::model::{Model, Replay};
+use crate::model::{Model, diff_loaded, diff_state};
 use crate::{EVENT, MAX_OBJECTS, Rng, Stats, Violation, chart, ensure, poll_now};
+use cavea_engine::Replay;
 
 /// Where every run's clock starts.
 pub const T0: Timestamp = Timestamp(1_000_000_000);
@@ -217,11 +218,11 @@ impl Run {
         for r in &expected {
             self.replay.apply(r)?;
         }
-        self.replay.diff_state(&self.engine)?;
+        diff_state(&self.replay, &self.engine)?;
         let loaded = poll_now(self.store.load_event(EVENT))
             .ok_or_else(|| Violation::new("store", "load waited"))?
             .map_err(engine_err)?;
-        self.replay.diff_loaded(&loaded)?;
+        diff_loaded(&self.replay, &loaded)?;
         stats.count("INV-5, INV-6, INV-10 checked");
         Ok(())
     }

@@ -622,6 +622,7 @@ impl EventState {
         self.pending.tokens.push(token);
         self.log(LogRecord {
             expires_at: Some(expires_at),
+            max_objects,
             ..record(seq, Op::CreateHold, actor, Some(id), Vec::new())
         });
         Ok(Outcome::HoldCreated {
@@ -1000,6 +1001,7 @@ fn record(
         hold_id,
         oids,
         expires_at: None,
+        max_objects: None,
         order_ref: None,
         status: None,
         details: Vec::new(),
