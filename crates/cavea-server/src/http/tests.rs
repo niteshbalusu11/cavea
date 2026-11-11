@@ -59,6 +59,7 @@ fn state() -> AppState {
         trusted_proxies: crate::net::TrustedProxies::default(),
         rate_limit_holds: 120,
         rate_limit_reads: 3_000,
+        asset_max_bytes: std::num::NonZeroU32::MIN.saturating_add((10 << 20) - 1),
     };
     // Never connects: no route under test reaches the database.
     let db = sqlx::postgres::PgPoolOptions::new().connect_lazy_with(Default::default());

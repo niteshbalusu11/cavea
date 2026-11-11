@@ -629,6 +629,7 @@ fn route_of(template: &str) -> String {
         .next()
         .unwrap()
         .replace("{hash}.ccf", "{file}")
+        .replace("{asset}", "{hash}")
         .replace("{key}", "{id}")
 }
 
@@ -647,7 +648,7 @@ fn op_of(method: &Method, template: &str) -> (Needs, bool) {
 
 /// One row per operation, with what a successful call sends and answers. A
 /// path's `{key}` is filled with an identifier of the tenant under test (see
-/// [`Tenant::path`]). [`every_route_has_a_row`]
+/// [`Tenant::path`]); `{png}` as a body is an image. [`every_route_has_a_row`]
 /// fails until a new route has its row.
 const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
     (Method::GET, "/healthz", 200, None),
@@ -695,6 +696,9 @@ const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
     (Method::POST, "/v1/charts/{chart}/publish", 200, None),
     (Method::GET, "/v1/charts/{chart}/versions", 200, None),
     (Method::GET, "/v1/public/charts/{hash}.ccf", 200, None),
+    // Both tenants upload the same bytes: each gets its own asset.
+    (Method::POST, "/v1/assets", 201, Some("{png}")),
+    (Method::GET, "/v1/public/assets/{asset}", 200, None),
     (Method::GET, "/v1/events", 200, None),
     (
         Method::POST,
@@ -918,6 +922,11 @@ const HEADER_TOKEN: &str = "/v1/public/hold-tokens/current";
 const HOLD_TOKEN: header::HeaderName = header::HeaderName::from_static("cavea-hold-token");
 const SESSION: header::HeaderName = header::HeaderName::from_static("cavea-session");
 
+/// The image every tenant uploads.
+fn png() -> Vec<u8> {
+    crate::assets::tests::png(64, 48)
+}
+
 /// A credential, as one cell's column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Cred {
@@ -1006,6 +1015,8 @@ async fn authorisation_matrix() {
         )
         .await;
         let other_token = other["hold_token"].as_str().unwrap().to_owned();
+        let asset = crate::assets::hash(&png());
+        let asset: String = asset.iter().map(|b| format!("{b:02x}")).collect();
         let unknown = format!("sk_{}", "0".repeat(64));
         let malformed = [
             format!("Basic {}", a.secret),
@@ -1037,7 +1048,7 @@ async fn authorisation_matrix() {
                 || IDENTIFIERS
                     .iter()
                     .any(|p| template.contains(p) || body.is_some_and(|b| b.contains(p)));
-            let path = a.path(template);
+            let path = a.path(template).replace("{asset}", &asset);
             let send_with = async |authorization: Option<&str>,
                                    extra: &[(header::HeaderName, &str)],
                                    body: Option<&str>| {
@@ -1062,6 +1073,9 @@ async fn authorisation_matrix() {
                     request = request.header(name, *value);
                 }
                 let request = match body {
+                    Some("{png}") => request
+                        .header(header::CONTENT_TYPE, "image/png")
+                        .body(Body::from(png())),
                     Some(body) => request
                         .header(header::CONTENT_TYPE, "application/json")
                         .body(Body::from(a.path(body))),
@@ -1148,6 +1162,7 @@ async fn authorisation_matrix() {
     .await;
 }
 
+mod assets;
 mod charts;
 mod limits;
 mod objects;

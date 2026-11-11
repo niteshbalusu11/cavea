@@ -13,6 +13,9 @@ anyhow.workspace = true
 axum = { workspace = true, features = ["tokio", "http1", "json", "matched-path", "query", "ws"] }
 # The SSE stream's base64 `data:` lines; already in the tree through sqlx-postgres.
 base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
+# BLAKE3, the content hash of uploaded assets as of chart artefacts (03 §4.1);
+# already built for cavea-compiler.
+blake3.workspace = true
 # Brotli (quality 11) of each published chart's public artefact (03 §4.6); the
 # workspace's version, already built for xtask.
 brotli.workspace = true
