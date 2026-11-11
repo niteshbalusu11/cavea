@@ -578,7 +578,7 @@ Seat rules (secret-key routes; the public ones follow the public table):
 | `GET /v1/public/charts/{hash}.ccf` | Compiled chart (no credential; 03 §4.6) |
 | `GET /v1/public/assets/{hash}` | Background images |
 
-Public rules (publishable key; SRV-015 built the event, hold-token, hold and release routes, RT-003 to RT-010 `state` and `rt`; `stream` and `after_seq` (RT-007, RT-008), `best-available`, `sections`, `rows` and `assets` arrive with the realtime fallbacks, best-available, the list view and asset upload):
+Public rules (publishable key; SRV-015 built the event, hold-token, hold and release routes, RT-003 to RT-010 `state`, `stream` and `rt`; `best-available`, `sections`, `rows` and `assets` arrive with best-available, the list view and asset upload):
 
 - **Event:** `GET /v1/public/events/{event}` returns `{event, chart: {hash, url}, hold_ttl_seconds, max_objects}`: the pinned version's public hash and file (above), the lifetime of a buyer's token, and the object limit of a buyer's token, which is also the maximum-selection rule (02 §12). Nothing else: no name, counts, settings beyond these, or anything of the backend's. `Cache-Control: private, max-age=30` and `Vary: Authorization`: the buyer's browser keeps it across page loads, per key; a shared cache must not, since the answer depends on the credential (another workspace's key names another event by the same key). An archived event is still described; its seat routes are `400 archived`.
 - **Hold tokens:** `POST /v1/public/hold-tokens` takes `{event, max_objects?}` and returns `201` with `{hold_token, event, seq, expires_at, max_objects}`. The lifetime is the event's `hold_ttl_seconds` (no `ttl_seconds`: unknown fields are refused). `max_objects` defaults to the event's and may lower it; above it, or 0, is `invalid_field`. Buyers cannot extend: a stalled checkout is the backend's to extend.
@@ -899,7 +899,17 @@ Tokens are opaque bytes; a present token may be empty.
 | SSE | Each frame base64-encoded in a `data:` line; `Last-Event-ID` carries `seq` |
 | Polling | `GET …/state?after_seq=n` every 2 s returns a DELTA or SNAPSHOT frame |
 
-SSE and polling have no client-to-server frames: the SUBSCRIBE fields travel as request parameters (RT-007, RT-008).
+SSE and polling have no client-to-server frames: the SUBSCRIBE fields travel as request parameters, the key as `key` (§6.2), the event in the path.
+
+**SSE** (`GET /v1/public/events/{event}/stream?key=pk_…`):
+
+- `200` with `Content-Type: text/event-stream`, `Cache-Control: no-store` and `X-Accel-Buffering: no` (so that proxies such as nginx do not buffer it), then the frames of a WebSocket subscription, each one event: `data: <base64 of the frame>` (standard alphabet, padded), preceded by `id: <seq>` for SNAPSHOT and DELTA. HELLO comes first, then the SNAPSHOT or the DELTAs since the client's `seq`, then every DELTA; RESYNC and a SNAPSHOT for a client that falls behind; CLOSE (3 at shutdown or when the event cannot be had, 1 for an archived event), after which the server ends the stream.
+- **Resuming.** The `seq` comes from `Last-Event-ID` (which `EventSource` sends when it reconnects by itself, with the last `id` it saw), else from `last_seq` in the query, else 0. A `Last-Event-ID` that is not a number is `400` (`reason: "last_event_id"`).
+- **Keep-alive.** A comment line (`:`) every 25 s takes PING's place: the client cannot answer, so an SSE stream is never closed for silence. A stalled write ends it after 30 s, as on a WebSocket. It counts toward the same connection limits (§8.2).
+- **No PRIVATE.** `EventSource` cannot set headers and the hold token never goes in a URL, so an SSE stream carries no hold token and no PRIVATE frames. A buyer on SSE or polling reads their own holds from the hold and release replies and from `GET /v1/public/hold-tokens/current` (on connect, after each SNAPSHOT, and periodically while a hold is live).
+- An unknown event, or another workspace's, is `404` before the stream starts. A client must call `close()` on its `EventSource` when it receives CLOSE 1, 4 or 5; otherwise the browser reconnects by itself.
+
+**Polling** (`GET /v1/public/events/{event}/state?key=pk_…&after_seq=n`, every 2 s): `200` with one DELTA from `n` (the buffered deltas merged into one), or the SNAPSHOT if the ring buffer no longer reaches back to `n` (or `n` is 0, or a `seq` the server never published); `204` with an empty body when nothing was published after `n`. Every answer carries the snapshot's cache headers (`public, max-age=1, stale-while-revalidate=5`, §8.5) and no `ETag`: any of them is a correct answer for at most that long (a DELTA from `n` runs to whatever was current when it was made, and the client then polls from its `to_seq`), and clients at the same `seq` share one cached URL. The client applies the frame and polls again from its new `seq`.
 
 ### 8.5 Caching the snapshot
 
