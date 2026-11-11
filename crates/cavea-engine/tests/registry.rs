@@ -435,7 +435,12 @@ async fn an_idle_actor_is_evicted_after_ten_minutes_and_reloaded_on_demand() {
         settle().await;
     }
     assert_eq!(reg.loaded(), 1);
+    // Dropped just before a check: the ten minutes start from the drop.
+    clock.advance_ms(IDLE_MS - 1);
     drop(alive);
+    clock.advance_ms(1);
+    settle().await;
+    assert_eq!(reg.loaded(), 1, "not right after the guard dropped");
     clock.advance_ms(IDLE_MS);
     settle().await;
     assert_eq!(reg.loaded(), 0);

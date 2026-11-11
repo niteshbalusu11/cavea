@@ -194,7 +194,7 @@ Load:
 
 Concurrent requests for an event that is not loaded share one load; a failed load is reported to all of them (§4.6).
 
-Eviction: an actor with no subscribers, no outstanding holds and no command for 10 minutes stops: it takes no more commands, commits what it accepted and releases its lease. It is checked once per 10 minutes on the engine clock, so after the last hold expires or the last subscriber leaves it can take up to 20. A subscriber keeps the actor with a keep-alive guard from the registry. A command after eviction loads the event again. At startup the server loads every event that has rows in `holds`.
+Eviction: an actor with no subscribers, no outstanding holds and no command for 10 minutes stops: it takes no more commands, commits what it accepted and releases its lease. It is checked once per 10 minutes on the engine clock, so it stops between 10 and 20 minutes after the last command, hold expiry or departing subscriber. A subscriber keeps the actor with a keep-alive guard from the registry. A command after eviction loads the event again. At startup the server loads every event that has rows in `holds`.
 
 ### 4.8 Ownership and failover
 

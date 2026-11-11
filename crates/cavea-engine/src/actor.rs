@@ -6,7 +6,7 @@
 use std::future::{Future, poll_fn};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
 use tokio::sync::{mpsc, oneshot, watch};
@@ -27,8 +27,8 @@ pub struct ActorConfig {
     /// lease. Well under the store's lease (15 s).
     pub heartbeat_ms: u64,
     /// An actor with no command, no hold and no [`KeepAlive`] for this long
-    /// stops. It is checked once per period, so a stretch that ends because
-    /// a hold expired or the last `KeepAlive` dropped can take up to twice it.
+    /// stops. It is checked once per period, so after the last command, hold
+    /// expiry or `KeepAlive` it can take up to twice this.
     pub idle_ms: u64,
 }
 
@@ -86,6 +86,8 @@ struct Control {
     stop: watch::Sender<bool>,
     /// Live [`KeepAlive`] guards.
     keep: AtomicUsize,
+    /// How many [`KeepAlive`] guards have dropped: one dropping is activity.
+    released: AtomicU64,
 }
 
 /// Keeps an actor from being evicted while it exists: what a realtime
@@ -103,6 +105,7 @@ impl Clone for KeepAlive {
 impl Drop for KeepAlive {
     fn drop(&mut self) {
         self.0.keep.fetch_sub(1, Ordering::Relaxed);
+        self.0.released.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -203,6 +206,7 @@ pub fn actor<S: SeatStore, C: Clock>(
     let control = Arc::new(Control {
         stop: watch::Sender::new(false),
         keep: AtomicUsize::new(0),
+        released: AtomicU64::new(0),
     });
     let run = run(state, store, clock, rx, control.clone(), config);
     (ActorHandle { tx, control }, run)
@@ -251,6 +255,8 @@ async fn run<S: SeatStore, C: Clock>(
     // is next checked for idleness; one timer waits for the earlier.
     let mut renew_at = after(clock.now(), config.heartbeat_ms);
     let mut idle_at = after(clock.now(), config.idle_ms);
+    // `control.released` at the last idle check.
+    let mut released = 0;
     let mut chore = None;
     let mut stop_signal = Some(Box::pin({
         let mut stop = control.stop.subscribe();
@@ -364,11 +370,15 @@ async fn run<S: SeatStore, C: Clock>(
                 chore = None;
                 let now = clock.now();
                 if now >= idle_at {
-                    // A heartbeat is not activity.
+                    // A guard dropped since the last check started a new
+                    // idle period. A heartbeat is not activity.
+                    let last =
+                        std::mem::replace(&mut released, control.released.load(Ordering::Relaxed));
                     let idle = (in_flight.is_none() || renewing)
                         && pending.is_empty()
                         && state.next_expiry().is_none()
-                        && control.keep.load(Ordering::Relaxed) == 0;
+                        && control.keep.load(Ordering::Relaxed) == 0
+                        && released == last;
                     if idle && stop_signal.take().is_some() {
                         info!("actor idle; evicting");
                         rx.close();
