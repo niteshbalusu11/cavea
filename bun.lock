@@ -33,6 +33,14 @@
         "vite": "8.3.8",
       },
     },
+    "packages/designer-core": {
+      "name": "@cavea/designer-core",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@types/bun": "1.4.4",
+        "typescript": "7.0.2",
+      },
+    },
     "packages/renderer": {
       "name": "@cavea/renderer",
       "version": "0.0.0",
@@ -82,6 +90,8 @@
     "@cavea/console": ["@cavea/console@workspace:apps/console"],
 
     "@cavea/demo": ["@cavea/demo@workspace:apps/demo"],
+
+    "@cavea/designer-core": ["@cavea/designer-core@workspace:packages/designer-core"],
 
     "@cavea/renderer": ["@cavea/renderer@workspace:packages/renderer"],
 

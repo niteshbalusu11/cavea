@@ -37,8 +37,15 @@ pub const SHAPE_FILL: &str = "#D1D5DB";
 pub const LINE_STROKE: &str = "#6B7280";
 pub const LINE_WIDTH: f64 = 4.0;
 
-/// A node to create, in numbers.
-#[derive(Debug, Clone, PartialEq)]
+/// A node to create, in numbers. In JSON tagged by `kind`:
+/// `{"kind": "rowBlock", "origin": [0, 0], "rows": 5, …}`.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum Draft {
     /// Straight rows, centre-aligned; `origin` is the centre of the front
     /// row and rows run towards +y.

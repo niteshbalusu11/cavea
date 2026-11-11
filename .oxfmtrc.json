@@ -1,4 +1,10 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "ignorePatterns": ["**/*.md", "packages/*/wasm/**", "bun.lock", "crates/*/samples/**"]
+  "ignorePatterns": [
+    "**/*.md",
+    "packages/*/wasm/**",
+    "bun.lock",
+    "crates/*/samples/**",
+    "packages/designer-core/src/generated/**"
+  ]
 }

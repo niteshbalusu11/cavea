@@ -9,12 +9,17 @@
 //!   `--update-baseline` records the measured size as the new baseline.
 //!   `--demo` adds the debug-only exports used by `apps/demo` (cargo feature
 //!   `cavea-web/demo`); it is not the production payload and is never gated.
+//! - `build-designer`: build `cavea-designer` the same way into
+//!   `packages/designer-core/wasm/` and print its sizes; not gated.
+//! - `types [--check]`: write the TypeScript types generated from the Rust
+//!   definitions (`types.rs`), or fail if the committed ones are stale.
 //! - `check-deps`: enforce the workspace dependency rule from
 //!   `docs/01-architecture.md` §3.
 //! - `determinism`: run the tests that pin compiled hashes natively and for
 //!   wasm32 under bun (`docs/13-testing-benchmarks.md` §4).
 
 mod determinism;
+mod types;
 
 use std::{
     collections::BTreeSet,
@@ -62,11 +67,15 @@ fn main() -> Result<()> {
         ["build-web"] => build_web(Mode::Gate),
         ["build-web", "--update-baseline"] => build_web(Mode::UpdateBaseline),
         ["build-web", "--demo"] => build_web(Mode::Demo),
+        ["build-designer"] => build_designer(),
+        ["types"] => types::write(false),
+        ["types", "--check"] => types::write(true),
         ["check-deps"] => check_deps(),
         ["determinism"] => determinism::determinism(),
         _ => {
             eprintln!(
-                "usage: cargo xtask <build-web [--demo | --update-baseline] | check-deps | determinism>"
+                "usage: cargo xtask <build-web [--demo | --update-baseline] | build-designer | \
+                 types [--check] | check-deps | determinism>"
             );
             std::process::exit(2);
         }
@@ -92,32 +101,40 @@ fn run(command: &mut Command) -> Result<()> {
     Ok(())
 }
 
-fn build_web(mode: Mode) -> Result<()> {
-    let demo = mode == Mode::Demo;
+/// Builds `package` for wasm32 with the `wasm-release` profile, writes its
+/// bindings into `out` (cleared first) and runs `wasm-opt` on its WASM.
+/// Returns the target directory, the optimised WASM and the `wasm-opt`
+/// version.
+fn build_wasm(
+    package: &str,
+    features: &[&str],
+    out: &str,
+) -> Result<(PathBuf, PathBuf, Option<String>)> {
     let root = root();
     let mut build = cargo();
     build.current_dir(&root).args([
         "build",
         "--package",
-        "cavea-web",
+        package,
         "--lib",
         "--target",
         WASM_TARGET,
         "--profile",
         WASM_PROFILE,
     ]);
-    if demo {
-        build.args(["--features", "demo"]);
+    for feature in features {
+        build.args(["--features", feature]);
     }
     run(&mut build)?;
 
     let target_dir =
         env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);
+    let name = package.replace('-', "_");
     let input = target_dir
         .join(WASM_TARGET)
         .join(WASM_PROFILE)
-        .join("cavea_web.wasm");
-    let out_dir = root.join("packages/renderer/wasm");
+        .join(format!("{name}.wasm"));
+    let out_dir = root.join(out);
     if out_dir.exists() {
         fs::remove_dir_all(&out_dir)
             .with_context(|| format!("cannot clear {}", out_dir.display()))?;
@@ -131,8 +148,18 @@ fn build_web(mode: Mode) -> Result<()> {
         .generate(&out_dir)
         .context("wasm-bindgen failed")?;
 
-    let wasm = out_dir.join("cavea_web_bg.wasm");
+    let wasm = out_dir.join(format!("{name}_bg.wasm"));
     let wasm_opt_version = wasm_opt(&wasm)?;
+    Ok((target_dir, wasm, wasm_opt_version))
+}
+
+fn build_web(mode: Mode) -> Result<()> {
+    let demo = mode == Mode::Demo;
+    let root = root();
+    let features: &[&str] = if demo { &["demo"] } else { &[] };
+    let (target_dir, wasm, wasm_opt_version) =
+        build_wasm("cavea-web", features, "packages/renderer/wasm")?;
+    let out_dir = root.join("packages/renderer/wasm");
     let bundle = target_dir.join("payload/renderer.min.js");
     run(Command::new("bun")
         .current_dir(&root)
@@ -174,6 +201,17 @@ fn build_web(mode: Mode) -> Result<()> {
         }
         Err(problem) => bail!("payload gate: {problem}"),
     }
+}
+
+/// The designer's module (`docs/07-designer.md` §2.4): an authoring tool,
+/// not the buyer's download, so its size is printed but not gated.
+fn build_designer() -> Result<()> {
+    let out = "packages/designer-core/wasm";
+    let (_, wasm, _) = build_wasm("cavea-designer", &[], out)?;
+    let glue = root().join(out).join("cavea_designer.js");
+    size_report(&[glue, wasm])?;
+    println!("bytes; brotli at quality 11. Output: {out}");
+    Ok(())
 }
 
 /// The last accepted payload (`xtask/payload-baseline.json`).
@@ -319,10 +357,7 @@ fn size_report(files: &[PathBuf]) -> Result<usize> {
             .unwrap_or_default();
         println!("{name:<28} {:>10} {:>10}", bytes.len(), br);
     }
-    println!(
-        "{:<28} {total_raw:>10} {total_br:>10}",
-        "total (js + wasm + atlas)"
-    );
+    println!("{:<28} {total_raw:>10} {total_br:>10}", "total");
     Ok(total_br)
 }
 
@@ -336,8 +371,9 @@ fn brotli_len(bytes: &[u8]) -> Result<usize> {
 }
 
 /// `cavea-core` and `cavea-format` may depend on no workspace crate except each
-/// other, `cavea-telemetry` on none, and nothing may depend on `cavea-server`
-/// (`docs/01-architecture.md` §3).
+/// other, `cavea-telemetry` on none, and nothing may depend on `cavea-server`,
+/// the test tool `cavea-loadgen` or `cavea-designer`, the designer's WASM
+/// entry point (`docs/01-architecture.md` §3).
 fn check_deps() -> Result<()> {
     let output = cargo()
         .current_dir(root())
@@ -366,8 +402,8 @@ fn check_deps() -> Result<()> {
                 "cavea-core" => dep == "cavea-format",
                 "cavea-format" => dep == "cavea-core",
                 "cavea-telemetry" => false,
-                // Test tools: nothing depends on them.
-                _ => !matches!(dep, "cavea-server" | "cavea-loadgen"),
+                // Test tools and the designer's entry point: nothing depends on them.
+                _ => !matches!(dep, "cavea-server" | "cavea-loadgen" | "cavea-designer"),
             };
             if !allowed {
                 violations.push(format!("{name} -> {dep}"));

@@ -245,6 +245,17 @@ name = "cavea-core"
 version = "0.0.0"
 
 [[package]]
+name = "cavea-designer"
+version = "0.0.0"
+dependencies = [
+ "cavea-compiler",
+ "cavea-edit",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "cavea-edit"
 version = "0.0.0"
 dependencies = [
@@ -2530,7 +2541,9 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "brotli",
+ "proc-macro2",
  "serde_json",
+ "syn 3.0.10",
  "wasm-bindgen-cli-support",
 ]
 

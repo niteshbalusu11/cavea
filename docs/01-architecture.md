@@ -70,7 +70,8 @@ cavea/
 │  │  ├─ src/backend/wgpu.rs  # native
 │  │  └─ shaders/*.wgsl       # single source; GLSL generated in build.rs
 │  ├─ cavea-web/              # wasm-bindgen entry point for the renderer
-│  ├─ cavea-edit/             # wasm-bindgen entry point for the designer
+│  ├─ cavea-edit/             # the designer's edit core (native; no wasm-bindgen)
+│  ├─ cavea-designer/         # wasm-bindgen entry point for the designer
 │  ├─ cavea-engine/
 │  ├─ cavea-server/
 │  ├─ cavea-mobile/           # UniFFI definitions
@@ -78,6 +79,7 @@ cavea/
 │  └─ cavea-testkit/          # simulators, generators, golden-image helpers
 ├─ packages/
 │  ├─ renderer/               # @cavea/renderer (TypeScript wrapper + WASM)
+│  ├─ designer-core/          # @cavea/designer-core (private: the edit core's typed Session)
 │  ├─ react/  vue/  svelte/   # thin wrappers
 │  ├─ designer-embed/         # @cavea/designer-embed (iframe helper)
 │  ├─ manager-embed/
@@ -96,7 +98,7 @@ cavea/
 └─ docs/                      # this spec set
 ```
 
-Dependency rule: `cavea-core` and `cavea-format` depend on nothing in the workspace except each other. `cavea-telemetry` (the server's logging and request spans) depends on nothing in the workspace. Nothing depends on `cavea-server`.
+Dependency rule: `cavea-core` and `cavea-format` depend on nothing in the workspace except each other. `cavea-telemetry` (the server's logging and request spans) depends on nothing in the workspace. Nothing depends on `cavea-server` or on `cavea-designer`.
 
 ## 4. Technology choices
 
@@ -226,6 +228,7 @@ Drawing 100,000 seats is one instanced draw call, so the GPU is not the constrai
 ### Build and release
 
 - `cargo xtask build-web` produces the WASM, runs `wasm-opt`, generates TypeScript types and enforces the size gate against a committed baseline (`13-testing-benchmarks.md` §6.3).
+- `cargo xtask build-designer` builds the designer's module the same way, without a gate; `cargo xtask types` writes the TypeScript types generated from the Rust definitions (D-41), and a test fails when the committed ones are stale.
 - `cargo xtask release` builds the server binary and Docker image, signs both, and writes an SBOM.
 - Every release publishes: Docker image, npm packages, Swift package, Android library, changelog, upgrade notes.
 

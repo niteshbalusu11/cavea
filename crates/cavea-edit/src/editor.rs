@@ -59,7 +59,8 @@ struct Gesture {
 }
 
 /// What an applied command did that its sender cannot know in advance.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Applied {
     /// Ids of the nodes made by `createNode`, in order.
     pub created: Vec<u32>,

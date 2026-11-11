@@ -47,7 +47,8 @@ impl Default for SnapSettings {
 }
 
 /// What the canvas draws for a snap, in chart coordinates.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Guide {
     /// An edge, centre or row end lined up: a magenta line.
     Line { from: P, to: P },
