@@ -707,7 +707,11 @@ export async function createMap(
       case "error":
         report(
           new CaveaError(
-            event.code === "glyphAtlas" ? "glyph_atlas_failed" : "engine_failed",
+            event.code === "glyphAtlas"
+              ? "glyph_atlas_failed"
+              : event.code === "image"
+                ? "image_failed"
+                : "engine_failed",
             event.message,
           ),
         );
@@ -1161,6 +1165,10 @@ export async function createMap(
     };
     if (options.maxDpr !== undefined) {
       attachOptions.maxDpr = options.maxDpr;
+    }
+    const image = options.assets?.image ?? adapter.image?.bind(adapter);
+    if (image !== undefined) {
+      attachOptions.images = image;
     }
     if (typeof options.reducedMotion === "boolean") {
       attachOptions.reducedMotion = options.reducedMotion;

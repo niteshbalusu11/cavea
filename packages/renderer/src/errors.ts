@@ -28,6 +28,8 @@ export type CaveaErrorCode =
   | "callback_failed"
   /** The glyph atlas failed: seats are drawn without labels. */
   | "glyph_atlas_failed"
+  /** A background image could not be fetched, decoded or used: the map is drawn without it. */
+  | "image_failed"
   /** The WebGL context was lost and not restored within 5 s; the map redraws if it comes back. */
   | "context_lost"
   /** A method was given input the engine refused (such as unknown labels). */

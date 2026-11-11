@@ -4,6 +4,7 @@
 import type { ChartSource, StateAdapter } from "./adapter.ts";
 import { CaveaError } from "./errors.ts";
 import type { GestureHandling } from "./host.ts";
+import type { ImageSource } from "./images.ts";
 import { isMessage, MESSAGES, type Messages } from "./messages.ts";
 import type { CategoryPricing, FormatPrice } from "./pricing.ts";
 import type { UiOptions } from "./ui.ts";
@@ -105,6 +106,11 @@ export interface SeatMapOptions {
     baseUrl?: string | URL;
     /** The WASM itself or its location: bring your own fetch. */
     wasm?: Response | ArrayBuffer | Uint8Array | WebAssembly.Module | string | URL;
+    /**
+     * Where the chart's background images are, by content hash: a URL to
+     * fetch or the bytes. Default: the state adapter's `image`, if any.
+     */
+    image?: ImageSource;
   };
   onReady?: (info: ReadyInfo) => void;
   onSelectionChange?: (selection: Selection) => void;
@@ -226,6 +232,7 @@ const CHECKS: Record<string, (v: unknown) => boolean> = {
   assets: (v) =>
     isObject(v) &&
     (v["baseUrl"] === undefined || isUrl(v["baseUrl"])) &&
+    (v["image"] === undefined || typeof v["image"] === "function") &&
     (v["wasm"] === undefined ||
       isUrl(v["wasm"]) ||
       isBytes(v["wasm"]) ||

@@ -1,6 +1,7 @@
 // State adapters (docs/05-web-sdk.md §4): where seat state comes from and
 // where holds go. The map calls the adapter; the adapter pushes state back
 // through its `AdapterContext`.
+import type { ImageAsset } from "./images.ts";
 
 /** Where the compiled chart (`.ccf`) comes from. */
 export type ChartSource = { url: string | URL } | { bytes: ArrayBuffer | Uint8Array };
@@ -71,6 +72,11 @@ export interface AdapterContext {
 export interface StateAdapter {
   /** The chart, when the options give none (such as the event's pinned version). */
   chart?(signal: AbortSignal): Promise<ChartSource>;
+  /**
+   * Where the chart's background image with content hash `hash` is (a URL
+   * or the bytes), unless `assets.image` says. Called after the first frame.
+   */
+  image?(hash: string): ImageAsset | Promise<ImageAsset>;
   /** Resolves with the first state. The map is ready once it is applied. */
   connect(ctx: AdapterContext): Promise<Snapshot>;
   /** Hold-on-select. Without `hold` and `release` the map runs in manual session mode. */

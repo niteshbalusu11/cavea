@@ -11,6 +11,7 @@ use crate::{
 
 mod chart;
 mod context;
+mod images;
 mod keys;
 mod labels;
 mod overview;

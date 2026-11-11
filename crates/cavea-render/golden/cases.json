@@ -17,6 +17,19 @@
       "text": "المسرح · במה",
       "rowPrefix": "Ряд ",
       "seatScheme": "alpha-lower"
+    },
+    "theatre-image": {
+      "preset": "theatre",
+      "image": {
+        "file": "background.png",
+        "hash": "5ca1ab1e0ddba11c0ffee0000000beef",
+        "node": {
+          "origin": [1200, 2300],
+          "size": [3200, 1600],
+          "rotation": 12,
+          "opacity": 0.6
+        }
+      }
     }
   },
   "cases": [
@@ -170,6 +183,38 @@
             [30, 4]
           ],
           "held": ["Stalls Centre-A-103"]
+        }
+      ]
+    },
+    {
+      "name": "images",
+      "guards": "a background image (04 §7 pass 2) behind everything, in its box turned 12° about its centre, at 0.6 opacity over its own half-transparent part, premultiplied, in the light and dark themes, at overview and at the cross-fade",
+      "panels": [
+        {
+          "chart": "theatre-image",
+          "size": [240, 180],
+          "camera": [-3000, -600, 6000, 4500],
+          "images": ["5ca1ab1e0ddba11c0ffee0000000beef"]
+        },
+        {
+          "chart": "theatre-image",
+          "size": [240, 180],
+          "camera": [-1100, 300, 2200, 1650],
+          "images": ["5ca1ab1e0ddba11c0ffee0000000beef"]
+        },
+        {
+          "chart": "theatre-image",
+          "size": [240, 180],
+          "camera": [-3000, -600, 6000, 4500],
+          "images": ["5ca1ab1e0ddba11c0ffee0000000beef"],
+          "theme": "dark"
+        },
+        {
+          "chart": "theatre-image",
+          "size": [240, 180],
+          "camera": [-1100, 300, 2200, 1650],
+          "images": ["5ca1ab1e0ddba11c0ffee0000000beef"],
+          "theme": "dark"
         }
       ]
     }
