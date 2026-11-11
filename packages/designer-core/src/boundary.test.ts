@@ -500,13 +500,17 @@ describe("the designer module", () => {
     expect(args("layers", [0, 1, 2])).toBe("arguments");
     expect(args("history", [1])).toBe("arguments");
     expect(args("layers", [-1, 1])).toBe("arguments");
-    expect(args("setField", [{ field: "rowPitch", value: Number.NaN }])).toBe("unknownCall");
+    expect(args("setField", [{ field: "rowPitch", value: 1 }])).toBe("unknownCall");
     expect(args("set_field", [{ field: "rowPitch", value: Number.NaN }])).toBe("arguments");
     expect(args("set_tool", ["pencil"])).toBe("arguments");
     expect(args("apply", [{ op: "moveNodes", ids: [], delta: [0, 0], extra: 1 }])).toBe(
       "arguments",
     );
     expect(failure(() => raw(s, "nope", []))).toEqual({ kind: "unknownCall", name: "nope" });
+    // NaN would cross as `null`, which clears a nullable field: refused first.
+    expect(failure(() => s.setField({ field: "floor", value: Number.NaN }))).toMatchObject({
+      kind: "arguments",
+    });
     expect(s.export()).toBe(before);
 
     // A disposed session.
@@ -535,6 +539,28 @@ describe("the designer module", () => {
     expect(failure(() => two.status())).toEqual({ kind: "panic", message: "unreachable" });
     two.dispose();
     expect(freed).toBe(0);
+  });
+
+  test("a trap while opening breaks the module for every later load", async () => {
+    // Bindings whose import traps, counting what is freed.
+    const stub = new URL("target/designer-trap-stub.js", root);
+    await Bun.write(
+      stub,
+      `export default async () => {};
+       export const counts = { made: 0, freed: 0 };
+       export class Designer {
+         constructor() { counts.made += 1; }
+         import() { throw new WebAssembly.RuntimeError("unreachable"); }
+         call() { return '{"ok":null}'; }
+         free() { counts.freed += 1; }
+       }`,
+    );
+    const { counts } = (await import(String(stub))) as { counts: { made: number; freed: number } };
+    const first = await loadDesigner({ bindings: stub, wasm: new Uint8Array() });
+    expect(failure(() => first.open("{}"))).toEqual({ kind: "panic", message: "unreachable" });
+    const again = await loadDesigner({ bindings: stub, wasm: new Uint8Array() });
+    expect(failure(() => again.open("{}"))).toEqual({ kind: "panic", message: "unreachable" });
+    expect(counts).toEqual({ made: 1, freed: 0 });
   });
 });
 

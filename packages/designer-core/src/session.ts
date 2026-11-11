@@ -6,8 +6,9 @@ import { Calls, type CallTable, type Failure } from "./generated/calls.ts";
  * refused it and nothing changed; `import`: the document cannot be opened;
  * `arguments`: they do not match the call), or one of the package's own:
  * `disposed` (the session was disposed) and `panic` (the module trapped: a
- * bug in the edit core; the module is unusable from then on and every
- * session of it throws `panic`).
+ * bug in the edit core; the module, which the page cannot instantiate a
+ * second time, is unusable from then on and every session of it throws
+ * `panic` until the page is reloaded).
  */
 export type DesignerFailure = Failure | { kind: "disposed" } | { kind: "panic"; message: string };
 
@@ -67,9 +68,13 @@ export interface LoadOptions {
   bindings?: string | URL;
 }
 
+/** The state of each instantiated module, by its bindings: the bindings
+ * keep one instance, which every `Designer` loaded from them shares. */
+const modules = new WeakMap<Bindings, Module>();
+
 /**
- * Loads and instantiates the module. Each call instantiates it afresh, so
- * a module broken by a trap can be replaced by loading again.
+ * Loads and instantiates the module, once per page: later calls share the
+ * instance, and a module broken by a trap stays broken.
  */
 export async function loadDesigner(options: LoadOptions = {}): Promise<Designer> {
   const url = options.bindings ?? new URL("../wasm/cavea_designer.js", import.meta.url);
@@ -78,31 +83,38 @@ export async function loadDesigner(options: LoadOptions = {}): Promise<Designer>
   await bindings.default({
     module_or_path: options.wasm ?? new URL("../wasm/cavea_designer_bg.wasm", import.meta.url),
   });
-  const module: Module = { bindings, broken: null };
+  const module = modules.get(bindings) ?? { bindings, broken: null };
+  modules.set(bindings, module);
   return {
     open(text: string): Session {
-      const handle = new bindings.Designer();
+      const made: { handle?: Handle } = {};
       try {
-        settle(module, handle.import(text), () => {});
+        settle(module, () => {
+          made.handle = new bindings.Designer();
+          return made.handle.import(text);
+        });
       } catch (error) {
         if (module.broken === null) {
-          handle.free();
+          made.handle?.free();
         }
         throw error;
       }
-      return new Session(module, handle);
+      if (made.handle === undefined) {
+        throw new DesignerError({ kind: "panic", message: "no session was made" });
+      }
+      return new Session(module, made.handle);
     },
   };
 }
 
 /** Parses a reply, or turns what the module threw into a `panic`. */
-function settle(module: Module, run: string | (() => string), onPanic: () => void): unknown {
+function settle(module: Module, run: () => string, onPanic: () => void = () => {}): unknown {
   if (module.broken !== null) {
     throw new DesignerError({ kind: "panic", message: module.broken });
   }
   let text: string;
   try {
-    text = typeof run === "string" ? run : run();
+    text = run();
   } catch (error) {
     module.broken = error instanceof Error ? error.message : String(error);
     onPanic();
@@ -148,7 +160,14 @@ export class Session extends Calls {
     if (handle === null) {
       throw new DesignerError({ kind: "disposed" });
     }
-    const json = JSON.stringify(args);
+    // `JSON.stringify` writes NaN and infinities as `null`, which a nullable
+    // argument would take as a value.
+    const json = JSON.stringify(args, (_key, value: unknown) => {
+      if (typeof value === "number" && !Number.isFinite(value)) {
+        throw new DesignerError({ kind: "arguments", message: `${value} is not a finite number` });
+      }
+      return value;
+    });
     return settle(
       this.#module,
       () => handle.call(method, json),

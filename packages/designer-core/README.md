@@ -39,4 +39,4 @@ try {
 session.dispose(); // when the chart closes
 ```
 
-A `panic` failure means a bug in the edit core: the module is unusable from then on; load it again.
+A `panic` failure means a bug in the edit core: the module is unusable until the page is reloaded (wasm-bindgen keeps one instance per page).
