@@ -96,6 +96,7 @@ pub fn write(check: bool) -> Result<()> {
     }
     // The console's API types, from the server's OpenAPI document (`api.rs`).
     outputs.push((crate::api::OUTPUT, crate::api::generate(&root)?));
+    outputs.push((crate::api::SDK_OUTPUT, crate::api::generate_sdk(&root)?));
     for (path, text) in outputs {
         let file = root.join(path);
         let old = fs::read_to_string(&file).unwrap_or_default();
