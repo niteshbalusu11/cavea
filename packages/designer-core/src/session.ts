@@ -42,7 +42,7 @@ function describe(failure: DesignerFailure): string {
 type Reply = { ok: unknown } | { err: Failure };
 
 /** The loaded module, shared by its sessions. */
-interface Module {
+export interface Module {
   bindings: Bindings;
   /** Set when the module trapped. */
   broken: string | null;
@@ -149,6 +149,14 @@ function settle(module: Module, run: () => string, onPanic: () => void = () => {
   return reply.ok;
 }
 
+/** The module and handle behind a session: for the package's `Canvas` only. */
+let reveal: (session: Session) => { module: Module; handle: Handle | null };
+
+/** The module and handle behind `session` (not exported from the package). */
+export function internals(session: Session): { module: Module; handle: Handle | null } {
+  return reveal(session);
+}
+
 /**
  * A designer session: the open chart with its undo history, selection,
  * tool and views (07 §2.3). Made by `Designer.open`. Every method is one
@@ -163,6 +171,10 @@ function settle(module: Module, run: () => string, onPanic: () => void = () => {
 export class Session extends Calls {
   readonly #module: Module;
   #handle: Handle | null;
+
+  static {
+    reveal = (session) => ({ module: session.#module, handle: session.#handle });
+  }
 
   /** Use `Designer.open`. */
   constructor(module: Module, handle: Handle) {

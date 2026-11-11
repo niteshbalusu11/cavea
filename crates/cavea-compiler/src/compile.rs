@@ -126,6 +126,28 @@ pub fn compile(document: &ChartDocument) -> Result<Compiled, CompileError> {
     emit(&chart, findings)
 }
 
+/// Steps 1–13 without the warnings, for the designer's live scene
+/// (`docs/04-renderer.md` §25): the compiled chart as built even when the
+/// document has errors, and those errors. With errors the chart is not
+/// necessarily consistent: check it with [`ccf::Chart::check`] before use.
+/// `None` when no chart was built (an unknown schema, or a string table over
+/// 4 GiB). [`compile`] is unaffected.
+pub fn build(document: &ChartDocument) -> (Option<ccf::Chart>, Vec<Finding>) {
+    let mut f = Findings::default();
+    if document.schema != SCHEMA {
+        return (None, f.0);
+    }
+    let mut c = Compiler::new(document);
+    c.warnings = false;
+    c.categories(&mut f);
+    c.floors(&mut f);
+    let mut units = c.plan(&mut f);
+    units.sort_by_key(|u| (u.floor, u.section.is_none(), u.order));
+    let expansion = c.expand(&mut units, &mut f);
+    let chart = c.build(&units, &expansion, &mut f);
+    (chart, f.0)
+}
+
 /// Steps 1–13 and the warnings: everything but encoding.
 fn check(document: &ChartDocument) -> Result<(ccf::Chart, Vec<Finding>), CompileError> {
     let mut f = Findings::default();
@@ -377,6 +399,8 @@ struct Compiler<'d> {
     decorations: Vec<Decoration<'d>>,
     /// Decoration nodes met so far, by kind (shape, text, icon, image).
     deco_counts: [usize; 4],
+    /// Whether a chart without errors is checked for warnings.
+    warnings: bool,
 }
 
 impl<'d> Compiler<'d> {
@@ -391,6 +415,7 @@ impl<'d> Compiler<'d> {
             ids: Vec::new(),
             decorations: Vec::new(),
             deco_counts: [0; 4],
+            warnings: true,
         }
     }
 
@@ -810,7 +835,7 @@ impl<'d> Compiler<'d> {
                 priorities: b.priorities,
             }),
         };
-        if !f.has_errors() {
+        if self.warnings && !f.has_errors() {
             let scene = warnings::Scene {
                 doc: self.doc,
                 units,

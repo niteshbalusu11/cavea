@@ -18,6 +18,10 @@ pub mod gesture;
 pub mod hit;
 pub mod host;
 pub mod label;
+#[cfg(feature = "designer")]
+pub mod live;
+#[cfg(feature = "designer")]
+pub mod overlay;
 pub mod overview;
 pub mod protocol;
 pub mod scene;

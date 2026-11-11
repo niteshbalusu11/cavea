@@ -173,6 +173,10 @@ pub struct Labels {
     scratch: Vec<u8>,
     /// Chunks built since load, for the demo's readout and tests.
     pub built: u32,
+    /// Sized for any chart (the designer's live scene, 04 §25): every slot
+    /// holds a chunk of the most seats a chunk has.
+    #[cfg(feature = "designer")]
+    pub fixed: bool,
 }
 
 impl Labels {
@@ -189,6 +193,8 @@ impl Labels {
         }
         *self = Self {
             built: self.built,
+            #[cfg(feature = "designer")]
+            fixed: self.fixed,
             ..Self::default()
         };
     }
@@ -235,7 +241,13 @@ impl Labels {
                 .map(|c| c.seat_count as usize)
                 .max()
                 .unwrap_or(0);
-            let slots = chunks.len().min(LABEL_CHUNKS);
+            #[allow(unused_mut, reason = "changed by the designer's live scene")]
+            let mut slots = chunks.len().min(LABEL_CHUNKS);
+            #[cfg(feature = "designer")]
+            if self.fixed {
+                self.slot_seats = cavea_format::CHUNK_MAX_SEATS as usize;
+                slots = LABEL_CHUNKS;
+            }
             let desc = BufferDesc {
                 kind: BufferKind::Vertex,
                 usage: BufferUsage::Dynamic,
@@ -247,6 +259,11 @@ impl Labels {
         let Some(buffer) = self.buffer else {
             return Ok(false);
         };
+        // A live scene may have gained chunks since the buffer was made.
+        #[cfg(feature = "designer")]
+        if self.slot_of.len() < chunks.len() {
+            self.slot_of.resize(chunks.len(), None);
+        }
         self.clock += 1;
         let (mut builds, mut waiting) = (0, false);
         for &c in visible.iter().take(LABEL_CHUNKS) {
@@ -285,7 +302,13 @@ impl Labels {
     /// drawn in this frame.
     fn claim(&mut self, c: u32) -> Result<u8, BackendError> {
         let free = self.slots.len();
-        let slot = if free < LABEL_CHUNKS.min(self.slot_of.len()) {
+        #[allow(unused_mut, reason = "changed by the designer's live scene")]
+        let mut most = LABEL_CHUNKS.min(self.slot_of.len());
+        #[cfg(feature = "designer")]
+        if self.fixed {
+            most = LABEL_CHUNKS;
+        }
+        let slot = if free < most {
             self.slots.push((c, 0));
             self.skipped.push(Vec::new());
             free
@@ -357,6 +380,37 @@ impl Labels {
         backend.update_buffer(buffer, offset, &self.scratch)?;
         self.built += 1;
         Ok(())
+    }
+}
+
+#[cfg(feature = "designer")]
+impl Labels {
+    /// Carries the built labels over to a new live scene (04 §25): `map`
+    /// gives a chunk's index in the new scene and how far its seats' `idx`
+    /// moved, or `None` for a chunk that is gone or changed, whose slot is
+    /// then the first to be reused. `chunks` is the new scene's count.
+    pub fn remap(&mut self, chunks: usize, map: impl Fn(u32) -> Option<(u32, i64)>) {
+        self.slot_of.clear();
+        self.slot_of.resize(chunks, None);
+        for (i, (chunk, used)) in self.slots.iter_mut().enumerate() {
+            match map(*chunk) {
+                Some((to, shift)) => {
+                    *chunk = to;
+                    if let Some(entry) = self.slot_of.get_mut(to as usize) {
+                        *entry = u8::try_from(i).ok();
+                    }
+                    if let Some(skipped) = self.skipped.get_mut(i) {
+                        for idx in skipped.iter_mut() {
+                            *idx = (i64::from(*idx) + shift) as u32;
+                        }
+                    }
+                }
+                None => {
+                    *chunk = u32::MAX;
+                    *used = 0;
+                }
+            }
+        }
     }
 }
 

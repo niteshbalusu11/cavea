@@ -10,6 +10,10 @@ publish.workspace = true
 # The WebGL2 backend. Enabled by `cavea-web` for wasm32 only, so native builds of
 # the workspace never compile it.
 glow = ["dep:glow"]
+# The designer's additions (04 §25): the live scene, per-piece transforms and
+# the overlay batcher. Enabled by `cavea-designer`, never by `cavea-web`, so
+# the buyer's payload does not carry them.
+designer = []
 
 [dependencies]
 cavea-core.workspace = true

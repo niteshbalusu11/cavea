@@ -25,6 +25,8 @@ mod inspector;
 mod layers;
 mod numbering;
 mod op;
+#[cfg(any(test, feature = "random"))]
+pub mod random;
 mod rows;
 mod section;
 mod selection;
@@ -55,7 +57,7 @@ pub use numbering::{
     RowLabelsView, SeatLabelsView, Shared,
 };
 pub use selection::{Level, Selection};
-pub use session::{InputResult, Session, ToolView};
+pub use session::{InputResult, Renumbered, Session, ToolView};
 pub use tool::{
     Button, Corner, Cursor, Guide, Handle, HandleKind, Input, Key, Modifiers, Overlay, Pointer,
     PointerKind, Readout, Side, SnapSettings, TextField, ToolId, tuning,

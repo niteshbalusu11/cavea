@@ -385,6 +385,28 @@ impl TextAtlas {
     }
 }
 
+#[cfg(feature = "designer")]
+impl TextAtlas {
+    /// Forgets the seats' labels, keyed by `idx`, which a new live scene
+    /// may give to another seat (04 §25); the chart's strings stay. Their
+    /// texels are reused at the next clear, and answers still out for them
+    /// are ignored.
+    pub fn forget_seat_labels(&mut self) {
+        let before = self.entries.len();
+        let mut pending = 0;
+        self.entries.retain(|e| {
+            let seat = matches!(e.key.source, Source::Seat(_));
+            pending += u32::from(seat && matches!(e.state, State::Pending(_)));
+            !seat
+        });
+        if self.entries.len() < before {
+            self.pending = self.pending.saturating_sub(pending);
+            self.evicted = true;
+            self.generation = self.generation.wrapping_add(1);
+        }
+    }
+}
+
 #[cfg(test)]
 impl TextAtlas {
     /// Every ready raster's rectangle, and the texture's side.

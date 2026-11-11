@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./atlas": "./src/atlas.ts",
+    "./text": "./src/text.ts"
   },
   "scripts": {
     "build": "bun build.ts",

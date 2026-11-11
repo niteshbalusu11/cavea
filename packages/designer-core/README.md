@@ -39,4 +39,26 @@ try {
 session.dispose(); // when the chart closes
 ```
 
+## The canvas
+
+`createCanvas(session, element)` draws the session's chart and overlay on a WebGL2 canvas (`docs/04-renderer.md` §25, `docs/07-designer.md` §2.4). The host owns the view (plain data) and every gesture; the canvas draws the view it is given.
+
+```ts
+import { createCanvas, fitView, pan, toChart, zoomAbout, type View } from "@cavea/designer-core";
+
+const canvas = createCanvas(session, element, { theme: "light", onFrame: () => (dirty = true) });
+let view: View = { centre: [0, 0], zoom: 1, width: element.clientWidth, height: element.clientHeight, dpr: devicePixelRatio };
+view = fitView(view, session.fit() ?? { min: [0, 0], max: [1, 1] }, 24, null);
+canvas.setView(view); // again after every pan, zoom or resize
+// input: session.input({ kind: "pointerMove", data: { world: toChart(view, at), screen: at, zoom: view.zoom, … } })
+// its `pan` result: view = pan(view, result.pan); the wheel: view = zoomAbout(view, f, at, canvas.zoomLimits())
+requestAnimationFrame(function frame(t) {
+  if (session.changed().length > 0 || dirty) dirty = canvas.draw(t); // true: draw again next frame
+  requestAnimationFrame(frame);
+});
+canvas.dispose(); // when the chart closes, before session.dispose()
+```
+
+The canvas handles a lost WebGL context itself and calls `onFrame` when it needs a frame the host cannot know about (the glyph atlas arrived, the context came back). `packages/designer-core/proof` is a page that drives it (`AGENTS.md`).
+
 A `panic` failure means a bug in the edit core: the module is unusable until the page is reloaded (wasm-bindgen keeps one instance per page).

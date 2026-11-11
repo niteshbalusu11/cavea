@@ -1,13 +1,25 @@
 import { Navigate, Route, Router } from "@solidjs/router";
 import { For } from "solid-js";
 import { render } from "solid-js/web";
-import { Charts, Frame, NotBuilt, NotFound, SECTIONS } from "./console/Frame.tsx";
+import { Account } from "./console/Account.tsx";
+import { Charts } from "./console/Charts.tsx";
+import { Frame, Gate, NotBuilt, NotFound, SECTIONS } from "./console/Frame.tsx";
+import { BASE } from "./console/paths.ts";
+import { Setup } from "./console/Setup.tsx";
+import { takeSetupToken } from "./console/setupToken.ts";
+import { SignIn } from "./console/SignIn.tsx";
 import { DesignerPage } from "./designer/Designer.tsx";
 import { localSource } from "./designer/source.ts";
+import { loadSession, watchSession } from "./session.ts";
 import { followTheme } from "./theme.ts";
 import { ToastRegion } from "./ui/overlays.tsx";
 
 followTheme();
+// Before the router reads the address: the setup token leaves the address
+// bar at once (CON-002).
+takeSetupToken();
+void loadSession();
+watchSession();
 const root = document.getElementById("root");
 if (root === null) {
   throw new Error("#root element is missing from index.html");
@@ -16,17 +28,42 @@ if (root === null) {
 // Two kinds of layout: the console frame, and full-window tools (the
 // designer; later the event manager). A server-backed chart is another
 // route with another `ChartSource` for the same designer (DSN-035).
+// Routes are under `BASE`, Vite's `base` (CON-015). The server logs the
+// setup link as `/console/setup`: under the root in development, that path
+// is the setup page too.
+const [charts, ...others] = SECTIONS;
 render(
   () => (
     <>
-      <Router>
+      <Router base={BASE}>
         <Route path="/" component={() => <Navigate href="/charts" />} />
+        <Route path={BASE === "" ? ["/setup", "/console/setup"] : "/setup"} component={Setup} />
+        <Route path="/sign-in" component={SignIn} />
         <Route path="/designer/local" component={() => <DesignerPage source={localSource} />} />
         <Route path="/" component={Frame}>
-          <Route path="/charts" component={Charts} />
-          <For each={SECTIONS.slice(1)}>
-            {(s) => <Route path={s.path} component={() => <NotBuilt section={s.label} />} />}
+          <Route
+            path="/charts"
+            component={() =>
+              charts === undefined ? null : (
+                <Gate section={charts}>
+                  <Charts />
+                </Gate>
+              )
+            }
+          />
+          <For each={others}>
+            {(s) => (
+              <Route
+                path={s.path}
+                component={() => (
+                  <Gate section={s}>
+                    <NotBuilt section={s.label} />
+                  </Gate>
+                )}
+              />
+            )}
           </For>
+          <Route path="/account" component={Account} />
           <Route path="*" component={NotFound} />
         </Route>
       </Router>
