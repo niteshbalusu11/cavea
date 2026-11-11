@@ -10,10 +10,15 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
-    "@cavea/renderer": "workspace:*",
+    "@cavea/designer-core": "workspace:*",
+    "@kobalte/core": "0.13.14",
+    "@solidjs/router": "1.0.1",
     "solid-js": "1.9.19"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@types/bun": "1.4.4",
+    "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
     "vite": "8.3.8",
     "vite-plugin-solid": "2.11.16"

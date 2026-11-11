@@ -1,0 +1,158 @@
+@import "tailwindcss";
+
+/* Design tokens (docs/09-console.md §9). Components use only these: the
+ * default Tailwind palette and type scale are removed, so a colour or a
+ * size that is not a token does not compile into a class. The pairs that
+ * carry text or controls are checked for WCAG 2.2 AA by tokens.test.ts. */
+
+:root {
+  --c-app: #f5f5f4;
+  --c-surface: #ffffff;
+  --c-raised: #ffffff;
+  --c-hover: #efeeed;
+  --c-active: #e7e5e4;
+  --c-line: #e7e5e4;
+  --c-line-strong: #d6d3d1;
+  --c-control: #ffffff;
+  --c-control-line: #8f8984;
+  --c-fg: #1c1917;
+  --c-muted: #57534e;
+  --c-faint: #625b56;
+  --c-accent: #1d4ed8;
+  --c-accent-fill: #2563eb;
+  --c-accent-soft: #e8f0fe;
+  --c-on-accent: #ffffff;
+  --c-focus: #2563eb;
+  --c-danger: #b91c1c;
+  --c-danger-soft: #fee2e2;
+  --c-warning: #a14a07;
+  --c-warning-soft: #fef3c7;
+  --c-success: #166534;
+  --c-canvas: #fafaf9;
+  --c-shadow: rgb(28 25 23 / 0.14);
+  --c-scrim: rgb(28 25 23 / 0.32);
+  color-scheme: light;
+}
+
+/* theme.ts sets data-theme from the preference, "system" following
+ * prefers-color-scheme, so the dark tokens are written once. */
+:root[data-theme="dark"] {
+  --c-app: #161412;
+  --c-surface: #1f1c1a;
+  --c-raised: #2a2624;
+  --c-hover: #2a2624;
+  --c-active: #35302d;
+  --c-line: #34302d;
+  --c-line-strong: #4a4541;
+  --c-control: #171513;
+  --c-control-line: #7d7671;
+  --c-fg: #f5f5f4;
+  --c-muted: #b8b2ad;
+  --c-faint: #a39c96;
+  --c-accent: #7ab0ff;
+  --c-accent-fill: #2563eb;
+  --c-accent-soft: #1b2f55;
+  --c-on-accent: #ffffff;
+  --c-focus: #7ab0ff;
+  --c-danger: #fa8c8c;
+  --c-danger-soft: #3f1d1d;
+  --c-warning: #fbbf24;
+  --c-warning-soft: #3a2a0b;
+  --c-success: #4ade80;
+  --c-canvas: #1c1917;
+  --c-shadow: rgb(0 0 0 / 0.5);
+  --c-scrim: rgb(0 0 0 / 0.55);
+  color-scheme: dark;
+}
+
+@theme {
+  --color-*: initial;
+  --text-*: initial;
+  --font-*: initial;
+  --shadow-*: initial;
+  --radius-*: initial;
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --text-2xs: 10px;
+  --text-2xs--line-height: 14px;
+  --text-xs: 11px;
+  --text-xs--line-height: 16px;
+  --text-sm: 12px;
+  --text-sm--line-height: 16px;
+  --text-base: 13px;
+  --text-base--line-height: 18px;
+  --text-lg: 15px;
+  --text-lg--line-height: 20px;
+  --text-xl: 20px;
+  --text-xl--line-height: 28px;
+
+  --spacing: 4px;
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 8px;
+  --shadow-menu: 0 6px 24px var(--c-shadow), 0 0 0 1px var(--c-line);
+}
+
+@theme inline {
+  --color-app: var(--c-app);
+  --color-surface: var(--c-surface);
+  --color-raised: var(--c-raised);
+  --color-hover: var(--c-hover);
+  --color-active: var(--c-active);
+  --color-line: var(--c-line);
+  --color-line-strong: var(--c-line-strong);
+  --color-control: var(--c-control);
+  --color-control-line: var(--c-control-line);
+  --color-fg: var(--c-fg);
+  --color-muted: var(--c-muted);
+  --color-faint: var(--c-faint);
+  --color-accent: var(--c-accent);
+  --color-accent-fill: var(--c-accent-fill);
+  --color-accent-soft: var(--c-accent-soft);
+  --color-on-accent: var(--c-on-accent);
+  --color-focus: var(--c-focus);
+  --color-danger: var(--c-danger);
+  --color-danger-soft: var(--c-danger-soft);
+  --color-warning: var(--c-warning);
+  --color-warning-soft: var(--c-warning-soft);
+  --color-success: var(--c-success);
+  --color-canvas: var(--c-canvas);
+  --color-scrim: var(--c-scrim);
+  --color-transparent: transparent;
+  --color-current: currentColor;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--c-app);
+    color: var(--c-fg);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: var(--text-base--line-height);
+    -webkit-font-smoothing: antialiased;
+  }
+  :focus-visible {
+    outline: 2px solid var(--c-focus);
+    outline-offset: 1px;
+  }
+  ::selection {
+    background: var(--c-accent-soft);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0s !important;
+    transition-duration: 0s !important;
+  }
+}
