@@ -140,6 +140,15 @@ fn subscribe_frame(event: &str, last_seq: u64, token: Option<&str>) -> Vec<u8> {
     .unwrap()
 }
 
+/// A `v32` length, as SUBSCRIBE's `bytes` fields carry it (08 §8).
+fn put_len(out: &mut Vec<u8>, mut len: usize) {
+    while len >= 0x80 {
+        out.push(u8::try_from(len & 0x7f).unwrap() | 0x80);
+        len >>= 7;
+    }
+    out.push(u8::try_from(len).unwrap());
+}
+
 async fn send(ws: &mut Ws, frame: Vec<u8>) {
     ws.send(Message::Binary(frame.into())).await.unwrap();
 }
@@ -422,6 +431,28 @@ async fn websocket_refuses_what_breaks_the_rules() {
             let frames = rest(&mut ws).await;
             let close = reason.map(wire::encode_close);
             assert_eq!(frames, Vec::from_iter(close), "{case}");
+        }
+
+        // A session token of up to 1,024 bytes is accepted (and not needed
+        // to follow an event); a longer SUBSCRIBE does not decode: CLOSE 6.
+        for (len, accepted) in [(1_000, true), (1_024, true), (1_025, false)] {
+            let mut frame = subscribe_frame(&t.event, 0, None);
+            let session = vec![b's'; len];
+            frame.truncate(frame.len() - 1);
+            frame.push(1);
+            put_len(&mut frame, len);
+            frame.extend_from_slice(&session);
+            let mut ws = connect(addr, Some(&t.publishable), None).await.unwrap();
+            send(&mut ws, frame).await;
+            if accepted {
+                let mut client = Client::default();
+                read_until(&mut ws, &mut client, |c| c.count(types::SNAPSHOT) == 1).await;
+            } else {
+                assert_eq!(
+                    rest(&mut ws).await,
+                    [wire::encode_close(CloseReason::BAD_FRAME)]
+                );
+            }
         }
 
         // After SUBSCRIBE: a second SUBSCRIBE or text is CLOSE 6.

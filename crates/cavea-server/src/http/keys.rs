@@ -61,7 +61,7 @@ pub(super) type KeyRow = (
 /// created it.
 #[derive(Debug, Serialize)]
 pub(super) struct KeyView {
-    id: String,
+    pub(super) id: String,
     kind: KeyKind,
     name: String,
     prefix: String,

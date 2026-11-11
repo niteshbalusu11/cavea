@@ -29,8 +29,8 @@ Everything arriving from a browser is untrusted, including chart files and realt
 
 | # | Threat | Mitigation |
 |---|---|---|
-| T1 | **Seat hoarding:** a bot holds large parts of the house to deny sales or to resell | Per-token object limit; rate limit per key and IP; short hold lifetime; optional mandatory session tokens signed by the customer's backend, with a cap per `sub`; metrics and a webhook for unusual hold volume; documented pattern for a challenge at the customer's gateway |
-| T2 | Stolen hold token | Bearer secret with short life; only a hash is stored; bound to the session `sub` when session tokens are used; cannot book (booking needs a secret key) |
+| T1 | **Seat hoarding:** a bot holds large parts of the house to deny sales or to resell | Per-token object limit; rate limit per key and IP; short hold lifetime; optional mandatory session tokens signed by the customer's backend (`require_session`), with a cap on each `sub`'s live hold tokens per event (`max_tokens_per_sub`, default 2) and on each token's objects (`max_objects` in the session token) (`08-server.md` §11); metrics and a webhook for unusual hold volume; documented pattern for a challenge at the customer's gateway |
+| T2 | Stolen hold token | Bearer secret with short life; only a hash is stored; bound to the session `sub` when created with a session token, and refused with any other `sub` or none (`08-server.md` §11); cannot book (booking needs a secret key) |
 | T3 | Publishable key used from another site | Origin allow-list (a hurdle, not a guarantee); rate limits; the key can only do what an anonymous buyer can |
 | T4 | Leaked secret key | Hashed at rest; shown once; last-used time visible; rotation with two valid keys during the overlap; restricted keys (P2) |
 | T5 | Cross-tenant access | Workspace comes from the credential only; every query filters by workspace; an automated test calls every endpoint with a foreign workspace's identifiers and expects 404. The exception is compiled chart files: public by nature, served without a credential and named only by their 128-bit content hash (`08-server.md` §6.2) |
@@ -68,7 +68,7 @@ Everything arriving from a browser is untrusted, including chart files and realt
 | Charts, events, seat state | Yes | Not personal data |
 | Order references | Yes | The customer's opaque identifier. The docs tell customers not to put personal data in it |
 | `extra` per object | Yes | Free-form; the customer controls its content |
-| Session `sub` | Yes, on holds | Should be an opaque identifier |
+| Session `sub` | Its SHA-256 only, on the hold it created, until the hold is deleted (expiry, or booking its last objects); never logged, never in the event log | Should be an opaque identifier |
 | Buyer IP addresses | In memory for rate limiting; in logs only if the customer enables it | |
 | Console users | Email, password hash | The only personal data we require |
 

@@ -61,8 +61,8 @@ impl Default for Timing {
 /// The most messages a client may send between two PINGs: it needs one, the
 /// PONG. More is CLOSE 6.
 pub const MAX_MESSAGES_PER_PING: u32 = 10;
-/// The largest client message: SUBSCRIBE with both tokens at their limits is
-/// under 1,100 bytes.
+/// The largest client message: SUBSCRIBE with every field at its limit is
+/// 1,812 bytes.
 pub const MAX_CLIENT_MESSAGE: usize = 2048;
 /// How long a CLOSE frame may take to write.
 const CLOSE_WRITE: Duration = Duration::from_secs(1);
@@ -530,6 +530,25 @@ pub(crate) mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
+
+    /// SUBSCRIBE with every field at its limit (08 §8.2) is a message the
+    /// server reads.
+    #[test]
+    fn the_largest_subscribe_fits_a_client_message() {
+        let key = "\u{1F600}".repeat(wire::MAX_KEY_CHARS);
+        let hold = [b'h'; wire::MAX_TOKEN_BYTES];
+        let session = [b's'; wire::MAX_SESSION_TOKEN_BYTES];
+        let frame = wire::encode_subscribe(&wire::Subscribe {
+            version: 1,
+            event_key: &key,
+            last_seq: u64::MAX,
+            hold_token: Some(&hold),
+            session_token: Some(&session),
+        })
+        .unwrap();
+        assert_eq!(frame.len(), 1_812);
+        assert!(frame.len() <= MAX_CLIENT_MESSAGE);
+    }
 
     /// A buyer's client: applies every frame as the renderer would, and
     /// refuses a DELTA that does not continue from its `seq` (08 §8.6).

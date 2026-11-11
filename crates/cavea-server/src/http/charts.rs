@@ -171,7 +171,9 @@ impl From<ChartError> for ApiError {
                 .with_message("The document holds U+0000, which cannot be stored.")
                 .with_detail("reason", "document"),
             ChartError::Invalid(findings) => {
-                ApiError::new(Code::ChartInvalid).with_detail("findings", findings_json(&findings))
+                // The compiler's documented form (03 §3.2); it cannot fail.
+                let findings = serde_json::to_value(findings).unwrap_or_default();
+                ApiError::new(Code::ChartInvalid).with_detail("findings", findings)
             }
             ChartError::Timeout => ApiError::new(Code::Overloaded)
                 .with_message("The chart could not be compiled in time; retry shortly.")
@@ -179,30 +181,6 @@ impl From<ChartError> for ApiError {
             ChartError::Internal(cause) => ApiError::internal(cause),
         }
     }
-}
-
-/// `[{code, severity, node, message}]`; `node` is `null` for chart-level
-/// findings.
-fn findings_json(findings: &[Finding]) -> Value {
-    findings
-        .iter()
-        .map(|f| {
-            // The E and W codes of 03 §3.2 as written there.
-            let code = match f.code {
-                cavea_compiler::Code::Unsupported => "unsupported".to_owned(),
-                code => format!("{code:?}"),
-            };
-            json!({
-                "code": code,
-                "severity": match f.severity() {
-                    Severity::Error => "error",
-                    Severity::Warning => "warning",
-                },
-                "node": f.node,
-                "message": f.to_string(),
-            })
-        })
-        .collect()
 }
 
 /// `If-Match`: `*`, or one strong entity tag as `draft_etag` gives it.
@@ -521,7 +499,8 @@ struct Validation {
     draft_etag: String,
     /// No finding has error severity: the draft can be published.
     valid: bool,
-    findings: Value,
+    /// In the compiler's documented form (03 §3.2).
+    findings: Vec<Finding>,
     /// The compiled chart's statistics, when it compiled.
     stats: Option<Value>,
 }
@@ -537,13 +516,13 @@ async fn validate(
         Ok(output) => Validation {
             draft_etag: etag_text(etag),
             valid: true,
-            findings: json!([]),
+            findings: Vec::new(),
             stats: Some(stats_json(&output)),
         },
         Err(ChartError::Invalid(findings)) => Validation {
             draft_etag: etag_text(etag),
             valid: !findings.iter().any(|f| f.severity() == Severity::Error),
-            findings: findings_json(&findings),
+            findings,
             stats: None,
         },
         Err(e) => return Err(e.into()),

@@ -258,6 +258,7 @@ impl Tenant {
     /// Fill a route template's placeholders with this tenant's identifiers.
     fn path(&self, template: &str) -> String {
         template
+            .replace("{workspace}", &self.id)
             .replace("{key}", &self.spare_id)
             .replace("{chart}", &self.chart)
             .replace("{hash}", &self.hash)
@@ -428,6 +429,60 @@ async fn key_lifecycle() {
     .await;
 }
 
+/// The operator mints a secret key for an existing workspace, shown once;
+/// an unknown or malformed workspace is `404`.
+#[tokio::test]
+#[ignore = "needs CAVEA_TEST_DATABASE_URL"]
+async fn admin_mints_a_secret_key() {
+    let _serial = serial();
+    let logs = Captured::default();
+    let _guard = logs.install();
+    let logs_in = logs.clone();
+    with_db(async move |pool| {
+        let logs = logs_in;
+        let app = api(&pool, Some(ADMIN));
+        let a = Tenant::create(&app, "a").await;
+        let uri = format!("/v1/workspaces/{}/keys", a.id);
+        let body = json!({ "name": "recovery" });
+        let (response, created) =
+            call(&app, Method::POST, &uri, Some(ADMIN), Some(body.clone())).await;
+        assert_eq!(response.status(), 201, "{created}");
+        assert_eq!(
+            (&created["kind"], &created["name"]),
+            (&json!("secret"), &json!("recovery"))
+        );
+        let key = created["key"].as_str().unwrap().to_owned();
+        let (response, list) = call(&app, Method::GET, "/v1/keys", Some(&key), None).await;
+        assert_eq!(response.status(), 200, "{list}");
+        assert!(
+            list["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|k| k["id"] == created["id"] && k.get("key").is_none())
+        );
+        let unknown = format!("/v1/workspaces/ws_{}/keys", "0".repeat(32));
+        for uri in [unknown.as_str(), "/v1/workspaces/acme/keys"] {
+            let (response, p) =
+                call(&app, Method::POST, uri, Some(ADMIN), Some(body.clone())).await;
+            assert_problem(&response, &p, Code::NotFound);
+        }
+        let (response, p) = call(
+            &app,
+            Method::POST,
+            &uri,
+            Some(ADMIN),
+            Some(json!({ "name": "" })),
+        )
+        .await;
+        assert_problem(&response, &p, Code::InvalidRequest);
+        let mut secrets = a.secrets().to_vec();
+        secrets.push(&key);
+        assert_no_secrets(&logs, &secrets);
+    })
+    .await;
+}
+
 /// Every kind of credential against a route of each kind; the origin
 /// allow-list; and the admin endpoints with no admin key configured.
 #[tokio::test]
@@ -576,6 +631,13 @@ const ROUTES: &[(Method, &str, Needs, u16, Option<&str>)] = &[
         201,
         Some(r#"{"key":"c","name":"c"}"#),
     ),
+    (
+        Method::POST,
+        "/v1/workspaces/{workspace}/keys",
+        Needs::Admin,
+        201,
+        Some(r#"{"name":"recovery"}"#),
+    ),
     (Method::GET, "/v1/keys", Needs::Secret, 200, None),
     (
         Method::POST,
@@ -708,6 +770,20 @@ const ROUTES: &[(Method, &str, Needs, u16, Option<&str>)] = &[
         Needs::Secret,
         200,
         Some(r#"{"objects":{"version":"{hash}","idx":[2]},"status":"blocked"}"#),
+    ),
+    (
+        Method::GET,
+        "/v1/events/{event}/objects?label=Nope",
+        Needs::Secret,
+        200,
+        None,
+    ),
+    (
+        Method::GET,
+        "/v1/events/{event}/objects?status=held&limit=5",
+        Needs::Secret,
+        200,
+        None,
     ),
     (
         Method::GET,
@@ -888,5 +964,7 @@ async fn tenant_isolation() {
 
 mod charts;
 mod limits;
+mod objects;
 mod realtime;
 mod seats;
+mod session;

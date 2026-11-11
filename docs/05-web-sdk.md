@@ -152,7 +152,7 @@ Built-in adapters:
 | `event` | string | — | Event key |
 | `session` | `'start'`, `'continue'`, `'manual'`, `'none'` | `'start'` | `start` creates a hold token; `continue` reuses one |
 | `holdToken` | string | — | For `continue` |
-| `sessionToken` | string or `() => Promise<string>` | — | Signed by the customer's backend; carries channels and limits |
+| `sessionToken` | string or `() => Promise<string>` | — | Signed by the customer's backend (`08-server.md` §11); carries the buyer's `sub`, limits and channels. Sent as `Cavea-Session` on hold-token creation, hold and release, and in SUBSCRIBE. Required before the first hold when the event info says `require_session` |
 | `transport` | `'auto'`, `'ws'`, `'sse'`, `'poll'` | `'auto'` | |
 | `pauseWhenHidden` | boolean | true | Drops the realtime connection in background tabs and resyncs on return |
 

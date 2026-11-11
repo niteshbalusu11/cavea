@@ -292,6 +292,7 @@ dependencies = [
  "cavea-testkit",
  "futures-util",
  "getrandom 0.4.3",
+ "hmac",
  "http-body",
  "serde",
  "serde_json",

@@ -292,8 +292,9 @@ const BAD_FRAME: Refusal = (Some(CloseReason::BAD_FRAME), "bad_frame");
 const NOT_FOUND: Refusal = (Some(CloseReason::NOT_FOUND), "not_found");
 const UNAVAILABLE: Refusal = (Some(CloseReason::SHUTTING_DOWN), "unavailable");
 
-/// The first frame must be SUBSCRIBE (08 §8.2); a session token in it is
-/// ignored until session tokens exist (SRV-016).
+/// The first frame must be SUBSCRIBE (08 §8.2). A session token in it is
+/// decoded (at most 1,024 bytes) but not verified: no public stream depends
+/// on a session until channel streams exist (08 §8.2, §11).
 async fn first_subscribe(socket: &mut WebSocket) -> Result<Subscribe, Refusal> {
     for _ in 0..MAX_MESSAGES_PER_PING {
         let bytes = match socket.recv().await {

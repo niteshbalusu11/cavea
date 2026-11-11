@@ -16,9 +16,11 @@ mod error;
 mod events;
 pub mod extract;
 mod keys;
+mod objects;
 mod public;
 mod realtime;
 mod seats;
+mod session;
 mod workspaces;
 
 use std::sync::Arc;
@@ -68,6 +70,7 @@ fn routes() -> Router<AppState> {
         .merge(charts::routes())
         .merge(events::routes())
         .merge(seats::routes())
+        .merge(objects::routes())
         .merge(public::routes())
         .merge(realtime::routes())
 }

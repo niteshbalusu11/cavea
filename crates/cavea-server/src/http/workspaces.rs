@@ -4,17 +4,19 @@
 use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::routing::get;
+use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 use tracing::Instrument as _;
 
 use super::auth::{AdminKeyAuth, KeyKind, NewKey};
-use super::extract::{Json, Page, Query, check_text};
-use super::keys::{KeyView, key_columns};
+use super::extract::{Json, Page, Path, Query, check_text};
+use super::keys::{KeyRow, KeyView, key_columns};
 use super::{ApiError, AppState, Code, List};
 
 pub(super) fn routes() -> Router<AppState> {
-    Router::new().route("/v1/workspaces", get(list).post(create))
+    Router::new()
+        .route("/v1/workspaces", get(list).post(create))
+        .route("/v1/workspaces/{workspace}/keys", post(create_key))
 }
 
 #[derive(Debug, Serialize)]
@@ -171,4 +173,47 @@ async fn create(
             secret_key,
         }),
     ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateKey {
+    name: String,
+}
+
+const CREATE_KEY: &str = concat!(
+    "INSERT INTO api_keys (id, workspace_id, kind, prefix, hash, name)
+ SELECT gen_random_uuid(), w.id, 'secret', $2, $3, $4 FROM workspaces w WHERE w.id = $1::uuid
+ RETURNING ",
+    key_columns!("api_keys")
+);
+
+/// A new secret key for an existing workspace, shown only here: the
+/// operator's way back into a workspace whose keys are all lost (08 §11).
+async fn create_key(
+    _: AdminKeyAuth,
+    Path(workspace): Path<String>,
+    State(state): State<AppState>,
+    Json(body): Json<CreateKey>,
+) -> Result<(StatusCode, axum::Json<KeyView>), ApiError> {
+    let not_found = || {
+        ApiError::new(Code::NotFound)
+            .with_message("No such workspace.")
+            .with_detail("missing", "workspace")
+    };
+    let uuid = workspace_uuid(&workspace).ok_or_else(not_found)?;
+    check_text("name", &body.name)?;
+    let new = NewKey::generate(KeyKind::Secret)?;
+    let row: Option<KeyRow> = sqlx::query_as(CREATE_KEY)
+        .bind(uuid)
+        .bind(&new.prefix)
+        .bind(new.hash.as_slice())
+        .bind(&body.name)
+        .fetch_optional(&state.db)
+        .instrument(cavea_telemetry::db_span("create_key"))
+        .await?;
+    let view = KeyView::new(row.ok_or_else(not_found)?, Some(new.key))?;
+    cavea_telemetry::record_workspace(&workspace);
+    tracing::info!(key_id = %view.id, by = "admin", "api key created");
+    Ok((StatusCode::CREATED, axum::Json(view)))
 }

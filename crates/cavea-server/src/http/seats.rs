@@ -30,6 +30,7 @@ use tracing::Instrument as _;
 use super::auth::{Auth, PublishableKey, SecretKey, has_hex_tail, push_hex, sha256};
 use super::events::{Settings, archived};
 use super::extract::{Json, Path, check_object_count, invalid, invalid_field};
+use super::session::{self, Session};
 use super::{ApiError, AppState, Code};
 use crate::seats::{Chart, event_id};
 use crate::store::reply;
@@ -67,7 +68,7 @@ pub(super) fn token_hash(token: &str) -> TokenHash {
 
 /// RFC 3339 UTC to the second, from Unix milliseconds (civil-from-days, H.
 /// Hinnant).
-fn rfc3339(t: Timestamp) -> String {
+pub(super) fn rfc3339(t: Timestamp) -> String {
     let secs = t.0 / 1000;
     let (days, rem) = (secs / 86_400, secs % 86_400);
     let z = days.cast_signed() + 719_468;
@@ -93,7 +94,7 @@ fn rfc3339(t: Timestamp) -> String {
 pub(super) struct Target {
     pub(super) id: EventId,
     pub(super) key: String,
-    version: ChartVersionId,
+    pub(super) version: ChartVersionId,
     /// The pinned version's public hash.
     pub(super) hash: String,
     pub(super) archived: bool,
@@ -310,6 +311,22 @@ async fn submit(
         });
     }
     let target = target(state, auth, find).await?;
+    let idempotency = key.map(|k| Idempotency {
+        key: k.key,
+        fingerprint: k.fingerprint,
+        checked_at,
+    });
+    dispatch(state, auth, target, idempotency, build).await
+}
+
+/// Refuse an archived event, build the command and send it.
+async fn dispatch(
+    state: &AppState,
+    auth: &Auth,
+    target: Target,
+    idempotency: Option<Idempotency>,
+    build: impl FnOnce(&Target) -> Result<Command, ApiError>,
+) -> Result<Done, ApiError> {
     if target.archived {
         return Err(archived());
     }
@@ -318,11 +335,7 @@ async fn submit(
         actor: auth.actor(),
         authority: auth.authority(),
         command,
-        idempotency: key.map(|k| Idempotency {
-            key: k.key,
-            fingerprint: k.fingerprint,
-            checked_at,
-        }),
+        idempotency,
     };
     let reply = state.seats.registry.send(target.id, request).await;
     // The event could not be had (its chart included): nothing to render.
@@ -471,8 +484,8 @@ struct CreateToken {
     max_objects: Option<u32>,
 }
 
-/// Mint a hold token, register its hash with the event, and return the token,
-/// once. `limits` gives the lifetime and object limit for the event.
+/// Mint a hold token, register its hash with the event, bind it to the
+/// session's `sub` if there is one, and return the token, once.
 ///
 /// Not idempotent, so an `Idempotency-Key` is ignored (08 §6.1): the token is
 /// never stored, so a replay could not return it, and a retry costs nothing
@@ -480,22 +493,21 @@ struct CreateToken {
 async fn new_token(
     state: &AppState,
     auth: &Auth,
-    event: &str,
-    limits: impl FnOnce(&Target) -> Result<(u32, Option<u32>), ApiError>,
+    target: Target,
+    ttl_secs: u32,
+    max_objects: Option<u32>,
+    session: Option<&Session>,
 ) -> Result<Response, ApiError> {
     let mut bytes = [0; TOKEN_BYTES];
     getrandom::fill(&mut bytes).map_err(|e| ApiError::internal(e.to_string()))?;
     let mut token = String::from("ht_");
     push_hex(&mut token, &bytes);
     let hash = token_hash(&token);
-    let mut max_objects = None;
-    let done = submit(state, auth, Find::Key(event), None, |target| {
-        let (ttl_secs, max) = limits(target)?;
-        max_objects = max;
+    let done = dispatch(state, auth, target, None, |_| {
         Ok(Command::CreateHold {
             token: hash,
             ttl_secs,
-            max_objects: max,
+            max_objects,
         })
     })
     .await?;
@@ -506,6 +518,9 @@ async fn new_token(
         Ok(_) => return Err(ApiError::internal("unexpected reply to create_hold")),
         Err(f) => return Err(failure(&done.chart, f)),
     };
+    if let Some(session) = session {
+        session::bind(state, auth, &done.target, &hash, session).await?;
+    }
     let body = json!({
         "hold_token": token,
         "event": done.target.key,
@@ -526,11 +541,9 @@ async fn create_token(
     if body.max_objects.is_some_and(|m| m > MAX_OBJECTS) {
         return Err(invalid_field("max_objects", "must be at most 1,000,000"));
     }
-    new_token(&state, &auth, &body.event, |target| {
-        let ttl = body.ttl_seconds.unwrap_or(target.settings.hold_ttl());
-        Ok((ttl, body.max_objects))
-    })
-    .await
+    let target = target(&state, &auth, Find::Key(&body.event)).await?;
+    let ttl = body.ttl_seconds.unwrap_or(target.settings.hold_ttl());
+    new_token(&state, &auth, target, ttl, body.max_objects, None).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -543,24 +556,35 @@ struct PublicCreateToken {
 }
 
 /// A buyer's token: the event's hold lifetime, and an object limit no higher
-/// than the event's `max_objects` (02 §5).
+/// than the event's `max_objects` (02 §5) or the session's (08 §11). With a
+/// session, the token is bound to its `sub`, within the event's
+/// `max_tokens_per_sub`.
 async fn public_create_token(
     PublishableKey(auth): PublishableKey,
+    headers: HeaderMap,
     State(state): State<AppState>,
     Json(body): Json<PublicCreateToken>,
 ) -> Result<Response, ApiError> {
-    new_token(&state, &auth, &body.event, |target| {
-        let limit = target.settings.max_objects();
-        let max = body.max_objects.unwrap_or(limit);
-        if max == 0 || max > limit {
-            return Err(invalid_field(
-                "max_objects",
-                "must be 1 to the event's max_objects",
-            ));
-        }
-        Ok((target.settings.hold_ttl(), Some(max)))
-    })
-    .await
+    let target = target(&state, &auth, Find::Key(&body.event)).await?;
+    let session = session::verify(&state, &auth, &headers, &target).await?;
+    let limit = target.settings.max_objects().min(
+        session
+            .as_ref()
+            .and_then(|s| s.max_objects)
+            .unwrap_or(u32::MAX),
+    );
+    let max = body.max_objects.unwrap_or(limit);
+    if max == 0 || max > limit {
+        return Err(invalid_field(
+            "max_objects",
+            "must be 1 to the event's max_objects, and the session's",
+        ));
+    }
+    if let Some(session) = &session {
+        session::check_cap(&state, &auth, &target, session).await?;
+    }
+    let ttl = target.settings.hold_ttl();
+    new_token(&state, &auth, target, ttl, Some(max), session.as_ref()).await
 }
 
 fn no_token() -> ApiError {
@@ -723,10 +747,40 @@ async fn hold(
 async fn public_hold(
     PublishableKey(auth): PublishableKey,
     Path(event): Path<String>,
+    headers: HeaderMap,
     State(state): State<AppState>,
     Json(body): Json<HoldBody>,
 ) -> Result<Response, ApiError> {
-    hold_objects(&state, &auth, &event, None, &body).await
+    let target = public_target(&state, &auth, &event, &headers, &body.hold_token).await?;
+    respond(
+        dispatch(&state, &auth, target, None, |target| {
+            hold_command(target, &body)
+        })
+        .await?,
+    )
+}
+
+/// The event of a buyer's hold or release, once its session is verified (or
+/// not required) and the hold token may be used with it.
+async fn public_target(
+    state: &AppState,
+    auth: &Auth,
+    event: &str,
+    headers: &HeaderMap,
+    hold_token: &str,
+) -> Result<Target, ApiError> {
+    let target = target(state, auth, Find::Key(event)).await?;
+    let session = session::verify(state, auth, headers, &target).await?;
+    let hash = token_hash(hold_token);
+    session::check_binding(state, auth, &target, &hash, session.as_ref()).await?;
+    Ok(target)
+}
+
+fn hold_command(target: &Target, body: &HoldBody) -> Result<Command, ApiError> {
+    Ok(Command::Hold {
+        token: token_hash(&body.hold_token),
+        objects: body.objects.refs(target)?,
+    })
 }
 
 async fn hold_objects(
@@ -737,10 +791,7 @@ async fn hold_objects(
     body: &HoldBody,
 ) -> Result<Response, ApiError> {
     let done = submit(state, auth, Find::Key(event), key, |target| {
-        Ok(Command::Hold {
-            token: token_hash(&body.hold_token),
-            objects: body.objects.refs(target)?,
-        })
+        hold_command(target, body)
     })
     .await?;
     respond(done)
@@ -780,14 +831,21 @@ struct PublicReleaseBody {
 async fn public_release(
     PublishableKey(auth): PublishableKey,
     Path(event): Path<String>,
+    headers: HeaderMap,
     State(state): State<AppState>,
     Json(body): Json<PublicReleaseBody>,
 ) -> Result<Response, ApiError> {
+    let target = public_target(&state, &auth, &event, &headers, &body.hold_token).await?;
     let body = ReleaseBody {
         hold_token: Some(body.hold_token),
         objects: body.objects,
     };
-    release_objects(&state, &auth, &event, None, &body).await
+    respond(
+        dispatch(&state, &auth, target, None, |target| {
+            release_command(target, &body)
+        })
+        .await?,
+    )
 }
 
 async fn release_objects(
@@ -798,29 +856,33 @@ async fn release_objects(
     body: &ReleaseBody,
 ) -> Result<Response, ApiError> {
     let done = submit(state, auth, Find::Key(event), key, |target| {
-        Ok(match &body.hold_token {
-            // An empty list releases nothing; leaving it out releases all.
-            Some(_) if body.objects.as_ref().is_some_and(Objects::is_empty) => {
-                return Err(invalid_field(
-                    "objects",
-                    "must not be empty; leave it out to release all",
-                ));
-            }
-            Some(token) => Command::Release {
-                token: token_hash(token),
-                objects: optional_refs(body.objects.as_ref(), target)?,
-            },
-            None => Command::ReleaseBooked {
-                objects: body
-                    .objects
-                    .as_ref()
-                    .ok_or_else(|| invalid_field("objects", "is required without `hold_token`"))?
-                    .refs(target)?,
-            },
-        })
+        release_command(target, body)
     })
     .await?;
     respond(done)
+}
+
+fn release_command(target: &Target, body: &ReleaseBody) -> Result<Command, ApiError> {
+    Ok(match &body.hold_token {
+        // An empty list releases nothing; leaving it out releases all.
+        Some(_) if body.objects.as_ref().is_some_and(Objects::is_empty) => {
+            return Err(invalid_field(
+                "objects",
+                "must not be empty; leave it out to release all",
+            ));
+        }
+        Some(token) => Command::Release {
+            token: token_hash(token),
+            objects: optional_refs(body.objects.as_ref(), target)?,
+        },
+        None => Command::ReleaseBooked {
+            objects: body
+                .objects
+                .as_ref()
+                .ok_or_else(|| invalid_field("objects", "is required without `hold_token`"))?
+                .refs(target)?,
+        },
+    })
 }
 
 #[derive(Debug, Deserialize)]

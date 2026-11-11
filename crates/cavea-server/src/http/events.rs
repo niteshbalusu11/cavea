@@ -31,6 +31,10 @@ pub(super) const DEFAULT_HOLD_TTL: u32 = 900;
 pub(super) const DEFAULT_MAX_OBJECTS: u32 = 10;
 /// The highest per-token object limit an event may set for publishable keys.
 const MAX_MAX_OBJECTS: u32 = 100;
+/// Default live hold tokens one session `sub` may have on an event (08 §11).
+const DEFAULT_TOKENS_PER_SUB: u32 = 2;
+/// The highest `max_tokens_per_sub` an event may set.
+const MAX_TOKENS_PER_SUB: u32 = 10;
 
 /// An event's settings as stored: only what the customer set. A field left
 /// out takes its default.
@@ -41,6 +45,10 @@ pub(super) struct Settings {
     hold_ttl_seconds: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_objects: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    require_session: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens_per_sub: Option<u32>,
 }
 
 impl Settings {
@@ -58,6 +66,16 @@ impl Settings {
         self.max_objects.unwrap_or(DEFAULT_MAX_OBJECTS)
     }
 
+    /// Whether the public hold routes require a session token (08 §11).
+    pub(super) fn require_session(self) -> bool {
+        self.require_session.unwrap_or(false)
+    }
+
+    /// How many live public hold tokens one session `sub` may have.
+    pub(super) fn max_tokens_per_sub(self) -> u32 {
+        self.max_tokens_per_sub.unwrap_or(DEFAULT_TOKENS_PER_SUB)
+    }
+
     fn check(self) -> Result<Self, ApiError> {
         let ttl = cavea_engine::limits::MIN_HOLD_TTL_SECS..=cavea_engine::limits::MAX_HOLD_TTL_SECS;
         if !ttl.contains(&self.hold_ttl()) {
@@ -72,6 +90,12 @@ impl Settings {
         {
             return Err(invalid_field("settings.max_objects", "must be 1 to 100"));
         }
+        if !(1..=MAX_TOKENS_PER_SUB).contains(&self.max_tokens_per_sub()) {
+            return Err(invalid_field(
+                "settings.max_tokens_per_sub",
+                "must be 1 to 10",
+            ));
+        }
         Ok(self)
     }
 
@@ -80,6 +104,8 @@ impl Settings {
         json!({
             "hold_ttl_seconds": self.hold_ttl(),
             "max_objects": self.max_objects(),
+            "require_session": self.require_session(),
+            "max_tokens_per_sub": self.max_tokens_per_sub(),
         })
     }
 }

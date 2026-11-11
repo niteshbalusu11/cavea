@@ -169,7 +169,7 @@ A batch carries the net effect of its commands as of its last one: each object a
 - **Readers** share the event's `Feed`: the current snapshot, the ring buffer and the committed holds sit behind one `std::sync::RwLock` that the actor takes for writing only to swap in a publication (an `Arc` swap, a push onto the ring buffer, and one map update per touched token), and readers take only to clone `Arc`s; neither holds it across an await, and no bytes are copied per reader. HTTP handlers read the snapshot without sending a message to the actor. Encoding happens before the lock is taken.
 - **Deltas:** encoded once per publication and broadcast as shared bytes on a `tokio::sync::broadcast` channel of 64 publications. No per-subscriber encoding.
 - **Ring buffer:** the published deltas of the last 60 seconds, at most 4 MiB of frames per event; older frames, then the oldest beyond 4 MiB, are dropped when a delta is published or, while none is, at the actor's idle check. A reload starts with an empty buffer.
-- **Object details and reports:** `Inspect` commands for live data; SQL for historical data.
+- **Object details and reports:** the objects query (§6.2) reads committed rows, as the event's counts do; `Inspect` (§4.2) is not built. Reports are SQL.
 
 ### 4.6 Failure
 
@@ -444,6 +444,8 @@ CREATE TABLE audit_log (
 
 Migration 2 adds `chart_versions.full_hash bytea NOT NULL` (16 bytes, the full artefact's content hash), replaces `UNIQUE (chart_id, hash)` with `UNIQUE (chart_id, full_hash)`, and indexes `hash`, by which the public chart route finds a file (§6.2).
 
+Migration 3 indexes `holds (event_id, session_sub) WHERE session_sub IS NOT NULL`, for the per-`sub` token cap (§11). `holds.session_sub` holds the SHA-256 of a session token's `sub` as 64 hex digits, never the `sub` itself; the server writes it, the engine never reads it.
+
 The `SeatStore` trait hides all of this from the engine: `acquire`, `load_event`, `commit_batch`, `heartbeat`, `release`. A store speaks for one node. Tests use an in-memory implementation with fault injection, whose leases follow the injected clock.
 
 ## 6. REST API
@@ -488,7 +490,7 @@ Secret key unless marked.
 - **Draft etag:** an opaque string such as `"3"` (the quotes are part of it, as in an HTTP entity tag), which changes on every save. Pass it back verbatim in `If-Match`. `If-Match: *` matches any draft. Any other form, or a weak tag, is `400` (`reason: "if_match"`).
 - **Saving a draft:** a missing `If-Match` is `400` (`reason: "if_match"`): a caller that means to overwrite whatever is there says so with `*`. A stale etag is `409 version_conflict` with the current `draft_etag` in `details`. The body is at most 16 MiB (a create body 16 MiB and 4 KiB): 27 times a parametric document at the design limit of 1,000,000 objects (02 §14; 600 KB measured), or about 16 bytes of per-seat data per object. A draft must parse as a chart document of a schema the server reads (unknown fields refused, 03 §2) and may not hold `\u0000`, which PostgreSQL `jsonb` cannot store; otherwise `400` with `reason: "document"` and the parser's message. It need not validate: the designer saves work in progress. Parsing runs on a blocking thread. The draft is stored as uploaded, as `jsonb` (03 §2.8), and read back in `jsonb`'s canonical form.
 - **Creating:** without `document`, the draft is `{"schema": 1, "name": <name>, "nextOid": 1}`. A key already used in the workspace, by an archived chart too, is `409 already_exists`.
-- **Validate:** `200` with `{draft_etag, valid, findings, stats}`. Each finding is `{code, severity, node, message}`: `code` is an E or W code of 03 §3.2, or `unsupported` for a node the compiler cannot compile yet; `severity` is `error` or `warning`; `node` is the node id, or `null` for findings about settings, categories and floors. `valid` is true when no finding is an error. `stats` is `null` when the draft did not compile.
+- **Validate:** `200` with `{draft_etag, valid, findings, stats}`. Each finding is the compiler's documented form (03 §3.2), `{code, severity, node, related, message}`: `code` is an E or W code of 03 §3.2, or `unsupported` for a node the compiler cannot compile yet; `severity` is `error` or `warning`; `node` is the node id, or `null` for findings about settings, categories and floors; `related` is the other node involved, or `null`; `message` is a short English sentence. `valid` is true when no finding is an error. `stats` is `null` when the draft did not compile.
 - **Publish:** compiles the draft as it is at the request. With `If-Match`, a draft whose etag differs is `409 version_conflict` before anything is compiled. Findings of error severity refuse it: `422 chart_invalid` with `details.findings` as above. Otherwise, in one transaction with the chart row locked, the server stores a new immutable version (02 INV-12): the next number, the public and full content hashes, the draft as `source`, the public artefact, its brotli form, the full artefact and `stats`; and points the chart's published version at it. A draft saved while the compile ran makes the publish `409 version_conflict`, and an archive while it ran `400` (`reason: "archived"`), creating nothing: a version is always the draft that was current when it was stored. Publishes racing on one chart are serialised by the row lock.
 - **Unchanged publish:** versions are identified by the full artefact's hash, which covers every compiled field. A draft that compiles to a version the chart already has publishes that version again: `200` with it, no new row, and the chart's published version points at it (so republishing an older draft goes back to its version). Two versions may share a public hash when they differ only in full-only data (`oid`s, ranks, section priorities, 03 §4.2); they then share one public file.
 - **Compile bounds:** validate and publish compile on blocking threads, at most two at once per node; others wait their turn. A request waits at most 60 s for its compile, its turn included, else `503 overloaded` (`reason: "compile_timeout"`); a compile still running keeps its turn until it ends, so compiles never take more than two threads. The work itself is bounded by the draft size limit and by the compiler's limits, checked before expansion allocates (02 §14). Measured locally (AMD Ryzen 9 7900X, release build): compiling 100,000 seats takes 54 ms and brotli 0.5 s; 1,000,000 seats 0.5 s and 4.6 s.
@@ -499,7 +501,7 @@ Secret key unless marked.
 
 - **Event object:** `{key, name, chart, version, settings, archived_at, created_at}`, plus `counts` from `GET /v1/events/{event}` only. `chart` is the chart's key; `version` is the pinned version object, whose `url` is the public chart file; `name` may be `null`.
 - **Creating:** the event pins one immutable version (D-11): the chart's published version, or `version` (a version number of that chart). An unknown chart is `404` (`missing: "chart"`), an unknown version number `404` (`missing: "version"`), a chart with no published version and no `version` `400` (`reason: "unpublished"`), an archived chart `400` (`reason: "archived"`), whatever the version. A key already used in the workspace, by an archived event too, is `409 already_exists`.
-- **Settings:** `hold_ttl_seconds` (60 to 7,200, default 900): the lifetime of a hold token created or extended without `ttl_seconds`; `max_objects` (1 to 100, default 10): the per-token object limit for publishable keys (02 §5). Unknown fields are refused. The stored settings are what was set; responses show every setting with its effective value. `PATCH` changes what it is given: `name` (`null` clears it) and the whole `settings` object (a setting left out goes back to its default); new settings apply to tokens created or extended afterwards.
+- **Settings:** `hold_ttl_seconds` (60 to 7,200, default 900): the lifetime of a hold token created or extended without `ttl_seconds`; `max_objects` (1 to 100, default 10): the per-token object limit for publishable keys (02 §5); `require_session` (boolean, default false): the public hold-token, hold and release routes require a session token (§11); `max_tokens_per_sub` (1 to 10, default 2): the live public hold tokens one session `sub` may have on the event (§11). There is no server-wide default lifetime: an event's effective settings never change with the server's configuration. Unknown fields are refused. The stored settings are what was set; responses show every setting with its effective value. `PATCH` changes what it is given: `name` (`null` clears it) and the whole `settings` object (a setting left out goes back to its default); new settings apply to tokens created or extended afterwards.
 - **Counts:** `{free, held, booked, blocked, custom: {"<code>": n}}`, from the committed rows of `object_state`; free is the version's object count less the rest. Committed state is exactly what was acknowledged, and reading it does not load the event's actor (there is no read command yet). A hold past its expiry counts as held until its expiry commits, at once for a loaded event. The list has no counts: they cost a scan per event.
 - **Archive:** sets `archived_at`; archiving again returns the event unchanged. An archived event is read-only: seat operations, token creation, extension and release, and `PATCH` are `400` (`reason: "archived"`); reads still work. Outstanding holds are left to expire on schedule (they are at most 2 hours long), bookings stay, and the loaded actor evicts itself once it holds nothing (§4.7). A command checked before the archive committed may still apply. The key stays taken.
 **Events**
@@ -538,6 +540,11 @@ Seat rules (secret-key routes; the public ones follow the public table):
 - **Objects:** an array of labels, or `{"version": "<hash>", "idx": [..]}` with the public hash of the event's pinned version; another hash is `409 version_conflict` with the pinned hash in `details.version`. At most 1,000.
 - **Requests and replies:** `hold` takes `{hold_token, objects}` and returns `{seq, expires_at, objects}`; `release` takes `{hold_token, objects?}` (held objects, all of the token's when `objects` is left out; an empty list is `invalid_field`) or `{objects}` without a token (booked objects); `book` takes `{hold_token?, objects?, order_ref, ticket_types?, extra?}` (with a token, all of the token's objects when `objects` is left out; an empty list is `invalid_field`), where `ticket_types` and `extra` are maps keyed by label and each `extra` value must be a JSON object (stored as sent); `change-status` takes `{objects, status}`. Each returns `{seq, objects}` but `hold`. `objects` in a reply is `[{label, oid}]` in `idx` order; refusals list failing objects as `{label, oid, reason}`.
 - **Status wire form:** `"free"`, `"blocked"`, or a custom status code as a number from 4 to 15 (custom status names per workspace come later). `"held"` and `"booked"` are refused by the engine (`bad_status`), anything else is `invalid_field`.
+- **Objects query:** `GET /v1/events/{event}/objects` answers in one of two ways.
+  - **By label:** `?label=A&label=B…` (repeated; percent-encoded; at most 1,000, else `too_many_objects`) returns `{data, unknown}`: `data` holds each named object once, in `idx` order; `unknown` lists, once each, the labels the event's chart version does not have. `label` cannot be combined with `status`, `limit` or `after`.
+  - **A page:** `?status=&limit=&after=` returns `{data, next}` in `idx` order. `status` is `free`, `held`, `booked`, `blocked` or a custom code (4 to 15); left out, every object. `limit` is 1 to 100 (default 100). `next` is the label of the last object the page looked at while the chart goes on, else `null`; pass it back as `after` (an `after` that is not a label of the chart is `reason: "query"`). A page looks at no more than 10,000 objects after `after`, so a page of a rare status may hold fewer than `limit` objects, or none, with a `next` to continue from; following `next` until it is `null` visits every object of the status exactly once. Each page is one query for the committed rows of the objects it looks at: free objects have no row, so the chart gives the order and the labels.
+  - **An object** is `{label, oid, status}`, `status` in the wire form above plus `"held"` and `"booked"`. An object that is not free adds `seq`, the `seq` of the command that last changed it; a held one adds `expires_at` (never its hold token or the token's hash); a booked one adds `order_ref`, `ticket_type` and `extra` (`null` when none was given; `extra` as stored, byte for byte). These go to a secret key, which wrote them, and never to a log.
+  - **Freshness:** read from committed rows (`object_state`, `holds`), not the live actor (the engine has no read command, §4.2), and without loading the event. A command acknowledged before the query began is visible; one acknowledged during it may or may not be; a hold past its expiry shows as held until its expiry commits, at once for a loaded event. The pages of one walk are separate reads, so an object that changes between two pages appears as it was when its page was read. Unknown query parameters, repeated ones and a malformed `status` or `limit` are `reason: "query"`.
 
 **Reports and log**
 
@@ -558,6 +565,7 @@ Seat rules (secret-key routes; the public ones follow the public table):
 | `GET /v1/webhooks/{id}/deliveries`, `POST …/deliveries/{id}/replay` | Delivery log |
 | `GET /v1/workspaces` | List workspaces. Admin key |
 | `POST /v1/workspaces` | Create (`key`, `name`); `201` with the workspace and its first secret key, shown only here. Admin key |
+| `POST /v1/workspaces/{workspace}/keys` | Mint a secret key (`name`) for an existing workspace; `201` with the key object, the key shown only here. An unknown or malformed `ws_…` id is `404` (`missing: "workspace"`). Admin key |
 | `POST /v1/embed-tokens` | Short-lived token for the embedded designer or manager |
 
 **Public (publishable key, CORS enabled)**
@@ -580,11 +588,12 @@ Seat rules (secret-key routes; the public ones follow the public table):
 
 Public rules (publishable key; SRV-015 built the event, hold-token, hold and release routes, RT-003 to RT-010 `state`, `stream` and `rt`; `best-available`, `sections`, `rows` and `assets` arrive with best-available, the list view and asset upload):
 
-- **Event:** `GET /v1/public/events/{event}` returns `{event, chart: {hash, url}, hold_ttl_seconds, max_objects}`: the pinned version's public hash and file (above), the lifetime of a buyer's token, and the object limit of a buyer's token, which is also the maximum-selection rule (02 §12). Nothing else: no name, counts, settings beyond these, or anything of the backend's. `Cache-Control: private, max-age=30` and `Vary: Authorization`: the buyer's browser keeps it across page loads, per key; a shared cache must not, since the answer depends on the credential (another workspace's key names another event by the same key). An archived event is still described; its seat routes are `400 archived`.
-- **Hold tokens:** `POST /v1/public/hold-tokens` takes `{event, max_objects?}` and returns `201` with `{hold_token, event, seq, expires_at, max_objects}`. The lifetime is the event's `hold_ttl_seconds` (no `ttl_seconds`: unknown fields are refused). `max_objects` defaults to the event's and may lower it; above it, or 0, is `invalid_field`. Buyers cannot extend: a stalled checkout is the backend's to extend.
-- **Hold and release:** `POST /v1/public/events/{event}/hold` takes `{hold_token, objects}`, `…/release` takes `{hold_token, objects?}`; replies and refusals as on the secret routes. They are issued with publishable authority, so the engine refuses a booked object (INV-3) and anything but hold and release with a token; a release without `hold_token` is `400`. The token's object limit is the key-configured policy, fixed at creation; a token the backend created and handed to the browser (`session: "continue"`) keeps the limit the backend gave it.
+- **Event:** `GET /v1/public/events/{event}` returns `{event, chart: {hash, url}, hold_ttl_seconds, max_objects, require_session}`: the pinned version's public hash and file (above), the lifetime of a buyer's token, the object limit of a buyer's token, which is also the maximum-selection rule (02 §12), and whether holding needs a session token, so that the SDK asks the host page for one before the buyer's first tap. Nothing else: no name, counts, settings beyond these, or anything of the backend's. `Cache-Control: private, max-age=30` and `Vary: Authorization`: the buyer's browser keeps it across page loads, per key; a shared cache must not, since the answer depends on the credential (another workspace's key names another event by the same key). An archived event is still described; its seat routes are `400 archived`.
+- **Hold tokens:** `POST /v1/public/hold-tokens` takes `{event, max_objects?}` and returns `201` with `{hold_token, event, seq, expires_at, max_objects}`. The lifetime is the event's `hold_ttl_seconds` (no `ttl_seconds`: unknown fields are refused). `max_objects` defaults to the lower of the event's and the session token's (§11) and may lower it further; above it, or 0, is `invalid_field`. With a session token the new token is bound to its `sub`, within the event's `max_tokens_per_sub` (§11). Buyers cannot extend: a stalled checkout is the backend's to extend.
+- **Hold and release:** `POST /v1/public/events/{event}/hold` takes `{hold_token, objects}`, `…/release` takes `{hold_token, objects?}`; replies and refusals as on the secret routes. A hold token bound to a `sub` is refused (`403`, `reason: "session"`) without a session token of that `sub` (§11). They are issued with publishable authority, so the engine refuses a booked object (INV-3) and anything but hold and release with a token; a release without `hold_token` is `400`. The token's object limit is the key-configured policy, fixed at creation; a token the backend created and handed to the browser (`session: "continue"`) keeps the limit the backend gave it.
 - **The token after a reload:** `GET /v1/public/hold-tokens/current` with the token in `Cavea-Hold-Token` returns `{event, expires_at, max_objects, objects}` as committed (`Cache-Control: no-store`), for `selection.restore` (05 §4). A missing or malformed header, an unknown or expired token and another workspace's are all `404` (`missing: "hold_token"`).
 - **Where the buyer's token travels:** in the JSON body or the `Cavea-Hold-Token` header, never in a URL. Public requests cross the open internet and the customer's CDN and proxies, which log URLs; the secret-key routes, called by the customer's backend, keep the token in the path and the server logs only route templates there.
+- **Session tokens** travel in the `Cavea-Session` header of hold-token creation, hold and release (§11), never in a URL. An event with `require_session` refuses those three without one (`401`); any event verifies one that is sent. `hold-tokens/current` and the realtime routes take none.
 - **Idempotency:** public routes take no `Idempotency-Key` (§6.1).
 - **Realtime routes** (`state`, `stream`, `rt`) take the publishable key in the `key` query parameter, not in `Authorization` (D-31): `WebSocket` and `EventSource` cannot set headers, and the snapshot must be cacheable by URL (§8.5). The key is checked as everywhere else: unknown or revoked `401`, another kind `403`, an `Origin` off its allow-list `403`. A secret key in a URL is refused like any wrong kind, and query strings are never logged. The hold token never goes in these URLs either: it travels inside SUBSCRIBE (§8.2).
 
@@ -708,10 +717,28 @@ Refused (nothing was published):
 
 ```json
 { "code": "chart_invalid", "status": 422, "message": "The chart has validation errors.",
-  "details": { "findings": [ { "code": "E007", "severity": "error", "node": 12,
-                               "message": "E007 node 12: unknown category \"vip\"" } ] },
+  "details": { "findings": [ { "code": "E007", "severity": "error", "node": 12, "related": null,
+                               "message": "unknown category \"vip\"" } ] },
   "request_id": "req_6ad9b530f0e172e7214232f15266b459" }
 ```
+
+Objects (fake order reference):
+
+```http
+GET /v1/events/hamlet-2027-03-14/objects?label=Orchestra-C-12&label=Orchestra-C-13&label=Orchestra-Z-99
+Authorization: Bearer sk_…
+```
+
+```json
+{ "data": [
+    { "label": "Orchestra-C-12", "oid": 4112, "status": "booked", "seq": 48230,
+      "order_ref": "77120", "ticket_type": "adult", "extra": null },
+    { "label": "Orchestra-C-13", "oid": 4113, "status": "held", "seq": 48211,
+      "expires_at": "2027-03-01T19:15:00Z" } ],
+  "unknown": [ "Orchestra-Z-99" ] }
+```
+
+`GET /v1/events/hamlet-2027-03-14/objects?status=free&limit=2` returns `{"data": [{"label": "Orchestra-A-1", "oid": 4001, "status": "free"}, {"label": "Orchestra-A-2", "oid": 4002, "status": "free"}], "next": "Orchestra-A-2"}`; the next page is `…&after=Orchestra-A-2`.
 
 ### 6.4 Error codes
 
@@ -729,7 +756,7 @@ Refused (nothing was published):
 | 409 | `upgrade_conflict` | Non-free objects missing from the new chart version |
 | 409 | `idempotency_mismatch` | Key reused with a different body |
 | 410 | `hold_token_expired` | Not returned by the actor, which deletes an expired token before processing any command at or after its expiry (§7.3); the token is then `not_found` |
-| 422 | `hold_limit_exceeded` | Over the token's object limit |
+| 422 | `hold_limit_exceeded` | Over the token's object limit; or, creating a public hold token, the session's `sub` already has the event's `max_tokens_per_sub` live tokens (§11) |
 | 422 | `channel_not_allowed` | |
 | 422 | `orphan_rule_violated` | |
 | 422 | `not_enough_objects` | Best-available could not satisfy the request |
@@ -756,7 +783,8 @@ Every error is `application/problem+json` with exactly these members:
 - `request_id` equals the `Cavea-Request-Id` header.
 - An unknown path, and a known path with the wrong method, are `404 not_found`. A body that is not JSON, lacks `Content-Type: application/json`, does not match the expected shape, is over the size limit or nests too deeply is `400 invalid_request` with `details.reason` one of `json_syntax`, `content_type`, `json_data`, `body_too_large`, `json_depth` (with `limit`), `body_unreadable`. A malformed path parameter is `reason: "path"`, a malformed query parameter or cursor `reason: "query"`, an invalid body field `reason: "invalid_field"` with `field`, and too many objects `reason: "too_many_objects"`. For charts: a missing or malformed `If-Match` is `reason: "if_match"`, a draft that is not a storable chart document `reason: "document"`, and a change to an archived chart `reason: "archived"`. An identifier in the path that cannot exist, or belongs to another workspace, is `404`.
 - An invalid `Idempotency-Key` is `400 invalid_request` with `reason: "idempotency_key"`.
-- `401 unauthorized` has `details.reason`: `missing` (no `Authorization`), `malformed` (not `Bearer <token>`), `invalid` (unknown or revoked key, or not the admin key). `403 forbidden` from authentication has `reason`: `key_kind` (the wrong kind of credential for the route), `origin` (§11), or `self_revocation`.
+- `401 unauthorized` has `details.reason`: `missing` (no `Authorization`), `malformed` (not `Bearer <token>`), `invalid` (unknown or revoked key, or not the admin key), or `session_token` with `details.session` one of `missing`, `invalid`, `expired`, `event` (§11). `403 forbidden` from authentication has `reason`: `key_kind` (the wrong kind of credential for the route), `origin` (§11), `self_revocation`, or `session` (a hold token bound to another `sub`, or used without a session, §11).
+- `hold_limit_exceeded` for the per-`sub` cap has `reason: "tokens_per_sub"` and `limit`.
 - `503 overloaded` carries `Retry-After: 1`.
 
 ## 7. Algorithms
@@ -861,7 +889,7 @@ The server picks the encoding with the smallest state, ties going to the lower n
 
 | Type | Name | Layout |
 |---|---|---|
-| `0x10` | SUBSCRIBE | `u8` version · `bytes(512)` event key (UTF-8 of at most 128 characters, `02-domain-model.md` §3) · `v64` last `seq` seen (0 if none) · `opt bytes(256)` hold token · `opt bytes(256)` session token |
+| `0x10` | SUBSCRIBE | `u8` version · `bytes(512)` event key (UTF-8 of at most 128 characters, `02-domain-model.md` §3) · `v64` last `seq` seen (0 if none) · `opt bytes(256)` hold token · `opt bytes(1024)` session token |
 | `0x11` | PONG | `v64` nonce, echoing the PING's |
 
 Tokens are opaque bytes; a present token may be empty.
@@ -872,8 +900,8 @@ Tokens are opaque bytes; a present token may be empty.
 - **SUBSCRIBE first.** The client's first message must be SUBSCRIBE, within 10 s of the upgrade; otherwise the connection is closed without a frame. Before it, PONG, text or a frame that does not decode is CLOSE 6; version 0 is CLOSE 4; unknown frame types are skipped (§8.6).
 - **The event.** SUBSCRIBE's event key is looked up in the key's workspace: another workspace's event and an unknown one are both CLOSE 5. An archived event is CLOSE 1.
 - **The hold token** in SUBSCRIBE (inside the connection, never in the URL) must be a live hold of that event, in that workspace, with an object limit of 1 to 100: every buyer's token is (the event's `max_objects` is at most 100, §6.2), and the renderer refuses a PRIVATE set of more than 100 objects. Anything else (unknown, expired, another event's or workspace's, or a secret-key token without a limit or above 100) is CLOSE 5, the same frame as an unknown event, so nothing tells which. A backend that hands a browser its own token (`session: "continue"`) creates it with `max_objects`.
-- **The session token** is ignored until session tokens exist (SRV-016).
-- **After SUBSCRIBE** the client sends only PONG. A second SUBSCRIBE, text, a frame that does not decode, more than 10 messages between two PINGs, or a message over 2 KiB (SUBSCRIBE with both tokens at their limits is under 1,100 bytes) is CLOSE 6 and the connection is closed.
+- **The session token** (a JWT, §11) is decoded and bounded, and not verified: no public stream depends on a session, so following an event needs none, also with `require_session` (§11). Channel streams (§8.3) will verify it and compute the stream from its `channels`.
+- **After SUBSCRIBE** the client sends only PONG. A second SUBSCRIBE, text, a frame that does not decode, more than 10 messages between two PINGs, or a message over 2 KiB (SUBSCRIBE with every field at its limit is 1,812 bytes) is CLOSE 6 and the connection is closed.
 
 ### 8.3 Behaviour
 
@@ -981,11 +1009,11 @@ Live reports read the actor. CSV exports stream from PostgreSQL.
 | Admin key | Platform operator | Create and list workspaces |
 | Secret key | Customer backend | Everything in one workspace |
 | Publishable key | Browser, mobile app | Public endpoints of one workspace; optional origin allow-list |
-| Session token | Buyer's browser | A JWT signed by the customer's backend with a secret key (HS256). Claims: `sub`, `exp`, `event`, `max_objects`, `channels` |
+| Session token | Buyer's browser | A JWT the customer's backend signs with a secret key (HS256, `kid` the key's id) for one buyer and one event. Claims: `sub`, `exp`, `event`, `max_objects`, `channels` (below) |
 | Console session | Staff | Cookie session; role per workspace |
 | Embed token | Embedded designer or manager | Short-lived, scoped to one workspace and one chart or event, with a permission list |
 
-- Session tokens are optional. An event can require them (`require_session: true`), which is the strongest defence against anonymous seat hoarding.
+- Session tokens are optional. An event can require them (`require_session: true`), which is the strongest defence against anonymous seat hoarding (12 §3 T1).
 - Every query is scoped by workspace id taken from the credential, never from the request. In the server the workspace id is obtainable only from an authenticated key (`http::Auth`). The one exception is the compiled chart route, which takes no credential and finds a public file by its content hash alone (§6.2).
 
 API keys:
@@ -997,11 +1025,43 @@ API keys:
 - A key may not revoke itself (`403`, `reason: "self_revocation"`). Every revocation is made by another unrevoked secret key, serialised per workspace, so a workspace always keeps at least one secret key.
 - Origin allow-list (publishable keys, 12 T3): up to 50 origins such as `https://tickets.example.com`, compared without regard to case. A request whose `Origin` is not on the list, `null` included, is `403` (`reason: "origin"`). A request without `Origin` is accepted: native apps send none, and a non-browser client can send any `Origin` it likes, so refusing it would stop no attacker. A key without a list accepts every origin.
 
+Session tokens (`DECISIONS.md` D-34):
+
+- **What it is.** A compact JWS (RFC 7515): `base64url(header) "." base64url(payload) "." base64url(signature)`, base64url without padding, header and payload JSON. The customer's backend mints one when its buyer opens the seat picker, and the browser sends it with every public hold call.
+- **Header.** `alg` exactly `"HS256"`; `kid` the id (`key_…`) of a secret key of the workspace; `typ` and other fields are ignored, except `crit`, which is refused (no extension is understood).
+- **Signing key.** HMAC-SHA-256 keyed with the secret key, as every JWT library does with an HS256 secret: `HMAC(sk_…, header "." payload)`. A secret key is 67 bytes, longer than SHA-256's 64-byte block, so HMAC hashes it first (RFC 2104 §2): signing with the key text is exactly signing with its 32-byte SHA-256, which is what the server stores (`api_keys.hash`) and verifies with. A backend may hold either. Signing with the SHA-256 as 64 hex characters is a different key and fails. The key must be live: a revoked key's tokens stop verifying at once; rotation is signing with the new key's id.
+- **Claims.** `sub` (required): the customer's identifier for the buyer, 1 to 128 characters, opaque to Cavea. `exp` (required): seconds since the Unix epoch, a whole number; accepted until 30 s after it by the server clock, for clock skew. `event` (required): the event key, exactly. `max_objects` (optional): a positive integer; a hold token created with the session holds at most the lower of it and the event's `max_objects`. `channels` (optional): a list of channel keys, each 1 to 128 characters; it is checked for shape and has no effect until channels exist (02 §7), when it will be the only source of a buyer's channels. Unknown claims (`iat`, `nbf`, `jti`, …) are ignored, a repeated claim is refused. The whole token is at most 1,024 bytes.
+- **Verification.** The token is split and decoded; the header must name `HS256` and a `kid`; the key is looked up among the live secret keys of the publishable key's workspace (never a workspace the token names); one HMAC-SHA-256 is computed (with a dummy key if there is none, so the work is the same) and compared in constant time; then the claims are checked. `none` and every other algorithm fail by construction: no other code path exists.
+- **Refusals** are `401 unauthorized`, `reason: "session_token"`, with `details.session`: `missing` (the event requires one and none was sent), `invalid` (anything wrong up to and including the signature: structure, base64, JSON, algorithm, an unknown, revoked, publishable or other workspace's `kid`, a bad signature; or, once signed, claims of the wrong shape), `expired` and `event`. `expired` and `event` are told only for a correctly signed token, so they help the integrator, who signed it; nobody else learns whether a `kid` exists, or anything about a token they could not sign.
+- **Carriers.** The `Cavea-Session` request header on `POST /v1/public/hold-tokens`, `POST /v1/public/events/{event}/hold` and `…/release`, and SUBSCRIBE's session field on the WebSocket (§8.2). Never a URL: SSE, the snapshot and polling take none.
+- **`require_session`.** With it, those three routes refuse a request without a valid session token (`401`). Without it, a session token sent is still verified (an invalid one is `401`, not ignored) and still binds the hold token it creates. Secret-key routes never take one.
+- **What realtime requires.** Nothing: no transport (WebSocket, SSE, snapshot, polling) requires or reads a session token. A public stream reveals only which seats are unavailable (D-12), the snapshot is cached by URL at a CDN (D-31) and cannot depend on a header, and the purpose of session tokens is to stop anonymous holding, which the hold routes enforce. PRIVATE frames follow the hold token alone, as `hold-tokens/current` does.
+- **The `sub` binding** (12 §3 T2). A hold token created with a session is bound to the session's `sub`: hold and release with it are refused (`403`, `reason: "session"`) without a session token of the same `sub`. A token created without one (by the backend, or on an event without sessions) is bound to nothing and may be used with any valid session. The engine's `CreateHold` does not carry the `sub`; the server writes it: after the actor has committed the hold and before the token is returned, it sets `holds.session_sub` in its own transaction, and it never changes. Nobody can use the token in between, because only the server has seen it. If the binding fails, the token is never returned; the hold holds nothing and expires. The binding is read before each public hold or release, without a race, since it is written before the token exists for anyone and never changes.
+- **A cap per `sub`** (12 §3 T1). One `sub` may have at most the event's `max_tokens_per_sub` live (unexpired) public hold tokens on an event, default 2, so that a buyer cannot multiply `max_objects` by minting tokens; 2 lets a buyer keep a second tab. Over it, creation is `422 hold_limit_exceeded` with `reason: "tokens_per_sub"` and `limit`. The binding enforces it: it takes a PostgreSQL advisory transaction lock on (event, `sub`), counts the `sub`'s live tokens in the next statement, and binds only below the cap, so of two creations at once the second waits and counts the first. A count before the hold is created refuses a buyer already at the cap without making the actor create a hold for nothing; the binding decides.
+- **Personal data** (12 §5). The `sub` is never logged and never stored: `holds.session_sub` keeps its SHA-256, until the hold row is deleted (when the hold expires, or when booking takes its last objects). It is not in the event log, webhooks or any response.
+
+A worked example (fake key): the secret key `sk_abab…ab` (`sk_` and 32 times `ab`) has the id `key_0123456789abcdef0123456789abcdef`. The backend builds
+
+```
+header  {"alg":"HS256","typ":"JWT","kid":"key_0123456789abcdef0123456789abcdef"}
+payload {"sub":"buyer-42","event":"hamlet-2027-03-14","exp":4102444800,"max_objects":4}
+```
+
+encodes each as base64url without padding, joins them with `.`, and appends `.` and the base64url HMAC-SHA-256 of that text keyed with the secret key (or its SHA-256):
+
+```
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImtleV8wMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZiJ9
+.eyJzdWIiOiJidXllci00MiIsImV2ZW50IjoiaGFtbGV0LTIwMjctMDMtMTQiLCJleHAiOjQxMDI0NDQ4MDAsIm1heF9vYmplY3RzIjo0fQ
+.S1xq35OM5lNCnx_kOyT1bTEFtIPFnwM1i0V0Eg1Bxks
+```
+
+(one line, without the breaks). Any JWT library does the same given the key as an HS256 secret and the `kid` header; in Python's standard library it is `hmac.new(secret_key.encode(), signing_input.encode(), hashlib.sha256)`. The server's test suite verifies this exact token. The browser then sends it as `Cavea-Session: eyJ…` with hold-token creation, hold and release.
+
 CORS (public routes):
 
 - Every path under `/v1/public/` answers browsers across origins; the compiled chart files keep their own open policy (`Access-Control-Allow-Origin: *` whatever the setting, so one file is one CDN entry). Secret-key, admin and every other route carry no CORS header at all (12 §4), and `OPTIONS` on them is `404`.
 - `CAVEA_CORS_ORIGINS` is the outer gate, enforced by the browser: `*` (default) answers `Access-Control-Allow-Origin: *`; a list answers with the request's `Origin` if it is on the list (compared without regard to case), and with no CORS headers otherwise, plus `Vary: Origin` on every public response.
-- Preflight (`OPTIONS`) carries no credential, so it is answered from the setting alone: `204` with `Access-Control-Allow-Methods: GET, POST`, `Access-Control-Allow-Headers: Authorization, Content-Type, Cavea-Hold-Token, Cavea-Request-Id` and `Access-Control-Max-Age: 7200`. Other responses, errors included, carry `Access-Control-Expose-Headers: Cavea-Request-Id, Retry-After`, so the renderer can read every problem+json and its request id.
+- Preflight (`OPTIONS`) carries no credential, so it is answered from the setting alone: `204` with `Access-Control-Allow-Methods: GET, POST`, `Access-Control-Allow-Headers: Authorization, Content-Type, Cavea-Hold-Token, Cavea-Request-Id, Cavea-Session` and `Access-Control-Max-Age: 7200`. Other responses, errors included, carry `Access-Control-Expose-Headers: Cavea-Request-Id, Retry-After`, so the renderer can read every problem+json and its request id.
 - The key's allow-list is the inner gate, checked on the request itself: an origin the setting admits but the key does not is `403` (`reason: "origin"`), with the CORS headers, so the page sees why. An origin must pass both. With a list in the setting, the key's list can only narrow it.
 - Credentials mode is off: no `Access-Control-Allow-Credentials`, no cookies; the key goes in `Authorization`, which is why every request with it is preflighted, except on the realtime routes, which take it in the `key` query parameter (§6.2, D-31) and are simple requests.
 - WebSockets are not subject to CORS: the upgrade checks `Origin` against both `CAVEA_CORS_ORIGINS` (a list) and the key's allow-list itself, and refuses with `403` (§8.2).
@@ -1010,6 +1070,7 @@ Admin key and workspaces:
 
 - `CAVEA_ADMIN_KEY` has no default. Set, it must be 32 to 512 printable ASCII characters or the server will not start; unset, the server starts with a warning and the admin endpoints refuse every request (`401`, or `403` for a valid API key, as on any admin route) (`DECISIONS.md` D-24). The presented token is hashed and the digests are compared in constant time. The admin key is checked before API keys; it is never logged.
 - `POST /v1/workspaces` creates the workspace and its first secret key in one statement and returns the key once. From there the workspace manages its own keys.
+- `POST /v1/workspaces/{workspace}/keys` mints another secret key for an existing workspace and returns it once: the operator's recovery for a workspace whose keys are all lost.
 
 ## 12. Rate limiting and overload
 
@@ -1034,7 +1095,6 @@ Admin key and workspaces:
 | `CAVEA_LICENCE` | — | Licence file path or contents |
 | `CAVEA_ADMIN_KEY` | none | The operator's key for `/v1/workspaces`: 32 to 512 printable ASCII characters. Unset, those endpoints refuse every request (§11) |
 | `CAVEA_DB_POOL` | 16 | Connection pool size |
-| `CAVEA_HOLD_TTL` | 900 | Default hold lifetime in seconds |
 | `CAVEA_DELTA_INTERVAL_MS` | 100 | Not read yet: the engine's interval is fixed at 100 ms (§8.3) |
 | `CAVEA_SNAPSHOT_MAX_AGE` | 1 | Seconds a shared cache may keep the public snapshot (`max-age`, §8.5) |
 | `CAVEA_RT_MAX_CONNECTIONS` | 60000 | Realtime connections the node holds open at most; beyond, the upgrade is `503 overloaded` (§8.2) |
