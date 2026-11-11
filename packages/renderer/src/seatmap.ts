@@ -147,7 +147,11 @@ export async function createMap(
    * Runs an engine or adapter call: a throw or a rejected promise is
    * reported, not thrown; unknown labels the view returns are reported.
    */
-  function engine(run: () => unknown, code: CaveaErrorCode = "engine_failed"): void {
+  function engine(
+    run: () => unknown,
+    code: CaveaErrorCode = "engine_failed",
+    strict = false,
+  ): void {
     try {
       const unknown = run();
       if (unknown instanceof Promise) {
@@ -161,6 +165,9 @@ export async function createMap(
         );
       }
     } catch (error) {
+      if (strict) {
+        throw new CaveaError(code, String(error), true, error);
+      }
       report(failure(code, error));
     }
   }
@@ -178,16 +185,18 @@ export async function createMap(
     host?.update();
   }
 
-  function applySnapshot(v: EngineView, snapshot: Snapshot): void {
+  /** `first`: the state `connect` resolved with, which the map cannot start without. */
+  function applySnapshot(v: EngineView, snapshot: Snapshot, first = false): void {
+    const code = first ? "state_connect_failed" : "state_failed";
     if (snapshot.kind === "binary") {
-      engine(() => v.applyFrame(bytesOf(snapshot.bytes)), "state_failed");
+      engine(() => v.applyFrame(bytesOf(snapshot.bytes)), code, first);
       return;
     }
     seq += 1;
-    engine(() => v.setSnapshotLabels(seq, snapshot.unavailable), "state_failed");
+    engine(() => v.setSnapshotLabels(seq, snapshot.unavailable), code, first);
     if (snapshot.mine !== undefined) {
       const mine = snapshot.mine;
-      engine(() => v.setPrivateLabels(mine, snapshot.expiresAt ?? 0), "state_failed");
+      engine(() => v.setPrivateLabels(mine, snapshot.expiresAt ?? 0), code, first);
     }
   }
 
@@ -334,85 +343,105 @@ export async function createMap(
     });
   }
 
+  /** Events still to deliver; set while a batch is being delivered. */
+  let delivering: RendererEvent[] | undefined;
+
+  /**
+   * Delivers events in order. A method called from a callback drains newer
+   * events; they wait until the batch being delivered is done.
+   */
   function onEvents(batch: RendererEvent[]): void {
-    for (const event of batch) {
-      // A callback may have destroyed the map.
-      if (destroyed) {
-        return;
+    if (delivering !== undefined) {
+      delivering.push(...batch);
+      return;
+    }
+    delivering = [...batch];
+    try {
+      for (const event of delivering) {
+        // A callback may destroy the map.
+        if (destroyed) {
+          break;
+        }
+        deliver(event);
       }
-      switch (event.type) {
-        case "ready":
-          chart = event;
-          break;
-        case "selectionChanged": {
-          const before = selected;
-          selected = new Map(event.selected.map((o) => [o.label, toSeat(o)]));
-          // A set of own holds without an expiry reports 0.
-          expiresAt = event.expiresAt || null;
-          for (const [label, object] of before) {
-            if (!selected.has(label)) {
-              call("onObjectDeselect", object);
-            }
+    } finally {
+      delivering = undefined;
+    }
+  }
+
+  function deliver(event: RendererEvent): void {
+    switch (event.type) {
+      case "ready":
+        chart = event;
+        break;
+      case "selectionChanged": {
+        const before = selected;
+        selected = new Map(event.selected.map((o) => [o.label, toSeat(o)]));
+        // A set of own holds without an expiry reports 0.
+        expiresAt = event.expiresAt || null;
+        for (const [label, object] of before) {
+          if (!selected.has(label)) {
+            call("onObjectDeselect", object);
           }
-          for (const [label, object] of selected) {
-            if (!before.has(label)) {
-              call("onObjectSelect", object);
-            }
-          }
-          call("onSelectionChange", selection());
-          break;
         }
-        case "selectionInvalid":
-          call("onSelectionInvalid", event.rule, event.objects.map(lookup));
-          break;
-        case "selectionValid":
-          call("onSelectionValid");
-          break;
-        case "holdRequest":
-          hold(event.request, event.labels);
-          break;
-        case "releaseRequest": {
-          const labels = event.labels;
-          enqueue(() =>
-            timed(() => adapter.release?.(labels)).catch((error: unknown) =>
-              report(new CaveaError("release_failed", String(error), false, error)),
-            ),
-          );
-          break;
-        }
-        case "objectHover":
-          call("onObjectHover", event.object && toSeat(event.object), event.at);
-          break;
-        case "objectFocus":
-          call("onObjectFocus", event.object && toSeat(event.object), event.at);
-          break;
-        case "objectUnavailable":
-          call("onObjectUnavailable", lookup(event.label));
-          break;
-        case "holdLost":
-          call("onHoldLost", event.labels.map(lookup));
-          break;
-        case "resync":
-          if (adapter.resync === undefined) {
-            report(
-              new CaveaError("state_failed", "state is out of step and the adapter cannot resync"),
-            );
-          } else {
-            engine(() => adapter.resync?.(), "state_failed");
+        for (const [label, object] of selected) {
+          if (!before.has(label)) {
+            call("onObjectSelect", object);
           }
-          break;
-        case "cameraChanged":
-          call("onCameraChange", { centre: event.centre, zoom: event.zoom, level: event.lod });
-          break;
-        case "error":
+        }
+        call("onSelectionChange", selection());
+        break;
+      }
+      case "selectionInvalid":
+        call("onSelectionInvalid", event.rule, event.objects.map(lookup));
+        break;
+      case "selectionValid":
+        call("onSelectionValid");
+        break;
+      case "holdRequest":
+        hold(event.request, event.labels);
+        break;
+      case "releaseRequest": {
+        const labels = event.labels;
+        enqueue(() =>
+          timed(() => adapter.release?.(labels)).catch((error: unknown) =>
+            report(new CaveaError("release_failed", String(error), false, error)),
+          ),
+        );
+        break;
+      }
+      case "objectHover":
+        call("onObjectHover", event.object && toSeat(event.object), event.at);
+        break;
+      case "objectFocus":
+        call("onObjectFocus", event.object && toSeat(event.object), event.at);
+        break;
+      case "objectUnavailable":
+        call("onObjectUnavailable", lookup(event.label));
+        break;
+      case "holdLost":
+        call("onHoldLost", event.labels.map(lookup));
+        break;
+      case "resync":
+        if (adapter.resync === undefined) {
           report(
-            new CaveaError(
-              event.code === "glyphAtlas" ? "glyph_atlas_failed" : "engine_failed",
-              event.message,
-            ),
+            new CaveaError("state_failed", "state is out of step and the adapter cannot resync"),
           );
-          break;
-      }
+        } else {
+          engine(() => adapter.resync?.(), "state_failed");
+        }
+        break;
+      case "cameraChanged":
+        call("onCameraChange", { centre: event.centre, zoom: event.zoom, level: event.lod });
+        break;
+      case "error":
+        report(
+          new CaveaError(
+            event.code === "glyphAtlas" ? "glyph_atlas_failed" : "engine_failed",
+            event.message,
+          ),
+        );
+        break;
     }
   }
 
@@ -524,7 +553,7 @@ export async function createMap(
     host.update();
     mark("chart_decoded");
     const first = await step(fatal(state, "state_connect_failed"));
-    applySnapshot(v, first);
+    applySnapshot(v, first, true);
     for (const apply of pending ?? []) {
       apply(v);
     }
