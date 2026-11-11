@@ -40,7 +40,10 @@ const server = Bun.serve({
   port,
   routes: {
     "/": page,
-    "/wasm/cavea_designer.js": file("packages/designer-core/wasm/cavea_designer.js", "text/javascript"),
+    "/wasm/cavea_designer.js": file(
+      "packages/designer-core/wasm/cavea_designer.js",
+      "text/javascript",
+    ),
     "/wasm/cavea_designer_bg.wasm": file(
       "packages/designer-core/wasm/cavea_designer_bg.wasm",
       "application/wasm",
