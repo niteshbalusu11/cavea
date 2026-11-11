@@ -164,7 +164,8 @@ pub enum Command {
     },
     /// Inserts `count` removed positions, with fresh oids, before position
     /// `at` of a row: an aisle that keeps every seat. Seats before it stay
-    /// where they are; the rest move `count` pitches towards the end.
+    /// where they are; the rest move `count` pitches towards the end. Only a
+    /// bulge, which depends on the row's length, reshapes (as `addSeats`).
     InsertGap {
         id: u32,
         rid: u32,
@@ -1316,7 +1317,7 @@ fn label_mut(node: &mut Node) -> Option<&mut Option<String>> {
     }
 }
 
-fn category_mut(node: &mut Node) -> Option<&mut Option<String>> {
+pub(crate) fn category_mut(node: &mut Node) -> Option<&mut Option<String>> {
     match node {
         Node::Section(n) => Some(&mut n.category),
         Node::RowBlock(n) => Some(&mut n.category),

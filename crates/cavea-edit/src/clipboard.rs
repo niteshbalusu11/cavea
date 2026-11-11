@@ -8,7 +8,8 @@
 //! selection always gives the same bytes:
 //! `{"format":"cavea-clipboard","version":1,"centre":[x,y],"categories":[…],"nodes":[…]}`.
 //! `nodes` are the selected nodes with their subtrees, in document order,
-//! placed in world space and without `floor` fields; `centre` is the middle
+//! placed in world space (a section child without a category taking its
+//! section's) and without `floor` fields; `centre` is the middle
 //! of their world bounds; `categories` are the chart's definitions of every
 //! category key they name, in the chart's order.
 
@@ -19,7 +20,7 @@ use cavea_core::limits::MAX_CATEGORIES;
 use serde::{Deserialize, Serialize};
 
 use crate::arrange::{DUPLICATE_OFFSET, MAX_NEW_NODES};
-use crate::command::{Command, CommandError, category};
+use crate::command::{Command, CommandError, category, category_mut};
 use crate::document::each_node;
 use crate::draft::normalise;
 use crate::index::{P, Place, Rect};
@@ -72,10 +73,20 @@ pub(crate) fn copy(view: &View<'_>, sel: &Selection) -> Option<String> {
     let kids = view.doc.children(parent).iter();
     let ids: Vec<u32> = kids.copied().filter(|id| ids.contains(id)).collect();
     let (place, turn) = space(view, parent);
+    // What a section's children inherit: copied without the section, they
+    // keep it as their own.
+    let inherited = parent
+        .and_then(|p| view.doc.node(p))
+        .and_then(category)
+        .cloned()
+        .flatten();
     let mut keys = BTreeSet::new();
     let mut nodes = Vec::with_capacity(ids.len());
     for &id in &ids {
         let mut node = view.doc.tree(id)?;
+        if let Some(c) = category_mut(&mut node).filter(|c| c.is_none()) {
+            c.clone_from(&inherited);
+        }
         if parent.is_some() {
             each_node!(&mut node, n => {
                 n.origin = place.apply(n.origin);

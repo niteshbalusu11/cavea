@@ -221,6 +221,23 @@ fn row_level_editing() {
     let cols: Vec<f64> = gone.iter().map(|o| t.seats(10)[o][0]).collect();
     assert!(cols.iter().all(|x| (x - cols[0]).abs() <= 25.0), "{cols:?}");
 
+    // On a skewed arc block the aisle is radial: the same position of
+    // every row of equal length.
+    let mut arc = T::new(chart());
+    let set = |t: &mut T, property| {
+        t.s.apply(Command::SetProperty { id: 10, property })
+            .expect("set");
+    };
+    set(
+        &mut arc,
+        Property::Curve(cavea_compiler::document::Curve::Arc { radius: 1_000.0 }),
+    );
+    set(&mut arc, Property::Skew(45.0));
+    arc.s.select(Level::Rows(10), [11, 12, 13]);
+    let at = arc.seats(10)[&102];
+    arc.s.cut_aisle(at).expect("cut");
+    assert_eq!(arc.removed(10), BTreeSet::from([102, 112, 122]));
+
     // Open an aisle one position wide between the 2nd and 3rd seats of the
     // back row: new removed position, later seats one pitch on, oids kept.
     t.s.select(Level::Rows(10), [13]);
@@ -791,6 +808,22 @@ fn copy_and_paste() {
         Err(CommandError::Limit("categories"))
     );
     assert_eq!(o.state(), state);
+
+    // A section's child copied alone keeps the category it inherited.
+    t.s.select(Level::Section(30), [31]);
+    let child = t.s.copy().expect("copy");
+    let mut o = T::new(chart());
+    o.s.apply(Command::RemoveCategory {
+        key: "vip".into(),
+        replacement: None,
+    })
+    .expect("remove");
+    o.s.paste(&child, None).expect("paste");
+    let [id] = o.selected()[..] else {
+        panic!("one node pasted")
+    };
+    assert_eq!(o.block(id).category.as_deref(), Some("vip"));
+    assert!(o.s.document().categories().iter().any(|c| c.key == "vip"));
 
     // Cut: copy and delete, one entry.
     t.s.select(Level::Top, [42]);

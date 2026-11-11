@@ -82,13 +82,15 @@ pub(crate) fn label(view: &View<'_>, sel: &Selection, label: Option<String>) -> 
     Some(Command::Composite { commands })
 }
 
-/// Where a seat lies across the rows, for an aisle through several rows: its
-/// angle about an arc's centre, else its x before the skew's shear, so one
-/// value names the same column in every row.
+/// Where a seat lies across the rows, for an aisle through several rows:
+/// with the skew's shear undone (03 §2.4: `x' = x − y × tan(skew)`), its
+/// angle about an arc's centre, else its x, so one value names the same
+/// column in every row.
 fn column(b: &RowBlock, p: P) -> f64 {
+    let x = p[0] + p[1] * b.skew.to_radians().tan();
     match b.curve {
-        Curve::Arc { radius } => p[0].atan2((p[1] + radius) * radius.signum()),
-        _ => p[0] + p[1] * b.skew.to_radians().tan(),
+        Curve::Arc { radius } => x.atan2((p[1] + radius) * radius.signum()),
+        _ => x,
     }
 }
 
