@@ -56,7 +56,11 @@ impl<B: GpuBackend> Engine<B> {
                 return;
             }
             _ => {
-                let factor = if key == "-" { 1.0 / ZOOM_STEP } else { ZOOM_STEP };
+                let factor = if key == "-" {
+                    1.0 / ZOOM_STEP
+                } else {
+                    ZOOM_STEP
+                };
                 return self.zoom_step(factor);
             }
         };
@@ -153,24 +157,27 @@ impl<B: GpuBackend> Engine<B> {
             .focus
             .filter(|_| self.focus_shown)
             .and_then(|i| self.scene.as_ref()?.scene.pos.get(i as usize).copied());
-        let at = pos.map_or([stage.size.width / 2.0, stage.size.height / 2.0], |[x, y]| {
-            camera.to_screen([f64::from(x), f64::from(y)], stage.size)
-        });
+        let at = pos.map_or(
+            [stage.size.width / 2.0, stage.size.height / 2.0],
+            |[x, y]| camera.to_screen([f64::from(x), f64::from(y)], stage.size),
+        );
         self.act(Action::ZoomStep { factor, at });
     }
 
     /// Emits `ObjectFocus` for the focus shown (`None` if hidden), anchored
-    /// where the camera will settle, and remembers what it reported.
+    /// where the camera will settle, and remembers the camera last reported
+    /// and the seat's state.
     pub(super) fn emit_focus(&mut self) {
         let shown = self.focus.filter(|_| self.focus_shown);
         let camera = self.camera_target();
         let object = shown.and_then(|idx| self.anchored_at(idx, camera));
-        self.focus_seen = shown.map(|idx| (camera, self.visual_of(idx)));
+        self.focus_seen = shown.map(|idx| (self.reported, self.visual_of(idx)));
         self.events.push(Event::ObjectFocus(object));
     }
 
     /// At the end of a frame: reports the focus again if its seat's state
-    /// changed, or the camera came to rest elsewhere than it was reported.
+    /// changed, or once the camera has come to rest after a `CameraChanged`
+    /// since the last report (which hid the host's tooltip).
     #[inline(never)]
     pub(super) fn refocus(&mut self) {
         let Some(idx) = self.focus.filter(|_| self.focus_shown) else {
@@ -179,14 +186,17 @@ impl<B: GpuBackend> Engine<B> {
         if !self.animations.is_empty() || self.recogniser.pressed() {
             return;
         }
-        if self.focus_seen != Some((self.camera, self.visual_of(idx))) {
+        if self.focus_seen != Some((self.reported, self.visual_of(idx))) {
             self.emit_focus();
         }
     }
 
     fn visual_of(&self, idx: u32) -> u8 {
         let visual = self.scene.as_ref().map(|l| &l.scene.visual);
-        visual.and_then(|v| v.get(idx as usize)).copied().unwrap_or(0)
+        visual
+            .and_then(|v| v.get(idx as usize))
+            .copied()
+            .unwrap_or(0)
     }
 }
 

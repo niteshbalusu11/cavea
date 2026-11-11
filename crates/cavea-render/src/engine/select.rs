@@ -470,7 +470,10 @@ impl<B: GpuBackend> Engine<B> {
         let idx = self.idx_of(label)?;
         let scene = &self.scene.as_ref()?.scene;
         let status = *scene.status.get(idx as usize)?;
-        let row = scene.chart.rows.get(*scene.row.get(idx as usize)? as usize)?;
+        let row = scene
+            .chart
+            .rows
+            .get(*scene.row.get(idx as usize)? as usize)?;
         let place = [idx - row.seat_first + 1, u32::from(row.seat_count)];
         Some((self.info(idx), status, place))
     }

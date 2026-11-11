@@ -39,7 +39,10 @@ fn reference(s: &Scene, from: u32, dir: Dir) -> Option<u32> {
     };
     let neighbours = [from.checked_sub(1), Some(from + 1)];
     best(
-        &mut neighbours.into_iter().flatten().filter(|n| in_row.contains(n)),
+        &mut neighbours
+            .into_iter()
+            .flatten()
+            .filter(|n| in_row.contains(n)),
         true,
     )
     .or_else(|| best(&mut s.active.clone().filter(|n| !in_row.contains(n)), true))
@@ -77,10 +80,7 @@ fn matches_the_rule_on_presets_and_synthetic_charts() {
     check_against_reference(&preset("theatre"), 1);
     check_against_reference(&preset("arena"), 41);
     for seed in 1..6 {
-        check_against_reference(
-            &scene(&cavea_testkit::synthetic::stadium(1_500, seed)),
-            3,
-        );
+        check_against_reference(&scene(&cavea_testkit::synthetic::stadium(1_500, seed)), 3);
     }
 }
 
@@ -187,7 +187,10 @@ fn follows_a_curved_row_and_crosses_rows_and_aisles() {
     // the cone where there is one.
     let mut crossed = 0;
     for row in &s.chart.rows {
-        let ends = [row.seat_first, row.seat_first + u32::from(row.seat_count) - 1];
+        let ends = [
+            row.seat_first,
+            row.seat_first + u32::from(row.seat_count) - 1,
+        ];
         for end in ends {
             for dir in [Dir::Left, Dir::Right] {
                 let Some(to) = step(&s, end, dir) else {

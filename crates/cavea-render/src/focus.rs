@@ -64,10 +64,16 @@ pub fn step(scene: &Scene, from: u32, dir: Dir) -> Option<u32> {
         let q = scene.pos.get(idx as usize)?;
         Some(axes(u, [q[0] - p[0], q[1] - p[1]]))
     };
-    let row = scene.chart.rows.get(*scene.row.get(from as usize)? as usize)?;
+    let row = scene
+        .chart
+        .rows
+        .get(*scene.row.get(from as usize)? as usize)?;
     let seats = row.seat_first..row.seat_first.saturating_add(u32::from(row.seat_count));
     let mut best: Option<(f32, u32)> = None;
-    for n in [from.checked_sub(1), from.checked_add(1)].into_iter().flatten() {
+    for n in [from.checked_sub(1), from.checked_add(1)]
+        .into_iter()
+        .flatten()
+    {
         if !seats.contains(&n) || !scene.active.contains(&n) {
             continue;
         }

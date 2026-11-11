@@ -36,6 +36,10 @@
 // custom properties on the container (`caveaDemo.brand(on)` toggles them
 // live); `width=px` narrows the container; `quiet=1` hides the readouts.
 //
+// Loading (05 §10): `preload=1` calls `preloadSeatMap` (with `chart=url`'s
+// chart) as the page starts; `wait=ms` creates the map that long after, with
+// or without it, to compare `first_frame`.
+//
 // Real server instead of the fake host: `server=<baseUrl>&key=<pk_…>&event=<key>`,
 // with `transport=auto|ws|sse|poll` and `session=start|manual|none` (05 §4);
 // the chart is the event's. Needs no `--demo` build.
@@ -48,6 +52,7 @@ import {
   caveaServer,
   createSeatMap,
   customState,
+  preloadSeatMap,
   loadRenderer,
   type AdapterContext,
   type GestureHandling,
@@ -90,6 +95,10 @@ function report(line: string): void {
 }
 
 const params = new URLSearchParams(location.search);
+if (params.get("preload") === "1") {
+  const url = params.get("chart");
+  void preloadSeatMap(url === null ? {} : { chart: { url } });
+}
 const num = (name: string, fallback: number): number => Number(params.get(name) ?? fallback);
 const chartUrl = params.get("chart");
 const preset = params.get("preset") ?? "";
@@ -469,6 +478,7 @@ try {
   } else {
     options.chart = { url: chartUrl };
   }
+  await new Promise((resolve) => setTimeout(resolve, Number(params.get("wait") ?? 0)));
   map = await createSeatMap(container, options);
   if (params.get("prices") === "1") {
     map.setPricing(

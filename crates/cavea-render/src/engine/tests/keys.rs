@@ -46,7 +46,10 @@ fn arrows_move_the_focus_and_enter_selects_it_as_a_tap() {
     assert_eq!(e.backend.draws.last().unwrap()[0], 0..2);
 
     key(&mut e, "Enter");
-    assert_eq!(summary(&tick(&mut e, 200.0)), ["changed [\"S-B-5\"]", "hold 1 [\"S-B-5\"]"]);
+    assert_eq!(
+        summary(&tick(&mut e, 200.0)),
+        ["changed [\"S-B-5\"]", "hold 1 [\"S-B-5\"]"]
+    );
     // The focused seat's state changes: the focus is reported again.
     e.handle(Command::HoldResult {
         request: 1,
@@ -82,7 +85,10 @@ fn escape_tab_and_taps_keep_the_focus_in_memory() {
     e.handle(Command::SetFocusShown(false));
     assert_eq!(focused(&e.drain_events().collect::<Vec<_>>()), [None]);
     e.handle(Command::SetFocusShown(true));
-    assert_eq!(focused(&e.drain_events().collect::<Vec<_>>()), shown("S-A-6"));
+    assert_eq!(
+        focused(&e.drain_events().collect::<Vec<_>>()),
+        shown("S-A-6")
+    );
     // A tap moves the focus to the tapped seat without showing it.
     let at = seat_pos(&e, 12);
     let events = click(&mut e, PointerType::Mouse, at, 1000.0);
@@ -95,7 +101,9 @@ fn escape_tab_and_taps_keep_the_focus_in_memory() {
     };
     assert!(!e.takes_key("ArrowRight", ctrl) && !e.takes_key("Tab", Modifiers::default()));
     // A new chart forgets the focus.
-    e.handle(Command::LoadChart { ccf: compile(super::select::HALL) });
+    e.handle(Command::LoadChart {
+        ccf: compile(super::select::HALL),
+    });
     assert_eq!(focused(&e.drain_events().collect::<Vec<_>>()), [None]);
     e.handle(Command::SetFocusShown(true));
     assert!(focused(&e.drain_events().collect::<Vec<_>>()).is_empty());
@@ -111,11 +119,25 @@ fn the_camera_follows_the_focus() {
         panic!("{events:?}");
     };
     let at = at.map(f64::from);
-    settle(&mut e, 0.0);
+    let mut events = Vec::new();
+    for t in 0..100 {
+        let tick = tick(&mut e, f64::from(t) * 16.0);
+        let more = wants_frame(&tick);
+        events.extend(tick);
+        if !more {
+            break;
+        }
+    }
     let idx = e.focus.unwrap();
     assert!((seat_px(&e) - crate::tuning::LOD_DETAIL_SEAT_PX).abs() < 0.5);
-    // Reported where the camera came to rest.
+    // Reported where the camera came to rest, and again once it has: the
+    // camera's moves hid the tooltip.
     assert!(close(at, seat_pos(&e, idx), 0.01), "{at:?}");
+    let last = |f: fn(&Event) -> bool| events.iter().rposition(f);
+    let focus = last(|e| matches!(e, Event::ObjectFocus(Some(_))));
+    let camera = last(|e| matches!(e, Event::CameraChanged { .. }));
+    assert!(focus > camera && camera.is_some(), "{focus:?} {camera:?}");
+    assert_eq!(focused(&events).len(), 1);
     // Moving along: the camera pans only when the focus nears the edge.
     let mut moves = 0;
     let mut camera = cam(&e);

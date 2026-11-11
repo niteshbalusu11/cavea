@@ -246,8 +246,9 @@ pub struct Engine<B: GpuBackend> {
     focus: Option<u32>,
     /// Whether the focus ring is drawn and `ObjectFocus` reports the focus.
     focus_shown: bool,
-    /// The camera and the focused seat's visual state `ObjectFocus` last
-    /// reported, to report again when either changes.
+    /// The camera `CameraChanged` had reported, and the focused seat's
+    /// visual state, when `ObjectFocus` last reported: it reports again
+    /// when either changes.
     focus_seen: Option<(Option<Camera>, u8)>,
     dirty: bool,
     frame_requested: bool,
