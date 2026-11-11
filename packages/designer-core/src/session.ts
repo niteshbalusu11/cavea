@@ -113,16 +113,18 @@ export async function loadDesigner(options: LoadOptions = {}): Promise<Designer>
  * nullable argument takes as a value), a `BigInt`, a cycle.
  */
 function encode(args: unknown[]): string {
+  // What was thrown is never inspected: a getter in the arguments may have
+  // thrown anything, even a value that throws when read.
+  let message = "not representable as JSON";
   try {
     return JSON.stringify(args, (_key, value: unknown) => {
       if (typeof value === "number" && !Number.isFinite(value)) {
-        throw new Error(`${value} is not a finite number`);
+        message = `${value} is not a finite number`;
+        throw new Error(message);
       }
       return value;
     });
-  } catch (error) {
-    // Not `String(error)`: what a getter throws may not convert.
-    const message = error instanceof Error ? error.message : "not representable as JSON";
+  } catch {
     throw new DesignerError({ kind: "arguments", message });
   }
 }

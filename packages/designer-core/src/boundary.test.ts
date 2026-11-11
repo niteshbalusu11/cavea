@@ -522,6 +522,14 @@ describe("the designer module", () => {
       },
     };
     expect(args("set_field", [hostile])).toBe("arguments");
+    const revoked = Proxy.revocable({}, {});
+    revoked.revoke();
+    const worse = {
+      get value(): never {
+        throw revoked.proxy as never;
+      },
+    };
+    expect(args("set_field", [worse])).toBe("arguments");
     expect(s.export()).toBe(before);
 
     // A disposed session.
