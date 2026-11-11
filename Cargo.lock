@@ -339,6 +339,7 @@ dependencies = [
  "cavea-testkit",
  "glow",
  "naga",
+ "web-sys",
 ]
 
 [[package]]

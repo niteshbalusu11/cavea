@@ -470,6 +470,17 @@ pub enum Event {
         weight: u16,
         font: String,
     },
+    /// Load the background image whose content hash is `asset` (32
+    /// lowercase hex digits, checked) and hand it to `Engine::set_image` with
+    /// `id`, scaled down to at most `max_side` pixels on its long side and
+    /// `max_pixels` in all (04 §7, §22). Emitted after a frame is drawn,
+    /// never before the first: images never delay the map.
+    ImageRequest {
+        id: u32,
+        asset: String,
+        max_side: u32,
+        max_pixels: u32,
+    },
     Error {
         code: ErrorCode,
         message: String,

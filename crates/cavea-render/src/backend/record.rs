@@ -59,6 +59,26 @@ impl Recorder {
 }
 
 impl GpuBackend for Recorder {
+    /// An image's size: its texture holds no pixels.
+    type Image = [u32; 2];
+
+    fn image_size(image: &[u32; 2]) -> [u32; 2] {
+        *image
+    }
+
+    fn create_image_texture(
+        &mut self,
+        &[width, height]: &[u32; 2],
+    ) -> Result<TextureId, BackendError> {
+        let desc = TextureDesc {
+            width,
+            height,
+            format: super::TextureFormat::Rgba8,
+            sampling: super::Sampling::Linear,
+        };
+        self.create_texture(desc, None)
+    }
+
     fn caps(&self) -> Caps {
         Caps {
             max_texture_size: 4096,

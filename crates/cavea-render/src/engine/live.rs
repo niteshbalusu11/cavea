@@ -209,6 +209,10 @@ impl<B: GpuBackend> Engine<B> {
         if let Err((code, message)) = result {
             self.error(code, message);
         }
+        if let Some(loaded) = &self.scene {
+            let scene = &loaded.scene;
+            (self.images).sync(&scene.chart, scene.floor, &mut self.backend, false);
+        }
         self.redraw();
     }
 

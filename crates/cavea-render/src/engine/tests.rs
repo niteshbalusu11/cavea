@@ -60,6 +60,23 @@ struct Fake {
 type E = Engine<Fake>;
 
 impl GpuBackend for Fake {
+    /// An image's size and the one byte its texture is filled with.
+    type Image = ([u32; 2], u8);
+    fn image_size(image: &Self::Image) -> [u32; 2] {
+        image.0
+    }
+    fn create_image_texture(
+        &mut self,
+        &([w, h], fill): &Self::Image,
+    ) -> Result<TextureId, BackendError> {
+        let desc = TextureDesc {
+            width: w,
+            height: h,
+            format: TextureFormat::Rgba8,
+            sampling: Sampling::Linear,
+        };
+        self.create_texture(desc, Some(&[fill]))
+    }
     fn caps(&self) -> Caps {
         Caps {
             max_texture_size: 4096,

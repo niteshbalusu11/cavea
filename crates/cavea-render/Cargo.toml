@@ -9,7 +9,7 @@ publish.workspace = true
 [features]
 # The WebGL2 backend. Enabled by `cavea-web` for wasm32 only, so native builds of
 # the workspace never compile it.
-glow = ["dep:glow"]
+glow = ["dep:glow", "dep:web-sys"]
 # The designer's additions (04 §25): the live scene, per-piece transforms and
 # the overlay batcher. Enabled by `cavea-designer`, never by `cavea-web`, so
 # the buyer's payload does not carry them.
@@ -19,6 +19,14 @@ designer = []
 cavea-core.workspace = true
 cavea-format.workspace = true
 glow = { workspace = true, optional = true }
+
+# The WebGL2 backend uploads background images from the browser's decoded
+# `ImageBitmap` (04 §7), with the context `glow` wraps.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { workspace = true, optional = true, features = [
+  "ImageBitmap",
+  "WebGl2RenderingContext",
+] }
 
 [dev-dependencies]
 cavea-compiler.workspace = true

@@ -32,6 +32,7 @@ use crate::{
     camera::{self, Camera, Limits, Rect, Size},
     cull,
     gesture::{Action, Intent, Recogniser},
+    image::{Images, SupplyError},
     label::{self, MapLabels},
     overview::{self, Sections},
     protocol::{
@@ -235,6 +236,8 @@ pub struct Engine<B: GpuBackend> {
     label_ranges: Vec<Range<u32>>,
     label_bases: Vec<u32>,
     atlas: Option<Atlas>,
+    /// The floor's background images (04 §7 pass 2).
+    images: Images,
     queue: Vec<Queued>,
     actions: Vec<Action>,
     recogniser: Recogniser,
@@ -302,6 +305,7 @@ impl<B: GpuBackend> Engine<B> {
             label_ranges: Vec::new(),
             label_bases: Vec::new(),
             atlas: None,
+            images: Images::default(),
             queue: Vec::new(),
             actions: Vec::new(),
             recogniser: Recogniser::default(),
@@ -604,6 +608,10 @@ impl<B: GpuBackend> Engine<B> {
             map_labels,
             palette_bytes,
         });
+        if let Some(loaded) = &self.scene {
+            let scene = &loaded.scene;
+            (self.images).sync(&scene.chart, scene.floor, &mut self.backend, true);
+        }
         self.flush_selection();
         self.chart_loaded();
         // The next frame fits the new chart, at a level without history.
@@ -638,6 +646,7 @@ impl<B: GpuBackend> Engine<B> {
         if let Some(texture) = self.atlas.as_mut().and_then(|a| a.texture.take()) {
             self.backend.destroy(ResourceId::Texture(texture));
         }
+        self.images.lose(&mut self.backend);
     }
 
     /// The context is back: the backend compiles its programs again and the
@@ -924,6 +933,33 @@ impl<B: GpuBackend> Engine<B> {
         self.last_draws = self.draws;
         self.last_seats = self.seats_drawn;
         self.backend.end_frame();
+        // After a frame, never before the first: images never delay the map.
+        let max_side = self.backend.caps().max_texture_size;
+        self.images.request(max_side, &mut self.events);
+    }
+
+    /// The host's answer to `Event::ImageRequest` `id` (04 §7): the decoded
+    /// image as the host holds it, or `None` when it could not be loaded.
+    /// Drawn from the next frame. An image over the request's limits is
+    /// refused (`InvalidInput`) and not asked for again; an answer to a
+    /// request no longer open (another chart, an image no longer shown) is
+    /// ignored; one that arrives while the context is lost is asked for
+    /// again after the restore.
+    pub fn set_image(&mut self, id: u32, image: Option<&B::Image>) {
+        let lost = self.context_lost;
+        match self.images.supply(&mut self.backend, id, image, lost) {
+            Ok(true) => self.redraw(),
+            Ok(false) => {}
+            Err(SupplyError::Limits) => {
+                self.error(ErrorCode::InvalidInput, "image breaks the size limits");
+            }
+            Err(SupplyError::Backend(error)) => self.error(ErrorCode::Gpu, error.to_string()),
+        }
+    }
+
+    /// Bytes of background image texture on the GPU (04 §22).
+    pub fn image_bytes(&self) -> u64 {
+        self.images.bytes()
     }
 
     /// Whether the host sets the camera (the designer, 04 §25): the engine
@@ -1229,6 +1265,7 @@ impl<B: GpuBackend> Engine<B> {
     /// cross-fade), its seats while they show (from the cross-fade up), its
     /// upper decoration. The fills and seats fade by seat size (04 §10).
     fn draw_world(&mut self, viewport: Viewport, time: f32) -> Result<(), (ErrorCode, String)> {
+        self.draw_images(viewport, time)?;
         #[cfg(feature = "designer")]
         if self.draw_world_live(viewport, time)? {
             return Ok(());
@@ -1277,6 +1314,36 @@ impl<B: GpuBackend> Engine<B> {
         draw_mesh(self, above, 1.0)?;
         let uniforms = self.world_uniforms(camera, viewport, time, 1.0)?;
         self.draw_icons(uniforms)
+    }
+
+    /// Pass 2 (04 §7): the floor's background images, behind everything,
+    /// each its texture × its opacity, in `IMGS` order.
+    fn draw_images(&mut self, viewport: Viewport, time: f32) -> Result<(), (ErrorCode, String)> {
+        let Some(camera) = self.camera.filter(|_| self.scene.is_some()) else {
+            return Ok(());
+        };
+        let buffer = (self.images.buffer(&mut self.backend))
+            .map_err(|error| (ErrorCode::Gpu, error.to_string()))?;
+        let Some(buffer) = buffer else {
+            return Ok(());
+        };
+        let uniforms = self.world_uniforms(camera, viewport, time, 1.0)?;
+        for i in 0..self.images.count() {
+            let Some(texture) = self.images.texture(i) else {
+                continue;
+            };
+            let range = i..i + 1;
+            let call = DrawCall {
+                pipeline: Pipeline::Image,
+                buffers: [Some(buffer), None],
+                textures: [Some(texture), None],
+                uniforms,
+                ranges: std::slice::from_ref(&range),
+                bases: &[],
+            };
+            submit(&mut self.backend, &mut self.draws, &call)?;
+        }
+        Ok(())
     }
 
     /// Seat labels from the dynamic atlas (with pass 9's), then pass 10
@@ -1733,6 +1800,7 @@ impl<B: GpuBackend> Drop for Engine<B> {
         if let Some(texture) = self.atlas.take().and_then(|a| a.texture) {
             self.backend.destroy(ResourceId::Texture(texture));
         }
+        self.images.release(&mut self.backend);
     }
 }
 

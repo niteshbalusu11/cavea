@@ -8,7 +8,8 @@ use std::fmt::Write;
 use cavea_render::protocol::{ChartInfo, Event, Lod, ObjectInfo};
 
 /// Appends the events the host is told about (chart ready, selection, hold
-/// and release requests, lost holds, resync, hover, focus, camera) as a JSON
+/// and release requests, lost holds, resync, hover, focus, camera, text and
+/// image requests) as a JSON
 /// array; others are skipped.
 pub fn to_json(events: &[Event], out: &mut String) {
     out.push('[');
@@ -142,6 +143,20 @@ fn write_event(event: &Event, out: &mut String) -> bool {
             let _ = write!(out, "{weight}");
             field(out, "font");
             string(out, font);
+        }
+        Event::ImageRequest {
+            id,
+            asset,
+            max_side,
+            max_pixels,
+        } => {
+            kind(out, "imageRequest");
+            let _ = write!(
+                out,
+                ",\"id\":{id},\"maxSide\":{max_side},\"maxPixels\":{max_pixels}"
+            );
+            field(out, "asset");
+            string(out, asset);
         }
         _ => return false,
     }
