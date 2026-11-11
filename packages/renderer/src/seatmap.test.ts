@@ -708,14 +708,16 @@ test("the WASM loads once per page; a failed load is tried again", async () => {
   const realFetch = g.fetch;
   g.fetch = (() => Promise.resolve(new Response("", { status: 404 }))) as unknown as typeof fetch;
   try {
-    const failure = await loadWasm("https://x/cavea_web_bg.wasm").catch((e: unknown) => e);
+    const failure = await loadWasm({ wasm: "https://x/cavea_web_bg.wasm" }).catch(
+      (e: unknown) => e,
+    );
     expect([(failure as { status?: number }).status, permanent(failure)]).toEqual([404, true]);
   } finally {
     g.fetch = realFetch;
   }
-  await expect(loadWasm(new Uint8Array([0, 1, 2, 3]))).rejects.toThrow();
+  await expect(loadWasm({ wasm: new Uint8Array([0, 1, 2, 3]) })).rejects.toThrow();
   const bytes = await Bun.file(new URL("../wasm/cavea_web_bg.wasm", import.meta.url)).arrayBuffer();
-  const first = loadWasm(bytes);
+  const first = loadWasm({ wasm: bytes });
   expect(loadWasm()).toBe(first);
   await first;
   const { version } = await import("../wasm/cavea_web.js");
