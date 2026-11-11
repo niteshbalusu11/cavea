@@ -421,9 +421,10 @@ async fn idempotency() {
         };
         let books = async || scalar(&pool, "SELECT count(*) FROM event_log WHERE op = 5").await;
 
-        // Key order and whitespace, inside `extra` too, do not matter.
+        // Key order and whitespace do not matter, but inside `extra` (stored
+        // as sent) only whitespace.
         let compact = format!(r#"{{"objects":["{seat}"],"order_ref":"R-1","extra":{{"{seat}":{{"a":1,"b":[1,2]}}}}}}"#);
-        let spaced = format!("{{ \"extra\": {{ \"{seat}\": {{ \"b\": [1, 2],\n \"a\": 1 }} }},\n  \"order_ref\": \"R-1\", \"objects\": [ \"{seat}\" ] }}");
+        let spaced = format!("{{ \"extra\": {{ \"{seat}\": {{ \"a\": 1,\n \"b\": [1, 2] }} }},\n  \"order_ref\": \"R-1\", \"objects\": [ \"{seat}\" ] }}");
         let (response, booked) = raw(&ev("book"), "k-1", compact.clone()).await;
         assert_eq!(response.status(), 200, "{booked}");
         let (response, again) = raw(&ev("book"), "k-1", spaced).await;
@@ -431,26 +432,26 @@ async fn idempotency() {
         assert_eq!(books().await, 1);
         // Another body, route or event with the key: a mismatch, changing nothing.
         let other_ref = compact.replace("R-1", "R-2");
+        let reordered = compact.replace(r#"{"a":1,"b":[1,2]}"#, r#"{"b":[1,2],"a":1}"#);
         let status = format!(r#"{{"objects":["{seat}"],"status":"blocked"}}"#);
-        for (uri, body) in [(ev("book"), other_ref), (ev("change-status"), status), ("/v1/events/e2/book".to_owned(), compact)] {
+        for (uri, body) in [(ev("book"), other_ref), (ev("book"), reordered), (ev("change-status"), status), ("/v1/events/e2/book".to_owned(), compact)] {
             let (response, p) = raw(&uri, "k-1", body).await;
             assert_problem(&response, &p, Code::IdempotencyMismatch);
         }
         assert_eq!(books().await, 1);
-        // Numbers in `extra` are compared as written, never rounded; an
-        // object that repeats a key is refused.
+        // `extra` is compared as written: numbers never rounded, nothing
+        // decoded (a lone surrogate is valid JSON and stored as sent).
         let big = |n: &str| format!(r#"{{"objects":{{"version":"{}","idx":[21]}},"order_ref":"R-6","extra":{{"{seat}":{{"n":{n}}}}}}}"#, t.hash);
         let (response, p) = raw(&ev("book"), "k-5", big("18446744073709551616")).await;
         assert_problem(&response, &p, Code::InvalidRequest);
         assert_eq!(p["details"]["reason"], "detail_mismatch");
         let (response, p) = raw(&ev("book"), "k-5", big("18446744073709551617")).await;
         assert_problem(&response, &p, Code::IdempotencyMismatch);
-        let (response, p) = raw(&ev("book"), "k-6", big("1e400")).await;
-        assert_problem(&response, &p, Code::InvalidRequest);
-        let dup = format!(r#"{{"objects":["{seat}"],"order_ref":"R-7","extra":{{"{seat}":{{"a":1,"a":2}}}}}}"#);
-        let (response, p) = raw(&ev("book"), "k-7", dup).await;
-        assert_problem(&response, &p, Code::InvalidRequest);
-        assert_eq!(p["details"]["field"], "extra");
+        for (key, n) in [("k-6", "1e400"), ("k-7", r#""\ud800""#)] {
+            let (response, p) = raw(&ev("book"), key, big(n)).await;
+            assert_problem(&response, &p, Code::InvalidRequest);
+            assert_eq!(p["details"]["reason"], "detail_mismatch", "{n}");
+        }
 
         // A refusal is replayed as it was, though the request would now succeed.
         let direct = format!(r#"{{"objects":["{seat}"],"order_ref":"R-3"}}"#);
@@ -548,6 +549,7 @@ async fn public_flow() {
         assert_eq!(info, json!({ "event": t.event, "chart": { "hash": t.hash, "url": url },
             "hold_ttl_seconds": 600, "max_objects": 2 }));
         assert_eq!(response.headers()[header::CACHE_CONTROL], "private, max-age=30");
+        assert!(response.headers().get_all(header::VARY).iter().any(|v| v == "Authorization"));
         assert_eq!(response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
 
         // A token: the event's lifetime and limit, never more.

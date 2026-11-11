@@ -99,8 +99,8 @@ pub(super) async fn cors(State(state): State<AppState>, request: Request, next: 
 
 /// What the renderer needs to start (05 §4): the compiled chart of the pinned
 /// version, the hold lifetime and the selection limit of a buyer's token.
-/// Browsers may keep it briefly; shared caches may not, since the answer
-/// depends on the credential.
+/// Browsers may keep it briefly, per credential; shared caches may not, since
+/// the answer depends on the credential.
 async fn event(
     PublishableKey(auth): PublishableKey,
     Path(event): Path<String>,
@@ -117,10 +117,13 @@ async fn event(
         "max_objects": target.settings.max_objects(),
     });
     let mut response = axum::Json(body).into_response();
-    response.headers_mut().insert(
+    let headers = response.headers_mut();
+    headers.insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("private, max-age=30"),
     );
+    // One browser may hold keys of two workspaces with the same event key.
+    headers.append(header::VARY, HeaderValue::from_static("Authorization"));
     Ok(response)
 }
 

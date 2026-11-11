@@ -180,7 +180,8 @@ pub(super) async fn chart(
 /// and the body as parsed and serialised again, each part prefixed with its
 /// length. The body goes through `serde_json::Value`, whose objects are sorted
 /// maps, so key order and whitespace do not matter; `extra` goes in as its
-/// [`canonical`] text, so that its numbers are never rounded.
+/// [`compact`] text, since it is stored as sent: whitespace there does not
+/// matter, key order does.
 struct Key {
     key: Arc<str>,
     fingerprint: [u8; 32],
@@ -222,79 +223,31 @@ fn idempotency_key(
     }))
 }
 
-/// JSON text with object keys sorted and no whitespace, strings escaped
-/// again and numbers exactly as written (a JSON value would round them).
-/// `None` if the text is not JSON or an object repeats a key: the store keeps
-/// `extra` as sent, so two objects that differ only in a repeated key would
-/// otherwise share a fingerprint.
-fn canonical(raw: &RawValue, out: &mut String) -> Option<()> {
-    let text = raw.get();
-    match text.as_bytes().first()? {
-        b'{' => {
-            let Entries(mut entries) = serde_json::from_str(text).ok()?;
-            entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-            if entries
-                .windows(2)
-                .any(|w| matches!(w, [a, b] if a.0 == b.0))
-            {
-                return None;
+/// JSON text without insignificant whitespace: the same tokens, in the same
+/// order, exactly as written. Nothing is decoded, so no valid JSON is refused
+/// and no two `extra` values that mean different things (as stored, byte for
+/// byte) share a fingerprint.
+fn compact(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    let (mut in_string, mut escaped) = (false, false);
+    for c in json.chars() {
+        if in_string {
+            out.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
             }
-            out.push('{');
-            for (n, (key, value)) in entries.iter().enumerate() {
-                if n > 0 {
-                    out.push(',');
-                }
-                out.push_str(&serde_json::to_string(key).ok()?);
-                out.push(':');
-                canonical(value, out)?;
-            }
-            out.push('}');
+        } else if c == '"' {
+            in_string = true;
+            out.push(c);
+        } else if !matches!(c, ' ' | '\t' | '\n' | '\r') {
+            out.push(c);
         }
-        b'[' => {
-            let items: Vec<Box<RawValue>> = serde_json::from_str(text).ok()?;
-            out.push('[');
-            for (n, item) in items.iter().enumerate() {
-                if n > 0 {
-                    out.push(',');
-                }
-                canonical(item, out)?;
-            }
-            out.push(']');
-        }
-        b'"' => {
-            let string: String = serde_json::from_str(text).ok()?;
-            out.push_str(&serde_json::to_string(&string).ok()?);
-        }
-        // A number, `true`, `false` or `null`, as written.
-        _ => out.push_str(text),
     }
-    Some(())
-}
-
-/// A JSON object's members in the order sent, repeated keys included.
-struct Entries(Vec<(String, Box<RawValue>)>);
-
-impl<'de> Deserialize<'de> for Entries {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct Members;
-        impl<'de> serde::de::Visitor<'de> for Members {
-            type Value = Entries;
-            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("a JSON object")
-            }
-            fn visit_map<A: serde::de::MapAccess<'de>>(
-                self,
-                mut map: A,
-            ) -> Result<Entries, A::Error> {
-                let mut out = Vec::new();
-                while let Some(entry) = map.next_entry()? {
-                    out.push(entry);
-                }
-                Ok(Entries(out))
-            }
-        }
-        deserializer.deserialize_map(Members)
-    }
+    out
 }
 
 const LOOKUP: &str = "SELECT replace(event_id::text, '-', ''), request_hash, response::text
@@ -895,17 +848,14 @@ async fn book(
     State(state): State<AppState>,
     Json(body): Json<BookBody>,
 ) -> Result<Response, ApiError> {
-    let mut extra = BTreeMap::new();
-    for (label, value) in &body.extra {
-        let mut text = String::new();
-        if !value.get().starts_with('{') || canonical(value, &mut text).is_none() {
-            return Err(invalid_field(
-                "extra",
-                "values must be JSON objects, without repeated keys",
-            ));
-        }
-        extra.insert(label.as_str(), text);
+    if body.extra.values().any(|e| !e.get().starts_with('{')) {
+        return Err(invalid_field("extra", "values must be JSON objects"));
     }
+    let extra: BTreeMap<&str, String> = body
+        .extra
+        .iter()
+        .map(|(label, value)| (label.as_str(), compact(value.get())))
+        .collect();
     check_object_count(body.ticket_types.len().max(body.extra.len()))?;
     // As for release: an empty list is not "all of the token's".
     if body.objects.as_ref().is_some_and(Objects::is_empty) {
