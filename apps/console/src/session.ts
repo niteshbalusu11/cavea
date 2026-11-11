@@ -5,6 +5,7 @@
 import { createMemo, createRoot, createSignal } from "solid-js";
 import { ApiError, call, configure } from "./api/client.ts";
 import type { ConsoleMe } from "./api/generated.ts";
+import { checkMe } from "./api/me.ts";
 import type { MeWorkspace } from "./api/permissions.ts";
 import { asApiError } from "./api/query.ts";
 import { load as loadStored, save } from "./storage.ts";
@@ -57,18 +58,28 @@ configure({
 });
 
 function end(cause: "none" | "ended" | "left"): void {
+  settle();
   configure({ csrf: null });
   setSession({ kind: "signedOut", cause });
 }
 
-/** Takes a `me` answer (from `me`, sign-in, setup or a password change). */
-function adopt(answer: ConsoleMe): void {
-  configure({ csrf: answer.csrf_token });
-  setSession({ kind: "signedIn", me: answer });
+/** Takes a `me` answer (from `me`, sign-in, setup or a password change),
+ * once it is checked to be one. */
+function adopt(answer: unknown): void {
+  const valid = checkMe(answer);
+  configure({ csrf: valid.csrf_token });
+  setSession({ kind: "signedIn", me: valid });
 }
 
 let loader: AbortController | null = null;
 let checked = 0;
+
+/** Cancels a `me` load in flight: what it answers predates a sign-in,
+ * sign-out or password change, and must not undo it. */
+function settle(): void {
+  loader?.abort();
+  loader = null;
+}
 
 /** Loads the session from `me`: at start, on Retry, and when the page is
  * shown again (to notice an expired session or a changed role). */
@@ -80,7 +91,9 @@ export async function loadSession(): Promise<void> {
   const quiet = session().kind === "signedIn";
   if (!quiet) setSession({ kind: "loading" });
   try {
-    adopt(await call("consoleMe", {}, mine.signal));
+    const answer = await call("consoleMe", {}, mine.signal);
+    if (loader !== mine) return;
+    adopt(answer);
   } catch (e) {
     if (loader !== mine) return;
     const error = asApiError(e);
@@ -102,14 +115,17 @@ export function watchSession(): void {
 }
 
 export async function signIn(email: string, password: string, signal: AbortSignal) {
+  settle();
   adopt(await call("consoleSignIn", { body: { email, password } }, signal));
 }
 
 export async function setUp(token: string, email: string, password: string, signal: AbortSignal) {
+  settle();
   adopt(await call("consoleSetup", { body: { token, email, password } }, signal));
 }
 
 export async function changePassword(current: string, next: string, signal: AbortSignal) {
+  settle();
   adopt(
     await call(
       "consolePassword",
@@ -120,6 +136,7 @@ export async function changePassword(current: string, next: string, signal: Abor
 }
 
 export async function signOut(signal: AbortSignal): Promise<void> {
+  settle();
   try {
     await call("consoleSignOut", {}, signal);
   } catch (e) {

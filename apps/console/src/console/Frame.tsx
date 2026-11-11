@@ -122,13 +122,7 @@ function Shell(props: { me: ConsoleMe; children: JSX.Element }) {
         </div>
       </nav>
       <main class="min-w-0 flex-1 overflow-y-auto bg-surface">
-        <div class="mx-auto max-w-[1280px] px-8 py-6">
-          {/* A workspace switch remounts the page: its requests are cancelled
-              and nothing of the previous workspace stays on screen. */}
-          <Show when={workspace()?.id} keyed fallback={<NoWorkspace />}>
-            {(_id) => props.children}
-          </Show>
-        </div>
+        <div class="mx-auto max-w-[1280px] px-8 py-6">{props.children}</div>
       </main>
     </div>
   );
@@ -230,9 +224,20 @@ function NoWorkspace() {
   );
 }
 
-/** A section's page, or why the role cannot open it (a link from elsewhere,
- * or a role lowered since). */
+/** A section's page, for the selected workspace: without one, why not;
+ * without the permission, why not (a link from elsewhere, or a role lowered
+ * since). A workspace switch remounts the page, so its requests are
+ * cancelled and nothing of the previous workspace stays on screen. The
+ * account page is outside it: a person in no workspace still has one. */
 export function Gate(props: ParentProps<{ section: Section }>) {
+  return (
+    <Show when={workspace()?.id} keyed fallback={<NoWorkspace />}>
+      {(_id) => <Allowed section={props.section}>{props.children}</Allowed>}
+    </Show>
+  );
+}
+
+function Allowed(props: ParentProps<{ section: Section }>) {
   return (
     <Show
       when={may(props.section.permission)}
