@@ -1,14 +1,14 @@
 // Draws a synthetic stadium, compiled in the browser, with the Rust renderer,
 // to see and measure it. Query parameters: `seats` (default 100000), `seed`
-// (default 1), `shape` (0 circle, 1 rounded, 2 chair),
-// `camera=x:y:width:height` in chart units,
+// (default 1), `shape` (0 circle, 1 rounded, 2 chair), `theme`
+// (light, dark, high-contrast), `camera=x:y:width:height` in chart units,
 // `sold` (fraction of seats made unavailable after the first frame, in runs;
 // default 0.3) or `mark=start:count` to make exactly that range unavailable.
 // Status changes upload only the dynamic sub-range they touch. Pan and zoom
 // with mouse, wheel, trackpad or touch; `gestures=greedy|cooperative|none`
 // sets gesture handling (cooperative makes the page scroll around the map),
 // `reducedMotion=1` turns animation off. `window.caveaDemo` counts frames and
-// WebGL errors for scripted checks.
+// WebGL errors and offers `setTheme(name)` for scripted checks.
 import { attach, loadRenderer, View, type GestureHandling } from "@cavea/renderer";
 
 /** Exports present only in `cargo xtask build-web --demo` builds. */
@@ -20,6 +20,7 @@ interface DemoStatics {
   demoChart(seats: number, seed: number, shape: number): Uint8Array;
 }
 
+type Theme = "light" | "dark" | "high-contrast";
 const UNAVAILABLE = 1;
 
 function element<T extends HTMLElement>(id: string, type: new () => T): T {
@@ -51,6 +52,8 @@ const shape = Number(params.get("shape") ?? 0);
 const sold = Number(params.get("sold") ?? 0.3);
 const mark = params.get("mark")?.split(":").map(Number);
 const camera = params.get("camera")?.split(":").map(Number);
+const themeParam = params.get("theme");
+const theme: Theme = themeParam === "dark" || themeParam === "high-contrast" ? themeParam : "light";
 const gesturesParam = params.get("gestures");
 const gestures: GestureHandling =
   gesturesParam === "cooperative" || gesturesParam === "none" ? gesturesParam : "greedy";
@@ -71,7 +74,12 @@ report(
 );
 
 let host: ReturnType<typeof attach> | undefined;
-const stats = { frames: 0, glErrors: 0 };
+function setTheme(name: Theme): void {
+  view.setTheme(name);
+  document.body.dataset["theme"] = name;
+  host?.update();
+}
+const stats = { frames: 0, glErrors: 0, setTheme };
 Object.assign(window, { caveaDemo: stats });
 let afterFirstFrame: (() => void) | undefined;
 let loadedAt = 0;
@@ -126,11 +134,12 @@ if (
   const compileStart = performance.now();
   const ccf = statics.demoChart(seats, seed, shape);
   const loadStart = performance.now();
+  setTheme(theme);
   view.loadChart(ccf);
   loadedAt = performance.now();
   report(
     `compiled ${seats} seats in ${(loadStart - compileStart).toFixed(1)} ms (${ccf.length} B CCF); ` +
-      `loadChart ${(loadedAt - loadStart).toFixed(1)} ms`,
+      `loadChart ${(loadedAt - loadStart).toFixed(1)} ms; theme ${theme}`,
   );
   if (camera !== undefined && camera.length === 4) {
     const [x = 0, y = 0, width = 1, height = 1] = camera;

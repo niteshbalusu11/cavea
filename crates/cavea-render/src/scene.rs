@@ -35,8 +35,9 @@ pub struct Scene {
     /// What the camera fits and clamps to: the active floor's seat centres
     /// grown by `max_half`.
     pub bounds: Bounds,
-    /// The largest half seat size in chart units: how far a seat reaches past
-    /// its centre, so render chunk boxes (of centres) are grown by it.
+    /// The largest half seat size in chart units, as the static buffer
+    /// encodes it: how far a seat reaches past its centre along its own axes.
+    /// Culling grows render chunk boxes (of centres) by this, rotated (04 §11).
     pub max_half: f32,
     /// The chart's default seat size in chart units.
     pub seat_size: f32,
@@ -60,7 +61,7 @@ impl Scene {
         let max_half = chart
             .rows
             .iter()
-            .map(|r| f32::from(r.seat_size) * 0.125)
+            .map(|r| f32::from(r.seat_size.div_ceil(2)) * 0.25)
             .fold(seat_size / 2.0, f32::max);
         let (active, floor_box) = chart.floors.first().map_or((0..0, [0; 4]), |f| {
             (f.seat_first..f.seat_first + f.seat_count, f.bounds)
