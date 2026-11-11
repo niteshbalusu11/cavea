@@ -16,7 +16,7 @@ use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderValue, Request, Response, StatusCode, header};
 use axum::routing::{get, post};
 use cavea_engine::{
-    ActorConfig, Batch, ChartView, Command, EventId, EventState, Failure, InvalidReason,
+    ActorConfig, Authority, Batch, ChartView, Command, EventId, EventState, Failure, InvalidReason,
     LoadedEvent, ManualClock, MemoryStore, Missing, ObjectFailure, ObjectReason, ObjectRef,
     Outcome, Request as EngineRequest, SeatStore, StoreError, Timestamp, TokenHash,
 };
@@ -387,6 +387,7 @@ fn hold_route(
         seq: 0,
         holds: vec![],
         objects: vec![],
+        idempotency: vec![],
     };
     let store = MemoryStore::new();
     store.create_event(event, 1);
@@ -401,11 +402,13 @@ fn hold_route(
         async move {
             let request = EngineRequest {
                 actor: "sk_test".into(),
+                authority: Authority::Secret,
                 command: Command::CreateHold {
                     token: TokenHash([1; 32]),
                     ttl_secs: 900,
                     max_objects: None,
                 },
+                idempotency: None,
             };
             match handle.send(request).await {
                 Ok(Outcome::HoldCreated { .. }) => Ok(StatusCode::CREATED),
