@@ -15,7 +15,8 @@ use crate::index::{P, Place, Rect};
 use crate::selection::shown;
 
 /// Which targets snap, and the grid step in chart units.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SnapSettings {
     pub grid: bool,
     pub step: f64,

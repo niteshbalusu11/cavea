@@ -14,6 +14,7 @@ mod block;
 mod brush;
 mod draw;
 pub(crate) mod focal;
+mod hand;
 pub(crate) mod handles;
 mod row;
 mod select;
@@ -25,6 +26,7 @@ pub(crate) use block::{ArcTool, BlockTool};
 pub(crate) use brush::BrushTool;
 pub(crate) use draw::Spot;
 pub(crate) use focal::FocalTool;
+pub(crate) use hand::HandTool;
 pub use handles::{Corner, Handle, HandleKind, Side};
 pub(crate) use row::RowTool;
 pub(crate) use select::{SelectTool, select_all, step_in};
@@ -59,6 +61,9 @@ pub mod tuning {
     pub const HANDLE_TOUCH: f64 = 14.0;
     /// How far the rotate handle sits outside the selection frame.
     pub const ROTATE_OFFSET: f64 = 24.0;
+    /// How far the curve handle sits behind the middle of a row block's
+    /// front row, clear of the top side's handle.
+    pub const CURVE_OFFSET: f64 = 16.0;
     /// How near a snap target must be to pull a position onto it.
     pub const SNAP: f64 = 6.0;
     /// How far around the pointer or the dragged selection snapping looks
@@ -166,7 +171,8 @@ pub enum Input {
 }
 
 /// The pointer the canvas should show.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Cursor {
     #[default]
     Default,
@@ -174,12 +180,19 @@ pub enum Cursor {
     Move,
     /// Drawing a selection box.
     Crosshair,
+    /// The hand tool, ready to pan.
+    Grab,
+    /// Panning.
+    Grabbing,
 }
 
 /// The tools of the tool rail; one is active at a time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ToolId {
     Select,
+    /// Pans the view (07 §4); also while Space is held.
+    Hand,
     RowBlock,
     ArcBlock,
     Row,
@@ -267,6 +280,13 @@ pub enum Readout {
     Rotate {
         angle: f64,
     },
+    /// The curve handle: how far the front row's middle lies behind the
+    /// line through its ends, and the arc's radius (none for a bulge or a
+    /// straight block).
+    Curve {
+        depth: f64,
+        radius: Option<f64>,
+    },
 }
 
 /// Text being typed (07 §2.3): the chrome shows a field at `at` (world)
@@ -324,4 +344,9 @@ pub(crate) trait Tool: std::fmt::Debug {
 
     /// Takes the whole string of a text field the tool asked for.
     fn text(&mut self, _cx: &mut Context<'_>, _text: &str) {}
+
+    /// How far the view should pan, in CSS pixels, since last asked.
+    fn take_pan(&mut self) -> Option<P> {
+        None
+    }
 }

@@ -122,6 +122,9 @@ impl Document {
     pub(crate) fn apply_op(&mut self, op: Op) -> Result<Op, Failed> {
         self.revision += 1;
         let rev = self.revision;
+        if !matches!(op, Op::Transform { .. }) {
+            self.structure = rev;
+        }
         match op {
             Op::Insert {
                 parent,

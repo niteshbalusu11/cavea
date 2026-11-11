@@ -14,7 +14,9 @@ use crate::document::{Document, LoadError};
 use crate::draft::Draft;
 use crate::editor::{Applied, Editor};
 use crate::guides::{FloorGuides, Guides, UserGuide};
-use crate::index::{Rect, SpatialIndex};
+use crate::import::{self, ImportError};
+use crate::index::{P, Rect, SpatialIndex};
+use crate::layers::Layers;
 use crate::numbering::{self, Numbering, NumberingView, Preview};
 use crate::rows;
 use crate::section;
@@ -22,11 +24,14 @@ use crate::selection::{self, Level, Selection, View, floor_of};
 use crate::tool::handles::targets;
 use crate::tool::snap::{Snap, SnapSettings};
 use crate::tool::{
-    self, ArcTool, BlockTool, BrushTool, Context, Cursor, FocalTool, Input, Overlay, RowTool,
-    SelectTool, ShapeKindTool, ShapeTool, TextTool, Tool, ToolId,
+    self, ArcTool, BlockTool, BrushTool, Button, Context, Cursor, FocalTool, HandTool, Input, Key,
+    Overlay, RowTool, SelectTool, ShapeKindTool, ShapeTool, TextTool, Tool, ToolId,
 };
 use crate::validation::{self, Progress, ValidationView, Validator};
+use crate::views::Seen;
 use cavea_compiler::document::{Node, Outline, Points};
+
+mod shell;
 
 #[derive(Debug)]
 pub struct Session {
@@ -43,6 +48,50 @@ pub struct Session {
     preview: Option<Proposal>,
     validator: Validator,
     guides: Guides,
+    layers: Layers,
+    /// The tool Space returns to while it holds the hand tool.
+    held: Option<ToolId>,
+    /// The screen position of a middle-button pan in progress.
+    middle: Option<P>,
+    /// A number field is being scrubbed, in a gesture of the session's own,
+    /// with the last command it showed.
+    scrub: Option<Option<Command>>,
+    watch: Watch,
+}
+
+/// What `changed` compares the views' sources with (07 §14).
+#[derive(Debug, Default)]
+struct Watch {
+    seen: Seen,
+    /// The selection when last compared, and a count of its changes.
+    selection: Selection,
+    selections: u64,
+    /// Changes of the guides, the numbering preview, and the tool, active
+    /// category or snap settings; inputs passed to the tool.
+    guides: u64,
+    previews: u64,
+    tools: u64,
+    inputs: u64,
+}
+
+/// What the shell does after an input: pan the view by `pan` CSS pixels
+/// (the hand tool, Space, the middle button).
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputResult {
+    pub pan: Option<[f64; 2]>,
+}
+
+/// The tool rail and the snapping toggles.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolView {
+    pub tool: ToolId,
+    /// While Space holds the hand tool, the tool it returns to.
+    pub held: Option<ToolId>,
+    /// The active category (07 §7).
+    pub category: Option<String>,
+    pub snap: SnapSettings,
 }
 
 /// A numbering previewed: for the selection and document it was made on.
@@ -57,7 +106,23 @@ struct Proposal {
 
 impl Session {
     pub fn load(document: ChartDocument) -> Result<Self, LoadError> {
-        let editor = Editor::load(document)?;
+        Ok(Self::open(Editor::load(document)?))
+    }
+
+    /// Opens chart document JSON, read as hostile input (07 §12): the
+    /// designer's import and the way the shell opens a draft. Importing
+    /// over an open chart is a new session: its undo history, selection,
+    /// guides and validation start afresh, and the shell asks first.
+    pub fn import(text: &str) -> Result<Self, ImportError> {
+        Ok(Self::open(Editor::from_document(import::import(text)?)))
+    }
+
+    /// The chart document JSON the server stores as the draft (07 §12).
+    pub fn export(&self) -> String {
+        import::export(self.document())
+    }
+
+    fn open(editor: Editor) -> Self {
         let floor = editor.document().floors().first().map(|f| f.id);
         let category = editor
             .document()
@@ -76,9 +141,14 @@ impl Session {
             preview: None,
             validator: Validator::default(),
             guides: Guides::default(),
+            layers: Layers::default(),
+            held: None,
+            middle: None,
+            scrub: None,
+            watch: Watch::default(),
         };
         session.settle();
-        Ok(session)
+        session
     }
 
     pub fn editor(&self) -> &Editor {
@@ -109,9 +179,16 @@ impl Session {
     /// Switches the tool; the old one abandons what it was doing first, so
     /// no gesture is left open.
     pub fn set_tool(&mut self, id: ToolId) {
+        self.held = None;
+        self.switch(id);
+    }
+
+    fn switch(&mut self, id: ToolId) {
         self.reset_tool();
+        self.watch.tools += 1;
         self.tool = match id {
             ToolId::Select => Box::new(SelectTool::default()),
+            ToolId::Hand => Box::new(HandTool::default()),
             ToolId::RowBlock => Box::new(BlockTool::default()),
             ToolId::ArcBlock => Box::new(ArcTool::default()),
             ToolId::Row => Box::new(RowTool::default()),
@@ -133,12 +210,14 @@ impl Session {
     }
 
     pub fn set_category(&mut self, key: Option<String>) {
+        self.watch.tools += 1;
         self.category = key;
     }
 
     /// The whole string of the text field the tool asked for
     /// (`Overlay::text`), on every change.
     pub fn set_text(&mut self, text: &str) {
+        self.watch.inputs += 1;
         self.with_tool(|tool, cx| tool.text(cx, text));
     }
 
@@ -377,6 +456,7 @@ impl Session {
             .after_z
             .unwrap_or(self.document().settings().alpha_overflow);
         let preview = numbering::preview(&view, &nodes, overflow);
+        self.watch.previews += 1;
         let proposal = self.preview.insert(Proposal {
             selection: self.selection.clone(),
             revision: self.document().revision(),
@@ -497,6 +577,7 @@ impl Session {
     /// (`was`: it was the active one).
     fn follow(&mut self, was: bool, next: Option<String>, result: &Result<Applied, CommandError>) {
         if result.is_ok() && was {
+            self.watch.tools += 1;
             self.category = next;
         }
     }
@@ -561,21 +642,25 @@ impl Session {
 
     /// Adds a guide on the floor shown; returns its index.
     pub fn add_guide(&mut self, guide: UserGuide) -> Result<usize, CommandError> {
+        self.watch.guides += 1;
         self.guides.add(self.floor, guide)
     }
 
     /// Moves guide `index` of the floor shown to `at`.
     pub fn move_guide(&mut self, index: usize, at: f64) -> Result<(), CommandError> {
+        self.watch.guides += 1;
         self.guides.set(self.floor, index, at)
     }
 
     /// Removes guide `index` of the floor shown (dragged back to a ruler).
     pub fn remove_guide(&mut self, index: usize) -> bool {
+        self.watch.guides += 1;
         self.guides.remove(self.floor, index)
     }
 
     /// Removes every guide of the floor shown.
     pub fn clear_guides(&mut self) {
+        self.watch.guides += 1;
         self.guides.clear(self.floor);
     }
 
@@ -591,16 +676,48 @@ impl Session {
 
     /// Replaces every guide with ones saved before, all or nothing.
     pub fn restore_guides(&mut self, saved: Vec<FloorGuides>) -> Result<(), CommandError> {
+        self.watch.guides += 1;
         self.guides.restore(saved)
     }
 
     /// Passes input to the active tool. A pointer event that is not finite,
     /// or has a zoom of 0 or less, is dropped, except that such a release
     /// cancels: the drag it would have ended does not stay open.
-    pub fn input(&mut self, mut input: Input) {
+    ///
+    /// The view pans, by the result's `pan`, with the hand tool, while
+    /// Space is held (the hand tool stands in for the active tool, which
+    /// gets it back on release), and with the middle button in any tool.
+    pub fn input(&mut self, mut input: Input) -> InputResult {
         match &input {
             Input::PointerUp(p) if !p.valid() => input = Input::PointerCancel,
-            Input::PointerDown(p) | Input::PointerMove(p) if !p.valid() => return,
+            Input::PointerDown(p) | Input::PointerMove(p) if !p.valid() => {
+                return InputResult::default();
+            }
+            _ => {}
+        }
+        self.end_scrub();
+        self.watch.inputs += 1;
+        if let Some(pan) = self.middle_pan(&input) {
+            return pan;
+        }
+        match input {
+            Input::KeyDown(Key::Char(' '), _) => {
+                // Not in the middle of a gesture, which switching would cancel.
+                if self.held.is_none()
+                    && self.tool_id != ToolId::Hand
+                    && !self.editor.gesture_open()
+                {
+                    self.held = Some(self.tool_id);
+                    self.switch(ToolId::Hand);
+                }
+                return InputResult::default();
+            }
+            Input::KeyUp(Key::Char(' '), _) => {
+                if let Some(back) = self.held.take() {
+                    self.switch(back);
+                }
+                return InputResult::default();
+            }
             _ => {}
         }
         self.snap.guides.clear();
@@ -611,6 +728,43 @@ impl Session {
         if matches!(input, Input::PointerUp(_) | Input::PointerCancel) {
             self.snap.guides.clear();
         }
+        InputResult {
+            pan: self.tool.take_pan(),
+        }
+    }
+
+    /// A drag with the middle button pans in any tool; the tool sees none
+    /// of it.
+    fn middle_pan(&mut self, input: &Input) -> Option<InputResult> {
+        let pan = |from: P, to: P| InputResult {
+            pan: Some([to[0] - from[0], to[1] - from[1]]),
+        };
+        match (input, self.middle) {
+            (Input::PointerDown(p), None)
+                if p.button == Button::Middle && !self.editor.gesture_open() =>
+            {
+                self.middle = Some(p.screen);
+                Some(InputResult::default())
+            }
+            (Input::PointerMove(p), Some(from)) => {
+                self.middle = Some(p.screen);
+                Some(pan(from, p.screen))
+            }
+            // The tool sees the release too: a press it had is let go.
+            (Input::PointerUp(p), Some(from)) => {
+                self.middle = None;
+                let up = pan(from, p.screen);
+                self.with_tool(|tool, cx| tool.input(cx, input));
+                Some(up)
+            }
+            (Input::PointerCancel, Some(_)) => {
+                self.middle = None;
+                self.with_tool(|tool, cx| tool.input(cx, input));
+                Some(InputResult::default())
+            }
+            (Input::PointerDown(_), Some(_)) => Some(InputResult::default()),
+            _ => None,
+        }
     }
 
     pub fn snap_settings(&self) -> SnapSettings {
@@ -620,6 +774,7 @@ impl Session {
     /// Turns each kind of snapping on or off, and sets the grid step (a
     /// step that is not finite and above 0 turns the grid off).
     pub fn set_snap(&mut self, settings: SnapSettings) {
+        self.watch.tools += 1;
         self.snap.settings = settings;
     }
 
@@ -677,6 +832,7 @@ impl Session {
     /// Shows another floor; the selection is cleared. False for a floor the
     /// chart does not list.
     pub fn set_floor(&mut self, floor: u32) -> bool {
+        self.end_scrub();
         if !self.document().floors().iter().any(|f| f.id == floor) {
             return false;
         }
@@ -752,6 +908,7 @@ impl Session {
     }
 
     fn reset_tool(&mut self) {
+        self.end_scrub();
         self.preview = None;
         self.snap.guides.clear();
         self.with_tool(|tool, cx| tool.reset(cx));
@@ -785,6 +942,7 @@ impl Session {
             .as_ref()
             .is_some_and(|k| !cats.iter().any(|c| &c.key == k))
         {
+            self.watch.tools += 1;
             self.category = cats.first().map(|c| c.key.clone());
         }
         let listed = |f| doc.floors().iter().any(|l| l.id == f);

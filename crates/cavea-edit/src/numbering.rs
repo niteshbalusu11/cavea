@@ -79,7 +79,7 @@ pub enum Shared<T> {
     Mixed,
 }
 
-fn shared<T: PartialEq>(mut values: impl Iterator<Item = T>) -> Option<Shared<T>> {
+pub(crate) fn shared<T: PartialEq>(mut values: impl Iterator<Item = T>) -> Option<Shared<T>> {
     let first = values.next()?;
     Some(if values.all(|v| v == first) {
         Shared::Same(first)

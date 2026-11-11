@@ -42,6 +42,8 @@ pub enum HandleKind {
     Corner(Corner),
     /// A line's first (0) or last (1) point.
     End(u8),
+    /// The middle of a row block's front row: drag to curve it (07 §5.3).
+    Curve,
 }
 
 /// A handle: drawn at `at` (chart units) moved by `offset` CSS pixels.
@@ -138,8 +140,20 @@ pub(crate) fn handles(view: &View<'_>, sel: &Selection, pivot: Option<P>) -> Vec
         (Corner::BottomLeft, q[3]),
     ];
     match view.doc.node(id) {
-        Some(Node::RowBlock(_)) => {
+        Some(Node::RowBlock(b)) => {
             out.extend(sides.map(|(s, at)| handle(HandleKind::Side(s), at)));
+            // After the sides, which win where they meet on a small block.
+            let curved = b.rows.first().is_some_and(|r| r.seats > 1);
+            let middle = front_middle(view, id).filter(|_| curved);
+            if let Some(at) = middle.and_then(|p| view.index.to_world(id, p)) {
+                let (sin, cos) = b.rotation.to_radians().sin_cos();
+                let k = tuning::CURVE_OFFSET;
+                out.push(Handle {
+                    kind: HandleKind::Curve,
+                    at,
+                    offset: [-sin * k, cos * k],
+                });
+            }
         }
         Some(Node::Shape(s)) => match s.kind {
             ShapeKind::Rect | ShapeKind::Ellipse | ShapeKind::Polygon => {
@@ -261,6 +275,7 @@ pub(crate) fn resize(
     (room, rows): (u64, Option<&BTreeSet<u32>>),
 ) -> Step {
     match (base, kind) {
+        (Node::RowBlock(b), HandleKind::Curve) if rows.is_none() => curve(b, id, d),
         (Node::RowBlock(_), HandleKind::Side(Side::Top | Side::Bottom)) if rows.is_some() => {
             Step::Keep
         }
@@ -308,7 +323,7 @@ fn align(b: &RowBlock) -> f64 {
 /// Whether the compiler accepts the block's arc (03 §2.4): no row's radius
 /// reaches zero or changes sign, and no seat is more than half a turn from
 /// the apex. The same test as the compiler's, on the same numbers.
-fn arc_ok(b: &RowBlock) -> bool {
+pub(crate) fn arc_ok(b: &RowBlock) -> bool {
     let Curve::Arc { radius } = b.curve else {
         return true;
     };
@@ -597,6 +612,108 @@ fn pitch(b: &RowBlock, id: u32, side: Side, d: P) -> Step {
 /// its own space (Shift keeps a corner drag's aspect ratio), each side at
 /// least [`MIN_SIZE`]; a line's end dragged (Shift: 15° steps about the
 /// other end).
+/// The middle of the block's front row in its own space: its middle
+/// position, or between the two middle ones.
+fn front_middle(view: &View<'_>, id: u32) -> Option<P> {
+    let front: Vec<P> = view
+        .index
+        .seats(id)
+        .iter()
+        .filter(|s| s.row == 0)
+        .map(|s| s.pos)
+        .collect();
+    let (a, b) = (
+        front.get((front.len().max(1) - 1) / 2)?,
+        front.get(front.len() / 2)?,
+    );
+    Some([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0])
+}
+
+/// Half the length of the block's front row along itself.
+fn half_length(b: &RowBlock) -> f64 {
+    let seats = b.rows.first().map_or(1, |r| r.seats);
+    f64::from(seats.saturating_sub(1)) * b.seat_pitch / 2.0
+}
+
+/// How far the front row's middle lies behind (+y) the line through its
+/// ends: a bulge's amount, an arc's sagitta `R (1 − cos(a / R))` over the
+/// half-length `a`, 0 for a straight block.
+pub(crate) fn depth(b: &RowBlock) -> f64 {
+    match b.curve {
+        Curve::None {} => 0.0,
+        Curve::Bulge { amount } => amount,
+        Curve::Arc { radius } => radius * (1.0 - (half_length(b) / radius).cos()),
+    }
+}
+
+/// The arc radius whose front row of half-length `a` has sagitta `depth`:
+/// `a / θ` for the half-angle `θ` in (0, π] solving `a (1 − cos θ) / θ =
+/// |depth|`, found by bisection (the left side grows with `θ`). A sagitta
+/// past half a turn's (`2a / π`) gets half a turn.
+fn radius(a: f64, depth: f64) -> f64 {
+    let sag = |t: f64| a * (1.0 - t.cos()) / t;
+    let target = depth.abs();
+    let (mut lo, mut hi) = (0.0f64, std::f64::consts::PI);
+    if sag(hi) > target {
+        for _ in 0..80 {
+            let mid = (lo + hi) / 2.0;
+            if sag(mid) < target {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+    }
+    (a / hi).copysign(depth)
+}
+
+/// The curve handle dragged by `d` in the block's own space (07 §5.3): the
+/// front row's middle follows the pointer along the block's y axis and its
+/// ends stay where they were. A bulge changes its amount; a straight block
+/// or an arc becomes the arc of that sagitta, its origin (the apex) moved
+/// by the change of sagitta, and straight again within half a chart unit.
+fn curve(b: &RowBlock, id: u32, d: P) -> Step {
+    let start = depth(b);
+    let to = start + d[1];
+    if !to.is_finite() || d[1] == 0.0 {
+        return Step::Base;
+    }
+    let a = half_length(b);
+    let (curve, radius) = match b.curve {
+        Curve::Bulge { .. } => (Curve::Bulge { amount: to }, None),
+        _ if to.abs() < 0.5 => (Curve::None {}, None),
+        _ if a <= 0.0 => return Step::Keep,
+        _ => {
+            let r = radius(a, to);
+            (Curve::Arc { radius: r }, Some(r))
+        }
+    };
+    let mut changed = b.clone();
+    changed.curve = curve;
+    if !arc_ok(&changed) {
+        return Step::Keep;
+    }
+    let mut commands = vec![Command::SetProperty {
+        id,
+        property: Property::Curve(curve),
+    }];
+    if !matches!(b.curve, Curve::Bulge { .. }) {
+        let shift = match curve {
+            Curve::Arc { .. } => to,
+            _ => 0.0,
+        } - start;
+        commands.push(Command::TransformNodes {
+            nodes: vec![NodeTransform {
+                id,
+                origin: shifted(b, [0.0, shift]),
+                rotation: b.rotation,
+            }],
+        });
+    }
+    let shown = Readout::Curve { depth: to, radius };
+    Step::Show(Command::Composite { commands }, shown)
+}
+
 fn scale(s: &Shape, id: u32, kind: HandleKind, d: P, q: P, shift: bool) -> Step {
     let mut next = s.clone();
     let points = s.points.as_deref().unwrap_or_default();

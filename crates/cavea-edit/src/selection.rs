@@ -12,7 +12,9 @@ use crate::index::{P, Quad, Rect, Select, SpatialIndex};
 
 /// What the selected items are: nodes at the top level or in a section, rows
 /// of a row block, or seat positions of a row block or row (seat-edit mode).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// In JSON `{"kind": "top"}`, `{"kind": "section", "id": 30}`, and so on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", content = "id", rename_all = "camelCase")]
 pub enum Level {
     Top,
     /// The section's children; the section is top-level.

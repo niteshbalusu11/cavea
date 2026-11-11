@@ -256,7 +256,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **DSN-003** Undo and redo stack with coalescing for drags and scrubbing (07 §9)
 - [ ] **DSN-004** Live scene: incremental expansion per changed node (04 §25)
 - [ ] **DSN-005** Renderer extensions: chunk transforms and the overlay batcher (04 §25)
-- [ ] **DSN-006** View models and their generated TypeScript types; throttled to one per frame (07 §2, §14)
+- [ ] **DSN-006** View models and their generated TypeScript types; throttled to one per frame (07 §2, §14). The view models are built: `Session::changed` once per frame (D-40), the history, title, floors, status, selection and tool views (07 §2.3); the generated TypeScript types and the WebAssembly boundary are not started, and the shell owes the frame loop
 - [x] **DSN-007** Spatial index for snapping and selection (07 §5.2)
 
 ### Shell
@@ -269,7 +269,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 - [x] **DSN-011** Select tool: click, shift-click, box, enter and exit nested levels (07 §5.1)
 - [x] **DSN-012** Move, nudge, rotate with pivot, resize semantics for blocks and shapes (07 §5.1)
-- [ ] **DSN-013** Hand tool, zoom shortcuts, zoom to selection (07 §4)
+- [ ] **DSN-013** Hand tool, zoom shortcuts, zoom to selection (07 §4). The edit core is built: `ToolId::Hand`, Space held, the middle button, `pan` in `InputResult`, the boxes `selection_view().bounds` and `fit()` (07 §2.3, §4); the shell and renderer owe the camera, the zoom shortcuts and framing those boxes
 - [x] **DSN-014** Row block tool with live counts and numeric entry (07 §4)
 - [x] **DSN-015** Arc block tool (07 §4)
 - [x] **DSN-016** Single row tool with optional bend (07 §4)
@@ -282,13 +282,13 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 ### Panels and editing
 
-- [ ] **DSN-023** Inspector for row blocks with the curve handle (07 §5.3)
-- [ ] **DSN-024** Inspector for sections, shapes, text, images and chart settings (07 §5.5)
+- [ ] **DSN-023** Inspector for row blocks with the curve handle (07 §5.3). The edit core is built: `Session::inspector`, `set_field`, scrubbing, the select tool's curve handle (07 §2.3, §5.3); the shell owes the inspector and drawing the handle
+- [ ] **DSN-024** Inspector for sections, shapes, text, images and chart settings (07 §5.5). The edit core is built: the `section`, `shape`, `text`, `image` and `chart` groups of `Session::inspector` (07 §2.3); a section's label position waits for a schema change (07 §5.5), and the shell owes the inspector
 - [x] **DSN-025** Row-level editing: add or remove seats, shift, insert aisle, override label, delete row (07 §5.3)
 - [x] **DSN-026** Seat-edit mode: remove, restore, flags, category, label, nudge (07 §5.3)
 - [ ] **DSN-027** Numbering panel for rows and seats with canvas preview (07 §6). The edit core is built: `Session::numbering`, `preview_numbering`, `number`, `sample` (07 §2.3, §6); the shell owes the panel and drawing the preview's labels
 - [ ] **DSN-028** Categories panel: add, rename, recolour, merge, delete with reassignment; contrast warning (07 §7). The edit core is built: `Session::categories` and the category calls, `contrast`, `too_similar` (07 §2.3, §7); the shell owes the panel and the colour picker
-- [ ] **DSN-029** Layers panel: virtualised tree, drag to reparent, lock, hide (07 §3)
+- [ ] **DSN-029** Layers panel: virtualised tree, drag to reparent, lock, hide (07 §3). The edit core is built: `Session::layers` by page, `expand_layer`, `reveal_layer`, `click_layer`, `move_layers`, `lock_layer`, `hide_layer` (07 §2.3); the shell owes the panel and its drag and drop
 - [x] **DSN-030** Snapping: grid, edges and centres, equal spacing, row alignment, angles (07 §5.2)
 - [ ] **DSN-031** Rulers and user guides (07 §5.2). The edit core is built: guides per floor as snap targets, `Session::add_guide` and the rest, `saved_guides` (07 §5.2); the shell owes the rulers, dragging guides out of them, and storing the guides beside the draft
 - [x] **DSN-032** Align, distribute, flip, duplicate, array duplicate (07 §5.1)
@@ -303,7 +303,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [ ] **DSN-038** Continuous validation, panel, canvas markers (07 §10). The edit core is built: `Session::validate`, `validation`, `focus`, the overlay's `markers` (07 §2.3, §10); the shell owes the idle-time loop, the panel, the status-bar summary, the markers on the canvas and disabling publish
 - [ ] **DSN-039** Preview with the buyer renderer, device widths and sample states (07 §11)
 - [ ] **DSN-040** Publish flow: compile, diff, thumbnail upload (07 §11)
-- [ ] **DSN-041** Export and import of chart document JSON (07 §12)
+- [ ] **DSN-041** Export and import of chart document JSON (07 §12). The edit core is built: `Session::export`, `Session::import` with typed `ImportError`s (07 §12); the shell owes the menu items, the file download and upload, and asking before it replaces a draft
 - [ ] **DSN-042** New-chart screen, three templates, first-run tour (07 §16)
 - [ ] **DSN-043** "Insert row block" form as the non-pointer path (07 §15)
 - [ ] **DSN-044** Performance pass on the 100,000-seat chart (07 §14)

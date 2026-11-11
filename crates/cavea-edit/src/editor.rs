@@ -31,13 +31,25 @@ pub const MAX_UNDO: usize = 500;
 #[derive(Debug)]
 pub struct Editor {
     doc: Document,
-    undo: VecDeque<Vec<Op>>,
-    redo: Vec<Vec<Op>>,
+    undo: VecDeque<Entry>,
+    redo: Vec<Entry>,
     gesture: Option<Gesture>,
+    /// Raised by every change of the stacks or the gesture state.
+    generation: u64,
+}
+
+/// An undo or redo entry: the ops that restore the state before it, and a
+/// stable key naming what it did, for the shell to translate (07 §9).
+#[derive(Debug)]
+struct Entry {
+    label: &'static str,
+    ops: Vec<Op>,
 }
 
 #[derive(Debug, Default)]
 struct Gesture {
+    /// The key of the entry it becomes: the first label it was given.
+    label: Option<&'static str>,
     /// Inverses in the order their ops were applied.
     inverse: Vec<Op>,
     /// Membership only; never iterated.
@@ -55,12 +67,18 @@ pub struct Applied {
 
 impl Editor {
     pub fn load(document: ChartDocument) -> Result<Self, LoadError> {
-        Ok(Self {
-            doc: Document::load(document)?,
+        Ok(Self::from_document(Document::load(document)?))
+    }
+
+    /// An editor of a document loaded already, with empty history.
+    pub fn from_document(doc: Document) -> Self {
+        Self {
+            doc,
             undo: VecDeque::new(),
             redo: Vec::new(),
             gesture: None,
-        })
+            generation: 0,
+        }
     }
 
     pub fn document(&self) -> &Document {
@@ -70,6 +88,17 @@ impl Editor {
     /// Applies a command completely, or returns why not and changes nothing.
     /// Outside a gesture it is one undo entry and clears redo.
     pub fn apply(&mut self, command: Command) -> Result<Applied, CommandError> {
+        self.apply_as(command, None)
+    }
+
+    /// [`Self::apply`], naming the undo entry `label` rather than by the
+    /// command ([`Command::label`]). Inside a gesture the first label wins.
+    pub fn apply_as(
+        &mut self,
+        command: Command,
+        label: Option<&'static str>,
+    ) -> Result<Applied, CommandError> {
+        let label = label.unwrap_or_else(|| command.label());
         let ids = (self.doc.fresh, self.doc.high_water);
         let mut inverse = Vec::new();
         let mut created = Vec::new();
@@ -81,13 +110,14 @@ impl Editor {
         }
         match &mut self.gesture {
             Some(g) => {
+                g.label.get_or_insert(label);
                 for op in inverse {
                     if op.key().is_none_or(|k| g.keys.insert(k)) {
                         g.inverse.push(op);
                     }
                 }
             }
-            None => self.push(inverse),
+            None => self.push(label, inverse),
         }
         Ok(Applied { created })
     }
@@ -100,13 +130,15 @@ impl Editor {
             ids: (self.doc.fresh, self.doc.high_water),
             ..Gesture::default()
         });
+        self.generation += 1;
         Ok(())
     }
 
     /// Closes the gesture as one undo entry (none if it changed nothing).
     pub fn end_gesture(&mut self) -> Result<(), CommandError> {
         let g = self.gesture.take().ok_or(CommandError::NoGesture)?;
-        self.push(g.inverse);
+        self.generation += 1;
+        self.push(g.label.unwrap_or("gesture"), g.inverse);
         Ok(())
     }
 
@@ -114,6 +146,7 @@ impl Editor {
     /// redo as it was. Ids it took are not handed out again.
     pub fn cancel_gesture(&mut self) -> Result<(), CommandError> {
         let g = self.gesture.take().ok_or(CommandError::NoGesture)?;
+        self.generation += 1;
         self.doc.unwind(g.inverse);
         Ok(())
     }
@@ -141,17 +174,18 @@ impl Editor {
         if self.gesture.is_some() {
             return Err(CommandError::GestureOpen);
         }
-        let Some(entry) = self.undo.pop_back() else {
+        let Some(Entry { label, ops }) = self.undo.pop_back() else {
             return Ok(false);
         };
-        match self.doc.apply_all(entry) {
-            Ok(mut redo) => {
-                redo.reverse();
-                self.redo.push(redo);
+        self.generation += 1;
+        match self.doc.apply_all(ops) {
+            Ok(mut ops) => {
+                ops.reverse();
+                self.redo.push(Entry { label, ops });
                 Ok(true)
             }
-            Err((entry, e)) => {
-                self.undo.push_back(entry);
+            Err((ops, e)) => {
+                self.undo.push_back(Entry { label, ops });
                 Err(e)
             }
         }
@@ -162,17 +196,18 @@ impl Editor {
         if self.gesture.is_some() {
             return Err(CommandError::GestureOpen);
         }
-        let Some(entry) = self.redo.pop() else {
+        let Some(Entry { label, ops }) = self.redo.pop() else {
             return Ok(false);
         };
-        match self.doc.apply_all(entry) {
-            Ok(mut undo) => {
-                undo.reverse();
-                self.undo.push_back(undo);
+        self.generation += 1;
+        match self.doc.apply_all(ops) {
+            Ok(mut ops) => {
+                ops.reverse();
+                self.undo.push_back(Entry { label, ops });
                 Ok(true)
             }
-            Err((entry, e)) => {
-                self.redo.push(entry);
+            Err((ops, e)) => {
+                self.redo.push(Entry { label, ops });
                 Err(e)
             }
         }
@@ -186,14 +221,27 @@ impl Editor {
         self.redo.len()
     }
 
+    /// The keys of the entries undo and redo would apply next.
+    pub fn labels(&self) -> (Option<&'static str>, Option<&'static str>) {
+        let undo = self.undo.back().map(|e| e.label);
+        (undo, self.redo.last().map(|e| e.label))
+    }
+
+    /// Raised by every change of the undo and redo stacks or of the gesture
+    /// state: what the history view shows cannot change without it.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     /// Pushes the inverses of a step (in application order) as one entry.
-    fn push(&mut self, mut inverse: Vec<Op>) {
-        if inverse.is_empty() {
+    fn push(&mut self, label: &'static str, mut ops: Vec<Op>) {
+        if ops.is_empty() {
             return;
         }
-        inverse.reverse();
+        ops.reverse();
+        self.generation += 1;
         self.redo.clear();
-        self.undo.push_back(inverse);
+        self.undo.push_back(Entry { label, ops });
         if self.undo.len() > MAX_UNDO {
             self.undo.pop_front();
         }
@@ -204,7 +252,7 @@ impl Editor {
     pub(crate) fn entry_sizes(&self) -> Vec<usize> {
         self.undo
             .iter()
-            .map(|e| serde_json::to_vec(e).map_or(0, |v| v.len()))
+            .map(|e| serde_json::to_vec(&e.ops).map_or(0, |v| v.len()))
             .collect()
     }
 }
