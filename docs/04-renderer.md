@@ -57,7 +57,8 @@ The engine is driven only by commands and emits only events. Both are plain data
 | `Resize` | Width, height, device pixel ratio, maximum ratio (`maxDpr`) |
 | `Pointer` | Kind (down, move, up, cancel), pointer id, type, position, time |
 | `Wheel` | Delta in CSS pixels, position, modifier flags, time |
-| `Key` | Key, modifiers |
+| `Key` | Key (the DOM's `KeyboardEvent.key`), modifiers: the keyboard baseline of `11-accessibility.md` §3.1 (arrows move the virtual focus, §15; Enter or Space selects it as a tap; Escape hides it; `+`, `=`, `-` zoom one step; `0` fits). `Engine::takes_key` says, before it is sent, whether the engine takes a key: never with Ctrl, Alt or Meta; Escape only while a focus is shown |
+| `SetFocusShown` | The map gained the page's focus from the keyboard (shows the remembered focus) or lost it (hides it, keeping it) |
 | `SetCamera` / `FlyTo` | Target bounds, object or section; `FlyTo`: duration, or none for 250–600 ms by distance (§13) |
 | `SetGestureHandling` | `greedy`, `cooperative`, `none` (§14) |
 | `SetReducedMotion` | On or off (§13, `11-accessibility.md` §6) |
@@ -85,7 +86,7 @@ The engine is driven only by commands and emits only events. Both are plain data
 | `HoldRequest` / `ReleaseRequest` | Request id, labels |
 | `SelectionChanged` | Selected objects with label, category, section, row, seat, flags; when the buyer's holds expire, if known |
 | `SelectionInvalid` / `SelectionValid` | Rule and offending objects (§16) |
-| `ObjectHover` / `ObjectFocus` | Object details, anchor position in screen space (the object's centre in CSS pixels); none when it leaves every object |
+| `ObjectHover` / `ObjectFocus` | Object details, anchor position in screen space (the object's centre in CSS pixels); none when it leaves every object. `ObjectFocus` reports the keyboard focus while it is shown: when it moves or appears (anchored where the camera's follow will settle), none when it is hidden, and again when its seat's visual state changes or the camera comes to rest elsewhere |
 | `SectionEnter` | Section |
 | `ObjectUnavailable` | A selected object was taken by someone else, or its hold failed with `not_free`; it is no longer selected |
 | `HoldLost` | The buyer's hold on these selected objects is gone (the token expired or is unknown, or the objects were released elsewhere); they are no longer selected |
@@ -347,7 +348,7 @@ Let `s` be the seat size in CSS pixels at the current zoom.
 | Tap or click | Select, or zoom if the target is too small (§15) |
 | Long press (touch) | Show the tooltip |
 | Hover (mouse) | Hover ring and tooltip |
-| Keyboard | See `11-accessibility.md` §3 |
+| Keyboard | See `11-accessibility.md` §3: `Key` and the focus search (§15) |
 
 - Pointer events are the single input source on the web, with pointer capture on press so a drag that leaves the canvas continues. Each active pointer is tracked by id (up to 10). A lost capture, a hidden page or a second mouse press cancels the pointers left down.
 - A press becomes a drag after 8 px of movement (touch, pen) or 4 px (mouse). The drag grabs the chart where the press began.
@@ -375,6 +376,7 @@ Let `s` be the seat size in CSS pixels at the current zoom.
 - Tables, booths and areas are tested against their shapes after seats.
 - **Zoom-to-select:** on touch or pen, if the hit seat's size on screen `s < 18` the tap does not select. It flies the camera to make seats 32 px, centred on the tap. With a mouse, selection works from `s ≥ 5`; a click on a smaller seat zooms the same way. A tap that hits no seat does nothing. The thresholds are in `cavea_render::tuning`.
 - Hover hit-tests each mouse or pen position and again when the camera moves; `ObjectHover` fires and the ring is redrawn only when the hovered object changes. A long press reports its object with `ObjectHover` (for the tooltip); the next touch tap clears it.
+- **Keyboard focus** (`cavea_render::focus`, `11-accessibility.md` §3.2). An arrow moves the focus to the focused seat's row neighbour within 45° of the arrow's screen direction; otherwise to the seat of another row with the lowest `along + 2 × |across|` within 45°, then anywhere ahead; otherwise it stays (an edge). Ties go to the lower `idx`. It uses the same hierarchy as the hit test: the focused seat's own section first, then every section and row whose box could hold a better seat, so a step reads a few rows; with no focus, the seat nearest the view's centre is the hit test's search. The focus is a seat at every level: below the seats level the camera zooms to 14 px seats on it (`LOD_DETAIL_SEAT_PX`), otherwise it pans the least that keeps the seat `FOCUS_MARGIN_PX` (32 CSS px) inside the view. The engine keeps the focus while its ring is hidden (Escape, `SetFocusShown(false)`, a tap that moves it to the tapped seat) and forgets it with the chart. Measured locally (release build, AMD Ryzen 9 7900X, `cavea bench focus`): 1.2 µs a search on `stadium-100k`, 2.1 µs a whole arrow key (search, camera, event) at overview and at detail; budget 20 µs and 50 µs.
 - Target: under 20 µs per hit test at 100,000 seats. Measured locally (release build, AMD Ryzen 9 7900X, the synthetic 100,000-seat stadium, taps near seats at 18 to 64 px seats): 0.55 µs.
 
 ## 16. Selection engine
