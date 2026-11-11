@@ -36,13 +36,36 @@ Decently strict, not pedantic.
 - `cargo fmt` clean.
 - `cargo clippy` with warnings denied. Lints are configured once in the workspace `Cargo.toml`: the default clippy set, plus `dbg_macro`, `todo`, `unimplemented`, and `unwrap_used` and `expect_used` outside tests. Do not enable `pedantic` or `nursery` wholesale.
 - `unsafe` only where an FFI or graphics API requires it, with a comment saying why it is sound.
-- Library crates return typed errors and do not panic on bad input. `cavea-format` treats every input byte as hostile.
+- No panics in normal operation. Do not call `unwrap` or `expect` outside tests; propagate with `?` and return a `Result`. Indexing that can go out of bounds uses `get`.
+- Library crates define their own error types and return them. Binaries (`cavea-server`'s `main`, `cavea-cli`, `xtask`) may use `anyhow` for top-level error handling with context.
+- `cavea-format` treats every input byte as hostile.
 
 **TypeScript**
 
 - `strict: true`, plus `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitOverride`, `noFallthroughCasesInSwitch`.
 - oxc lint clean with no blanket disables. A single-line disable needs a reason.
 - No `any` in exported types.
+
+## Dependencies
+
+Keep them few. Rust build time is paid on every change, locally and in CI, and the server is where it hurts most.
+
+- Add a dependency only when it does substantial, hard-to-get-right work: the async runtime, the HTTP framework, the database driver, serialisation, cryptography, graphics bindings.
+- Do not add a crate for something a few dozen lines of our own code can do: small helpers, trivial macros, one-function utilities, convenience wrappers.
+- Prefer what the standard library and the crates already in the workspace provide.
+- Turn off default features and enable only what is used.
+- Every new dependency is named in the pull request with one line on why it is needed and what it adds to the build (`cargo tree` before and after). Avoid pulling in a second version of a crate already in the tree.
+- The same restraint applies to JavaScript packages.
+
+## Logging
+
+Structured, never ad hoc.
+
+- All logging goes through one workspace crate, `cavea-telemetry`, built on `tracing`. It owns setup (JSON output in production, readable output in development, level from configuration) and the HTTP layer.
+- Every HTTP request gets a span with a request id, method, matched route, status and duration; the request id is returned in the `Cavea-Request-Id` header. Work done for a request (mailbox wait, apply, commit, database calls) happens inside child spans, so one request can be followed end to end.
+- Log events carry fields, not interpolated strings: `info!(event = %key, seq, "hold committed")`.
+- No `println!`, `eprintln!` or `dbg!` outside `xtask` and CLI output.
+- Never log secrets: API keys, hold tokens, session tokens, request bodies (`docs/12-security-licensing.md` §4).
 
 ## Tests
 

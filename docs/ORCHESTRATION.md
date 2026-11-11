@@ -114,5 +114,7 @@ Ask only when a decision is genuinely the owner's and work cannot route around i
 - CI stays small: format, lint, type-check and build checks only. Do not let a builder add audit, coverage or benchmark jobs.
 - Test suites are not in CI. Every builder runs the relevant tests locally before filing and again after rebasing; say so in each brief.
 - System-level tools come from `flake.nix`. A builder that needs a new one adds it to the flake in the same pull request instead of installing it by hand, and builders may run their commands through `nix develop -c` to get the pinned versions.
+- Remind every builder of the dependency, logging and no-panic rules in `AGENTS.md`. Reject a slice report that adds a small convenience dependency without justification; send it back.
+- `SRV-025` (the `cavea-telemetry` crate) lands before or with the first server endpoints, so that every endpoint is traced from the start.
 - No secrets in briefs, commits or pull requests.
 - Commit and pull-request attribution follows the harness's instructions.
