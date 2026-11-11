@@ -1,0 +1,10 @@
+{
+  "about": "a touch tap on a seat smaller than 18 px does not select: it flies the camera to make seats 32 px about the tap",
+  "chart": "theatre",
+  "viewport": [800, 600],
+  "camera": [-1655, 200, 3310, 2480],
+  "steps": [
+    [100, "down", 1, "touch", 400, 302],
+    [160, "up", 1, "touch", 400, 302]
+  ]
+}

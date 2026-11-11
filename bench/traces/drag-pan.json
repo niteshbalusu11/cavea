@@ -1,0 +1,20 @@
+{
+  "about": "a mouse drag pans the map with the pointer and keeps moving with inertia after release; it selects nothing",
+  "chart": "theatre",
+  "viewport": [800, 600],
+  "camera": [-290, 380, 580, 440],
+  "steps": [
+    [100, "down", 1, "mouse", 400, 300],
+    [116, "move", 1, "mouse", 388, 296],
+    [132, "move", 1, "mouse", 376, 292],
+    [148, "move", 1, "mouse", 364, 288],
+    [164, "move", 1, "mouse", 352, 284],
+    [180, "move", 1, "mouse", 340, 280],
+    [196, "move", 1, "mouse", 328, 276],
+    [212, "move", 1, "mouse", 316, 272],
+    [228, "move", 1, "mouse", 304, 268],
+    [244, "move", 1, "mouse", 292, 264],
+    [260, "move", 1, "mouse", 280, 260],
+    [268, "up", 1, "mouse", 280, 260]
+  ]
+}

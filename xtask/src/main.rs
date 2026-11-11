@@ -21,6 +21,10 @@
 //!   `docs/01-architecture.md` §3.
 //! - `determinism`: run the tests that pin compiled hashes natively and for
 //!   wasm32 under bun (`docs/13-testing-benchmarks.md` §4).
+//! - `golden [--update] [--runs n] [case…]`: build the release WASM (without
+//!   the payload gate) and the CLI, then draw the renderer's golden images
+//!   in the flake's headless Chromium and compare them with the stored ones
+//!   (`tools/golden/run.ts`, `docs/13-testing-benchmarks.md` §6.1).
 
 mod api;
 mod determinism;
@@ -80,10 +84,12 @@ fn main() -> Result<()> {
         ["types", "--check"] => types::write(true),
         ["check-deps"] => check_deps(),
         ["determinism"] => determinism::determinism(),
+        ["golden", rest @ ..] => golden(rest),
         _ => {
             eprintln!(
                 "usage: cargo xtask <build-web [--demo | --update-baseline] | build-designer | \
-                 build-server [--target <triple>] | types [--check] | check-deps | determinism>"
+                 build-server [--target <triple>] | types [--check] | check-deps | determinism | \
+                 golden [--update] [--runs n] [case…]>"
             );
             std::process::exit(2);
         }
@@ -209,6 +215,28 @@ fn build_web(mode: Mode) -> Result<()> {
         }
         Err(problem) => bail!("payload gate: {problem}"),
     }
+}
+
+/// The renderer's golden images (`docs/13-testing-benchmarks.md` §6.1): the
+/// WASM a buyer gets (release profile, `wasm-opt`; the gate is not run, so
+/// a change that grows the payload can still be checked), the CLI that
+/// compiles the cases' charts, then the harness, which starts the browser,
+/// draws, compares and reports.
+fn golden(args: &[&str]) -> Result<()> {
+    let root = root();
+    let (target_dir, _, _) = build_wasm("cavea-web", &[], "packages/renderer/wasm")?;
+    run(cargo()
+        .current_dir(&root)
+        .args(["build", "--release", "--package", "cavea-cli"]))?;
+    let cli = target_dir.join("release/cavea");
+    let mut harness = Command::new("bun");
+    harness
+        .current_dir(&root)
+        .arg("tools/golden/run.ts")
+        .arg("--cli")
+        .arg(&cli)
+        .args(args);
+    run(&mut harness).context("the golden images differ, or the harness could not run")
 }
 
 /// The designer's module (`docs/07-designer.md` §2.4): an authoring tool,

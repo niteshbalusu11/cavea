@@ -1,0 +1,13 @@
+{
+  "about": "a click on an available seat selects it and asks for its hold; the hold confirmed, a second click deselects it and releases it",
+  "chart": "theatre",
+  "viewport": [800, 600],
+  "camera": [-290, 380, 580, 440],
+  "steps": [
+    [100, "down", 1, "mouse", 400, 175],
+    [160, "up", 1, "mouse", 400, 175],
+    [600, "holdOk"],
+    [1000, "down", 1, "mouse", 400, 175],
+    [1060, "up", 1, "mouse", 400, 175]
+  ]
+}

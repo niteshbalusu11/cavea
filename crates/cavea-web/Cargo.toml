@@ -27,6 +27,10 @@ cavea-testkit = { workspace = true, optional = true }
 [dev-dependencies]
 # The wire codecs the TypeScript fixture is checked against (`wire_fixture`).
 cavea-format.workspace = true
+# The interaction traces (`traces`): their charts, and the trace files.
+cavea-compiler.workspace = true
+cavea-testkit.workspace = true
+serde_json.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 cavea-render = { workspace = true, features = ["glow"] }

@@ -23,3 +23,6 @@ dist/
 
 # Nix and direnv
 .direnv/
+
+# benchmark results from development machines (bench/collect.ts)
+/bench/local-results/

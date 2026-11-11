@@ -1,0 +1,19 @@
+{
+  "about": "a touch that moves 6 px is still a tap and selects; one that moves 12 px (past the 8 px touch threshold) is a drag: it pans and selects nothing",
+  "chart": "theatre",
+  "viewport": [800, 600],
+  "camera": [-290, 380, 580, 440],
+  "steps": [
+    [100, "down", 1, "touch", 400, 175],
+    [130, "move", 1, "touch", 403, 177],
+    [160, "move", 1, "touch", 405, 178],
+    [190, "up", 1, "touch", 405, 178],
+    [500, "holdOk"],
+    [1000, "down", 2, "touch", 366, 294],
+    [1016, "move", 2, "touch", 366, 297],
+    [1032, "move", 2, "touch", 366, 300],
+    [1048, "move", 2, "touch", 366, 303],
+    [1064, "move", 2, "touch", 366, 306],
+    [1080, "up", 2, "touch", 366, 306]
+  ]
+}

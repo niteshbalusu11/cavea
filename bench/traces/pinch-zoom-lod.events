@@ -1,0 +1,17 @@
+      0.0 {"type":"cameraChanged","centre":[0.0000,1650.0000],"zoom":0.0426,"range":[0.0389,1.4545],"lod":"overview"}
+    150.0 {"type":"cameraChanged","centre":[0.0000,1650.0000],"zoom":0.0568,"range":[0.0389,1.4545],"lod":"crossFade"}
+    166.7 {"type":"cameraChanged","centre":[0.0000,1650.0000],"zoom":0.0640,"range":[0.0389,1.4545],"lod":"crossFade"}
+    183.3 {"type":"cameraChanged","centre":[0.0000,1650.0000],"zoom":0.0711,"range":[0.0389,1.4545],"lod":"crossFade"}
+    200.0 {"type":"cameraChanged","centre":[0.0000,1650.0000],"zoom":0.0782,"range":[0.0389,1.4545],"lod":"crossFade"}
+    216.7 {"type":"cameraChanged","centre":[0.0000,1650.0000],"zoom":0.0853,"range":[0.0389,1.4545],"lod":"crossFade"}
+    233.3 {"type":"cameraChanged","centre":[0.0000,1650.0000],"zoom":0.0924,"range":[0.0389,1.4545],"lod":"crossFade"}
+    250.0 {"type":"cameraChanged","centre":[0.0000,1650.0000],"zoom":0.0995,"range":[0.0389,1.4545],"lod":"crossFade"}
+    266.7 {"type":"cameraChanged","centre":[0.0000,1650.0000],"zoom":0.1066,"range":[0.0389,1.4545],"lod":"crossFade"}
+    283.3 {"type":"cameraChanged","centre":[0.0000,1650.0000],"zoom":0.1137,"range":[0.0389,1.4545],"lod":"seats"}
+    300.0 {"type":"cameraChanged","centre":[0.0000,1650.0000],"zoom":0.1208,"range":[0.0389,1.4545],"lod":"seats"}
+    316.7 {"type":"cameraChanged","centre":[0.0000,1650.0000],"zoom":0.1280,"range":[0.0389,1.4545],"lod":"seats"}
+    333.3 {"type":"cameraChanged","centre":[0.0000,1650.0000],"zoom":0.1351,"range":[0.0389,1.4545],"lod":"seats"}
+    350.0 {"type":"cameraChanged","centre":[0.0000,1650.0000],"zoom":0.1422,"range":[0.0389,1.4545],"lod":"seats"}
+    366.7 {"type":"cameraChanged","centre":[0.0000,1650.0000],"zoom":0.1564,"range":[0.0389,1.4545],"lod":"seats"}
+    383.3 {"type":"cameraChanged","centre":[0.0000,1650.0000],"zoom":0.1635,"range":[0.0389,1.4545],"lod":"seats"}
+    400.0 {"type":"cameraChanged","centre":[0.0000,1650.0000],"zoom":0.1706,"range":[0.0389,1.4545],"lod":"seats"}

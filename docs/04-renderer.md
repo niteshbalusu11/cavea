@@ -560,6 +560,6 @@ Measured locally (2026-11-11, release build, AMD Ryzen 9 7900X, the engine with 
 
 ## 26. Testing hooks
 
-- A headless mode renders a given chart, state and camera to a pixel buffer for golden-image tests.
-- A scripted input trace (recorded gestures with timestamps) drives benchmarks deterministically.
+- A headless mode renders a given chart, state and camera to a pixel buffer for golden-image tests. It is a host, not an engine mode (`DECISIONS.md` D-66): `tools/golden/page.ts` drives the release `View` with the SDK's text rasteriser and atlas loader; given a chart, its seat states, a selection (held or in flight), a hover position, keys pressed with the focus shown, a camera, a size, a pixel ratio and a theme, it sends the commands with reduced motion on, runs frames at fixed 60 Hz times until the engine asks for none and no text request is open (all in one task, so the drawing buffer is never presented in between), then reads it with `readPixels`. The engine reads no clock and every camera move is instant, so the pixels depend on neither wall-clock time nor the number of frames drawn. The release WASM carries nothing for it. `cargo xtask golden` (13 §6.1) runs it.
+- A scripted input trace (recorded gestures with timestamps) drives benchmarks deterministically. One format (`bench/traces/*.json`, described in `crates/cavea-web/src/traces.rs`) serves the interaction tests, replayed natively on a virtual 60 Hz clock, and the benchmark page, which replays the same steps as pointer events with real time (13 §6.2).
 - Every level-of-detail threshold and gesture constant is a named constant in one module.

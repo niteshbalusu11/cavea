@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cavea benchmark</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        font:
+          14px system-ui,
+          sans-serif;
+      }
+      /* The map fills the window; the controls sit on top. */
+      #map {
+        position: fixed;
+        inset: 0;
+      }
+      #controls {
+        position: fixed;
+        left: 8px;
+        top: 8px;
+        z-index: 1;
+        max-width: calc(100% - 16px);
+        pointer-events: none;
+      }
+      #controls > * {
+        pointer-events: auto;
+      }
+      #status,
+      #result {
+        margin: 8px 0 0;
+        padding: 6px 8px;
+        max-height: 40vh;
+        overflow: auto;
+        font:
+          12px/1.4 ui-monospace,
+          monospace;
+        background: rgb(0 0 0 / 0.75);
+        color: #fff;
+        border-radius: 4px;
+      }
+      #result:empty {
+        display: none;
+      }
+      button {
+        font: inherit;
+        padding: 8px 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <div id="controls">
+      <button id="start" type="button">Start benchmark</button>
+      <pre id="status">
+S1 to S5 of docs/13-testing-benchmarks.md §6.2. Keep the screen on and do not touch the map.</pre>
+      <pre id="result"></pre>
+    </div>
+    <script type="module" src="/src/bench.ts"></script>
+  </body>
+</html>
