@@ -19,7 +19,7 @@ use tracing::{Instrument as _, debug, error, info, info_span, warn};
 
 use crate::actor::{ActorConfig, ActorHandle, KeepAlive, PendingReply, Rejected, actor};
 use crate::state::{EventState, LoadError};
-use crate::store::{ChartProvider, SeatStore, StoreError};
+use crate::store::{Acquired, ChartProvider, SeatStore, StoreError};
 use crate::types::{Clock, EventId, Failure, Reply, Request, Timestamp};
 
 #[derive(Debug, Clone, Copy)]
@@ -272,6 +272,10 @@ impl<S: SeatStore, P: ChartProvider, C: Clock + Clone> Registry<S, P, C> {
     /// Look the event up; start its load if it has no entry.
     fn find(&self, event: EventId) -> Result<Found, OpenError> {
         let mut slots = self.inner.slots();
+        // Even a live actor takes nothing more once shutdown has begun.
+        if slots.shutting_down {
+            return Err(OpenError::ShuttingDown);
+        }
         match slots.map.get(&event) {
             Some(Slot::Live(live)) => return Ok(Found::Live(live.handle.clone())),
             Some(Slot::Loading(rx)) => return Ok(Found::Wait(rx.clone())),
@@ -279,9 +283,6 @@ impl<S: SeatStore, P: ChartProvider, C: Clock + Clone> Registry<S, P, C> {
                 return Err(error.clone());
             }
             Some(Slot::Failed { .. }) | None => {}
-        }
-        if slots.shutting_down {
-            return Err(OpenError::ShuttingDown);
         }
         let (tx, rx) = watch::channel(None);
         slots.map.insert(event, Slot::Loading(rx.clone()));
@@ -339,6 +340,15 @@ async fn run_event<S: SeatStore, P: ChartProvider, C: Clock + Clone>(
                 },
             );
             loaded.send_replace(Some(Err(error)));
+            drop(loaded);
+            // Forget the failure once it no longer holds requests back, so
+            // that failed events do not accumulate.
+            inner.clock.sleep_until(retry_at).await;
+            let mut slots = inner.slots();
+            if matches!(slots.map.get(&event), Some(Slot::Failed { retry_at: r, .. }) if *r == retry_at)
+            {
+                slots.map.remove(&event);
+            }
             return;
         }
     };
@@ -383,13 +393,30 @@ async fn run_event<S: SeatStore, P: ChartProvider, C: Clock + Clone>(
 
 /// 08 §4.7: acquire ownership, get the chart for the pinned version, read the
 /// state, and restore it. Holds already past their expiry are expired by the
-/// actor before anything else, as the first commit it makes.
+/// actor before anything else, as the first commit it makes. If anything after
+/// the acquisition fails, the lease is released: no actor holds the event.
 async fn open<S: SeatStore, P: ChartProvider, C: Clock>(
     inner: &Inner<S, P, C>,
     event: EventId,
 ) -> Result<EventState, OpenError> {
     let acquired = inner.store.acquire(event).await.map_err(OpenError::Store)?;
     info!(epoch = acquired.epoch, "ownership acquired");
+    let read = CatchUnwind(Box::pin(read(inner, event, acquired)))
+        .await
+        .unwrap_or(Err(OpenError::Panicked));
+    if read.is_err()
+        && let Err(error) = inner.store.release(event, acquired.epoch).await
+    {
+        debug!(%error, "lease not released after a failed load");
+    }
+    read
+}
+
+async fn read<S: SeatStore, P: ChartProvider, C: Clock>(
+    inner: &Inner<S, P, C>,
+    event: EventId,
+    acquired: Acquired,
+) -> Result<EventState, OpenError> {
     let chart = inner
         .charts
         .chart(acquired.chart_version)

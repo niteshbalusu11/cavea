@@ -176,7 +176,7 @@ A batch carries the net effect of its commands as of its last one: each object a
 | Commit fails (database down, timeout) | Fail every command in that batch and in later uncommitted batches with `503 unavailable`. Drop the actor. The next request reloads it from PostgreSQL |
 | Fencing check updates zero rows, or a heartbeat fails | Same, and for fencing log loudly: another node owns the event |
 | Actor panics | The registry catches it, fails pending callers, drops the actor |
-| Load fails (database down, event leased by another node) | Every request waiting for that load gets `503 unavailable`. For the next second, requests for the event fail at once without touching the database; after that the next request tries again. An outage costs at most one load attempt per event per second |
+| Load fails (database down, event leased by another node) | Every request waiting for that load gets `503 unavailable`. For the next second, requests for the event fail at once without touching the database; after that the next request tries again. An outage costs at most one load attempt per event per second. A load that fails after acquiring the event releases its lease |
 | Process crash | Nothing acknowledged is lost. On restart, events with outstanding holds are loaded so that expiries still fire |
 
 There is no in-memory rollback path. Reloading from the database is the single recovery mechanism, which keeps it tested. A request that reaches an actor as it stops is not applied: it waits for the actor to end and goes to the reloaded one.

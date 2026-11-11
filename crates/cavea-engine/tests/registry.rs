@@ -197,6 +197,14 @@ async fn a_failed_load_reaches_every_waiter_and_is_retried_after_a_pause() {
     store.clock().advance_ms(1);
     assert!(reg.send(EV, block(0)).await.is_ok());
     assert_eq!(store.acquisitions(), 2);
+
+    // A load that fails after acquiring, here for want of its chart, leaves
+    // no lease behind for retries to keep renewing.
+    let orphan = EventId(9);
+    store.create_event(orphan, 0, ChartVersionId(404));
+    assert_eq!(reg.send(orphan, block(0)).await, Err(Failure::Unavailable));
+    assert_eq!(store.lease(orphan).unwrap().1, None);
+    assert_eq!(epoch(&store, orphan), 1);
 }
 
 #[tokio::test]
@@ -454,7 +462,8 @@ async fn shutdown_commits_accepted_work_and_releases_every_lease() {
     });
     settle().await;
     assert!(!stopping.is_finished(), "waits for the commit in flight");
-    // An event not yet loaded is refused at once.
+    // Nothing more is taken, not even by an actor still flushing.
+    assert_eq!(reg.send(EV, block(3)).await, Err(Failure::Unavailable));
     assert_eq!(
         reg.send(EventId(99), block(3)).await,
         Err(Failure::Unavailable)
