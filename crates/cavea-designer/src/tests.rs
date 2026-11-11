@@ -926,3 +926,128 @@ fn moved_seats_are_drawn_once() {
     let stationary = seat_draws.first().map_or(0, |d| d.ranges.len());
     assert_eq!(stationary, 90);
 }
+
+/// 04 §25: seat labels the baked atlas cannot draw (here "Sitz 1", five
+/// glyphs and lower case) come from the dynamic atlas as text instances;
+/// while their block is dragged they are built where its seats are drawn,
+/// not where it was compiled.
+#[test]
+fn dynamic_seat_labels_move_with_their_piece() {
+    use cavea_render::protocol::Event;
+    let mut s = Session::load(preset("theatre")).expect("load");
+    let block = s
+        .insert(
+            None,
+            &cavea_edit::Draft::RowBlock {
+                origin: [20_000.0, 0.0],
+                rows: 2,
+                seats: 4,
+                seat_pitch: 60.0,
+                row_pitch: 100.0,
+            },
+        )
+        .expect("block");
+    s.select(Level::Top, [block]);
+    let numbering = cavea_edit::Numbering {
+        rows: None,
+        seats: Some(SeatLabels {
+            prefix: "Sitz ".into(),
+            ..SeatLabels::default()
+        }),
+        after_z: None,
+        across: None,
+        keep_overrides: false,
+    };
+    s.number(&numbering).expect("number");
+    let view = View {
+        centre: [20_000.0, 50.0],
+        zoom: 0.5,
+        width: 2400.0,
+        height: 800.0,
+        dpr: 1.0,
+    };
+    let mut p = painter(view);
+    let [w, h] = cavea_render::text::ATLAS_SIZE;
+    p.handle(Command::SetGlyphAtlas {
+        rgba: vec![0; (w * h * 4) as usize],
+    });
+    // Draws, answering every text request with a small raster.
+    let frames = |p: &mut Painter<Recorder>, s: &Session, t: f64| {
+        for k in 0..40 {
+            p.draw(s, t + f64::from(k));
+            for e in p.take_events() {
+                if let Event::TextRequest { id, .. } = e {
+                    p.handle(Command::SetText {
+                        id,
+                        width: 24,
+                        height: 12,
+                        px: 11,
+                        pixels: vec![255; 24 * 12],
+                    });
+                }
+            }
+        }
+    };
+    frames(&mut p, &s, 0.0);
+    // The text instances' anchors in the last frame drawn.
+    let anchors = |p: &mut Painter<Recorder>, s: &Session, t: f64| {
+        p.engine_mut().backend_mut().clear();
+        // A frame is drawn only for a change: move the view a little.
+        p.set_view(View {
+            centre: [view.centre[0] + t * 1e-4, view.centre[1]],
+            ..view
+        });
+        frames(p, s, t);
+        let rec = p.engine().backend();
+        let mut out = Vec::new();
+        let last = rec
+            .draws
+            .iter()
+            .rposition(|d| d.pipeline == cavea_render::backend::Pipeline::Mesh);
+        let from = last.map_or(0, |i| i.saturating_sub(12));
+        for d in rec.draws.iter().skip(from) {
+            if d.pipeline != cavea_render::backend::Pipeline::Text {
+                continue;
+            }
+            let Some(bytes) = d.buffers[0].and_then(|b| rec.buffer(b)) else {
+                continue;
+            };
+            for r in &d.ranges {
+                for i in r.clone() {
+                    let at = i as usize * 36;
+                    let f = |o: usize| {
+                        f32::from_le_bytes(bytes[at + o..at + o + 4].try_into().expect("4"))
+                    };
+                    out.push([f(0), f(4)]);
+                }
+            }
+        }
+        out
+    };
+    let before = anchors(&mut p, &s, 100.0);
+    let near = |a: &[[f32; 2]], x: f32| a.iter().filter(|p| (p[0] - x).abs() < 200.0).count();
+    // Eight seat labels and the rows' four end labels.
+    assert_eq!(near(&before, 20_000.0), 12, "{before:?}");
+    // Drag the block 600 cu right.
+    let seat = s.index().seats(block)[0].pos;
+    let from = s.index().to_world(block, seat).expect("world");
+    let ptr = |w: [f64; 2], t: f64| Pointer {
+        world: w,
+        screen: [w[0] * 0.5, w[1] * 0.5],
+        zoom: 0.5,
+        button: Button::Primary,
+        kind: PointerKind::Mouse,
+        mods: Modifiers::default(),
+        time: t,
+    };
+    s.input(Input::PointerDown(ptr(from, 1e6)));
+    s.input(Input::PointerMove(ptr(
+        [from[0] + 600.0, from[1]],
+        1e6 + 16.0,
+    )));
+    assert!(s.editor().gesture_open());
+    let during = anchors(&mut p, &s, 200.0);
+    assert!(!p.engine().moving().is_empty());
+    assert_eq!(near(&during, 20_000.0), 0, "none left behind: {during:?}");
+    assert_eq!(near(&during, 20_600.0), 12, "all moved: {during:?}");
+}
