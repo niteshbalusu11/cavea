@@ -259,17 +259,23 @@ node!(RowBlock {
     pub seat_overrides: BTreeMap<u32, SeatOverride>,
 });
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Curve {
-    #[default]
-    None,
+    /// An empty struct, not a unit variant, so that extra fields are rejected.
+    None {},
     Arc {
         radius: f64,
     },
     Bulge {
         amount: f64,
     },
+}
+
+impl Default for Curve {
+    fn default() -> Self {
+        Self::None {}
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -300,23 +306,48 @@ pub struct BlockRow {
     pub removed: Vec<u32>,
 }
 
-/// Reads `seatOverrides`, whose keys are oids written as decimal strings. (Inside
-/// a tagged node serde buffers the map, which loses serde_json's own key parsing.)
+/// Reads `seatOverrides`, whose keys are oids written as canonical decimal
+/// strings. (Inside a tagged node serde buffers the map, which loses
+/// serde_json's own key parsing.) A key in another form, or a repeated oid, is
+/// an error rather than a silently dropped override.
 fn oid_keys<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<BTreeMap<u32, SeatOverride>, D::Error> {
-    BTreeMap::<String, SeatOverride>::deserialize(d)?
-        .into_iter()
-        .map(|(key, value)| {
-            let oid = key
-                .bytes()
-                .all(|b| b.is_ascii_digit())
-                .then(|| key.parse().ok());
-            oid.flatten().map(|oid| (oid, value)).ok_or_else(|| {
-                serde::de::Error::custom(format_args!("seat override key {key:?} is not an oid"))
-            })
-        })
-        .collect()
+    struct Keys;
+
+    impl<'de> serde::de::Visitor<'de> for Keys {
+        type Value = BTreeMap<u32, SeatOverride>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a map from oids to seat overrides")
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> Result<Self::Value, A::Error> {
+            use serde::de::Error;
+            let mut out = BTreeMap::new();
+            while let Some((key, value)) = map.next_entry::<String, SeatOverride>()? {
+                let canonical = key.bytes().all(|b| b.is_ascii_digit())
+                    && (key == "0" || !key.starts_with('0'));
+                let oid: u32 = canonical
+                    .then(|| key.parse().ok())
+                    .flatten()
+                    .ok_or_else(|| {
+                        A::Error::custom(format_args!("seat override key {key:?} is not an oid"))
+                    })?;
+                if out.insert(oid, value).is_some() {
+                    return Err(A::Error::custom(format_args!(
+                        "seat override for oid {oid} is repeated"
+                    )));
+                }
+            }
+            Ok(out)
+        }
+    }
+
+    d.deserialize_map(Keys)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

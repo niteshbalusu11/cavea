@@ -101,10 +101,21 @@ fn rejects_unknown_and_malformed_input() {
         base(r#"{"id":1,"type":"booth","size":[1e999,1],"oid":2}"#),
         base(r#"{"id":-1,"type":"booth","size":[1,1],"oid":2}"#),
         base(r#"{"id":1,"type":"rowBlock","rows":[],"seatOverrides":{"+7":{}}}"#),
+        base(r#"{"id":1,"type":"rowBlock","rows":[],"seatOverrides":{"007":{},"7":{}}}"#),
+        base(r#"{"id":1,"type":"rowBlock","rows":[],"seatOverrides":{"7":{},"7":{}}}"#),
+        base(r#"{"id":1,"type":"rowBlock","rows":[],"curve":{"kind":"none","extra":1}}"#),
     ];
     for json in &bad {
         assert!(ChartDocument::from_json(json.as_bytes()).is_err(), "{json}");
     }
+    let good = base(
+        r#"{"id":1,"type":"rowBlock","rows":[],"curve":{"kind":"none"},"seatOverrides":{"0":{},"70":{}}}"#,
+    );
+    let doc = ChartDocument::from_json(good.as_bytes()).unwrap();
+    assert_eq!(
+        ChartDocument::from_json(&doc.to_json().unwrap()).unwrap(),
+        doc
+    );
 }
 
 #[test]
