@@ -352,6 +352,13 @@ pub(crate) fn command(r: &mut Rng, doc: &Document) -> Command {
             rid,
             label: (r.below(2) == 0).then(|| "AA".into()),
         },
+        23 => Command::MoveCategory {
+            key: doc
+                .categories()
+                .last()
+                .map_or("vip".into(), |c| c.key.clone()),
+            index: r.below(doc.categories().len() + 1) as u32,
+        },
         28 => Command::InsertGap {
             id: bid,
             rid,
@@ -369,7 +376,7 @@ pub(crate) fn command(r: &mut Rng, doc: &Document) -> Command {
     }
 }
 
-fn subjects() -> Vec<ChartDocument> {
+pub(crate) fn subjects() -> Vec<ChartDocument> {
     vec![
         sample("small.json"),
         sample("full.json"),

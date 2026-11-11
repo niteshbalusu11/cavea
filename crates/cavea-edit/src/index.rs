@@ -24,7 +24,7 @@ pub(crate) type P = [f64; 2];
 pub type Quad = [P; 4];
 
 /// An axis-aligned box in chart units.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct Rect {
     pub min: P,
     pub max: P,

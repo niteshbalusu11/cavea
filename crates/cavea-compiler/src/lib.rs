@@ -16,6 +16,7 @@ mod migrate;
 mod shape;
 mod tessellate;
 
+pub use compile::warnings::{BACKGROUNDS, MIN_CONTRAST, contrast, luminance, too_similar};
 pub use compile::{
     CompileError, Compiled, DEFAULT_PADDING, RANK_ALGO, Stats, compile, write_full_label,
 };

@@ -18,9 +18,9 @@ use crate::geometry::{Bands, P};
 const MAX_OVERLAPS: usize = 100;
 /// W107: the backgrounds of the built-in light and dark themes (04 §19), and
 /// the non-text contrast every category colour should reach on both (11 §6).
-const BACKGROUNDS: [(&str, [u8; 3]); 2] =
+pub const BACKGROUNDS: [(&str, [u8; 3]); 2] =
     [("light", [0xFA, 0xFA, 0xF9]), ("dark", [0x1C, 0x19, 0x17])];
-const MIN_CONTRAST: f64 = 3.0;
+pub const MIN_CONTRAST: f64 = 3.0;
 /// W107: two colours closer than this "redmean" distance are too similar.
 const MIN_DISTANCE: f64 = 40.0;
 /// W108: the reference viewport, the fit padding (04 §13) and the smallest
@@ -344,7 +344,7 @@ fn isqrt_below(limit: i128, k: i128) -> i128 {
 /// W107: the "redmean" distance between two sRGB colours (a low-cost
 /// approximation of perceived difference), below [`MIN_DISTANCE`]. Exact in
 /// `f64`.
-fn too_similar(a: [u8; 3], b: [u8; 3]) -> bool {
+pub fn too_similar(a: [u8; 3], b: [u8; 3]) -> bool {
     let d = |i: usize| f64::from(a[i]) - f64::from(b[i]);
     let r = (f64::from(a[0]) + f64::from(b[0])) / 2.0;
     let d2 = (2.0 + r / 256.0) * d(0) * d(0)
@@ -355,7 +355,7 @@ fn too_similar(a: [u8; 3], b: [u8; 3]) -> bool {
 
 /// WCAG 2 relative luminance, by the exact sRGB curve, as the renderer's
 /// themes compute it (04 §19), in `f64`.
-fn luminance([r, g, b]: [u8; 3]) -> f64 {
+pub fn luminance([r, g, b]: [u8; 3]) -> f64 {
     0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
 }
 
@@ -377,7 +377,7 @@ fn linear(v: u8) -> f64 {
 }
 
 /// The WCAG 2 contrast ratio of two luminances.
-fn contrast(a: f64, b: f64) -> f64 {
+pub fn contrast(a: f64, b: f64) -> f64 {
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 

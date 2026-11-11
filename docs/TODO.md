@@ -286,11 +286,11 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [ ] **DSN-024** Inspector for sections, shapes, text, images and chart settings (07 §5.5)
 - [x] **DSN-025** Row-level editing: add or remove seats, shift, insert aisle, override label, delete row (07 §5.3)
 - [x] **DSN-026** Seat-edit mode: remove, restore, flags, category, label, nudge (07 §5.3)
-- [ ] **DSN-027** Numbering panel for rows and seats with canvas preview (07 §6)
-- [ ] **DSN-028** Categories panel: add, rename, recolour, merge, delete with reassignment; contrast warning (07 §7)
+- [ ] **DSN-027** Numbering panel for rows and seats with canvas preview (07 §6). The edit core is built: `Session::numbering`, `preview_numbering`, `number`, `sample` (07 §2.3, §6); the shell owes the panel and drawing the preview's labels
+- [ ] **DSN-028** Categories panel: add, rename, recolour, merge, delete with reassignment; contrast warning (07 §7). The edit core is built: `Session::categories` and the category calls, `contrast`, `too_similar` (07 §2.3, §7); the shell owes the panel and the colour picker
 - [ ] **DSN-029** Layers panel: virtualised tree, drag to reparent, lock, hide (07 §3)
 - [x] **DSN-030** Snapping: grid, edges and centres, equal spacing, row alignment, angles (07 §5.2)
-- [ ] **DSN-031** Rulers and user guides (07 §5.2)
+- [ ] **DSN-031** Rulers and user guides (07 §5.2). The edit core is built: guides per floor as snap targets, `Session::add_guide` and the rest, `saved_guides` (07 §5.2); the shell owes the rulers, dragging guides out of them, and storing the guides beside the draft
 - [x] **DSN-032** Align, distribute, flip, duplicate, array duplicate (07 §5.1)
 - [x] **DSN-033** Copy and paste, including between charts (07 §5.1)
 - [ ] **DSN-034** Group, ungroup, order for decoration nodes (07 §5.1). Order, lock and hide are built; grouping needs a schema change (07 §5.1, group and ungroup)
@@ -300,7 +300,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [ ] **DSN-035** Autosave with etag and save-state indicator (07 §9)
 - [ ] **DSN-036** IndexedDB safety net and recovery prompt (07 §9)
 - [ ] **DSN-037** Single-editor lock with take-over (07 §9)
-- [ ] **DSN-038** Continuous validation, panel, canvas markers (07 §10)
+- [ ] **DSN-038** Continuous validation, panel, canvas markers (07 §10). The edit core is built: `Session::validate`, `validation`, `focus`, the overlay's `markers` (07 §2.3, §10); the shell owes the idle-time loop, the panel, the status-bar summary, the markers on the canvas and disabling publish
 - [ ] **DSN-039** Preview with the buyer renderer, device widths and sample states (07 §11)
 - [ ] **DSN-040** Publish flow: compile, diff, thumbnail upload (07 §11)
 - [ ] **DSN-041** Export and import of chart document JSON (07 §12)

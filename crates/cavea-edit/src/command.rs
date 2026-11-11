@@ -79,6 +79,12 @@ pub enum Command {
         key: String,
         replacement: Option<String>,
     },
+    /// Moves the category `key` to `index` in the list, counted after it
+    /// has left its place.
+    MoveCategory {
+        key: String,
+        index: u32,
+    },
     /// Adds a floor; its `id` is assigned (one above the largest).
     AddFloor {
         index: u32,
@@ -317,6 +323,12 @@ pub enum CommandError {
     },
     DuplicateCategory(String),
     MissingCategory(String),
+    /// Deleting a category that nodes or seat overrides still name, without
+    /// a replacement (07 §7).
+    CategoryInUse {
+        key: String,
+        references: u32,
+    },
     MissingFloor(u32),
     /// Undo, redo or a new gesture while a gesture is open.
     GestureOpen,
@@ -345,6 +357,9 @@ impl fmt::Display for CommandError {
             Self::SeatState { id, oid } => write!(f, "node {id} seat {oid}: already so"),
             Self::DuplicateCategory(key) => write!(f, "category {key:?} exists"),
             Self::MissingCategory(key) => write!(f, "no category {key:?}"),
+            Self::CategoryInUse { key, references } => {
+                write!(f, "category {key:?} is used {references} times")
+            }
             Self::MissingFloor(id) => write!(f, "no floor {id}"),
             Self::GestureOpen => f.write_str("a gesture is open"),
             Self::NoGesture => f.write_str("no gesture is open"),
@@ -506,6 +521,7 @@ impl Document {
                 run(self, Op::Chart(property))
             }
             Command::AddCategory { index, category } => {
+                crate::categories::check(&category)?;
                 let mut list = self.categories.clone();
                 if list.len() >= MAX_CATEGORIES as usize {
                     return Err(CommandError::Limit("categories"));
@@ -520,6 +536,7 @@ impl Document {
                 run(self, Op::Categories(list))
             }
             Command::UpdateCategory { key, category } => {
+                crate::categories::check(&category)?;
                 let mut list = self.categories.clone();
                 let i = list.iter().position(|c| c.key == key);
                 let i = i.ok_or_else(|| CommandError::MissingCategory(key.clone()))?;
@@ -545,6 +562,17 @@ impl Document {
                 }
                 self.reassign_category(&key, replacement.as_deref(), &mut run)?;
                 list.remove(i);
+                run(self, Op::Categories(list))
+            }
+            Command::MoveCategory { key, index } => {
+                let mut list = self.categories.clone();
+                let i = list.iter().position(|c| c.key == key);
+                let i = i.ok_or_else(|| CommandError::MissingCategory(key.clone()))?;
+                let c = list.remove(i);
+                if index as usize > list.len() {
+                    return Err(CommandError::IndexOutOfRange);
+                }
+                list.insert(index as usize, c);
                 run(self, Op::Categories(list))
             }
             Command::AddFloor { index, mut floor } => {
@@ -990,12 +1018,20 @@ impl Document {
         let wanted: BTreeSet<u32> = oids.into_iter().collect();
         let mut found = Vec::with_capacity(wanted.len());
         for &oid in &wanted {
+            // The nearest run starting at or below the oid that holds it:
+            // in a valid row the first one tried; runs that overlap (E009)
+            // are searched further, so a seat the expansion has is found.
             let k = runs.partition_point(|r| r.0 <= oid);
-            let hit = k.checked_sub(1).and_then(|k| runs.get(k)).and_then(|r| {
-                let pos = r.3.checked_add(oid - r.0)?;
-                let seats = lines.get(r.2)?.0;
-                (oid - r.0 < r.1 && pos < seats).then_some((oid, r.2, pos))
-            });
+            let hit = runs
+                .get(..k)
+                .unwrap_or_default()
+                .iter()
+                .rev()
+                .find_map(|r| {
+                    let pos = r.3.checked_add(oid - r.0)?;
+                    let seats = lines.get(r.2)?.0;
+                    (oid - r.0 < r.1 && pos < seats).then_some((oid, r.2, pos))
+                });
             found.push(hit.ok_or(CommandError::MissingSeat { id, oid })?);
         }
         if let SeatEdit::Remove | SeatEdit::Restore = edit {

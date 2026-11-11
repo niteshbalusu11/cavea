@@ -31,7 +31,7 @@ use crate::geometry::{self, OutlineError, P};
 use crate::tessellate::{self, TessError};
 
 mod decoration;
-mod warnings;
+pub(crate) mod warnings;
 
 use decoration::{Decorated, Decoration};
 
