@@ -156,40 +156,39 @@ Ask only when a decision is genuinely the owner's and work cannot route around i
 
 ## 11. Slice plan and open notes
 
-The orchestrator keeps this section current so that the plan survives a context summary. Done work is whatever `docs/TODO.md` ticks on `main`; this lists only what is planned and what to remember. Last refreshed after pull request #27 (2026-11-11).
+The orchestrator keeps this section current so that the plan survives a context summary. Done work is whatever `docs/TODO.md` ticks on `main`; this lists only what is planned and what to remember. Last refreshed after pull request #44 (2026-11-11).
 
-Three chains run side by side, one builder each, because each chain's slices edit the same crates. When a builder splits a slice, the next builder in that chain inherits the unreviewed branch and takes it through review together with the chain's next tasks.
+Three chains run side by side, one builder each, because each chain's slices edit the same crates. When a builder splits a slice, the next builder in that chain inherits the unreviewed branch and takes it through review together with the chain's next tasks. A builder may send an interim note and keep running: check the task's status before starting a follow-up, so that two builders never work one branch.
 
-**Renderer chain** (`cavea-render`, `cavea-web`, `packages/renderer`, `apps/demo`); the longest chain in M1:
+**Renderer chain** (`cavea-render`, `cavea-web`, `packages/renderer`, `apps/demo`):
 
-1. In flight: `mesh` program, level of detail, section counters and tint, pulse: `REN-019`, `REN-021`, `REN-022`, `REN-043` (the pulse inherited from `slice/render-pulse-crowd`).
-2. Text: MSDF atlas and `glyph` program, seat labels, dynamic text atlas and `text` program, row and section labels, icons: `REN-024` to `REN-028`. Likely two slices.
-3. Context loss, timing marks, headless render, golden images: `REN-040`, `REN-044`, `REN-045`, `REN-006`, `TST-010`.
-4. Web SDK: `WEB-001` to `WEB-005` (loader, `createSeatMap`, adapters, callbacks, methods), then `WEB-006` to `WEB-011` (built-in interface), then `WEB-012` to `WEB-018`; server adapter `WEB-020` to `WEB-025` once the realtime transports are merged. `FND-007` (generated TypeScript types) goes with the first SDK slice.
-5. Accessibility baseline `A11Y-001`, `A11Y-002`; benchmark page and tests `TST-011`, `TST-012`, `TST-015`.
-6. A payload-reduction slice if the gate shows the renderer heading past 150 KB (see notes).
-7. `REN-020` (background images) waits for asset upload (`SRV-010`).
+1. In review: dynamic text atlas, row and section labels, icons: `REN-026` to `REN-028` (pull request #46).
+2. Designer canvas support, because the designer shell cannot mount a canvas without it: live scene and renderer extensions (`DSN-004`, `DSN-005`), with the view-model boundary (`DSN-006`) if it fits.
+3. Built-in interface: `WEB-006` to `WEB-011`; then accessibility baseline `A11Y-001`, `A11Y-002`.
+4. Context loss, timing marks, headless render, golden images: `REN-040`, `REN-044`, `REN-045`, `REN-006`, `TST-010`; scripted interaction tests and the benchmark page `TST-015`, `TST-012`.
+5. Packaging: `WEB-012` to `WEB-018`, generated types `FND-007`.
+6. `REN-020` (background images) waits for asset upload (`SRV-010`).
 
-**Format, compiler and tooling chain** (`cavea-compiler`, `cavea-format`, `cavea-cli`, `cavea-testkit`, `xtask`):
+**Designer chain** (`cavea-edit`, later `apps/console`); took over the format and tooling slot once the compiler, CLI, presets, fuzz targets and determinism check were done:
 
-1. In flight: CLI, presets, compiled sizes, CI payload gate: `FMT-024` to `FMT-026`, `FND-005`.
-2. Fuzz targets and determinism automation: `TST-013`, `TST-014`, `TST-027`.
-3. Then this slot starts M3's edit core early, since it needs only the compiler: `cavea-edit` document arena, commands with inverses, undo and redo, spatial index: `DSN-001` to `DSN-003`, `DSN-007`, `TST-030`.
+1. In review: rows and seats, category brush, focal point, arrange, duplicate and clipboard: `DSN-021`, `DSN-022`, `DSN-025`, `DSN-026`, `DSN-032`, `DSN-033`, part of `DSN-034` (pull request #45). Grouping decoration nodes probably needs a schema decision.
+2. Remaining logic that needs no canvas: numbering (`DSN-027`), categories (`DSN-028`), layers (`DSN-029`), guides (`DSN-031`), continuous validation (`DSN-038`), export and import (`DSN-041`).
+3. The application shell in `apps/console` (`DSN-008` to `DSN-010`, `DSN-013`), which the console (`CON-001`) shares: build the shell once. Then inspectors (`DSN-023`, `DSN-024`), image tool (`DSN-020`, after `SRV-010`), saving (`DSN-035` to `DSN-037`), preview and publish (`DSN-039`, `DSN-040`), new-chart screen and form (`DSN-042`, `DSN-043`), performance pass (`DSN-044`), end-to-end test (`TST-031`).
 
-**Server chain** (`cavea-engine`, `cavea-server`):
+**Server chain** (`cavea-engine`, `cavea-server`, `cavea-sim`, `cavea-loadgen`):
 
-1. In flight: realtime transports: `RT-003` to `RT-010`, `SRV-021`.
-2. Session tokens and rate limiting: `SRV-016`, `SRV-018`.
-3. Objects query, readiness and metrics, OpenAPI, the tracing gap below: `SRV-014`, `SRV-019`, `SRV-020`.
-4. M2 tests: reference model and simulation (`TST-020`, `TST-021`), reconciler and load generator (`TST-022`, `TST-023`), load and chaos runs (`TST-024`, `TST-025`), authorisation matrix completion and fuzz (`TST-026`).
-5. Docker image and compose (`SRV-023`), Node server SDK (`WEB-026`, after OpenAPI), assets (`SRV-010`).
+1. In flight: load generator through review with reconnection, local L1 and L2 runs, `kill -9` and PostgreSQL-restart chaos on a private container: `TST-023` to `TST-025`.
+2. Health, readiness, metrics and the tracing gap (`SRV-020`); OpenAPI (`SRV-019`); assets (`SRV-010`).
+3. Docker image and compose (`SRV-023`); Node server SDK (`WEB-026`, after OpenAPI); authorisation matrix completion and the HTTP fuzz target (`TST-026`, `TST-027`).
+4. M4's server side: licensing, security and operations tasks in `docs/TODO.md` order, and the endpoints the console needs.
 
-M3 (designer) and M4 (console, licensing, security, docs, release) follow in `docs/TODO.md` order. The console and designer share `apps/console`; the designer's Rust side is `cavea-edit`.
+No milestone report has been posted yet: M1 and M2 each still have open tasks. Post each one when its last agent-doable task merges.
 
 Notes for milestone reports and later briefs:
 
-- **Payload.** Production renderer, brotli, measured locally: 37,298 B (first slice), 44,403 (camera), 57,277 (chart loading), 60,852 (themes), 59,175 (reader slimmed), 70,337 (selection), 79,638 (holds and state). Budget 150 KB, hard cap 200 KB, with text and its atlas, accessibility and the SDK interface still to come. Known large items: label generation and the JSON event encoder, about 5 KB each before optimisation; the CCF reader, about 9 KB; wire decoders 2.4 KB.
-- **Proof.** All browser proof is software rendering in headless Chromium. Nothing has run on a hardware GPU, a second browser engine or a phone. Reference-device budgets cannot be checked by agents.
-- **Decisions the owner may want to revisit** (all recorded in `docs/DECISIONS.md` or the specs): D-23 one-statement commit; D-24 server starts without an admin key; D-25 decoration carries its floor, strokes built without `lyon`; D-26 public chart URL is the content hash with no credential, gzip dropped; D-27 snapshot re-encoded only with a delta; an expired hold token is `404`, not `410`; a wrong HTTP method is `404`; hold-token creation is not idempotent; public routes ignore `Idempotency-Key`; a buyer's hold token never travels in a URL on public routes; buyers cannot extend a hold; `sqlx` took the server from 58 to 165 crates.
-- **Gaps carried forward:** `mailbox_wait` and `apply` spans emit nothing on success (span-close events are off in `cavea-telemetry`), so per-stage timing is not in logs; `CAVEA_HOLD_TTL` is not read; no admin call mints a key for a workspace whose keys are all lost; `CreateHold` log rows lack the token hash and object limit, which the reconciler needs; the `hold.expired` webhook row is not written (M5); the server still formats findings itself instead of using the compiler's JSON form; a seat override keyed by an `oid` outside its row is not reported; HELLO carries a zero chart hash until the transports slice fixes the chart provider; `banquet` and `festival` presets, E004, tables, booths and areas wait for M5.
-- **Measured locally (Ryzen 9 7900X), for the M1 and M2 reports:** compile 100,000 seats about 65 ms; CCF decode 0.55 ms per 100,000 seats; hit test 0.55 µs; snapshot apply 0.04 ms; 10,000-change delta 0.11 ms; one event through the actor against PostgreSQL 45,700 commands per second; load 100,000 objects 35 ms; hold over HTTP p50 2.0 ms, p99 3.7 ms; publish 100,000 seats 576 ms (brotli 488 ms).
+- **Payload.** Production payload, brotli, measured locally: 37,298 B (first slice), 44,403, 57,277, 60,852, 59,175, 70,337, 79,638, 84,301, 98,593 (glyph atlas, 9.5 KB), 104,057 (the SDK bundle is measured from here on), 109,658 (server adapter). The gate (D-28) fails a build more than 3% over `xtask/payload-baseline.json` or over 200,000 B; target 150 KB. About 40 KB is left for the second text slice, the built-in interface, accessibility and fallbacks.
+- **Proof.** All browser proof is software rendering in headless Chromium. Nothing has run on a hardware GPU, a second browser engine or a phone. Reference-device budgets and reference-hardware load runs cannot be checked by agents.
+- **Decisions the owner may want to revisit** (all recorded in `docs/DECISIONS.md` or the specs): D-23 one-statement commit; D-24 server starts without an admin key; D-25 decoration carries its floor, strokes built without `lyon`; D-26 public chart URL is the content hash with no credential, gzip dropped; D-27 snapshot re-encoded only with a delta; D-31 realtime routes take the publishable key in `?key=`; D-33 glyph atlas choices (notches at device pixel ratio 3); D-34 session tokens are signed with the SHA-256 of a secret key; D-35 what "development" means in the SDK; D-37 the token hash is not logged; an expired hold token is `404`, not `410`; a wrong HTTP method is `404`; hold-token creation is not idempotent; public routes ignore `Idempotency-Key`; a buyer's hold token never travels in a URL; buyers cannot extend a hold; `sqlx` and WebSocket support took the server from 58 to 194 crates.
+- **For the owner's go-to-market list:** the Roboto Condensed licence notice (SIL OFL 1.1) must ship with the renderer. The 24-hour fuzz run of `ccf_decode` has not been made (30 minutes per target, no findings); the command is in `AGENTS.md`.
+- **Gaps carried forward:** `mailbox_wait` and `apply` spans emit nothing on success (span-close events are off in `cavea-telemetry`), so per-stage timing is not in logs; the snapshot route's 99th percentile was 25.6 ms during a connection burst in a small load run, against a 3 ms budget (cause not yet found); `session: 'none'` still selects locally in the SDK; the `hold.expired` webhook row is not written (M5); `banquet` and `festival` presets, E004, tables, booths and areas wait for M5. From the earlier list and not rechecked since: no admin call mints a key for a workspace whose keys are all lost; the server formats findings itself instead of using the compiler's JSON form; a seat override keyed by an `oid` outside its row is not reported.
+- **Measured locally (Ryzen 9 7900X, PostgreSQL 18 in Docker on loopback), for the M1 and M2 reports:** compile 100,000 seats about 65 ms; CCF decode 0.53 ms per 100,000 seats; hit test 0.30 µs; snapshot apply 0.17 ms; 10,000-change delta 0.19 ms; label build 0.16 ms per 4,096; compiled sizes, brotli: theatre 6.6 KB, arena 53.8 KB, stadium-100k 181.2 KB; one event through the actor against PostgreSQL 45,700 commands per second; load 100,000 objects 35 ms; hold over HTTP p50 2.0 ms, p99 3.7 ms; public hold p50 2.2 ms, p99 5.3 ms; publish 100,000 seats 576 ms; delta delivery p95 91 ms; snapshot request p99 0.43 ms unloaded; about 11.2 KiB per idle WebSocket with 10,000 open; hold in one browser to visible in a second, median 1 ms, p95 3 ms after the 100 ms coalescing interval; simulation 10,000,000 steps in 36.2 s with every invariant held and 18 planted bugs caught; reference model 40,000,000 steps without a defect; reconciler about 1,000,000 log rows per second; fuzzing 30 minutes per target without a finding.
