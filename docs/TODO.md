@@ -59,10 +59,10 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 ### Chart format and compiler
 
-- [ ] **FMT-002** Chart document types with serde; top-level, settings, categories, floors (03 §2.1)
-- [ ] **FMT-003** Node types and common fields (03 §2.2)
-- [ ] **FMT-004** Row label scheme engine: alpha, lower, numeric, roman, custom, skip, direction, overflow (03 §2.5)
-- [ ] **FMT-005** Seat label scheme engine: numeric, alpha, odd, even, custom; ltr, rtl, centre-out, serpentine; continuous (03 §2.5)
+- [x] **FMT-002** Chart document types with serde; top-level, settings, categories, floors (03 §2.1)
+- [x] **FMT-003** Node types and common fields (03 §2.2)
+- [x] **FMT-004** Row label scheme engine: alpha, lower, numeric, roman, custom, skip, direction, overflow (03 §2.5)
+- [x] **FMT-005** Seat label scheme engine: numeric, alpha, odd, even, custom; ltr, rtl, centre-out, serpentine; continuous (03 §2.5)
 - [ ] **FMT-006** Expand straight row blocks: pitch, alignment, offset (03 §2.4)
 - [ ] **FMT-007** Arc and bulge curves (03 §2.4)
 - [ ] **FMT-008** Stagger, skew, removed seats, per-seat overrides, `oid` runs (03 §2.4)
