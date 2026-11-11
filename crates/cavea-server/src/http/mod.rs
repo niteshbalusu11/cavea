@@ -43,11 +43,12 @@ use crate::limiter::Limiter;
 use crate::realtime::Realtime;
 use crate::seats::Seats;
 
-pub use auth::{AdminKey, AdminKeyAuth, Auth, PublishableKey, QueryKey, SecretKey};
+pub use auth::{AdminKey, AdminKeyAuth, Auth, PublishableKey, QueryKey};
 pub use error::{ApiError, Code};
 pub use extract::{Json, Path, Query};
 pub use health::Health;
 pub(crate) use public::parse_hash;
+pub use staff::Staff;
 
 /// Shared with every handler through `State<AppState>`. Cheap to clone.
 #[derive(Debug, Clone)]

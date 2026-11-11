@@ -24,6 +24,7 @@ use axum::routing::{MethodFilter, MethodRouter, on};
 use serde_json::{Map, Value, json};
 
 use super::{AppState, Code};
+use crate::console::{Permission, Role};
 
 #[cfg(test)]
 pub(crate) mod check;
@@ -35,7 +36,13 @@ pub enum Needs {
     /// None: a public file named by its URL, the health probes, this document.
     Nothing,
     Admin,
-    Secret,
+    /// The workspace's secret key, or a console session of a member whose
+    /// role grants the permission (09 §2, 08 §11), naming the workspace in
+    /// `Cavea-Workspace`. Every such route declares its permission here, so
+    /// none can be added without one; the router hands it to the
+    /// [`super::staff::Staff`] extractor, and the document shows it as
+    /// `x-cavea-permission`.
+    Staff(Permission),
     /// A console session alone: the `/console/api` routes of a signed-in user.
     Console,
     Publishable,
@@ -238,9 +245,10 @@ impl Op {
 
     /// The problem+json statuses: 500 always; 503 unless the operation never
     /// reaches the database (a credential is looked up there, 08 §12); 401
-    /// and 403 with a credential; 400 with any input; 404 with a path
-    /// parameter; 409 with `Idempotency-Key` (`idempotency_mismatch`); 429
-    /// for publishable keys (08 §12); and what the operation adds.
+    /// and 403 with a credential; 400 with any input, or a console session
+    /// that must name its workspace; 404 with a path parameter; 409 with
+    /// `Idempotency-Key` (`idempotency_mismatch`); 429 for publishable keys
+    /// (08 §12); and what the operation adds.
     fn error_statuses(&self) -> Vec<u16> {
         let mut statuses = vec![500];
         if !self.no_storage {
@@ -253,7 +261,9 @@ impl Op {
             statuses.extend([401, 403]);
         }
         let path_params = self.path_params().next().is_some();
-        if path_params || self.body.is_some() || !self.params.is_empty() || self.idempotent {
+        let staff = matches!(self.needs, Needs::Staff(_));
+        if path_params || self.body.is_some() || !self.params.is_empty() || self.idempotent || staff
+        {
             statuses.push(400);
         }
         if path_params {
@@ -272,7 +282,7 @@ impl Op {
         let scheme = match self.needs {
             Needs::Nothing => return json!([]),
             Needs::Admin => "adminKey",
-            Needs::Secret => "secretKey",
+            Needs::Staff(_) => return json!([{ "secretKey": [] }, { "consoleSession": [] }]),
             Needs::Console => return json!([{ "consoleSession": [] }]),
             Needs::Publishable => "publishableKey",
             Needs::QueryKey => "publishableKeyQuery",
@@ -291,8 +301,11 @@ impl Op {
             .path_params()
             .map(|name| component("parameters", &path_param_name(name)))
             .collect();
+        if matches!(self.needs, Needs::Staff(_)) {
+            params.push(component("parameters", "Workspace"));
+        }
         let safe = matches!(self.method, Method::GET | Method::HEAD);
-        if self.needs == Needs::Console && !safe {
+        if matches!(self.needs, Needs::Staff(_) | Needs::Console) && !safe {
             params.push(component("parameters", "CsrfToken"));
         }
         if self.idempotent {
@@ -330,6 +343,15 @@ impl Op {
         });
         if let Some(description) = self.description {
             op["description"] = description.into();
+        }
+        if let Needs::Staff(permission) = self.needs {
+            let roles: Vec<&str> = Role::ALL
+                .into_iter()
+                .filter(|r| r.allows(permission))
+                .map(Role::as_str)
+                .collect();
+            op["x-cavea-permission"] = permission.as_str().into();
+            op["x-cavea-roles"] = roles.into();
         }
         if !params.is_empty() {
             op["parameters"] = params.into();
@@ -378,7 +400,12 @@ impl Routes {
     {
         // Every method the table uses has a filter; GET also answers HEAD.
         let filter = MethodFilter::try_from(op.method.clone()).unwrap_or(MethodFilter::GET);
-        self.router = self.router.route(op.path, layer(on(filter, handler)));
+        let mut route = layer(on(filter, handler));
+        // The permission a console session's role must grant, for `Staff`.
+        if let Needs::Staff(permission) = op.needs {
+            route = route.layer(axum::Extension(permission));
+        }
+        self.router = self.router.route(op.path, route);
         self.ops.push(op);
         self
     }
@@ -459,13 +486,14 @@ fn problem_response(status: u16) -> Option<&'static str> {
 }
 
 const INFO: &str = "The Cavea server's REST API (`docs/08-server.md` §6). JSON bodies with \
-`snake_case` fields; times are RFC 3339 UTC. Every response carries `Cavea-Request-Id`; a caller may \
+`snake_case` fields; times are RFC 3339 UTC. Routes under `/v1` that take a secret key also take a \
+console session (the cookie `/console/api/session` sets, 09 §10): the request names its workspace \
+in `Cavea-Workspace`, a non-safe method carries `Cavea-Csrf-Token`, and the member's role must \
+grant the operation's `x-cavea-permission` (`x-cavea-roles` lists the roles that do, 09 §2). Every response carries `Cavea-Request-Id`; a caller may \
 send its own (1 to 64 characters of `A-Z a-z 0-9 . _ -`). Errors are `application/problem+json` \
 with a stable `code` (08 §6.4): match on `code`, not on `message`. Lists are \
 `{\"data\": [..], \"next\": <cursor or null>}`, oldest first; pass `next` back as `after`. The \
-WebSocket protocol of `GET /v1/public/rt` is 08 §8, which OpenAPI cannot describe. The \
-`/console/api` routes take the console session cookie (09 §10); their non-safe methods send \
-`Cavea-Csrf-Token`.";
+WebSocket protocol of `GET /v1/public/rt` is 08 §8, which OpenAPI cannot describe.";
 
 /// The whole document.
 #[must_use]
@@ -513,10 +541,16 @@ key with another request is `409 idempotency_mismatch`.",
                 "description": "The draft's etag as `draft_etag` gives it, or `*`.",
                 "schema": { "type": "string" },
             },
+            "Workspace": {
+                "name": "Cavea-Workspace", "in": "header", "required": false,
+                "description": "With a console session, required: the workspace acted on, `ws_` and \
+32 hex digits, one the user is a member of. Ignored with a secret key, whose workspace is its own.",
+                "schema": { "type": "string" },
+            },
             "CsrfToken": {
-                "name": "Cavea-Csrf-Token", "in": "header", "required": true,
-                "description": "Required: the session's `csrf_token` from `GET /console/api/me` (or \
-sign-in).",
+                "name": "Cavea-Csrf-Token", "in": "header", "required": false,
+                "description": "With a console session, required: the session's `csrf_token` from \
+`GET /console/api/me` (or sign-in). Not used with an API key.",
                 "schema": { "type": "string" },
             },
             "IfMatchRequired": {
@@ -593,7 +627,7 @@ whatever is there.",
                     "description": "A staff member's console session (09 §2), set by \
     `POST /console/api/session` or `/console/api/setup`; `cavea_console` when \
     `CAVEA_CONSOLE_COOKIE_SECURE=false`. Not the buyer's session token. With it, a non-safe method \
-    sends `Cavea-Csrf-Token`.",
+    sends `Cavea-Csrf-Token`, and a `/v1` route names its workspace in `Cavea-Workspace`.",
                 },
             },
         },

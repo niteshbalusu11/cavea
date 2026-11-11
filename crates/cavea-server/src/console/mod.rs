@@ -1,7 +1,7 @@
 //! The console's people (09 §2, 08 §5, 12 §3 T9): roles and what each may
 //! do, emails, passwords, console sessions and the first-run setup token.
 //! The HTTP side is `http::console` (the `/console/api` routes) and
-//! `http::staff` (the cookie, CSRF and origin checks).
+//! `http::staff` (the console session as a credential on `/v1`).
 //!
 //! A console session is not the buyer's session token (08 §11, D-34): it is
 //! a staff member's sign-in, carried in a cookie. Names here say "console
@@ -59,6 +59,76 @@ impl Role {
     #[must_use]
     pub fn from_db(role: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|r| r.as_str() == role)
+    }
+
+    /// The role table of 09 §2.
+    #[must_use]
+    pub fn allows(self, permission: Permission) -> bool {
+        use Permission as P;
+        match self {
+            Self::Owner | Self::Admin => true,
+            Self::Editor => matches!(permission, P::ChartsRead | P::ChartsWrite | P::EventsRead),
+            Self::Operator => matches!(permission, P::ChartsRead | P::EventsRead | P::SeatsWrite),
+            Self::Viewer => matches!(permission, P::ChartsRead | P::EventsRead),
+        }
+    }
+
+    /// Every permission the role grants, in [`Permission::ALL`] order.
+    #[must_use]
+    pub fn permissions(self) -> Vec<&'static str> {
+        Permission::ALL
+            .into_iter()
+            .filter(|&p| self.allows(p))
+            .map(Permission::as_str)
+            .collect()
+    }
+}
+
+/// What a `/v1` route needs of a console session's role: every route a secret
+/// key may call declares one in the route table (`http::openapi::Needs`),
+/// which the OpenAPI document shows as `x-cavea-permission`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Permission {
+    /// Charts, drafts, versions: read and validate. Every role.
+    ChartsRead,
+    /// Create, edit, publish and archive charts; upload images. Owner, admin,
+    /// editor.
+    ChartsWrite,
+    /// Events, objects, hold tokens and (later) reports: read. Every role.
+    EventsRead,
+    /// Create, change and archive events. Owner, admin.
+    EventsWrite,
+    /// Seat operations: hold tokens, hold, release, book, change status.
+    /// Owner, admin, operator.
+    SeatsWrite,
+    /// API keys (and later webhooks and embed tokens). Owner, admin.
+    Developers,
+    /// Workspace settings and members. Owner, admin.
+    Settings,
+}
+
+impl Permission {
+    pub const ALL: [Self; 7] = [
+        Self::ChartsRead,
+        Self::ChartsWrite,
+        Self::EventsRead,
+        Self::EventsWrite,
+        Self::SeatsWrite,
+        Self::Developers,
+        Self::Settings,
+    ];
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ChartsRead => "charts.read",
+            Self::ChartsWrite => "charts.write",
+            Self::EventsRead => "events.read",
+            Self::EventsWrite => "events.write",
+            Self::SeatsWrite => "seats.write",
+            Self::Developers => "developers",
+            Self::Settings => "settings",
+        }
     }
 }
 
@@ -168,6 +238,26 @@ mod tests {
     #![allow(clippy::unwrap_used, reason = "tests")]
 
     use super::*;
+
+    #[test]
+    fn the_role_table_is_09s() {
+        use Permission as P;
+        let table = [
+            (Role::Owner, "1111111"),
+            (Role::Admin, "1111111"),
+            (Role::Editor, "1110000"),
+            (Role::Operator, "1010100"),
+            (Role::Viewer, "1010000"),
+        ];
+        for (role, row) in table {
+            let got: String = P::ALL
+                .into_iter()
+                .map(|p| if role.allows(p) { '1' } else { '0' })
+                .collect();
+            assert_eq!(got, row, "{role:?}");
+            assert_eq!(Role::from_db(role.as_str()), Some(role));
+        }
+    }
 
     #[test]
     fn emails_are_normalised_and_checked() {

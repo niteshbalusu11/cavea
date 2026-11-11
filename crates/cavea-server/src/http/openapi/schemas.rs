@@ -636,6 +636,17 @@ Without: booked objects.",
                                     "role",
                                     json!({ "enum": ["owner", "admin", "editor", "operator", "viewer"] }),
                                 ),
+                                (
+                                    "permissions",
+                                    described(
+                                        array(json!({ "enum": [
+                                            "charts.read", "charts.write", "events.read",
+                                            "events.write", "seats.write", "developers", "settings",
+                                        ] })),
+                                        "What the role allows: compare with an operation's \
+`x-cavea-permission`.",
+                                    ),
+                                ),
                             ],
                             &[],
                         )),

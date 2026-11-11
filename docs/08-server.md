@@ -463,7 +463,7 @@ CREATE TABLE console_setup (
 );
 ```
 
-`audit_log` is not written yet (CON-013).
+`charts.draft_updated_by` and `chart_versions.created_by` hold the console user who saved or published, and stay empty for an API key. `audit_log` is not written yet (CON-013).
 
 Migration 3 indexes `holds (event_id, session_sub) WHERE session_sub IS NOT NULL`, for the per-`sub` token cap (§11). `holds.session_sub` holds the SHA-256 of a session token's `sub` as 64 hex digits, never the `sub` itself; the server writes it, the engine never reads it.
 
@@ -474,7 +474,7 @@ The `SeatStore` trait hides all of this from the engine: `acquire`, `load_event`
 ### 6.1 Conventions
 
 - Base path `/v1`. JSON bodies, `snake_case` fields. Times are RFC 3339 UTC.
-- Authentication: `Authorization: Bearer sk_…` or `Bearer pk_…` (§11). The workspace is implied by the key. The console's own routes (`/console/api`) take the console session cookie instead (§11); `/v1` does not take it yet (CON-004).
+- Authentication: `Authorization: Bearer sk_…` or `Bearer pk_…` (§11). The workspace is implied by the key. Every route that takes a secret key also takes a console session (the cookie, §11), which names its workspace in `Cavea-Workspace` and needs the role's permission the route declares.
 - Mutating secret-key seat requests accept `Idempotency-Key` (1 to 255 printable ASCII characters (U+0020 to U+007E), which is all an HTTP header carries portably; anything else is `400`, `reason: "idempotency_key"`; kept 24 hours). Replaying a key with a different request returns `409 idempotency_mismatch`.
 - For seat commands the engine does this atomically with the command. The handler computes a 32-byte fingerprint of the request: SHA-256 over the method and route template, the path parameter (event key or hold token) and the body as parsed and serialised again (object keys sorted, no whitespace), each of the three prefixed with its length. An `extra` object, stored as sent, goes in as sent without insignificant whitespace: nothing in it is decoded or rounded, so key order inside it matters. Two sends of one request that differ only in whitespace, or in key order outside `extra`, are the same request; the same key on another route, another event or token, or with another body is a mismatch. The handler looks the key up in `idempotency` first and, if found, replays or mismatches without reaching the actor; otherwise it submits the command with the key, the fingerprint and the time of that lookup. The actor keeps an in-memory window of its event's records: every keyed command it applies gets a record, refusals included (a refused request replayed later must not succeed), holding the engine's reply exactly as returned, `seq` and per-object failures included. A key in the window replays that reply or fails with `idempotency_mismatch`, changing nothing; a key not in it is applied. The window is the authority for records not yet visible to the handler's lookup (uncommitted, or committed after it) and the store for everything older. Records are written in the commit (§4.4 statement 8) and loaded with the event (§4.7 step 3), so a retry after a lost reply and a reload returns the original reply. A record matches for 24 hours from when its command was applied. If the clock jumps back across a record's 24-hour mark, a record memory has already dropped can match again once the event reloads from the store; nothing else depends on it, and the model-based tests (13 §3.1) do not jump back across that mark. The window holds at most 50,000 records. To make room it drops the oldest only if they were already a minute old at the command's store lookup, never by the time the command is processed: a record the lookup could not see was committed after it (commits time out well within a minute), so it is still in the window however long the command waited in the mailbox. When no record qualifies, the new key is refused `503 overloaded` and the caller looks it up again. `overloaded`, `unavailable`, an invalid key and a mismatch write no record. A key is per workspace, but the engine checks it per event: two events given the same new key at the same moment both apply, and the store keeps the first record. A stored record is replayed with its original status and body (the event it names may since be archived, the token gone). Refusals made before the command reaches the engine (a malformed body, an unknown event or token, an archived event) record nothing. Routes that take a key: `hold`, `release`, `book`, `change-status`, and extending and releasing a hold token. Every other route ignores one: event routes (creating is unique by key, changing and archiving are idempotent), hold-token creation (the token is never stored, so a replay could not return it; a retry costs only an empty token that expires) and every public route (a key is per workspace, and buyers who share a publishable key could otherwise take, or collide with, a key the customer's backend means to use; a buyer's hold and release are safe to repeat with the same token anyway).
 - Objects are addressed by label. A request may instead send `{"version": "<hash>", "idx": [..]}`.
@@ -516,7 +516,7 @@ Secret key unless marked.
 - **Unchanged publish:** versions are identified by the full artefact's hash, which covers every compiled field. A draft that compiles to a version the chart already has publishes that version again: `200` with it, no new row, and the chart's published version points at it (so republishing an older draft goes back to its version). Two versions may share a public hash when they differ only in full-only data (`oid`s, ranks, section priorities, 03 §4.2); they then share one public file.
 - **Compile bounds:** validate and publish compile on blocking threads, at most two at once per node; others wait their turn. A request waits at most 60 s for its compile, its turn included, else `503 overloaded` (`reason: "compile_timeout"`); a compile still running keeps its turn until it ends, so compiles never take more than two threads. The work itself is bounded by the draft size limit and by the compiler's limits, checked before expansion allocates (02 §14). Measured locally (AMD Ryzen 9 7900X, release build): compiling 100,000 seats takes 54 ms and brotli 0.5 s; 1,000,000 seats 0.5 s and 4.6 s.
 - **Archive:** sets `archived_at`; archiving again returns the chart unchanged. The draft can no longer be saved or published (`400`, `reason: "archived"`); it can still be read and validated. The key stays taken. Versions are untouched and their public files are still served: events pinned to them keep working, and browsers and CDNs cache those files for a year regardless.
-- **Who:** `draft_updated_by` and `chart_versions.created_by` are left empty until console users act on `/v1` (09 §2, CON-004): an API key is not a user.
+- **Who:** `draft_updated_by` and `chart_versions.created_by` are the console user who saved or published (§11), and stay empty for an API key, which is not a user.
 
 `{event}` is the customer's event key. Event rules:
 
@@ -579,7 +579,7 @@ Seat rules (secret-key routes; the public ones follow the public table):
 
 | Method and path | Purpose |
 |---|---|
-| `GET /v1/keys` | List the workspace's API keys, revoked ones included; never the key or its hash |
+| `GET /v1/keys` | List the workspace's API keys, revoked ones included; never the key or its hash. Keys, like every secret-key route, also take a console session of an owner or admin (§11) |
 | `POST /v1/keys` | Create (`kind`: `secret` or `publishable`, `name`, optional `allowed_origins` for publishable keys); `201` with the key, shown only here |
 | `DELETE /v1/keys/{id}` | Revoke; returns the key. Idempotent. A key may not revoke itself |
 | `GET/POST/PATCH/DELETE /v1/webhooks` | Endpoints |
@@ -628,14 +628,14 @@ The compiled chart route takes no credential and ignores any sent. A chart file 
 - **Lifecycle:** assets are immutable and kept. There is no list or delete endpoint: a draft's image node, a published version and a thumbnail refer to an asset by hash, and none of them may lose it. There is no quota per workspace yet; the size limit bounds each upload. **E007:** validate and publish check that each background image of the compiled chart (read from its public artefact, what a renderer will fetch) names an asset the workspace holds; another workspace's copy does not count. One that does not is a finding `{code: "E007", severity: "error", node, related: null, message}`, `node` the first image node naming the hash (the message names no hash, 03 §3.2): validate answers `valid: false` with it, publish `422 chart_invalid`. It is checked only on a draft that compiles. Reference images are the designer's only and are not checked.
 - **The designer:** the image tool (07 §4) uploads the picked file here and writes the reply's `hash` into the image node's `asset`, its `width` and `height` as the node's starting `size`; it shows the image from `url`. Publishing (07 §11) renders the 640 × 480 PNG thumbnail (03 §5) and uploads it here; attaching it to the version, as `chart_versions.thumbnail` holding the asset's 16-byte hash, comes with DSN-040.
 
-**Console** (a console session, 09 §10, §11 below)
+**Console** (a console session, 09 §10; the role each `/v1` route needs is in §11)
 
 | Method and path | Purpose |
 |---|---|
 | `POST /console/api/setup` | First-run owner creation with the one-time token (no session; `201` signed in) |
 | `POST /console/api/session` | Sign in (no session; `200` signed in) |
 | `DELETE /console/api/session` | Sign out: the session ends on the server, the cookie is cleared; `204` |
-| `GET /console/api/me` | The user, their workspaces with roles, the CSRF token, the session's ends |
+| `GET /console/api/me` | The user, their workspaces with role and permissions, the CSRF token, the session's ends |
 | `POST /console/api/password` | Change one's password: every session of the user ends, a new one starts |
 
 **System**
@@ -1052,11 +1052,11 @@ Live reports read the actor. CSV exports stream from PostgreSQL.
 | Secret key | Customer backend | Everything in one workspace |
 | Publishable key | Browser, mobile app | Public endpoints of one workspace; optional origin allow-list |
 | Session token | Buyer's browser | A JWT the customer's backend signs with a secret key (HS256, `kid` the key's id) for one buyer and one event. Claims: `sub`, `exp`, `event`, `max_objects`, `channels` (below) |
-| Console session | Staff | Cookie session (below); the console's own routes (`/console/api`) for now; `/v1` with a role per workspace is CON-004 |
+| Console session | Staff | Cookie session (below); on `/v1`, one workspace per request, by role (09 §2) |
 | Embed token | Embedded designer or manager | Short-lived, scoped to one workspace and one chart or event, with a permission list |
 
 - Session tokens are optional. An event can require them (`require_session: true`), which is the strongest defence against anonymous seat hoarding (12 §3 T1).
-- Every query is scoped by workspace id taken from the credential, never from the request. In the server the workspace id is obtainable only from an authenticated key (`http::Auth`). The one exception is the compiled chart route, which takes no credential and finds a public file by its content hash alone (§6.2).
+- Every query is scoped by workspace id taken from the credential, never from the request alone. In the server the workspace id is obtainable only from an authenticated key, or from a console session whose user is a member of the workspace the request names (`http::Auth`). The one exception is the compiled chart route, which takes no credential and finds a public file by its content hash alone (§6.2).
 
 API keys:
 
@@ -1064,16 +1064,29 @@ API keys:
 - A presented key is found by its SHA-256, so no stored secret is compared byte by byte (12 T16). Unknown and revoked keys are both `401`; a valid key of the wrong kind for the route is `403`. Secret keys are refused on public endpoints and publishable keys everywhere else.
 - `last_used_at` is updated by the lookup itself when it is unset or more than an hour old: accurate to an hour, and at most one write per key per hour.
 - Rotation: create a second key, move the backend to it, revoke the first with it. Both are valid in between.
-- A key may not revoke itself (`403`, `reason: "self_revocation"`). Every revocation is made by another unrevoked secret key, serialised per workspace, so a workspace always keeps at least one secret key.
+- A key may not revoke itself (`403`, `reason: "self_revocation"`). Every revocation by a key is made by another unrevoked secret key, serialised per workspace, so keys alone always leave one. An owner or admin in the console may revoke any key, the last secret key included: the console can mint another.
 - Origin allow-list (publishable keys, 12 T3): up to 50 origins such as `https://tickets.example.com`, compared without regard to case. A request whose `Origin` is not on the list, `null` included, is `403` (`reason: "origin"`). A request without `Origin` is accepted: native apps send none, and a non-browser client can send any `Origin` it likes, so refusing it would stop no attacker. A key without a list accepts every origin.
 
 Console sessions (09 §2, §10; `DECISIONS.md` D-50). Not the buyer's session token below: a staff member's sign-in.
 
 - **Cookie.** `__Host-cavea_console=cs_…; Path=/; Max-Age=604800; HttpOnly; SameSite=Lax; Secure`, set by sign-in, setup and a password change; `Max-Age=0` clears it at sign-out. `CAVEA_CONSOLE_COOKIE_SECURE=false` (development over plain HTTP from a host other than `localhost`) drops `Secure` and the `__Host-` prefix, which requires it: the name is then `cavea_console`. `__Host-` pins the cookie to this host and path `/`, so no other subdomain can set or read it.
 - **Lifetimes.** A session ends 12 hours after its last use ("renewed on activity": a request with it moves the end, at most every five minutes, so a busy console writes once per session per five minutes) and 7 days after sign-in however used. Both are checked by the lookup, on the database's clock. A disabled user's sessions stop at once.
-- **Rotation and revocation.** Sign-in always starts a new session and ends one presented with it; setup starts the owner's first. A password change ends every session of the user and starts a new one. Sign-out ends the session on the server. There is no elevated mode to rotate into yet (TOTP).
-- **CSRF.** Every non-safe method (anything but `GET`, `HEAD`, `OPTIONS`) authenticated by the cookie must send `Cavea-Csrf-Token`: the session's token, which `GET /console/api/me` and the sign-in reply give, the SHA-256 of a fixed label and the session identifier (nothing stored; another site can neither read the cookie nor derive it). Without it, or wrong: `403`, `reason: "csrf"`. Such a request must also come from the server's own origin: `Sec-Fetch-Site` `same-origin` (or `none`), or without it an `Origin` whose host is the request's `Host`; else `403`, `reason: "origin"`. Sign-in and setup, which have no session yet, take the origin check too, and like every JSON route need `Content-Type: application/json`, which another site cannot send without a preflight nobody answers. No `GET` changes anything. Routes that take an API key never read the cookie, so neither check applies to keys.
-- **Not yet on `/v1`.** The `/v1` routes take API keys only; accepting the console session there, naming a workspace and checking the role of 09 §2 on every route, is CON-004.
+- **Rotation and revocation.** Sign-in always starts a new session and ends one presented with it; setup starts the owner's first. A password change ends every session of the user and starts a new one. Sign-out ends the session on the server. A role change takes effect on the next request, since the role is read with each; there is no elevated mode to rotate into yet (TOTP).
+- **CSRF.** Every non-safe method (anything but `GET`, `HEAD`, `OPTIONS`) authenticated by the cookie, on `/console/api` and on `/v1`, must send `Cavea-Csrf-Token`: the session's token, which `GET /console/api/me` and the sign-in reply give, the SHA-256 of a fixed label and the session identifier (nothing stored; another site can neither read the cookie nor derive it). Without it, or wrong: `403`, `reason: "csrf"`. Such a request must also come from the server's own origin: `Sec-Fetch-Site` `same-origin` (or `none`), or without it an `Origin` whose host is the request's `Host`; else `403`, `reason: "origin"`. Sign-in and setup, which have no session yet, take the origin check too, and like every JSON route need `Content-Type: application/json`, which another site cannot send without a preflight nobody answers. No `GET` changes anything. A request with `Authorization` is read as an API key and never for a cookie, so neither check applies to keys.
+- **On `/v1`.** Every route that takes a secret key takes a console session instead when `Authorization` is absent. The request names its workspace in `Cavea-Workspace` (`ws_…`, from `me`): missing, `400` `reason: "workspace"`; a workspace the user is not a member of, existing or not, `403` `reason: "workspace"`. The workspace is then the credential's, as a key's would be: every query is scoped by it, and another workspace's identifiers are `404`. The member's role must grant the permission the route declares (`403` `reason: "role"`, with `details.permission`). The engine sees secret-key authority, and the event log's `actor` is `usr_` and the user's id (never the email); drafts and versions record the user. Admin-key routes (`/v1/workspaces`, `/metrics`) and the public routes take no console session.
+- **Permissions** (09 §2). Each route in the route table declares one (`openapi::Needs::Staff`), shown in the OpenAPI document as `x-cavea-permission`, with `x-cavea-roles`:
+
+  | Permission | Routes | Roles |
+  |---|---|---|
+  | `charts.read` | `GET` charts, drafts, versions | all five |
+  | `charts.write` | create, save the draft, validate, publish, archive charts; upload images | owner, admin, editor |
+  | `events.read` | `GET` events, objects, hold tokens | all five |
+  | `events.write` | create, change, archive events | owner, admin |
+  | `seats.write` | hold tokens (create, extend, release), hold, release, book, change status | owner, admin, operator |
+  | `developers` | API keys | owner, admin |
+  | `settings` | workspace settings and members (none built yet) | owner, admin |
+
+  Validate is `charts.write`: it compiles, which only those who can publish need. Ownership transfer, owner-only in 09 §2, waits for members (CON-012).
 - **Cross-origin.** No route answers another origin with credentials: CORS is only on `/v1/public/`, never with `Access-Control-Allow-Credentials`, and those routes take no cookie. In development the console's dev server proxies `/console/api` and `/v1` to the server (09 §9), so everything is one origin.
 
 Session tokens (`DECISIONS.md` D-34):
