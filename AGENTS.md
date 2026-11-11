@@ -114,7 +114,7 @@ Keep it small and fast.
 
 - Work on a branch in your own worktree. One pull request per task slice.
 - Name the `docs/TODO.md` task ids in the pull request title, and tick those items in the same pull request.
-- Follow the `full-send` skill end to end: build, prove locally, review with `sol-loop`, file the pull request, fix CI and review findings, merge to `main`.
+- Follow the `full-stop` skill: build, prove locally, review with `sol-loop`, rebase, file the pull request. Builders do not wait on CI and do not merge; the orchestrator runs the merge gate and merges (`docs/ORCHESTRATION.md` §7).
 - Review is by GPT-6.1 Sol at high reasoning effort, through `sol-loop`. The builder does not approve its own work.
 - Squash-merge. Rebase onto `main` before merging; never force-push `main`.
 - Make the smallest change that completes the task. No unrelated cleanup.
