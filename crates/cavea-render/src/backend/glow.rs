@@ -15,17 +15,22 @@ use super::{
 };
 use crate::{seat, shaders};
 
-/// The program, attribute layout and uniform buffer of the `shape` pipeline.
-struct ShapeProgram {
+/// A linked program and its attribute layout.
+struct Program {
     program: glow::Program,
     vao: glow::VertexArray,
-    globals: glow::Buffer,
 }
+
+/// Bytes per `MESH` vertex: x, y as `f32`, then RGBA8.
+const MESH_STRIDE: i32 = 12;
 
 pub struct GlowBackend {
     gl: glow::Context,
     caps: Caps,
-    shape: ShapeProgram,
+    shape: Program,
+    mesh: Program,
+    /// The uniform buffer both programs read at binding point 0.
+    globals: glow::Buffer,
     buffers: Vec<Option<(glow::Buffer, u32, BufferKind)>>,
     textures: Vec<Option<(glow::Texture, TextureDesc)>>,
 }
@@ -44,10 +49,21 @@ impl GlowBackend {
                     .unwrap_or(0),
             };
             let shape = shape_program(&gl)?;
+            let mesh = mesh_program(&gl)?;
+            let globals = gl.create_buffer().map_err(BackendError::Create)?;
+            gl.bind_buffer(glow::UNIFORM_BUFFER, Some(globals));
+            gl.buffer_data_size(
+                glow::UNIFORM_BUFFER,
+                super::Uniforms::STD140_SIZE as i32,
+                glow::DYNAMIC_DRAW,
+            );
+            gl.bind_buffer_base(glow::UNIFORM_BUFFER, 0, Some(globals));
             Ok(Self {
                 gl,
                 caps,
                 shape,
+                mesh,
+                globals,
                 buffers: Vec::new(),
                 textures: Vec::new(),
             })
@@ -58,6 +74,17 @@ impl GlowBackend {
         match id.and_then(|id| self.buffers.get(id.0 as usize)) {
             Some(Some((buffer, len, _))) => Ok((*buffer, *len)),
             _ => Err(BackendError::UnknownResource),
+        }
+    }
+
+    /// Uploads the draw's uniforms to the shared block.
+    fn uniforms(&self, call: &DrawCall<'_>) {
+        // SAFETY: see the module documentation; the block is STD140_SIZE bytes.
+        unsafe {
+            self.gl
+                .bind_buffer(glow::UNIFORM_BUFFER, Some(self.globals));
+            self.gl
+                .buffer_sub_data_u8_slice(glow::UNIFORM_BUFFER, 0, &call.uniforms.to_std140());
         }
     }
 
@@ -90,11 +117,9 @@ impl GlowBackend {
         // SAFETY: see the module documentation; every range was checked above,
         // so the offsets and counts below fit in i32 and inside the buffers.
         unsafe {
+            self.uniforms(call);
             gl.use_program(Some(self.shape.program));
             gl.bind_vertex_array(Some(self.shape.vao));
-            gl.bind_buffer(glow::UNIFORM_BUFFER, Some(self.shape.globals));
-            gl.buffer_sub_data_u8_slice(glow::UNIFORM_BUFFER, 0, &call.uniforms.to_std140());
-            gl.bind_buffer_base(glow::UNIFORM_BUFFER, 0, Some(self.shape.globals));
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(palette));
             for range in call.ranges {
@@ -149,44 +174,101 @@ impl GlowBackend {
         }
         Ok(())
     }
+
+    /// Indexed triangles: each range is a range of the index buffer.
+    fn draw_mesh(&self, call: &DrawCall<'_>) -> Result<(), BackendError> {
+        let [vertex_id, index_id] = call.buffers;
+        let (vertex_buf, _) = self.buffer(vertex_id)?;
+        let (index_buf, index_len) = self.buffer(index_id)?;
+        for range in call.ranges {
+            if range.start > range.end
+                || u64::from(range.end) * 4 > u64::from(index_len)
+                || i32::try_from(u64::from(range.end) * 4).is_err()
+            {
+                return Err(BackendError::InvalidData);
+            }
+        }
+        let gl = &self.gl;
+        // SAFETY: see the module documentation; every range was checked above,
+        // and WebGL checks each index against the vertex buffer.
+        unsafe {
+            self.uniforms(call);
+            gl.use_program(Some(self.mesh.program));
+            gl.bind_vertex_array(Some(self.mesh.vao));
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(vertex_buf));
+            gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, MESH_STRIDE, 0);
+            gl.vertex_attrib_pointer_f32(1, 4, glow::UNSIGNED_BYTE, true, MESH_STRIDE, 8);
+            gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(index_buf));
+            for range in call.ranges {
+                let count = (range.end - range.start) as i32;
+                let offset = (range.start * 4) as i32;
+                gl.draw_elements(glow::TRIANGLES, count, glow::UNSIGNED_INT, offset);
+            }
+            gl.bind_vertex_array(None);
+        }
+        Ok(())
+    }
 }
 
-fn shape_program(gl: &glow::Context) -> Result<ShapeProgram, BackendError> {
+/// Links a program, binds its uniform blocks to binding point 0 and its
+/// sampler, if any, to texture unit 0, and makes an attribute layout with
+/// `attributes` arrays enabled, per instance when `instanced`.
+unsafe fn program(
+    gl: &glow::Context,
+    [vert, frag]: [&str; 2],
+    blocks: &[&str],
+    sampler: Option<&str>,
+    attributes: u32,
+    instanced: bool,
+) -> Result<Program, BackendError> {
     // SAFETY: see the module documentation.
     unsafe {
-        let program = link(gl, shaders::SHAPE_VERT, shaders::SHAPE_FRAG)?;
-        for block in [shaders::SHAPE_VERT_GLOBALS, shaders::SHAPE_FRAG_GLOBALS] {
+        let program = link(gl, vert, frag)?;
+        for block in blocks {
             if let Some(index) = gl.get_uniform_block_index(program, block) {
                 gl.uniform_block_binding(program, index, 0);
             }
         }
-        gl.use_program(Some(program));
-        let palette = gl.get_uniform_location(program, shaders::SHAPE_VERT_PALETTE);
-        gl.uniform_1_i32(palette.as_ref(), 0);
-        gl.use_program(None);
-
+        if let Some(sampler) = sampler {
+            gl.use_program(Some(program));
+            let location = gl.get_uniform_location(program, sampler);
+            gl.uniform_1_i32(location.as_ref(), 0);
+            gl.use_program(None);
+        }
         let vao = gl.create_vertex_array().map_err(BackendError::Create)?;
         gl.bind_vertex_array(Some(vao));
-        for location in 0..5 {
+        for location in 0..attributes {
             gl.enable_vertex_attrib_array(location);
-            gl.vertex_attrib_divisor(location, 1);
+            if instanced {
+                gl.vertex_attrib_divisor(location, 1);
+            }
         }
         gl.bind_vertex_array(None);
-
-        let globals = gl.create_buffer().map_err(BackendError::Create)?;
-        gl.bind_buffer(glow::UNIFORM_BUFFER, Some(globals));
-        gl.buffer_data_size(
-            glow::UNIFORM_BUFFER,
-            super::Uniforms::STD140_SIZE as i32,
-            glow::DYNAMIC_DRAW,
-        );
-        gl.bind_buffer(glow::UNIFORM_BUFFER, None);
-        Ok(ShapeProgram {
-            program,
-            vao,
-            globals,
-        })
+        Ok(Program { program, vao })
     }
+}
+
+fn shape_program(gl: &glow::Context) -> Result<Program, BackendError> {
+    let blocks = [shaders::SHAPE_VERT_GLOBALS, shaders::SHAPE_FRAG_GLOBALS];
+    let sources = [shaders::SHAPE_VERT, shaders::SHAPE_FRAG];
+    // SAFETY: see the module documentation.
+    unsafe {
+        program(
+            gl,
+            sources,
+            &blocks,
+            Some(shaders::SHAPE_VERT_PALETTE),
+            5,
+            true,
+        )
+    }
+}
+
+/// The `mesh` program reads its uniforms in the vertex stage only.
+fn mesh_program(gl: &glow::Context) -> Result<Program, BackendError> {
+    let sources = [shaders::MESH_VERT, shaders::MESH_FRAG];
+    // SAFETY: see the module documentation.
+    unsafe { program(gl, sources, &[shaders::MESH_VERT_GLOBALS], None, 2, false) }
 }
 
 /// Compiles and links one program, returning the driver's log on failure.
@@ -404,6 +486,7 @@ impl GpuBackend for GlowBackend {
     fn draw(&mut self, call: &DrawCall<'_>) -> Result<(), BackendError> {
         match call.pipeline {
             Pipeline::Shape => self.draw_shape(call),
+            Pipeline::Mesh => self.draw_mesh(call),
             other => Err(BackendError::Unsupported(other)),
         }
     }

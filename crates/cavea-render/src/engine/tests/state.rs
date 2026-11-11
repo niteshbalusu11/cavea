@@ -269,6 +269,9 @@ fn seats_taken_by_a_delta_pulse_for_400_ms() {
         .unwrap()
         .public;
     shown(&mut e, ccf);
+    // Seats are drawn (not overview, where nothing pulses).
+    set_camera(&mut e, [-500.0, -500.0, 1000.0, 1000.0]);
+    tick(&mut e, 8.0);
     snapshot(&mut e, 1, &[]);
     let changes: Vec<(u32, u8)> = (0..10_000).map(|i| (i * 2, 1)).collect();
     delta(&mut e, 1, &changes);
@@ -286,7 +289,16 @@ fn measure_state() {
     let ccf = cavea_compiler::compile(&cavea_testkit::synthetic::stadium(100_000, 1))
         .unwrap()
         .public;
+    let start = std::time::Instant::now();
     let dynamic = shown(&mut e, ccf);
+    println!("load to first frame: {:?}", start.elapsed());
+    let mesh = &e.scene.as_ref().unwrap().scene.chart.mesh;
+    println!(
+        "mesh: {} vertices, {} indices, {} B on the GPU",
+        mesh.vertices.len(),
+        mesh.indices.len(),
+        mesh.vertices.len() * 12 + mesh.indices.len() * 4
+    );
     let n = e.objects().unwrap();
     let mut rng = Rng(11);
     let state: Vec<u8> = (0..n)

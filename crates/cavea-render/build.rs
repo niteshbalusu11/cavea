@@ -16,7 +16,7 @@ use naga::{
 };
 
 /// Programs translated at build time; the others in `Pipeline` come in later slices.
-const PROGRAMS: &[&str] = &["shape"];
+const PROGRAMS: &[&str] = &["shape", "mesh"];
 
 fn main() {
     if let Err(message) = run() {

@@ -83,6 +83,7 @@ impl<B: GpuBackend> Engine<B> {
         for (v, &s) in scene.visual.iter_mut().zip(&scene.status) {
             *v = picker_visual(s, Selection::None);
         }
+        loaded.sections.recount(&scene.chart, &scene.visual);
         grow_dirty(&mut loaded.dirty, 0..seats);
         self.redraw();
         for idx in self.selection.seats() {
@@ -119,6 +120,8 @@ impl<B: GpuBackend> Engine<B> {
         for &idx in &unreleased {
             self.selection.confirm_release(idx);
         }
+        // Seats pulse only where they are drawn: not at overview (04 §10).
+        let pulsing = !self.reduced_motion && self.seat_alpha() > 0.0;
         let Some(loaded) = &mut self.scene else {
             return;
         };
@@ -127,16 +130,19 @@ impl<B: GpuBackend> Engine<B> {
         let mut span: Option<Range<usize>> = None;
         for c in changes {
             let i = c.idx as usize;
+            let section = scene.section_of(i);
             let (Some(status), Some(visual)) = (scene.status.get_mut(i), scene.visual.get_mut(i))
             else {
                 break;
             };
             if *status != c.status {
                 *status = c.status;
-                if *visual == visual::AVAILABLE {
+                let was = *visual;
+                if pulsing && was == visual::AVAILABLE {
                     pulse.push(c.idx);
                 }
                 *visual = picker_visual(c.status, Selection::None);
+                loaded.sections.change(section, was, *visual);
                 span = Some(span.map_or(i..i + 1, |s| s.start..i + 1));
             }
         }
@@ -148,7 +154,7 @@ impl<B: GpuBackend> Engine<B> {
         for idx in seats.chain(unreleased) {
             self.refresh(idx);
         }
-        if let (false, Some(loaded), Some(span)) = (self.reduced_motion, &mut self.scene, span) {
+        if let (true, Some(loaded), Some(span)) = (pulsing, &mut self.scene, span) {
             let scene = &mut loaded.scene;
             pulse.retain(|&i| scene.visual.get(i as usize) == Some(&visual::UNAVAILABLE));
             for &i in &pulse {

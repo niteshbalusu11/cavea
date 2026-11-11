@@ -129,6 +129,9 @@ pub struct Uniforms {
     pub dim: f32,
     /// Seconds since the engine started, for pulses.
     pub time: f32,
+    /// The pass's opacity, multiplying everything it draws: the
+    /// level-of-detail cross-fade (04 §10). 1 otherwise.
+    pub alpha: f32,
 }
 
 impl Uniforms {
@@ -144,6 +147,7 @@ impl Uniforms {
             self.stroke_min_px,
             self.dim,
             self.time,
+            self.alpha,
         ];
         let columns = self.view.iter().enumerate().flat_map(|(i, column)| {
             column
@@ -166,14 +170,17 @@ impl Uniforms {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrawCall<'a> {
     pub pipeline: Pipeline,
-    /// Vertex buffers in the order the pipeline defines. `Shape`: the 12-byte
-    /// static and the 4-byte dynamic instance buffers (04 §6).
+    /// Buffers in the order the pipeline defines. `Shape`: the 12-byte static
+    /// and the 4-byte dynamic instance buffers (04 §6). `Mesh`: the vertex
+    /// buffer (12 bytes per vertex: x, y as `f32`, RGBA8 colour, as `MESH`
+    /// stores them) and the `u32` index buffer.
     pub buffers: [Option<BufferId>; 2],
-    /// `Shape`: the palette texture.
+    /// `Shape`: the palette texture. `Mesh`: none.
     pub texture: Option<TextureId>,
     pub uniforms: Uniforms,
-    /// Instance ranges, in order. WebGL2 has no base instance, so the GL
-    /// backend rebinds attribute offsets per range (04 §11).
+    /// `Shape`: instance ranges, in order. WebGL2 has no base instance, so
+    /// the GL backend rebinds attribute offsets per range (04 §11). `Mesh`:
+    /// ranges of the index buffer, each drawn as triangles.
     pub ranges: &'a [Range<u32>],
 }
 

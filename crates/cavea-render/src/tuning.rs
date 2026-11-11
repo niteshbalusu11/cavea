@@ -74,8 +74,8 @@ pub const HIT_TOLERANCE_MOUSE_PX: f64 = 4.0;
 /// Seats smaller than this on screen are not selected by a touch or pen tap:
 /// the tap zooms to `ZOOM_TO_SELECT_SEAT_PX` instead (zoom-to-select).
 pub const SELECT_MIN_SEAT_TOUCH_PX: f64 = 18.0;
-/// The same for a mouse click.
-pub const SELECT_MIN_SEAT_MOUSE_PX: f64 = 5.0;
+/// The same for a mouse click: the seats level's threshold (04 §10).
+pub const SELECT_MIN_SEAT_MOUSE_PX: f64 = LOD_SEATS_SEAT_PX;
 /// Zoom-to-select makes the tapped seat this large, centred on the tap.
 pub const ZOOM_TO_SELECT_SEAT_PX: f64 = 32.0;
 /// Most objects a buyer can select: the largest object limit of a hold token
@@ -92,8 +92,18 @@ pub const RING_WIDTH_PX: f32 = 2.0;
 
 // Level of detail (04 §10).
 
-/// Seats at least this large on screen are drawn at the detail level.
+/// Seat sizes on screen (the chart's default seat size, CSS pixels) at which
+/// the levels begin, going up: the cross-fade from section fills to seats,
+/// seats, and detail.
+pub const LOD_CROSSFADE_SEAT_PX: f64 = 2.5;
+pub const LOD_SEATS_SEAT_PX: f64 = 5.0;
 pub const LOD_DETAIL_SEAT_PX: f64 = 14.0;
+/// Going down, a level is left only below this fraction of its threshold
+/// (10% hysteresis), so the level does not flicker at a boundary.
+pub const LOD_HYSTERESIS: f64 = 0.9;
+/// Seats smaller than this on screen, each by its own size, are drawn
+/// without their stroke (04 §8): the seats level's threshold.
+pub const STROKE_MIN_SEAT_PX: f32 = LOD_SEATS_SEAT_PX as f32;
 
 /// Most seat draw calls in one frame (04 §11); more visible ranges are merged
 /// across the smallest gaps.

@@ -115,6 +115,16 @@ impl Scene {
         out
     }
 
+    /// Seat `i`'s section through its row, or `NONE`.
+    #[inline]
+    pub fn section_of(&self, i: usize) -> u32 {
+        let row = self
+            .row
+            .get(i)
+            .and_then(|&r| self.chart.rows.get(r as usize));
+        row.map_or(NONE, |r| r.section)
+    }
+
     /// Seat `idx`'s static instance values, as the static buffer holds them.
     pub fn seat_static(&self, idx: u32) -> Option<SeatStatic> {
         let segments = &self.chart.segments;

@@ -23,11 +23,16 @@
 // `gap=n` skips a sequence number every n-th delta, so the view asks to
 // resync and the host answers with a SNAPSHOT.
 //
-// `window.caveaDemo` counts frames and WebGL errors, keeps every engine event
-// in `events`, and offers `setTheme(name)`, `crowd(on)`, `resnapshot()` and
-// `take(label)` (someone else takes a seat, in a DELTA) and `gap()` (a DELTA
-// that skips a sequence number, so the view asks to resync and this host
-// answers with a SNAPSHOT) for scripted checks.
+// The chart has a pitch below the seats and a translucent band above them
+// (mesh decoration). Each frame line reports the level of detail
+// (`cameraChanged`) and the WebGL draw calls the frame made.
+//
+// `window.caveaDemo` counts frames, WebGL errors and draw calls (`lod`,
+// `frameDraws`), keeps every engine event in `events`, and offers
+// `setTheme(name)`, `crowd(on)`, `resnapshot()`, `take(label)` (someone else
+// takes a seat, in a DELTA), `sell(from, count)` (the same for an `idx`
+// range) and `gap()` (a DELTA that skips a sequence number, so the view asks
+// to resync and this host answers with a SNAPSHOT) for scripted checks.
 import {
   attach,
   loadRenderer,
@@ -118,15 +123,38 @@ const events: RendererEvent[] = [];
 const stats = {
   frames: 0,
   glErrors: 0,
+  lod: "",
+  drawCalls: 0,
+  frameDraws: 0,
   setTheme,
   events,
   crowd: (on: boolean) => crowd(on),
   resnapshot: () => sendSnapshot(),
   take: (label: string) => sendDelta(new Map(idxOf([label]).map((i) => [i, 1]))),
+  sell: (from: number, count: number) =>
+    sendDelta(new Map(Array.from({ length: count }, (_, k) => [from + k, 1]))),
   gap: () => sendDelta(new Map(), true),
 };
 Object.assign(window, { caveaDemo: stats });
 let afterFirstFrame: (() => void) | undefined;
+
+/** Counts the draw calls the renderer makes (seats, overlays, meshes). */
+function countDraws(context: WebGL2RenderingContext): void {
+  const instanced = context.drawArraysInstanced.bind(context);
+  context.drawArraysInstanced = (...args) => {
+    stats.drawCalls += 1;
+    instanced(...args);
+  };
+  const elements = context.drawElements.bind(context);
+  context.drawElements = (...args) => {
+    stats.drawCalls += 1;
+    elements(...args);
+  };
+}
+if (gl) {
+  countDraws(gl);
+}
+let drawsBefore = 0;
 let loadedAt = 0;
 
 function onFrame(time: number): void {
@@ -138,7 +166,16 @@ function onFrame(time: number): void {
   if (stats.frames === 1) {
     report(`first frame ${(performance.now() - loadedAt).toFixed(1)} ms after loadChart returned`);
   }
-  report(`frame ${stats.frames} at ${time.toFixed(0)}: gl.getError() = ${error}`);
+  stats.frameDraws = stats.drawCalls - drawsBefore;
+  drawsBefore = stats.drawCalls;
+  const frames = stats.frames;
+  // After this frame's events, so the level is the one it was drawn at.
+  queueMicrotask(() =>
+    report(
+      `frame ${frames} at ${time.toFixed(0)}: gl.getError() = ${error}; ` +
+        `level ${stats.lod}, ${stats.frameDraws} draw calls`,
+    ),
+  );
   const next = afterFirstFrame;
   afterFirstFrame = undefined;
   next?.();
@@ -349,6 +386,9 @@ function onEvents(batch: RendererEvent[]): void {
         break;
       case "objectHover":
         hover = event.object?.label ?? "";
+        break;
+      case "cameraChanged":
+        stats.lod = event.lod;
         break;
       default:
         break;

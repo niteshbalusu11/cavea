@@ -85,7 +85,8 @@ pub struct Theme {
     pub selected_ink: Rgba,
     pub ring_hover: Rgba,
     pub ring_focus: Rgba,
-    /// Strength of the overview tint, 0–1 (used from REN-021).
+    /// Strength of the overview tint, 0–1: how much of a fully available
+    /// section's category colour its fill takes (04 §10).
     pub section_tint: f32,
     /// Alpha of dimmed (filtered-out) objects, 0–1.
     pub dim: f32,
@@ -191,18 +192,21 @@ impl Theme {
         self.bg.map(|v| f32::from(v) / 255.0)
     }
 
+    /// A category's colour: the chart's, or the theme's override for its key.
+    pub fn category(&self, c: &Category, strings: &Strings) -> Rgba {
+        let key = strings.get(c.key).unwrap_or_default();
+        self.categories
+            .iter()
+            .rev()
+            .find(|(k, _)| k == key)
+            .map_or(c.color, |&(_, color)| color)
+    }
+
     /// Writes the palette texture for `categories` into `out` (cleared first):
     /// `categories.len() + 1` rows of `PALETTE_WIDTH` RGBA8 texels.
     pub fn palette(&self, categories: &[Category], strings: &Strings, out: &mut Vec<u8>) {
         out.clear();
-        let rows = categories.iter().map(|c| {
-            let key = strings.get(c.key).unwrap_or_default();
-            self.categories
-                .iter()
-                .rev()
-                .find(|(k, _)| k == key)
-                .map_or(c.color, |&(_, color)| color)
-        });
+        let rows = categories.iter().map(|c| self.category(c, strings));
         // The last row, for objects without a category.
         for base in rows.chain([self.fg_muted]) {
             let unavailable = [

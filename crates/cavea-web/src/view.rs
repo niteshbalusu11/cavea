@@ -347,18 +347,79 @@ impl View {
     }
 
     /// Demo only: a synthetic stadium of `seats` seats from `seed`, compiled
-    /// in the browser; `shape` 0 circle, 1 rounded, 2 chair. Returns public
-    /// CCF bytes for `loadChart`.
+    /// in the browser; `shape` 0 circle, 1 rounded, 2 chair. Decoration is
+    /// added to see the mesh passes: a pitch below the seats and a
+    /// translucent band across the bowl above them. Returns public CCF bytes
+    /// for `loadChart`.
     #[cfg(feature = "demo")]
     #[wasm_bindgen(js_name = demoChart)]
     pub fn demo_chart(seats: u32, seed: u32, shape: u8) -> Result<Vec<u8>, JsError> {
-        use cavea_compiler::document::SeatShape;
+        use cavea_compiler::document::{Layer, Node, SeatShape, Shape, ShapeKind, Style};
         let mut doc = cavea_testkit::synthetic::stadium(seats, u64::from(seed));
         doc.settings.seat_shape = match shape {
             0 => SeatShape::Circle,
             1 => SeatShape::Rounded,
             _ => SeatShape::Chair,
         };
+        let rings = doc.nodes.iter().find_map(|n| match n {
+            Node::Section(s) => s.children.iter().find_map(|c| match c {
+                Node::RowBlock(b) => Some(b.rows.len()),
+                _ => None,
+            }),
+            _ => None,
+        });
+        let outer = 3000.0 + 95.0 * rings.unwrap_or(0) as f64 + 200.0;
+        // Through the middle of the first section (7.5° clockwise from +x).
+        let (c, s) = (0.991_444_861, 0.130_526_192);
+        let shape = |id, kind, layer, style, size, points| {
+            Node::Shape(Shape {
+                id,
+                name: None,
+                floor: None,
+                origin: [0.0, 0.0],
+                rotation: 0.0,
+                locked: false,
+                hidden: false,
+                kind,
+                size,
+                corner_radius: Some(200.0),
+                points,
+                d: None,
+                style,
+                layer,
+            })
+        };
+        let pitch = Style {
+            fill: Some("#15803D".to_owned()),
+            stroke: Some("#F8FAFC".to_owned()),
+            stroke_width: 30.0,
+            opacity: 1.0,
+        };
+        let band = Style {
+            fill: None,
+            stroke: Some("#7C3AED".to_owned()),
+            stroke_width: 120.0,
+            opacity: 0.5,
+        };
+        let id = doc.next_oid;
+        doc.next_oid += 2;
+        doc.nodes.push(shape(
+            id,
+            ShapeKind::Rect,
+            Layer::Below,
+            pitch,
+            Some([4400.0, 2800.0]),
+            None,
+        ));
+        let ends = vec![[-outer * c, -outer * s], [outer * c, outer * s]];
+        doc.nodes.push(shape(
+            id + 1,
+            ShapeKind::Line,
+            Layer::Above,
+            band,
+            None,
+            Some(ends),
+        ));
         cavea_compiler::compile(&doc)
             .map(|compiled| compiled.public)
             .map_err(|e| JsError::new(&format!("{e:?}")))

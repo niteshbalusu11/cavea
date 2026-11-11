@@ -359,13 +359,16 @@ impl<B: GpuBackend> Engine<B> {
             return;
         };
         let i = idx as usize;
+        let section = loaded.scene.section_of(i);
         let (Some(&status), Some(visual)) =
             (loaded.scene.status.get(i), loaded.scene.visual.get_mut(i))
         else {
             return;
         };
+        let was = *visual;
         // A seat the buyer may still hold reads as theirs to take again.
         *visual = picker_visual(if ours { 0 } else { status }, state);
+        loaded.sections.change(section, was, *visual);
         grow_dirty(&mut loaded.dirty, i..i + 1);
         self.redraw();
     }
