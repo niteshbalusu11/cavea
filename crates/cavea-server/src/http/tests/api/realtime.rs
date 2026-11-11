@@ -726,6 +726,37 @@ async fn sse_stream() {
     .await;
 }
 
+/// An SSE stream nobody reads: at the stall limit its task ends and drops the
+/// subscription, but the connection keeps its slot until the HTTP side drops
+/// the body, so stalled streams cannot pile up past the connection limits.
+#[tokio::test]
+#[ignore = "needs CAVEA_TEST_DATABASE_URL"]
+async fn a_stalled_sse_stream_keeps_its_slot() {
+    let _serial = serial();
+    with_db(async move |pool| {
+        let stall = Timing {
+            stall: Duration::from_millis(300),
+            ..FAST
+        };
+        let server = start(&pool, stall, 10, CorsOrigins::Any).await;
+        let t = Tenant::create(&server.app, "a").await;
+        let id = event_id(&pool, &t.event).await;
+        let uri = format!("/v1/public/events/{}/stream?key={}", t.event, t.publishable);
+        // HELLO fills the one-frame channel; the SNAPSHOT's write blocks.
+        let body = open_sse(&server.app, &uri, &[]).await;
+        // Past the stall limit: the task has ended, and its slot would be
+        // back by now if the task held it.
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert_eq!(server.realtime.subscribers(Transport::Sse), 0);
+        assert_eq!(server.seats.registry.subscribers(id), 0);
+        assert_eq!(server.realtime.connections(), 1);
+        drop(body);
+        server.settled(id).await;
+        server.shutdown().await;
+    })
+    .await;
+}
+
 /// One sequence of commands, observed over a WebSocket, SSE and polling, ends
 /// in the same client state on all three, which is the committed state.
 #[tokio::test]

@@ -449,8 +449,10 @@ struct StreamQuery {
 /// `Last-Event-ID` (an `EventSource` reconnecting), else from `last_seq`. No
 /// hold token, so no PRIVATE frames. A client that stops reading blocks the
 /// task's write once the one-frame channel and the connection's write queue
-/// (hyper's: at most 16 chunks) are full, and is dropped at the stall limit
-/// like a WebSocket.
+/// (hyper's: at most 16 chunks) are full; at the stall limit the task ends and
+/// its subscription with it. The socket is hyper's: it stays open, holding
+/// the body and with it the connection's slot, until the client reads again
+/// or the connection breaks.
 async fn stream(
     QueryKey(auth): QueryKey,
     Path(event): Path<String>,
@@ -473,14 +475,8 @@ async fn stream(
     span.record("event", target.key.as_str());
     // One frame waits here at most; the rest stay in the engine's channel.
     let (tx, rx) = mpsc::channel(1);
-    tokio::spawn(
-        async move {
-            let _slot = slot;
-            sse_session(state, target, last_seq, SseLink(tx)).await;
-        }
-        .instrument(span),
-    );
-    let mut response = Body::new(SseBody(rx)).into_response();
+    tokio::spawn(sse_session(state, target, last_seq, SseLink(tx)).instrument(span));
+    let mut response = Body::new(SseBody { rx, _slot: slot }).into_response();
     let headers = response.headers_mut();
     let pairs = [
         (header::CONTENT_TYPE, "text/event-stream"),
@@ -545,8 +541,12 @@ impl Link for SseLink {
     }
 }
 
-/// The SSE response body: what the connection's task writes.
-struct SseBody(mpsc::Receiver<Bytes>);
+/// The SSE response body: what the connection's task writes, and the
+/// connection's slot, given back when hyper drops the body with the response.
+struct SseBody {
+    rx: mpsc::Receiver<Bytes>,
+    _slot: Slot,
+}
 
 impl HttpBody for SseBody {
     type Data = Bytes;
@@ -556,7 +556,7 @@ impl HttpBody for SseBody {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<http_body::Frame<Bytes>, Infallible>>> {
-        self.0
+        self.rx
             .poll_recv(cx)
             .map(|event| event.map(|e| Ok(http_body::Frame::data(e))))
     }
