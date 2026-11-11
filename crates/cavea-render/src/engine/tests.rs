@@ -199,6 +199,9 @@ fn idle_engine_asks_for_and_draws_nothing() {
 
 #[test]
 fn zoom_and_centre_stay_within_limits() {
+    // A chart so small that fitting it would exceed the maximum zoom.
+    let e = engine_with([0.0, 0.0], [7.0, 7.0], W, H);
+    assert_eq!(cam(&e).zoom, 64.0);
     let mut rng = Rng(0x5eed);
     for _ in 0..300 {
         let min = [rng.range(-1e4, 1e4), rng.range(-1e4, 1e4)];
@@ -310,6 +313,36 @@ fn fly_to_lands_exactly_within_its_duration() {
     });
     assert!(!wants_frame(&tick(&mut e, 1000.0)));
     assert_eq!(cam(&e), expected);
+
+    // Reduced motion requested mid-flight lands it at the next frame.
+    let mut e = engine();
+    let duration_ms = Some(400);
+    e.handle(Command::FlyTo {
+        target: bounds(target),
+        duration_ms,
+    });
+    tick(&mut e, 1000.0);
+    tick(&mut e, 1016.0);
+    e.handle(Command::SetReducedMotion(true));
+    assert!(!wants_frame(&tick(&mut e, 1032.0)));
+    assert_eq!(cam(&e), expected);
+
+    // A resize mid-flight that raises the minimum zoom holds at landing.
+    let mut e = engine();
+    let target = bounds([0.0, 0.0, 2000.0, 2000.0]);
+    e.handle(Command::FlyTo {
+        target,
+        duration_ms,
+    });
+    tick(&mut e, 1000.0);
+    resize(&mut e, 1600.0, 1200.0, 1.0, 3.0);
+    settle(&mut e, 1016.0);
+    let min_zoom = 0.8 * (1200.0 - 48.0) / 1000.0;
+    assert!(
+        (cam(&e).zoom - min_zoom).abs() < 1e-9,
+        "zoom {}",
+        cam(&e).zoom
+    );
 }
 
 #[test]

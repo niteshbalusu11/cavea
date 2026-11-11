@@ -230,7 +230,22 @@ impl<B: GpuBackend> Engine<B> {
                 duration_ms,
             } => self.enqueue_camera(target, true, duration_ms),
             Command::SetGestureHandling(mode) => self.recogniser.mode = mode,
-            Command::SetReducedMotion(on) => self.reduced_motion = on,
+            Command::SetReducedMotion(on) => {
+                self.reduced_motion = on;
+                if on {
+                    // Running fly-tos land at the next frame; inertia stops.
+                    self.animations.retain_mut(|animation| match animation {
+                        Animation::Fly { duration_ms, .. } => {
+                            *duration_ms = 0.0;
+                            true
+                        }
+                        Animation::Inertia { .. } => false,
+                    });
+                    if !self.animations.is_empty() {
+                        self.want_frame();
+                    }
+                }
+            }
             Command::Tick { time_ms } => self.frame(time_ms),
             Command::ContextLost => self.context_lost = true,
             _ => self.error(
@@ -483,7 +498,9 @@ impl<B: GpuBackend> Engine<B> {
         if self.camera.is_none()
             && let Some(stage) = self.stage()
         {
-            self.camera = Some(Camera::fit(stage.chart, stage.size));
+            let mut camera = Camera::fit(stage.chart, stage.size);
+            camera.clamp(stage.chart, stage.size, stage.limits);
+            self.camera = Some(camera);
         }
         self.apply_queue();
         self.recogniser.tick(time_ms, &mut self.actions);
@@ -690,7 +707,9 @@ impl<B: GpuBackend> Engine<B> {
             } => {
                 let t = (now_ms - *start_ms.get_or_insert(now_ms)) / *duration_ms;
                 if t >= 1.0 || t.is_nan() {
+                    // A resize during the flight may have moved the limits.
                     *camera = *to;
+                    camera.clamp(stage.chart, stage.size, stage.limits);
                     return false;
                 }
                 *camera = from.lerp(to, camera::ease_out(t.max(0.0)));
