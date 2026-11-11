@@ -394,6 +394,7 @@
               "member.role_changed",
               "member.removed",
               "invitation.revoked",
+              "workspace.created",
               "workspace.renamed",
               "api_key.created",
               "api_key.revoked",

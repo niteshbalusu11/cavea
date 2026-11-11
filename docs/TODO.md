@@ -208,7 +208,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **SRV-020** Health, readiness and Prometheus metrics (08 §15). `/readyz` follows a once-a-second database probe and shutdown; `/metrics` takes the admin key; every §15 metric but the webhook ones, which come with SRV-032, plus mailbox wait, fan-out time, frames, rate-limit refusals, pool connections and dropped log records
 - [x] **SRV-021** Graceful shutdown: flush, close subscribers, release leases (08 §14)
 - [x] **SRV-022** Startup load of events with outstanding holds (08 §4.7)
-- [ ] **SRV-023** Dockerfile (distroless, multi-arch) and compose file (08 §14)
+- [x] **SRV-023** Dockerfile (distroless, multi-arch) and compose file (08 §14). `deploy/Dockerfile`, `deploy/compose.server.yaml`, `deploy/smoke.ts` (D-57). The Helm chart and systemd unit 08 §14 lists are not done
 - [x] **SRV-024** Body size, object count and JSON depth limits (12 §3 T19)
 
 ### Realtime
@@ -331,10 +331,10 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [ ] **CON-009** Event settings tab (09 §4.3)
 - [ ] **CON-010** API keys screen (09 §6)
 - [ ] **CON-011** Quick-start snippets pre-filled with workspace values (09 §6)
-- [ ] **CON-012** Workspace and members settings; invitations (09 §7). Built on the server: list members, change a role, remove a member (`/console/api/members`, owner and admin; only an owner makes or unmakes an owner; a workspace keeps one owner; 08 §6.2). Owed: invitations and the admin key's first owner of a new workspace (written, unreviewed, on branch `slice/members-invitations-audit-unreviewed`), workspace settings (name), and the console's screens
-- [ ] **CON-013** Audit log writes for sensitive actions (09 §4.2)
+- [ ] **CON-012** Workspace and members settings; invitations (09 §7). Built on the server: list members, change a role, remove a member (`/console/api/members`, owner and admin; only an owner makes or unmakes an owner; a workspace keeps one owner; 08 §6.2). Then invitations, the admin key's owner invitation and the workspace's name (09 §7, D-55). Owed: the console's screens (members, invitations, the invitation page, workspace settings)
+- [x] **CON-013** Audit log writes for sensitive actions (09 §4.2). Written in each action's transaction; `GET /console/api/audit` (09 §7, D-55). Its screen is with the settings screens
 - [ ] **CON-014** Interface standards: tables, forms, feedback, themes, keyboard (09 §8)
-- [ ] **CON-015** Embed the built console in the server binary with hashed assets (09 §9)
+- [x] **CON-015** Embed the built console in the server binary with hashed assets (09 §9). `cargo xtask build-server` (D-56)
 
 ### Licensing
 

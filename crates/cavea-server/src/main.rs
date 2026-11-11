@@ -2,7 +2,9 @@
 //! serve until Ctrl-C or SIGTERM, then stop within 20 seconds (08 §14,
 //! `cavea_server::serve`). `cavea-server verify …` runs the reconciler
 //! instead (13 §3.3, `cavea_server::verify`); `cavea-server openapi` prints
-//! the OpenAPI document (08 §6.1).
+//! the OpenAPI document (08 §6.1); `cavea-server probe` exits 0 when the
+//! server on `CAVEA_LISTEN`'s port answers `GET /readyz` with `200`, for a
+//! container's health check, which has no shell or HTTP client (08 §14).
 
 use std::sync::Arc;
 
@@ -36,6 +38,9 @@ fn main() -> anyhow::Result<()> {
         let text = cavea_server::http::openapi::text();
         std::io::Write::write_all(&mut std::io::stdout(), text.as_bytes())?;
         return Ok(());
+    }
+    if args.first().map(String::as_str) == Some("probe") {
+        std::process::exit(i32::from(!probe()));
     }
     hold_standard_descriptors();
     let config = Config::from_env()?;
@@ -133,6 +138,27 @@ fn hold_standard_descriptors() {
             _ => break,
         }
     }
+}
+
+/// `GET /readyz` on this host at `CAVEA_LISTEN`'s port, within 2 s.
+fn probe() -> bool {
+    use std::io::{Read as _, Write as _};
+    let port = std::env::var("CAVEA_LISTEN")
+        .ok()
+        .and_then(|l| l.parse::<std::net::SocketAddr>().ok())
+        .map_or(8080, |a| a.port());
+    let timeout = std::time::Duration::from_secs(2);
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, timeout) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+    let mut status = [0; 12];
+    stream
+        .write_all(b"GET /readyz HTTP/1.0\r\nHost: localhost\r\n\r\n")
+        .and_then(|()| stream.read_exact(&mut status))
+        .is_ok_and(|()| status.ends_with(b" 200"))
 }
 
 /// Resolves on Ctrl-C or, on Unix, SIGTERM.

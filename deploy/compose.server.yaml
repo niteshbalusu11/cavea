@@ -1,0 +1,55 @@
+# A production-shaped Cavea: the server image (deploy/Dockerfile) and its own
+# PostgreSQL (08 §14). Separate from compose.yaml, the development database,
+# which it never touches. Required: POSTGRES_PASSWORD. Optional:
+# CAVEA_ADMIN_KEY (32 to 512 printable characters; unset, the workspace
+# endpoints refuse every request, D-24), CAVEA_PUBLIC_URL (the HTTPS address
+# people reach, which the console's setup link starts with), CAVEA_PORT
+# (8080), CAVEA_IMAGE (cavea-server:latest).
+#
+#   POSTGRES_PASSWORD=… docker compose -f deploy/compose.server.yaml up -d --build --wait
+#   docker compose -f deploy/compose.server.yaml logs server | grep setup_link
+#
+# The port is published on 127.0.0.1 only: put the TLS proxy in front of it
+# (08 §14). Secrets come from the environment and are never in this file.
+name: cavea-server
+
+services:
+  postgres:
+    image: postgres:18-alpine@sha256:123b17998ccaf47e53b502e8c6a1e79afd8f579c6f3eec83c563da026f957395
+    # Every hold is acknowledged after its commit is durable (08 §14).
+    command: ["postgres", "-c", "synchronous_commit=on"]
+    environment:
+      POSTGRES_USER: cavea
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: cavea
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cavea -d cavea"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  server:
+    image: ${CAVEA_IMAGE:-cavea-server:latest}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CAVEA_DATABASE_URL: postgres://cavea:${POSTGRES_PASSWORD}@postgres:5432/cavea
+      # Passed through only when set in the environment.
+      CAVEA_PUBLIC_URL:
+      CAVEA_ADMIN_KEY:
+    ports:
+      - "127.0.0.1:${CAVEA_PORT:-8080}:8080"
+    read_only: true
+    # More than the server's 20 s shutdown (08 §14).
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

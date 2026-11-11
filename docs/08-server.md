@@ -463,7 +463,9 @@ CREATE TABLE console_setup (
 );
 ```
 
-`charts.draft_updated_by` and `chart_versions.created_by` hold the console user who saved or published, and stay empty for an API key. `audit_log` is not written yet (CON-013).
+`charts.draft_updated_by` and `chart_versions.created_by` hold the console user who saved or published, and stay empty for an API key.
+
+Migration 6 is invitations and the audit log (09 §7, D-55). `invitations (id, workspace_id, email, role, token_hash UNIQUE, created_by, created_at, expires_at, UNIQUE (workspace_id, email))` holds the SHA-256 of each pending invitation's token, never the token; accepting or revoking deletes the row, and creating one deletes the workspace's expired ones. `audit_log` gains `actor text NOT NULL` (`usr_…`, `key_…`, `admin`, `anonymous`) and `request_id`, and is written from this migration on: one row per action in the action's own transaction (the actions are listed in 09 §7). Two indexes serve the read route, `(workspace_id, id)` and `(user_id, id) WHERE workspace_id IS NULL`; a page is a backward scan of each, a page of the workspace's rows and a page per member of the instance rows, so its cost does not grow with the table (13 §7.4). Rows are kept: there is no retention job.
 
 Migration 3 indexes `holds (event_id, session_sub) WHERE session_sub IS NOT NULL`, for the per-`sub` token cap (§11). `holds.session_sub` holds the SHA-256 of a session token's `sub` as 64 hex digits, never the `sub` itself; the server writes it, the engine never reads it.
 
@@ -481,6 +483,7 @@ The `SeatStore` trait hides all of this from the engine: `acquire`, `load_event`
 - Lists use cursor pagination: `?limit=100&after=<cursor>` (`limit` 1 to 100, default 100). A list response is `{"data": [..], "next": "<cursor>"}`, oldest first; `next` is the id of the last item when another page may follow, else `null`, and is passed back as `after`. Server-generated ids are `ws_` or `key_` and 32 hex digits.
 - Request limits (`12-security-licensing.md` T19): a body is at most 256 KiB unless its route sets a larger limit; JSON arrays and objects nest at most 32 deep, checked by a scan of the raw bytes before parsing; a command names at most 1,000 objects (`02-domain-model.md` §14). Name and customer key fields are 1 to 128 characters without U+0000.
 - Every response, errors and 404s included, carries `Cavea-Request-Id`. The server generates `req_` and 32 lowercase hex digits. A caller may send its own `Cavea-Request-Id` to correlate with its logs: the server adopts it only if it is 1 to 64 characters from `A-Z a-z 0-9 . _ -`, and otherwise ignores it and generates one. An adopted id is not guaranteed unique.
+- Every path that is no route is the router's fallback: a console file or `index.html` (09 §9) for a `GET` outside `/v1`, `/console/api`, `/healthz`, `/readyz` and `/metrics`, else problem+json `404`. The console's files are not part of the API and not in its document.
 - The OpenAPI 3.1 document is served at `GET /v1/openapi.json`, without a credential (it describes the API, nothing of any workspace), with `Cache-Control: public, max-age=300` and a strong `ETag` (`304` on `If-None-Match`). It is generated, never written by hand (D-46): every route is registered through the route table (`http::openapi::Routes`), which gives the router its method and path and the document its operation, so a route cannot exist without its entry or the reverse; the component schemas (`http/openapi/schemas.rs`) are held to the code by the router tests, which validate every response they receive and every JSON body the server accepted against them. The document is also committed as `crates/cavea-server/openapi.json` (`cavea-server openapi` prints it; a test fails while the file is stale), so a pull request shows API changes in its diff and clients are generated without running the server. Each operation has an `operationId`, a tag (its resource), its security scheme (`adminKey`, `secretKey`, `publishableKey`, `publishableKeyQuery`, `sessionToken`, `holdToken`), its parameters (`Idempotency-Key`, `If-Match`, the page's `limit` and `after`), its request and response schemas by name, the problem+json responses of each status it can return with their codes, and `Cavea-Request-Id` (and `Retry-After` on `429` and `503`) on every response. `GET /v1/public/rt` is described as an upgrade to the WebSocket protocol of §8, which OpenAPI cannot describe.
 
 ### 6.2 Endpoints
@@ -587,6 +590,7 @@ Seat rules (secret-key routes; the public ones follow the public table):
 | `GET /v1/workspaces` | List workspaces. Admin key |
 | `POST /v1/workspaces` | Create (`key`, `name`); `201` with the workspace and its first secret key, shown only here. Admin key |
 | `POST /v1/workspaces/{workspace}/keys` | Mint a secret key (`name`) for an existing workspace; `201` with the key object, the key shown only here. An unknown or malformed `ws_…` id is `404` (`missing: "workspace"`). Admin key |
+| `POST /v1/workspaces/{workspace}/invitations` | An owner invitation (`email`) to an existing workspace: `201` with the invitation and its one-time link (09 §7); `409` for a member's email. A new workspace's first member, or the recovery of one whose owners are gone. Admin key |
 | `POST /v1/embed-tokens` | Short-lived token for the embedded designer or manager |
 
 **Public (publishable key, CORS enabled)**
@@ -640,8 +644,14 @@ The compiled chart route takes no credential and ignores any sent. A chart file 
 | `GET /console/api/members` | The workspace's members: `{user: {id, email}, role}`, by user id, paginated. Owner and admin |
 | `PATCH /console/api/members/{user}` | Change a member's role (`{role}`); making or unmaking an owner needs `ownership`; the last owner cannot be changed (`400` `last_owner`) |
 | `DELETE /console/api/members/{user}` | Remove a member; `204`. The same owner rules |
+| `POST /console/api/members` | Invite an email with a role (`{email, role}`): `201` with the invitation and its one-time link; an owner invitation needs `ownership`; `409` for a member's email |
+| `GET /console/api/invitations` | Pending invitations, oldest first, paginated; never a link |
+| `DELETE /console/api/invitations/{invitation}` | Revoke; `204` |
+| `POST /console/api/invitations/accept` | Accept a link's token (`{token, password?}`), signed in as its email or by setting a password for a new account (09 §7); no `settings` |
+| `PATCH /console/api/workspace` | Rename (`{name}`) |
+| `GET /console/api/audit` | The audit log, newest first, paginated (09 §7) |
 
-The members routes take the console session only (no API key), name the workspace in `Cavea-Workspace` like `/v1`, and need `settings`. Changes to one workspace's members are serialised on its row, so a workspace always keeps an owner whatever runs at once; a change applies to the member's next request and ends nothing else of theirs (sessions, other workspaces). A user removed from every workspace can still sign in and sees none.
+The members, invitation, workspace and audit routes take the console session only (no API key), name the workspace in `Cavea-Workspace` like `/v1`, and need `settings`; acceptance takes a token instead, with the session when there is one. Changes to one workspace's members are serialised on its row, so a workspace always keeps an owner whatever runs at once; a change applies to the member's next request and ends nothing else of theirs (sessions, other workspaces). A user removed from every workspace can still sign in and sees none.
 
 **System**
 
@@ -1169,7 +1179,7 @@ Admin key and workspaces:
 | `CAVEA_PUBLIC_URL` | — | External base URL such as `https://seats.example.com` (`http://` or `https://`, kept without a trailing slash). The first-run setup link starts with it (09 §2); without it the link is a path. The server warns at start when it is not HTTPS. Later: webhooks |
 | `CAVEA_LICENCE` | — | Licence file path or contents |
 | `CAVEA_ADMIN_KEY` | none | The operator's key for `/v1/workspaces`: 32 to 512 printable ASCII characters. Unset, those endpoints refuse every request (§11) |
-| `CAVEA_DB_POOL` | 16 | Connection pool size: every connection is opened at start and kept (one that reaches its lifetime or idle timeout is replaced in the background), so no request waits for a new one |
+| `CAVEA_DB_POOL` | 16 | Connections to PostgreSQL, all opened at start, before the server listens, and kept open, so the first burst after a start or a quiet night opens none (13 §7.4). The first must open or the start fails; any the database refuses beyond it are opened later, with a warning. Every 10 minutes the pool retires idle connections older than 10 minutes and opens back up to this number in the background; a request that finds none idle opens one. Size it within the database's `max_connections`, counting a second process during a rolling restart: a 1 vCPU node beside a small managed PostgreSQL does well with 4 |
 | `CAVEA_DELTA_INTERVAL_MS` | 100 | Not read yet: the engine's interval is fixed at 100 ms (§8.3) |
 | `CAVEA_SNAPSHOT_MAX_AGE` | 1 | Seconds a shared cache may keep the public snapshot (`max-age`, §8.5) |
 | `CAVEA_RT_MAX_CONNECTIONS` | 60000 | Realtime connections the node holds open at most; beyond, the upgrade is `503 overloaded` (§8.2) |
@@ -1190,13 +1200,13 @@ Admin key and workspaces:
 
 ## 14. Deployment
 
-- **Artefacts:** a static binary and a distroless Docker image for x86-64 and arm64.
+- **Artefacts:** a binary for Linux (x86-64 and arm64, glibc 2.34 or newer) and a distroless Docker image for both (D-57). As built (SRV-023): `deploy/Dockerfile` builds everything from the repository at its pinned versions (Rust from `rust-toolchain.toml`, bun from `package.json`, binaryen 132 as CI) on the build machine's platform and cross-compiles the server for the target's, so arm64 needs no emulation; the image is `gcr.io/distroless/cc-debian12:nonroot` with the binary (console included), about 46 MB, running as `nonroot` (65532) with no shell, `CAVEA_LISTEN=0.0.0.0:8080` inside the container, `EXPOSE 8080`, `STOPSIGNAL SIGTERM` and a `HEALTHCHECK` running `cavea-server probe` (`GET /readyz` on the container's own port). It writes nothing to disk, so it runs with a read-only root filesystem. Docker's default stop timeout is 10 s: give 30 s (`docker stop -t 30`, compose `stop_grace_period`). Not a static (musl) binary: ring's C code would need musl cross compilers the build image does not have, and musl's allocator, slow under contention, would need a replacement allocator crate on the hold path.
 - **Minimum:** 1 vCPU, 512 MB, PostgreSQL 15. **Recommended for on-sales:** 4 vCPU, 8 GB, PostgreSQL on fast storage in the same network.
 - **PostgreSQL:** `synchronous_commit = on`. Backups and point-in-time recovery are the customer's responsibility; the docs give a recipe.
 - **TLS:** terminate at the customer's proxy or load balancer. WebSocket upgrade must be allowed.
 - **Shutdown:** on SIGTERM, stop accepting commands, flush pending batches, send CLOSE to subscribers, release leases, exit within 20 s. First every realtime connection is sent CLOSE 3 and closed (a CLOSE that cannot be written within 1 s is dropped; a connection whose write is blocked by a client that does not read, or that has not sent SUBSCRIBE yet, ends at once), so that long-lived connections never hold the drain open or eat into the actors' time; clients reconnect with backoff to another node or the restarted one and resume from their `seq`. The server stops accepting connections and gives requests in flight up to 10 s to finish (their commands reach their actors); then the registry stops every actor, each committing what it accepted and releasing its lease, within what is left of the 20 s. Only after that does the server wait, until the deadline, for realtime connections still open: an SSE response whose client has stopped reading keeps its socket, and its slot, until the client reads (§8.4), and must not take the actors' time. `GET /readyz` answers `503` from the signal on. At exit the log output gets 250 ms more to write what is queued.
 - **Upgrade:** replace the image and restart. Migrations run automatically; a migration that cannot run online is called out in the release notes.
-- **Reference files:** `deploy/compose.yaml`, `deploy/helm/`, a systemd unit.
+- **Reference files:** `deploy/compose.server.yaml` (the image, its own PostgreSQL with `synchronous_commit = on` and a named volume, health checks, the server after the database is healthy, a read-only root filesystem, a 30 s stop grace period, the port on 127.0.0.1, `POSTGRES_PASSWORD` required and no admin key unless one is set); `deploy/smoke.ts`, the image's end-to-end check (13 §13); `deploy/compose.yaml` is only the development database. Still to do: `deploy/helm/` and a systemd unit.
 
 ## 15. Observability
 
@@ -1251,6 +1261,7 @@ realtime {request_id, transport, workspace, event}   one per realtime connection
 
 | Failure | Effect | Recovery |
 |---|---|---|
+| PostgreSQL unreachable at start | The migrations' connection fails and the process exits with an error before it listens, so nothing is half up (the pool, opened after them, waits up to 5 s for its first connection, then does the same). A container platform restarts it (compose: `restart: unless-stopped`, after the database is healthy) | Automatic once the database answers |
 | PostgreSQL unreachable | Commands fail with 503. An actor stops at its next failed commit or heartbeat (within 5 s, §4.8), ending its subscriptions; its event cannot be reloaded, so its snapshot and realtime are unavailable until the database returns. `/readyz` answers `503` within about a second | Automatic when the database returns |
 | Log output fails or stalls (disk full, closed pipe, a stopped collector) | Records are dropped and counted in `cavea_log_records_dropped_total`; requests, actors and shutdown carry on. Standard input, output or error closed at start are held open on `/dev/null`, so the server's sockets never take their descriptors | Fix the output; logging resumes by itself |
 | Fanning out saturates the cores (tens of thousands of subscribers) | Delta delivery slows and publications coalesce over up to 1 s (§8.3); commands, commits and snapshots are not delayed | None needed; fewer subscribers per node, or more cores |
