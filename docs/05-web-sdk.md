@@ -250,7 +250,7 @@ Each request is cancelled after 8 s, its body included. A hold gives up 18 s aft
 
 | Callback | Fires when | Payload | Today |
 |---|---|---|---|
-| `onReady` | Chart-ready | `{ chart: { name, seats, objects }, backend: 'webgl2', marks }`: timing marks in ms since `createSeatMap` (04 §24: `init_start`, `wasm_ready`, `chart_fetched`, `chart_decoded`, `first_frame`, `state_ready`; also `performance.mark('cavea:<name>')`) | Built; fires just before the promise resolves. `first_frame` is missing while the container is hidden |
+| `onReady` | Chart-ready | `{ chart: { name, seats, objects }, backend: 'webgl2', marks }`: timing marks in ms since `createSeatMap` (04 §24: `init_start`, `wasm_ready`, `gpu_ready`, `chart_fetched`, `chart_decoded`, `first_frame`, `state_ready`; `interactive` comes after, in `onMetrics`; also `performance.mark('cavea:<name>')`) | Built; fires just before the promise resolves. `first_frame` is missing while the container is hidden |
 | `onSelectionChange` | The selection changes | `{ objects, holdToken, valid, expiresAt }` | Built; `valid`: at least `selection.min` objects; `expiresAt` in Unix ms on the page's clock (`Date.now()`), corrected for the server's (§4) |
 | `onObjectSelect` / `onObjectDeselect` | One object is added or removed | Object | Built |
 | `onSelectionInvalid` / `onSelectionValid` | Rule state changes | `(rule, objects)` / — | Built: rule `min` (objects: the selection) or a refusal (`max`, `not_free`, a hold code: objects refused) |
@@ -264,7 +264,7 @@ Each request is cancelled after 8 s, its body included. A hold gives up 18 s aft
 | `onSectionEnter` | The camera drills into a section | Section | Not yet |
 | `onFloorChange` | The floor changes | Floor | Not yet |
 | `onCameraChange` | Pan or zoom settles | `{ centre, zoom, level }` | Built |
-| `onMetrics` | At most once a second | Frame statistics | Not yet |
+| `onMetrics` | At most once a second, only after frames | `{ frames, frameMs: { median, p95, max }, drawCalls, visibleSeats, level, backend, pixelRatio, marks }` (04 §24): frame times over the last 120 frames, the rest for the last frame drawn | Built (REN-044). Without it frames are not timed |
 | `onError` | Any recoverable or fatal error | `CaveaError` | Built |
 
 A callback that throws is caught and reported through `onError` as `callback_failed`; if `onError` itself throws, that is swallowed. No callback fires after `destroy`. Callbacks fire in the engine's order: events caused by a method called from inside a callback are delivered after the events already being delivered. Selection callbacks can fire before `createSeatMap` resolves, if the buyer taps before the first state arrives.
@@ -361,7 +361,7 @@ class CaveaError extends Error {
 }
 ```
 
-Codes: `invalid_option`, `not_browser`, `wasm_unavailable`, `webgl_unavailable`, `chart_fetch_failed`, `bad_chart` and `state_connect_failed` (fatal, at start); `state_failed` (an adapter error, refused or unknown state), `state_disconnected` (`caveaServer`'s realtime connection dropped and is reconnecting, or stopped for good, §4.1), `hold_failed`, `release_failed`, `callback_failed`, `glyph_atlas_failed` (seats are drawn without labels), `invalid_input` (a method's input refused) and `engine_failed` (a frame or input call failed).
+Codes: `invalid_option`, `not_browser`, `wasm_unavailable`, `webgl_unavailable`, `chart_fetch_failed`, `bad_chart` and `state_connect_failed` (fatal, at start); `state_failed` (an adapter error, refused or unknown state), `state_disconnected` (`caveaServer`'s realtime connection dropped and is reconnecting, or stopped for good, §4.1), `hold_failed`, `release_failed`, `callback_failed`, `glyph_atlas_failed` (seats are drawn without labels), `context_lost` (the WebGL context was lost and not restored within 5 s; the map redraws if it comes back), `invalid_input` (a method's input refused) and `engine_failed` (a frame or input call failed).
 
 | Situation | Behaviour |
 |---|---|
@@ -369,7 +369,7 @@ Codes: `invalid_option`, `not_browser`, `wasm_unavailable`, `webgl_unavailable`,
 | WASM blocked or fails to compile | Fall to the list view if the adapter can supply sections and rows; otherwise fatal. Today: fatal, `wasm_unavailable` |
 | WebGL2 unavailable | Canvas 2D fallback. Today: fatal, `webgl_unavailable` |
 | Glyph atlas fails | The map works without seat labels; `onError` with `glyph_atlas_failed` |
-| GL context lost | Pause, restore, re-upload; no user-visible error if restored within 5 s |
+| GL context lost | Pause, restore, re-upload; no user-visible error if restored within 5 s. Built (REN-040, 04 §20.2): no frame while lost; restored, everything is made again from the engine's copies with no refetch; `onError` with `context_lost` after 5 s lost |
 | Realtime connection drops | Keep the map usable, show a discreet "reconnecting" indicator, resync on return; holds still go over HTTPS. Today: `onError` with `state_disconnected` at the first drop, reconnection with backoff from `seq` (§4.1); the indicator waits for WEB-006 |
 | Sequence gap | Automatic resync |
 | Hold request fails for network reasons | Retry once, then revert the selection and report `onHoldFailed`. The retry is the adapter's (`caveaServer`: §4.1); the SDK reverts and reports a rejected `hold` |
