@@ -419,7 +419,8 @@ impl Shared {
                 kind,
                 seq,
                 objects,
-                send_ms: if retried { s.first_send_ms } else { s.send_ms },
+                // The first attempt may be the one that was applied.
+                send_ms: s.first_send_ms,
                 recv_ms: s.recv_ms,
                 retried,
                 order,
@@ -436,6 +437,20 @@ impl Shared {
                 objects,
                 send_ms: s.first_send_ms,
                 order,
+            });
+        });
+    }
+
+    /// An earlier attempt's unknown outcome, kept after a later one was
+    /// refused.
+    fn keep_unknown(&self, party: Party, kind: Kind, objects: Vec<u32>, s: &Sent) {
+        self.record(|h| {
+            h.unknown.push(Unknown {
+                party,
+                kind,
+                objects,
+                send_ms: s.first_send_ms,
+                order: None,
             });
         });
     }
@@ -1219,6 +1234,11 @@ async fn buy_inner(
             Attempt::Reply(st, _) => st,
             _ => 0,
         };
+        // A refusal proves only that the last attempt failed: an earlier one
+        // whose outcome is unknown may hold the seats.
+        if status != 200 && s.unknown_before {
+            sh.keep_unknown(party, Kind::Hold, pick.clone(), &s);
+        }
         match (status, v["code"].as_str()) {
             (200, _) => {
                 sh.op("hold", s.started, Ok(()));
@@ -1362,15 +1382,7 @@ async fn release(
             objects.sort_unstable();
             if objects.is_empty() && s.unknown_before {
                 // The earlier attempt was applied; its `seq` is not known.
-                sh.record(|h| {
-                    h.unknown.push(Unknown {
-                        party,
-                        kind: Kind::Release,
-                        objects: held.to_vec(),
-                        send_ms: s.first_send_ms,
-                        order: None,
-                    });
-                });
+                sh.keep_unknown(party, Kind::Release, held.to_vec(), &s);
                 return;
             }
             if objects != held {
@@ -1387,6 +1399,9 @@ async fn release(
         Attempt::Reply(_, v) => {
             sh.op("release", s.started, Err(code(v)));
             sh.failed(party, Kind::Release, held.to_vec(), None);
+            if s.unknown_before {
+                sh.keep_unknown(party, Kind::Release, held.to_vec(), &s);
+            }
         }
         _ if s.unknown() => sh.unknown(party, Kind::Release, held.to_vec(), &s, None),
         _ => sh.failed(party, Kind::Release, held.to_vec(), None),

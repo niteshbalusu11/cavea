@@ -360,6 +360,13 @@ mod tests {
             report::build(&cfg, "custom", &outcome(vec![], 20)).1,
             report::EXIT_BUDGET
         );
+        // A view never compared with the server is not a pass.
+        let mut unverified = outcome(vec![], 2);
+        unverified.converged = (3, 0, 1);
+        assert_eq!(
+            report::build(&cfg, "custom", &unverified).1,
+            report::EXIT_CORRECTNESS
+        );
         let v = Violation {
             check: "double_hold",
             detail: "x".into(),

@@ -172,7 +172,7 @@ struct Replayed {
     violations: Vec<Violation>,
     /// Each object's owner after the last acknowledgement, the `seq` it was
     /// acknowledged at.
-    owner: HashMap<u32, (Owner, u64)>,
+    owner: HashMap<u32, (Owner, u64, i64)>,
     /// Every interval in which another party may have owned an object.
     owned: BTreeMap<u32, Vec<(i64, i64, Party)>>,
     /// Objects whose last acknowledgement freed them, and how (release,
@@ -198,10 +198,13 @@ impl History {
     }
 
     /// Whether a request with an unknown outcome may have ended `current`'s
-    /// hold on `o` before local time `t`.
-    fn may_have_ended(&self, current: Owner, o: u32, t: i64) -> bool {
+    /// ownership of `o`, which began at local time `start`, before local time
+    /// `t`: a release by its holder, a cancellation of its booking, an unblock,
+    /// sent after the ownership began.
+    fn may_have_ended(&self, current: Owner, o: u32, start: i64, t: i64) -> bool {
         self.unknown.iter().any(|u| {
-            u.send_ms < t
+            u.send_ms >= start
+                && u.send_ms < t
                 && u.objects.contains(&o)
                 && match current {
                     Owner::Held(p) => u.kind == Kind::Release && u.party == p,
@@ -246,7 +249,7 @@ impl History {
                 };
                 if !compatible
                     && let Some((c, _, start)) = current
-                    && self.may_have_ended(c, o, a.recv_ms)
+                    && self.may_have_ended(c, o, start, a.recv_ms)
                 {
                     // An unknown release, cancellation or unblock may have
                     // freed it: no accusation, but the owner may have had it
@@ -342,7 +345,7 @@ impl History {
                 Owner::Booked(p, _) => close(o, p, start, i64::MAX),
                 Owner::Blocked => close(o, BACKEND, start, i64::MAX),
             }
-            end.insert(o, (who, seq));
+            end.insert(o, (who, seq, start));
         }
         // Unknown outcomes that may have made a seat unavailable.
         for u in &self.unknown {
@@ -371,7 +374,7 @@ impl History {
         let mut parties: HashSet<Party> = r
             .owner
             .values()
-            .filter_map(|(o, _)| match o {
+            .filter_map(|(o, ..)| match o {
                 Owner::Held(p) => Some(*p),
                 _ => None,
             })
@@ -484,14 +487,14 @@ pub fn audit(h: &History, seen: &Observed) -> (Vec<Violation>, Resolution) {
             .any(|a| a.kind == kind && a.party == party && a.objects.contains(&o))
     };
     // What should still be there.
-    for (&o, &(who, seq)) in &r.owner {
+    for (&o, &(who, seq, start)) in &r.owner {
         if h.before.contains(&o) {
             continue;
         }
         let now = seen.objects.get(&o).copied();
         match who {
             Owner::Booked(_, n) => {
-                if now != Some(Seen::Booked(n)) && !unknown(o, Kind::Unbook, None) {
+                if now != Some(Seen::Booked(n)) && !h.may_have_ended(who, o, start, i64::MAX) {
                     bad(
                         "lost_ack",
                         format!("idx {o}: booking acknowledged at seq {seq} missing; now {now:?}"),
@@ -499,7 +502,7 @@ pub fn audit(h: &History, seen: &Observed) -> (Vec<Violation>, Resolution) {
                 }
             }
             Owner::Blocked => {
-                if now != Some(Seen::Blocked) && !unknown(o, Kind::Unblock, None) {
+                if now != Some(Seen::Blocked) && !h.may_have_ended(who, o, start, i64::MAX) {
                     bad(
                         "lost_ack",
                         format!("idx {o}: block acknowledged at seq {seq} missing; now {now:?}"),
@@ -514,7 +517,7 @@ pub fn audit(h: &History, seen: &Observed) -> (Vec<Violation>, Resolution) {
                     .is_some_and(|t| t.contains(&o));
                 if h.certainly_live(p, seen.end_ms)
                     && !has
-                    && !unknown(o, Kind::Release, Some(p))
+                    && !h.may_have_ended(who, o, start, i64::MAX)
                     && !unknown(o, Kind::Book, Some(p))
                 {
                     bad(
@@ -609,7 +612,7 @@ pub fn audit(h: &History, seen: &Observed) -> (Vec<Violation>, Resolution) {
         for &o in t.iter().flatten() {
             if acked(o, Kind::Hold, p) {
                 if r.freed.get(&o) == Some(&(Kind::Release, p))
-                    && !matches!(r.owner.get(&o), Some((Owner::Held(q), _)) if *q == p)
+                    && !matches!(r.owner.get(&o), Some((Owner::Held(q), ..)) if *q == p)
                 {
                     bad(
                         "lost_ack",
@@ -967,6 +970,28 @@ mod tests {
         h3.acks.push(ack(BACKEND, Kind::Unblock, 10, &[10], 2_000));
         s.tokens.insert(2, Some(vec![]));
         assert_eq!(audits(&h3, &s), ["lost_ack", "lost_ack", "lost_ack"]);
+        // An unknown cancellation excuses a missing booking only if it is
+        // that booking's and was sent after it; an unknown unblock, a missing
+        // block only if sent after the block.
+        let (mut h6, mut s) = audited();
+        s.objects.remove(&8);
+        s.objects.remove(&10);
+        h6.unknown = vec![
+            Unknown {
+                order: Some(3),
+                ..unknown(BACKEND, Kind::Unbook, &[8], 2_000)
+            },
+            unknown(BACKEND, Kind::Unblock, &[10], 500),
+        ];
+        assert_eq!(audits(&h6, &s), ["lost_ack", "lost_ack"]);
+        h6.unknown = vec![
+            Unknown {
+                order: Some(4),
+                ..unknown(BACKEND, Kind::Unbook, &[8], 2_000)
+            },
+            unknown(BACKEND, Kind::Unblock, &[10], 2_000),
+        ];
+        assert!(audits(&h6, &s).is_empty(), "{:?}", audit(&h6, &s).0);
         // A hold long past its expiry still held.
         let (h4, mut s) = audited();
         s.objects.insert(11, Seen::Held(60_000));

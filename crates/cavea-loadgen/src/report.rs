@@ -87,7 +87,8 @@ pub fn build(cfg: &Config, profile: &str, o: &Outcome) -> (Value, u8) {
         Some((a, b, r)) => (Some(*a), Some(*b), Some(r.clone())),
         None => (None, None, None),
     };
-    let exit = if o.violations_total > 0 || differ > 0 {
+    // A view never compared is a convergence not shown.
+    let exit = if o.violations_total > 0 || differ > 0 || unverified > 0 {
         EXIT_CORRECTNESS
     } else if budget_missed {
         EXIT_BUDGET
