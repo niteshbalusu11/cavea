@@ -4,7 +4,7 @@
 // or archive it. What the role cannot do is not offered (CON-004).
 // Thumbnails come with publishing (DSN-040): a card shows a placeholder.
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
-import { A, useNavigate } from "@solidjs/router";
+import { useNavigate } from "@solidjs/router";
 import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { checkChartList } from "../api/check.ts";
 import { call } from "../api/client.ts";
@@ -384,9 +384,7 @@ function ChartCard(props: {
       <div class="flex items-start gap-2 p-3">
         <div class="min-w-0 flex-1">
           <h2 class="truncate text-base font-medium text-fg" title={props.chart.name}>
-            <A href={`/charts/${encodeURIComponent(props.chart.key)}`} class="hover:underline">
-              {props.chart.name}
-            </A>
+            {props.chart.name}
           </h2>
           <p class="truncate font-mono text-sm text-muted" title={props.chart.key}>
             {props.chart.key}

@@ -1,8 +1,7 @@
 // The form for a new event (09 §4.1, CON-007): key, name, chart, version
 // (the chart's published version unless another is chosen) and the
 // settings the API takes, each with its unit and the server's limits.
-// Opened from the events list, or from a chart's version with the chart
-// and version chosen.
+// Opened from the events list.
 import { createMemo, createSignal, Show } from "solid-js";
 import { checkEvent, checkVersionList } from "../api/check.ts";
 import { call } from "../api/client.ts";
@@ -23,7 +22,7 @@ import { EVENT_LIMITS, eventRefusal, wholeNumber, type EventField } from "./refu
 const VERSION_PAGES = 20;
 
 /** A chart's versions, newest first, whole up to `VERSION_PAGES` pages. */
-export async function loadVersions(chart: string, signal: AbortSignal) {
+async function loadVersions(chart: string, signal: AbortSignal) {
   const all = await loadAll(
     async (after) =>
       checkVersionList(
@@ -39,7 +38,7 @@ export async function loadVersions(chart: string, signal: AbortSignal) {
   return { versions: [...all.data].reverse(), complete: all.complete };
 }
 
-export function versionLabel(v: Version, published: number | null): string {
+function versionLabel(v: Version, published: number | null): string {
   const text = msg("events.versionOption", {
     number: v.number,
     seats: formatNumber(v.stats.seats),
@@ -59,9 +58,6 @@ type Errors = Partial<Record<EventField, string | null>>;
 export function EventForm(props: {
   /** The charts to choose from: every one events can be made on. */
   charts: Chart[];
-  /** Chosen beforehand (a chart's version): the chart is then fixed. */
-  chart?: Chart;
-  version?: number;
   onClose: () => void;
   onCreated: (event: Event) => void;
 }) {
@@ -69,10 +65,8 @@ export function EventForm(props: {
   const { holdTtl, maxObjects, tokensPerSub } = EVENT_LIMITS;
   const usable = () =>
     props.charts.filter((c) => c.archived_at === null && c.published_version !== null);
-  const [chartKey, setChartKey] = createSignal(props.chart?.key ?? "");
-  const [version, setVersion] = createSignal<string>(
-    props.version === undefined ? "" : String(props.version),
-  );
+  const [chartKey, setChartKey] = createSignal("");
+  const [version, setVersion] = createSignal("");
   const [name, setName] = createSignal("");
   const [key, setKey] = createSignal("");
   const [keyEdited, setKeyEdited] = createSignal(false);
@@ -84,9 +78,7 @@ export function EventForm(props: {
   const [failure, setFailure] = createSignal<{ text: string; detail?: string } | null>(null);
   const [busy, setBusy] = createSignal(false);
 
-  const chart = createMemo(
-    () => props.chart ?? props.charts.find((c) => c.key === chartKey()) ?? null,
-  );
+  const chart = createMemo(() => props.charts.find((c) => c.key === chartKey()) ?? null);
   const published = () => chart()?.published_version?.number ?? null;
   const versions = createQuery(
     () => {
@@ -193,17 +185,7 @@ export function EventForm(props: {
   };
 
   return (
-    <Dialog
-      open
-      title={
-        props.chart === undefined
-          ? msg("events.newTitle")
-          : msg("events.newFromTitle", { name: props.chart.name })
-      }
-      heading
-      class="max-w-lg"
-      onClose={props.onClose}
-    >
+    <Dialog open title={msg("events.newTitle")} heading class="max-w-lg" onClose={props.onClose}>
       <form
         class="space-y-4 overflow-y-auto px-5 pt-2 pb-5"
         noValidate
@@ -236,28 +218,19 @@ export function EventForm(props: {
           onBlur={() => checks.key()}
           error={errors().key ?? null}
         />
-        <Show
-          when={props.chart === undefined}
-          fallback={
-            <p class="text-base text-fg">
-              {msg("events.chartFixed", { name: props.chart?.name ?? "" })}
-            </p>
-          }
-        >
-          <SelectField
-            label={msg("events.chart")}
-            value={chartKey()}
-            placeholder={msg("events.chartPlaceholder")}
-            options={usable().map((c) => ({ value: c.key, label: `${c.name} (${c.key})` }))}
-            hint={usable().length === 0 ? msg("events.noCharts") : msg("events.chartHint")}
-            onChange={(v) => {
-              setChartKey(v);
-              setVersion("");
-              checks.chart();
-            }}
-            error={errors().chart ?? null}
-          />
-        </Show>
+        <SelectField
+          label={msg("events.chart")}
+          value={chartKey()}
+          placeholder={msg("events.chartPlaceholder")}
+          options={usable().map((c) => ({ value: c.key, label: `${c.name} (${c.key})` }))}
+          hint={usable().length === 0 ? msg("events.noCharts") : msg("events.chartHint")}
+          onChange={(v) => {
+            setChartKey(v);
+            setVersion("");
+            checks.chart();
+          }}
+          error={errors().chart ?? null}
+        />
         <Show when={chart() !== null}>
           <Show
             when={versions.state().status !== "error"}

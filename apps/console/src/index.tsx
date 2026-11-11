@@ -2,7 +2,6 @@ import { Navigate, Route, Router } from "@solidjs/router";
 import { For, type JSX } from "solid-js";
 import { render } from "solid-js/web";
 import { Account } from "./console/Account.tsx";
-import { ChartDetail } from "./console/ChartDetail.tsx";
 import { Charts } from "./console/Charts.tsx";
 import { Developers } from "./console/Developers.tsx";
 import { Events } from "./console/Events.tsx";
@@ -61,16 +60,6 @@ render(
               charts === undefined ? null : (
                 <Gate section={charts}>
                   <Charts />
-                </Gate>
-              )
-            }
-          />
-          <Route
-            path="/charts/:chart"
-            component={() =>
-              charts === undefined ? null : (
-                <Gate section={charts}>
-                  <ChartDetail />
                 </Gate>
               )
             }
