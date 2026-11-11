@@ -42,8 +42,11 @@ export interface Ui {
   /** Strings or prices changed: everything shown is rendered again. */
   refresh(): void;
   loading(on: boolean): void;
-  /** Shows the error state; resolves when the buyer asks to retry. */
-  failed(): Promise<void>;
+  /**
+   * Shows the error state with message `id`, and Retry unless `retry` is
+   * false; resolves when the buyer asks to retry (every caller waiting).
+   */
+  failed(id: "loadFailed" | "offline" | "contextLost", retry?: boolean): Promise<void>;
   legend(categories: Array<{ key: string; label: string; color: string; objects: number }>): void;
   camera(zoom: number, range: [number, number]): void;
   /** The hovered or focused object, with its centre in CSS pixels. */
@@ -51,6 +54,8 @@ export interface Ui {
   /** The selection changed; `label` was just selected alone (the tooltip may pin to it). */
   selected(label: string | null): void;
   toast(text: string): void;
+  /** The box, in CSS pixels on the map, of a control over `at` (with a margin), if any. */
+  covered(at: [number, number]): [number, number, number, number] | null;
   destroy(): void;
 }
 
@@ -65,6 +70,8 @@ const TOASTS = 3;
 /** The tooltip's distance from the object's centre, and from the map's edges. */
 const GAP = 14;
 const EDGE = 8;
+/** A focused seat's centre is kept this far from a control. */
+const COVER = 16;
 /** A tap selects within this long of the press. */
 const TAP_MS = 1500;
 
@@ -127,6 +134,7 @@ export const UI_CSS =
   "align-items:center;gap:8px;pointer-events:none}.zc .ts{inset-inline-end:68px}" +
   `.to{pointer-events:auto;display:flex;align-items:center;max-width:100%;padding-inline-start:12px;` +
   `background:var(--_fg);color:var(--_bg);border-radius:${R};box-shadow:${PANEL};animation:var(--_t) .2s ease-out}` +
+  ".vh{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}" +
   ".s,.e{position:absolute;inset:0;z-index:1;display:grid;place-content:center;justify-items:center;gap:12px;" +
   "padding:24px;text-align:center;background:var(--_bg)}" +
   `.k{position:absolute;inset:24px;border-radius:${R};background:var(--_seat-unavailable-fill);` +
@@ -225,9 +233,12 @@ export function createUi(root: HTMLElement, canvas: HTMLElement, host: UiHost): 
   // Zoom controls: disabled at the limits with `aria-disabled`, so focus stays.
   let zoomIn: HTMLButtonElement | undefined;
   let zoomOut: HTMLButtonElement | undefined;
+  /** Controls a focused seat must not be under. */
+  const panels: HTMLElement[] = [];
   if (options.zoomControls !== false) {
     root.classList.add("zc");
     const group = make("div", "z", "zoom-controls", root);
+    panels.push(group);
     group.setAttribute("role", "group");
     const zoomButton = (how: "in" | "out" | "fit", id: "zoomIn" | "zoomOut" | "zoomFit") => {
       const b = button(group, `zoom-${how}`, () => t(id), ICONS[how]);
@@ -249,6 +260,7 @@ export function createUi(root: HTMLElement, canvas: HTMLElement, host: UiHost): 
   let legend: Ui["legend"] | undefined;
   if (options.legend !== false) {
     const details = make("details", "l p", "legend", root);
+    panels.push(details);
     details.open = host.size()[0] >= 600;
     const summary = make("summary", "b", "button legend-summary", details);
     const categories = make("ul", "", "legend-categories", details);
@@ -289,7 +301,11 @@ export function createUi(root: HTMLElement, canvas: HTMLElement, host: UiHost): 
   // Loading and error states.
   let status: HTMLElement | undefined;
   let error: HTMLElement | undefined;
+  let again: HTMLButtonElement | undefined;
+  let message: HTMLElement | undefined;
   let retry: (() => void) | undefined;
+  let retried: Promise<void> | undefined;
+  let failure: "loadFailed" | "offline" | "contextLost" = "loadFailed";
   if (options.loading !== false) {
     // While loading or failed, the controls over the map are hidden.
     root.setAttribute("data-l", "");
@@ -300,12 +316,13 @@ export function createUi(root: HTMLElement, canvas: HTMLElement, host: UiHost): 
     error = make("div", "e", "error", root);
     error.setAttribute("role", "alert");
     error.hidden = true;
-    const message = make("p", "", "", error);
-    const again = button(error, "retry", () => t("retry"), undefined, true);
+    const said = make("p", "", "", error);
+    message = said;
+    again = button(error, "retry", () => t("retry"), undefined, true);
     on(again, "click", () => retry?.());
     const render = (): void => {
       text.textContent = t("loading");
-      message.textContent = t("loadFailed");
+      said.textContent = t(failure);
     };
     render();
     renders.push(render);
@@ -527,19 +544,26 @@ export function createUi(root: HTMLElement, canvas: HTMLElement, host: UiHost): 
         root.toggleAttribute("data-l", shown);
       }
     },
-    failed() {
-      if (status === undefined || error === undefined) {
+    failed(id, offer = true) {
+      if (status === undefined || error === undefined || again === undefined) {
         return Promise.reject(new Error("the error state is disabled"));
       }
+      failure = id;
       status.hidden = true;
       error.hidden = false;
+      again.hidden = !offer;
       root.setAttribute("data-l", "");
-      return new Promise((resolve) => {
+      if (message !== undefined) {
+        message.textContent = t(id);
+      }
+      retried ??= new Promise((resolve) => {
         retry = () => {
           retry = undefined;
+          retried = undefined;
           resolve();
         };
       });
+      return retried;
     },
     legend: (categories) => legend?.(categories),
     camera(zoom, [min, max]) {
@@ -602,6 +626,22 @@ export function createUi(root: HTMLElement, canvas: HTMLElement, host: UiHost): 
       for (const oldest of [...toasts.keys()].slice(0, -TOASTS)) {
         drop(oldest);
       }
+    },
+    covered([x, y]) {
+      const base = root.getBoundingClientRect();
+      for (const panel of panels) {
+        const r = panel.getBoundingClientRect();
+        const box: [number, number, number, number] = [
+          r.left - base.left - COVER,
+          r.top - base.top - COVER,
+          r.right - base.left + COVER,
+          r.bottom - base.top + COVER,
+        ];
+        if (r.width > 0 && x > box[0] && x < box[2] && y > box[1] && y < box[3]) {
+          return box;
+        }
+      }
+      return null;
     },
     destroy() {
       dead = true;

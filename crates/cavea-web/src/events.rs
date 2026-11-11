@@ -205,9 +205,9 @@ fn write_object(out: &mut String, o: &ObjectInfo) {
 }
 
 /// One object with its public status code, for `View::object`.
-pub fn object_with_status(out: &mut String, o: &ObjectInfo, status: u8) {
+pub fn object_with_status(out: &mut String, o: &ObjectInfo, status: u8, [n, of]: [u32; 2]) {
     object_fields(out, o);
-    let _ = write!(out, ",\"status\":{status}}}");
+    let _ = write!(out, ",\"status\":{status},\"place\":[{n},{of}]}}");
 }
 
 /// An object's fields, without the closing brace.
@@ -315,10 +315,10 @@ mod tests {
         to_json(&[Event::NeedFrame], &mut out);
         assert_eq!(out, "[]");
         let mut out = String::new();
-        object_with_status(&mut out, &ObjectInfo::default(), 1);
+        object_with_status(&mut out, &ObjectInfo::default(), 1, [3, 30]);
         assert_eq!(
             out,
-            r#"{"label":"","category":"","section":"","row":"","seat":"","flags":0,"status":1}"#
+            r#"{"label":"","category":"","section":"","row":"","seat":"","flags":0,"status":1,"place":[3,30]}"#
         );
 
         use cavea_render::protocol::{CategoryInfo, FloorInfo, SectionInfo};

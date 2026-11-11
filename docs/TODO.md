@@ -127,7 +127,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 ### Web SDK
 
 - [x] **WEB-001** Package scaffold; loader that starts WASM, chart, state and atlas fetches together (04 §4, 05 §1). The script-tag build waits for WEB-013
-- [x] **WEB-002** `createSeatMap` with options validation and development warnings (05 §3). Options of unbuilt features are typed out and warned about; the capability ladder waits for WEB-017
+- [x] **WEB-002** `createSeatMap` with options validation and development warnings (05 §3). Options of unbuilt features are typed out and warned about; the capability ladder waits for REN-071
 - [x] **WEB-003** `StateAdapter` interface, `staticState`, `customState` (05 §4)
 - [x] **WEB-004** Callbacks and the `SeatObject` payload (05 §5). `onHoldExpiring` and `onHoldExpired` wait for WEB-024; `onSectionEnter`, `onFloorChange`, `onMetrics` and `price`/`ticketType` (WEB-009) for their features
 - [x] **WEB-005** Methods: selection, pricing, theme, zoom, find, list, destroy (05 §6). `setPricing` waits for WEB-009; floors as zoom targets, per-category availability and the other unbuilt methods of 05 §6 for their features
@@ -137,18 +137,18 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **WEB-009** Pricing display and `formatPrice` (05 §3.1)
 - [x] **WEB-010** Theme tokens as CSS custom properties, applied live (05 §8)
 - [x] **WEB-011** Message catalogue in English, `messages` override, `locale` (05 §3.4)
-- [ ] **WEB-012** `preloadSeatMap` and preload documentation (05 §10)
+- [x] **WEB-012** `preloadSeatMap` and preload documentation (05 §10)
 - [ ] **WEB-013** Script-tag build (05 §1)
 - [ ] **WEB-014** React wrapper with one-to-one props and imperative ref (05 §11)
 - [ ] **WEB-015** Server-side-rendering safety test with Next.js (05 §10)
 - [ ] **WEB-016** Content Security Policy test page and documentation (05 §10)
-- [ ] **WEB-017** Error model and degradation behaviours (05 §9)
+- [x] **WEB-017** Error model and degradation behaviours (05 §9)
 - [ ] **WEB-018** Bundler compatibility checks: Vite, webpack 5, Rollup, esbuild (13 §8)
 
 ### Accessibility baseline
 
-- [ ] **A11Y-001** Map as one tab stop with arrow-key virtual focus and Enter to select (11 §3)
-- [ ] **A11Y-002** Hidden proxy element with rebuilt accessible name; polite live region for selections (11 §5)
+- [x] **A11Y-001** Map as one tab stop with arrow-key virtual focus and Enter to select (11 §3)
+- [x] **A11Y-002** Hidden proxy element with rebuilt accessible name; polite live region for selections (11 §5)
 
 ### Testing
 

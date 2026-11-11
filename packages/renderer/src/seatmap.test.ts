@@ -661,10 +661,58 @@ test("the package imports without a DOM; createSeatMap then rejects", async () =
   expect(typeof (globalThis as { document?: unknown }).document).toBe("undefined");
   const sdk = await import("./index.ts");
   await expect(sdk.createSeatMap({} as HTMLElement)).rejects.toMatchObject({ code: "not_browser" });
+  // Preloading where there is no DOM does nothing and does not throw.
+  await expect(sdk.preloadSeatMap({ chart: { url: "https://x/c.ccf" } })).resolves.toBeUndefined();
+});
+
+test("preloadSeatMap fetches a chart once for every later map; a failure is not kept", async () => {
+  const { browserEnv, preload } = await import("./browser.ts");
+  const g = globalThis as { document?: unknown; fetch: typeof fetch };
+  const realFetch = g.fetch;
+  const fetched: string[] = [];
+  let fail = true;
+  g.document = { baseURI: "https://x/" };
+  g.fetch = ((url: string | URL) => {
+    fetched.push(String(url));
+    if (!String(url).endsWith(".ccf")) {
+      return Promise.reject(new TypeError("not in this test"));
+    }
+    return fail
+      ? Promise.reject(new TypeError("offline"))
+      : Promise.resolve(new Response(new Uint8Array([7])));
+  }) as typeof fetch;
+  try {
+    const charts = (): number => fetched.filter((u) => u.endsWith(".ccf")).length;
+    await preload({ chart: { url: "c.ccf" } });
+    await preload({ chart: { url: "https://x/c.ccf" } });
+    // The first failed and was dropped; the second fetched again.
+    expect(charts()).toBe(2);
+    fail = false;
+    await preload({ chart: { url: "c.ccf" } });
+    await preload({ chart: { url: "c.ccf" } });
+    expect(charts()).toBe(3);
+    // A map takes the preloaded bytes without fetching.
+    const bytes = await browserEnv().fetchBytes("https://x/c.ccf", new AbortController().signal);
+    expect([[...bytes], charts()]).toEqual([[7], 3]);
+  } finally {
+    g.fetch = realFetch;
+    delete g.document;
+  }
 });
 
 test("the WASM loads once per page; a failed load is tried again", async () => {
   const { loadWasm } = await import("./browser.ts");
+  const { permanent } = await import("./errors.ts");
+  // An HTTP failure keeps its status, so a 404 is not retried (05 §9).
+  const g = globalThis as { fetch: typeof fetch };
+  const realFetch = g.fetch;
+  g.fetch = (() => Promise.resolve(new Response("", { status: 404 }))) as unknown as typeof fetch;
+  try {
+    const failure = await loadWasm("https://x/cavea_web_bg.wasm").catch((e: unknown) => e);
+    expect([(failure as { status?: number }).status, permanent(failure)]).toEqual([404, true]);
+  } finally {
+    g.fetch = realFetch;
+  }
   await expect(loadWasm(new Uint8Array([0, 1, 2, 3]))).rejects.toThrow();
   const bytes = await Bun.file(new URL("../wasm/cavea_web_bg.wasm", import.meta.url)).arrayBuffer();
   const first = loadWasm(bytes);

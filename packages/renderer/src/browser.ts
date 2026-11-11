@@ -2,7 +2,7 @@
 // package can be imported where there is no DOM (server-side rendering).
 import init, { View, type InitInput } from "../wasm/cavea_web.js";
 import { loadGlyphAtlas } from "./atlas.ts";
-import { CaveaError } from "./errors.ts";
+import { CaveaError, httpError } from "./errors.ts";
 import { attach } from "./host.ts";
 import type { SeatMapOptions } from "./options.ts";
 import type { Env } from "./seatmap.ts";
@@ -23,15 +23,74 @@ let loading: Promise<unknown> | undefined;
  */
 export function loadWasm(source?: InitInput): Promise<unknown> {
   if (typeof WebAssembly === "undefined") {
-    return Promise.reject(new Error("WebAssembly is not available"));
+    return Promise.reject(new CaveaError("wasm_unavailable", "WebAssembly is not available", true));
   }
-  loading ??= init({
-    module_or_path: source ?? new URL("../wasm/cavea_web_bg.wasm", import.meta.url),
-  }).catch((error: unknown) => {
+  const input = source ?? new URL("../wasm/cavea_web_bg.wasm", import.meta.url);
+  // Fetched here, so an HTTP failure keeps its status (05 §9: a 404 is not retried).
+  loading ??= (
+    typeof input === "string" || input instanceof URL
+      ? fetchOk(input).then((r) => init({ module_or_path: r }))
+      : init({ module_or_path: input })
+  ).catch((error: unknown) => {
     loading = undefined;
     throw error;
   });
   return loading;
+}
+
+/** Decoded atlases and preloaded charts by URL, shared by every map; a failure is not kept. */
+const shared = new Map<string, Promise<Uint8Array>>();
+function once(key: string, start: () => Promise<Uint8Array>): Promise<Uint8Array> {
+  let promise = shared.get(key);
+  if (promise === undefined) {
+    promise = start();
+    shared.set(key, promise);
+    promise.catch(() => shared.delete(key));
+  }
+  return promise;
+}
+
+/** `url`'s response; one that is not OK throws with its status. */
+async function fetchOk(url: string | URL, signal?: AbortSignal): Promise<Response> {
+  const response = await fetch(url, signal === undefined ? {} : { signal });
+  if (!response.ok) {
+    throw httpError(String(url), response.status);
+  }
+  return response;
+}
+
+async function fetchBytes(url: string | URL, signal?: AbortSignal): Promise<Uint8Array> {
+  return new Uint8Array(await (await fetchOk(url, signal)).arrayBuffer());
+}
+
+const href = (url: string | URL): string => new URL(url, document.baseURI).href;
+const atlas = (assets: SeatMapOptions["assets"]): Promise<Uint8Array> => {
+  const url = asset(assets, "glyphs.png");
+  return once(`atlas ${url === undefined ? "" : href(url)}`, () => loadGlyphAtlas(url));
+};
+
+/**
+ * Starts fetching and compiling what a map needs (05 §10): the WASM, the
+ * glyph atlas and, given a chart URL, the chart; later maps use them. Does
+ * nothing without a DOM; never rejects (a failure is reported by the map
+ * that needs it, which tries again).
+ */
+export function preload(
+  options: Pick<SeatMapOptions, "assets"> & { chart?: { url: string | URL } } = {},
+): Promise<void> {
+  if (typeof document === "undefined") {
+    return Promise.resolve();
+  }
+  const { assets, chart } = options;
+  const jobs: Array<Promise<unknown>> = [
+    loadWasm(assets?.wasm ?? asset(assets, "cavea_web_bg.wasm")),
+    atlas(assets),
+  ];
+  if (chart?.url !== undefined) {
+    const url = chart.url;
+    jobs.push(once(href(url), () => fetchBytes(url)));
+  }
+  return Promise.allSettled(jobs).then(() => undefined);
 }
 
 /** `name` under `assets.baseUrl`, which may be relative to the page. */
@@ -44,6 +103,8 @@ function asset(assets: SeatMapOptions["assets"], name: string): URL | undefined 
 const css = (): string =>
   ":host{display:block;position:relative}:host([hidden]){display:none}" +
   ".r canvas{position:absolute;inset:0;width:100%;height:100%;display:block;outline:none}" +
+  // The map's own focus, from the keyboard, before a seat has one (11 §3.1).
+  ".r canvas:focus-visible{outline:2px solid var(--_ring-focus);outline-offset:-2px}" +
   schemeCss() +
   UI_CSS;
 
@@ -94,14 +155,9 @@ export function browserEnv(): Env {
       await loadWasm(assets?.wasm ?? asset(assets, "cavea_web_bg.wasm"));
       return (canvas): EngineView => new View(canvas);
     },
-    async fetchBytes(url, signal) {
-      const response = await fetch(url, { signal });
-      if (!response.ok) {
-        throw new Error(`${String(url)}: HTTP ${response.status}`);
-      }
-      return new Uint8Array(await response.arrayBuffer());
-    },
-    atlas: (assets) => loadGlyphAtlas(asset(assets, "glyphs.png")),
+    // A chart `preloadSeatMap` fetched is used once it is in.
+    fetchBytes: (url, signal) => shared.get(href(url)) ?? fetchBytes(url, signal),
+    atlas,
     mount(element) {
       let shadow: ShadowRoot;
       try {
@@ -127,8 +183,6 @@ export function browserEnv(): Env {
       const root = doc.createElement("div");
       root.className = "r";
       const canvas = doc.createElement("canvas");
-      // Until the accessible list view exists (A11Y-001).
-      canvas.setAttribute("role", "img");
       root.append(canvas);
       shadow.append(root);
       return {
@@ -166,6 +220,26 @@ export function browserEnv(): Env {
       query.addEventListener("change", changed);
       return () => query.removeEventListener("change", changed);
     },
+    online: () => navigator.onLine !== false,
+    usable: (signal) =>
+      new Promise((resolve) => {
+        const check = (): void => {
+          if (!document.hidden && navigator.onLine !== false) {
+            done();
+            resolve();
+          }
+        };
+        const done = (): void => {
+          document.removeEventListener("visibilitychange", check);
+          removeEventListener("online", check);
+          signal.removeEventListener("abort", done);
+        };
+        document.addEventListener("visibilitychange", check);
+        addEventListener("online", check);
+        signal.addEventListener("abort", done);
+        check();
+      }),
+    retryMs: 1_000,
     holdTimeoutMs: HOLD_TIMEOUT_MS,
     contextLostMs: 5_000,
     metricsMs: 1_000,

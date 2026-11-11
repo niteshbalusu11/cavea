@@ -119,14 +119,21 @@ Prices are the host's display data; Cavea charges nothing. Each entry needs a ca
 
 | Id | English | Where |
 |---|---|---|
-| `mapLabel` | Seat map | The canvas's accessible name, until A11Y-001 |
+| `mapLabel` | Seat map | The map's accessible name (11 §5); override it to name the venue and event |
+| `mapRole` | seat map | The map's `aria-roledescription` |
+| `mapHelp` | Use the arrow keys to move between seats, and Enter to choose one. | The map's description: its usage instructions |
+| `place` | {index} of {count} in the row | The proxy's name: the seat's place in its row (11 §5) |
+| `seatSelected`, `seatDeselected` | {seat} selected. · {seat} deselected. | Live region, `{seat}` the seat's section, row and seat |
+| `selectedCount` | one: {count} seat selected. · other: {count} seats selected. | Live region, after the seat |
 | `zoomIn`, `zoomOut`, `zoomFit` | Zoom in · Zoom out · Show the whole map | Zoom buttons' names |
 | `legend` | Key | Legend summary |
 | `available`, `selected`, `unavailable` | Available · Selected · Unavailable | Legend states and the tooltip's status |
 | `loading` | Loading the seat map… | Loading state |
 | `loadFailed`, `retry` | The seat map could not be loaded. · Try again | Error state |
+| `offline` | You are offline. The seat map will load when you are back online. | Error state, while offline before the first frame (§9) |
+| `contextLost` | The seat map cannot be drawn right now. | Error state, after the WebGL context has been lost 5 s (§9) |
 | `soldOut` | Sold out | Drawn on sold-out sections by the engine (`SetMessage`) |
-| `row`, `seat` | Row {row} · Seat {seat} | Tooltip |
+| `row`, `seat` | Row {row} · Seat {seat} | Tooltip, proxy name, live region |
 | `priceRange` | {min} – {max} | Legend and tooltip, over ticket types |
 | `accessible`, `companion`, `restrictedView`, `aisle` | Wheelchair accessible · Companion seat · Restricted view · Aisle seat | Tooltip: the seat's flags in words |
 | `ticketType` | Ticket type | Name of the tooltip's ticket-type choice |
@@ -146,7 +153,8 @@ Prices are the host's display data; Cavea charges nothing. Each entry needs a ca
 |---|---|---|---|
 | `assets.baseUrl` | string or `URL` | Package location | Where `cavea_web_bg.wasm` and `glyphs.png` are served from; relative to the page if relative |
 | `assets.wasm` | `Response`, `ArrayBuffer`, `Uint8Array`, `WebAssembly.Module`, or URL | — | Bring your own fetch. The WASM is loaded once per page: the first map's source is used by every later map |
-| `fallback` | `'auto'`, `'canvas'`, `'list'` | `'auto'` | Force a step of the capability ladder. Not yet (WEB-017) |
+| `fallback` | `'auto'`, `'canvas'`, `'list'` | `'auto'` | Force a step of the capability ladder. Not yet (REN-071) |
+| `signal` | `AbortSignal` | none | Cancels the map (§9): aborted before `createSeatMap` settles, it rejects with `aborted` and removes everything; after, it destroys the map |
 | `worker` | boolean | false | P2 (WEB-040) |
 
 ### 3.6 Validation and development builds
@@ -300,7 +308,7 @@ Each request is cancelled after 8 s, its body included. A hold gives up 18 s aft
 | `onObjectUnavailable` | A selected object was taken | Object | Built |
 | `onHoldExpiring` | 60 s before expiry | Seconds left | Built: once per expiry the adapter reports, timed by the server's clock (§4); at once with the seconds left if the expiry is nearer than 60 s when it becomes known (after a reload, say). One timer, recomputed when it fires and when the page is shown again, since hidden pages run timers late; none after `destroy` |
 | `onHoldExpired` | The hold token expired | — | Built: when the buyer's held seats leave the selection (after `onHoldLost`) within 5 s of their expiry or after it, by the server's clock. A hold given up earlier (released elsewhere, deselected) fires no expiry |
-| `onObjectHover` / `onObjectFocus` | Pointer or keyboard focus | `(object or null, at)`: `at` the object's centre in CSS pixels | Built; focus waits for keyboard navigation (A11Y-001) |
+| `onObjectHover` / `onObjectFocus` | Pointer or keyboard focus | `(object or null, at)`: `at` the object's centre in CSS pixels | Built. Focus is the keyboard's (11 §3.1): fired when the focus shown moves or appears, with `null` when it is hidden (Escape, the map losing focus, a tap), and again when its seat's state changes or the camera settles after moving it on screen |
 | `onSectionEnter` | The camera drills into a section | Section | Not yet |
 | `onFloorChange` | The floor changes | Floor | Not yet |
 | `onCameraChange` | Pan or zoom settles | `{ centre, zoom, level }` | Built |
@@ -348,11 +356,11 @@ Today `kind` is always `'seat'` (tables, booths and areas are not compiled yet),
 
 Methods never throw. Methods that are not built exist and only warn in development; they are not in the TypeScript type.
 
-`createSeatMap` returns a promise that resolves at chart-ready (the chart decoded and the first state applied; it does not wait for a frame, so a hidden container does not hold it up) and rejects only if no step of the capability ladder works. The ladder (Canvas 2D, then the list view) is not built yet (WEB-017): today WebAssembly and WebGL2 are required, and without them the promise rejects with `wasm_unavailable` or `webgl_unavailable`. The ladder hooks in where `createSeatMap` creates the WebGL2 view. It also rejects for invalid options, outside a browser (`not_browser`), and when the chart or the first state cannot be had (§9).
+`createSeatMap` returns a promise that resolves at chart-ready (the chart decoded and the first state applied; it does not wait for a frame, so a hidden container does not hold it up) and rejects only if no step of the capability ladder works. The ladder (Canvas 2D, then the list view) is not built yet (REN-070, REN-071): today WebAssembly and WebGL2 are required, and without them the promise rejects with `wasm_unavailable` or `webgl_unavailable`. The ladder hooks in where `createSeatMap` creates the WebGL2 view. It also rejects for invalid options, outside a browser (`not_browser`), when the chart or the first state cannot be had (§9), and when the host aborts `signal` (`aborted`): the way to cancel a map whose promise is still pending, for example while the error state waits for a retry.
 
 ## 7. Built-in interface
 
-All built-in controls live in a shadow root on the container, so host styles cannot break them and theirs cannot leak. The shadow root holds one root element (`.r`) with the canvas, which fills the container (`role="img"`, named by the `mapLabel` message until the accessibility layer, A11Y-001), and the controls over it. The container's own children are not displayed while the map is in it. The container is `display: block` unless the page styles it otherwise; the `hidden` attribute still hides it.
+All built-in controls live in a shadow root on the container, so host styles cannot break them and theirs cannot leak. The shadow root holds one root element (`.r`) with the canvas, which fills the container and is the map's one tab stop (`role="application"`, named by `mapLabel`, with the keyboard focus's proxy in its fallback content, 11 §5), the controls over it, and the selections' visually hidden live region. The container's own children are not displayed while the map is in it. The container is `display: block` unless the page styles it otherwise; the `hidden` attribute still hides it.
 
 | Element | Option | Today |
 |---|---|---|
@@ -369,12 +377,12 @@ All built-in controls live in a shadow root on the container, so host styles can
 
 Each element is on unless its option is `false`; one that is off is never created, costs no listener, and its callbacks still fire. It stays in the bundle: the interface is one module, and dropping an element at build time would need a separate entry (a packaging question for WEB-013 and WEB-018).
 
-**Tooltip.** For the hovered object (04 §14: a mouse or pen over a seat), or the focused one once keyboard focus exists (A11Y-001): the section, row and seat, the category with its colour and price (the range over ticket types until one is chosen), the flags in words (`accessible`, `companion`, `restrictedView`, `aisle` messages) and the status (`available`, `unavailable` or `selected`). It is centred 14 px above the object, or below it when there is no room above, and kept 8 px inside the map. It takes no pointer events, so it never steals hover. Escape (listened for only while it shows), a pan or zoom, and the pointer leaving the object dismiss it; dismissed with Escape, it stays hidden until the hover moves to another object.
+**Tooltip.** For the hovered object (04 §14: a mouse or pen over a seat), or the keyboard's focused one (11 §3.1): the section, row and seat, the category with its colour and price (the range over ticket types until one is chosen), the flags in words (`accessible`, `companion`, `restrictedView`, `aisle` messages) and the status (`available`, `unavailable` or `selected`). It is centred 14 px above the object, or below it when there is no room above, and kept 8 px inside the map. It takes no pointer events, so it never steals hover. Escape (listened for only while it shows), a pan or zoom, and the pointer leaving the object dismiss it; dismissed with Escape, it stays hidden until the hover moves to another object.
 - **Touch.** There is no hover. A long press shows the tooltip for the object under it without selecting (04 §14), and the next tap clears it. A tap that selects one object pins the tooltip to it, anchored at the tap, until the next press on the map, a pan or zoom, or Escape: on touch always, so the price and flags reach touch buyers, and with a mouse when the object's category has several ticket types (the hover tooltip shows the rest).
 - **Ticket types.** A pinned tooltip on a selected object whose category has several ticket types shows them as buttons (`aria-pressed` on the chosen one) in a group named by the `ticketType` message, each with its price. Choosing one reports it (§3.1). A pinned tooltip ignores hover elsewhere and takes pointer events; it does not take focus.
 - **Replaced by the host.** With a function for `ui.tooltip` (§3.4), the host's element or text is shown in the same positioned box (the `tooltip` part, which the host styles with `::part(tooltip)`) and the built-in content is not rendered; the ticket-type choice is then the host's (the default type of §3.1 still applies). With `ui.tooltip: false`, nothing is shown and `onObjectHover` gives the host the object and its centre.
 
-**Toasts.** In words, from the catalogue: a selected seat taken (`onObjectUnavailable`, message `taken`), the refusals of 04 §16 (`max`, `not_free`, `hold_limit_exceeded`, and any other hold code as `holdFailed`; `min` is readiness, not a refusal, and shows nothing), a hold lost or expired (`holdLost`, `holdExpired`) and a dropped realtime connection (`reconnecting`). They stack at the top of the map, newest last, at most three (the oldest goes first); a message already shown is replaced, not repeated. Each closes after 5 s, or with its Dismiss button; while the pointer is over them or focus is in them none closes. They sit in one `role="status"` region (`aria-live="polite"`); the assertive announcements of 11 §5 are the accessibility layer's (A11Y-002). They slide in unless motion is reduced (`reducedMotion`, or `prefers-reduced-motion`). Each toast has one timer, which ends with it; an idle map has none.
+**Toasts.** In words, from the catalogue: a selected seat taken (`onObjectUnavailable`, message `taken`), the refusals of 04 §16 (`max`, `not_free`, `hold_limit_exceeded`, and any other hold code as `holdFailed`; `min` is readiness, not a refusal, and shows nothing), a hold lost or expired (`holdLost`, `holdExpired`) and a dropped realtime connection (`reconnecting`). They stack at the top of the map, newest last, at most three (the oldest goes first); a message already shown is replaced, not repeated. Each closes after 5 s, or with its Dismiss button; while the pointer is over them or focus is in them none closes. They sit in one `role="status"` region (`aria-live="polite"`), which also speaks for refusals, losses and expiry until the assertive region of 11 §5 exists (A11Y-013); the buyer's selections are said in a region of their own (11 §5), which leaves out the removals a toast explains. They slide in unless motion is reduced (`reducedMotion`, or `prefers-reduced-motion`). Each toast has one timer, which ends with it; an idle map has none.
 
 **Layout.** Controls are absolutely placed over the canvas and never resize it; they use logical properties, so a right-to-left page (or `dir`) mirrors them. Buttons are at least 44 × 44 CSS px. Nothing in the interface makes the canvas draw: hover changes the tooltip in the DOM, and the canvas draws only for its own reasons (the hover ring). Text is `max(14px, .875rem)`, so it follows the buyer's text size; the font is the page's (inherited through the shadow root) unless `--cavea-font` is set.
 
@@ -415,19 +423,33 @@ class CaveaError extends Error {
 }
 ```
 
-Codes: `invalid_option`, `not_browser`, `wasm_unavailable`, `webgl_unavailable`, `chart_fetch_failed`, `bad_chart` and `state_connect_failed` (fatal, at start); `state_failed` (an adapter error, refused or unknown state), `state_disconnected` (`caveaServer`'s realtime connection dropped and is reconnecting, or stopped for good, §4.1), `hold_failed`, `release_failed`, `callback_failed`, `glyph_atlas_failed` (seats are drawn without labels), `context_lost` (the WebGL context was lost and not restored within 5 s; the map redraws if it comes back), `invalid_input` (a method's input refused) and `engine_failed` (a frame or input call failed).
+Codes: `invalid_option`, `not_browser`, `wasm_unavailable`, `webgl_unavailable`, `chart_fetch_failed`, `bad_chart`, `state_connect_failed` and `aborted` (fatal, at start); `state_failed` (an adapter error, refused or unknown state), `state_disconnected` (`caveaServer`'s realtime connection dropped and is reconnecting, or stopped for good, §4.1), `hold_failed`, `release_failed`, `callback_failed`, `glyph_atlas_failed` (seats are drawn without labels), `context_lost` (the WebGL context was lost and not restored within 5 s; the map redraws if it comes back), `invalid_input` (a method's input refused) and `engine_failed` (a frame or input call failed). `chart_fetch_failed`, `wasm_unavailable` and `state_connect_failed` are also reported as recoverable while the error state offers a retry (below).
 
-| Situation | Behaviour |
-|---|---|
-| Chart fetch fails | Retry three times with backoff, then show the error state with a retry action. Today: with `ui.loading` (the default) the error state shows at the first failure, `chart_fetch_failed` is reported through `onError` as recoverable, and `createSeatMap` stays pending; Retry fetches the chart again (the state, WASM and atlas are not fetched again) and the promise resolves when it arrives. A failed `state` adapter's `chart()` or `connect`, meanwhile or later, still rejects. Without `ui.loading`, `createSeatMap` rejects with `chart_fetch_failed`. Automatic retries with backoff wait for WEB-017. While the error shows, the host has no map to `destroy` |
-| WASM blocked or fails to compile | Fall to the list view if the adapter can supply sections and rows; otherwise fatal. Today: fatal, `wasm_unavailable` |
-| WebGL2 unavailable | Canvas 2D fallback. Today: fatal, `webgl_unavailable` |
-| Glyph atlas fails | The map works without seat labels; `onError` with `glyph_atlas_failed` |
-| GL context lost | Pause, restore, re-upload; no user-visible error if restored within 5 s. Built (REN-040, 04 §20.2): no frame while lost; restored, everything is made again from the engine's copies with no refetch; `onError` with `context_lost` after 5 s lost |
-| Realtime connection drops | Keep the map usable, show a discreet "reconnecting" indicator, resync on return; holds still go over HTTPS. Today: `onError` with `state_disconnected` at the first drop, reconnection with backoff from `seq` (§4.1), and the `reconnecting` toast (§7): the adapter does not report the reconnection, so the indicator is a toast that closes, not a lasting badge |
-| Sequence gap | Automatic resync |
-| Hold request fails for network reasons | Retry once, then revert the selection and report `onHoldFailed`. The retry is the adapter's (`caveaServer`: §4.1); the SDK reverts and reports a rejected `hold` |
-| Unknown option | Console warning in development builds only (§3.6) |
+**Retries** (D-53). The WASM, the chart (the adapter's `chart()` and the fetch), the adapter's first state (`connect`) and the glyph atlas are each tried again after a failure that may succeed later: three retries, after 1, 2 and 4 s (doubling, capped at 30 s), each times 0.5 to 1.5 at random so that maps on many pages do not retry together. A wait does not end while the page is hidden or the browser is offline: the next try waits for the page to be shown and online. Never tried again, because they cannot succeed: an HTTP status from 400 to 499 other than 408 and 429 (a chart the server no longer has, an unknown event, a refused key), WebAssembly that does not compile or link or that a Content Security Policy refuses (`CompileError`, `LinkError`, `EvalError`), a chart that does not decode (`bad_chart`), and a browser without WebAssembly or WebGL2. A failed `connect` is called again, so an adapter's `connect` that rejects must leave nothing open (`caveaServer`'s does not, and forgets a failed event lookup). The realtime connection has its own reconnection (§4.1).
+
+| Situation | Code, fatal | The buyer sees | The host gets | Retries |
+|---|---|---|---|---|
+| Invalid options | `invalid_option`, fatal | Nothing: the map is not mounted | Rejection | None |
+| Outside a browser | `not_browser`, fatal | Nothing | Rejection | None |
+| The chart, WASM or first state fails for a while, then loads | none | The loading skeleton throughout | Nothing; `createSeatMap` resolves | Up to three, quietly |
+| …and still fails after the retries, with `ui.loading` (default) | `chart_fetch_failed`, `wasm_unavailable` or `state_connect_failed`, recoverable | The error state: `loadFailed` and Retry | `onError`; the promise stays pending (D-48) and resolves when a retry succeeds | Retry starts three more |
+| …without `ui.loading` | The same codes, fatal | Nothing: the map is removed | Rejection | None more |
+| Offline before the first frame | none while waiting | The error state with `offline`, no Retry | Nothing until it is online and a try fails | Paused; resumes when online |
+| Page hidden before the first frame | none | The skeleton | Nothing | Paused; resumes when shown |
+| A chart the server no longer has (404, 410), an unknown event or a refused key (4xx) | `chart_fetch_failed` or `state_connect_failed`, fatal | Nothing: the map is removed | Rejection | None |
+| A chart that does not decode | `bad_chart`, fatal | Nothing | Rejection | None |
+| WASM blocked by a Content Security Policy, broken, or not on the server (4xx); no WebAssembly | `wasm_unavailable`, fatal | Nothing (the list view, REN-071, A11Y-015, is not built) | Rejection | None |
+| WebGL2 unavailable | `webgl_unavailable`, fatal | Nothing (the Canvas 2D fallback, REN-070, is not built) | Rejection | None |
+| The host aborts `signal` before the map is ready | `aborted`, fatal | Nothing: the map is removed, the adapter disconnected | Rejection | Stopped |
+| The host aborts `signal` after | none | Nothing: the map is destroyed | — | — |
+| Glyph atlas fails | `glyph_atlas_failed` | The map without seat labels | `onError` | Three, quietly; then labels stay off |
+| GL context lost | `context_lost` after 5 s | No frame while lost; after 5 s the error state with `contextLost`, no Retry, until the context returns (04 §20.2: everything is made again from the engine's copies, no refetch) | `onError` once per loss | The browser's restore |
+| Realtime connection drops | `state_disconnected` | The map stays usable; the `reconnecting` toast; holds still go over HTTPS | `onError` at the first drop | `caveaServer` reconnects with backoff from `seq` and resyncs (§4.1); the adapter does not report the reconnection, so the indicator is a toast that closes, not a lasting badge |
+| Sequence gap | none | Nothing | Nothing | Automatic resync |
+| Hold request fails for network reasons | `hold_failed` | The seat reverts; a toast | `onHoldFailed`, `onError` | The adapter's (`caveaServer` retries once, §4.1); the SDK reverts and reports a rejected `hold` |
+| Unknown option | none | Nothing | A console warning in development builds (§3.6) | — |
+
+The error state, the offline wait and the retries before the first frame are what the buyer sees of a failed start; a failure after the map is ready never replaces it (the atlas, the context, the realtime connection), except a lost context's notice; and the first frame does not end an error state that waits for Retry (the first state can fail after the chart is drawn). Measured in the tests (`packages/renderer/src/errors.test.ts`) with a fake platform: each row above produces its code, interface state and callback.
 
 After `onReady`, the renderer never throws into host code: methods, callbacks, input and frames report through `onError`.
 
@@ -435,7 +457,8 @@ After `onReady`, the renderer never throws into host code: methods, callbacks, i
 
 For integrators; the docs site repeats this.
 
-- **Preload.** Add `<link rel="preload" as="fetch" crossorigin>` for the WASM and the chart, or call `preloadSeatMap(options)` as early as the route is known.
+- **Preload.** `preloadSeatMap({ assets?, chart? })` starts fetching and compiling the WASM, fetching and decoding the glyph atlas and, given `chart: { url }`, fetching the chart, before any container exists, as early as the route is known (on hover of a "Choose seats" link, say). A later `createSeatMap` with the same assets and chart URL uses them: the WASM is compiled once per page whoever asked first, and the atlas and the preloaded chart are shared by every later map. It returns a promise that resolves when everything has settled and never rejects; a failure is not kept, so a later map fetches again (and retries, §9). It is safe to call many times, and on a server: without a DOM it does nothing. Measured on the demo (`?chart=<stadium-100k.ccf>&wait=3000&preload=1|0`: the map created 3 s after the page starts; Chromium 157 headless, SwiftShader software rendering, a fresh profile for each run so the cache is cold, the files served by the Vite dev server on the same machine, so with no network latency): `first_frame`, from `createSeatMap` to the first frame with the chart, 145 to 160 ms without and 50 to 52 ms with (three runs each). On a real network the saving grows by the WASM's and the chart's download time, which preloading overlaps with the page's own work.
+- **Preload hints.** In the page's `<head>`, before any script runs: `<link rel="preload" href="…/cavea_web_bg.wasm" as="fetch" type="application/wasm" crossorigin>`, `<link rel="preload" href="…/glyphs.png" as="fetch" crossorigin>` and, for a chart, `<link rel="preload" href="…/chart.ccf" as="fetch" crossorigin>`; and `<link rel="modulepreload" href="…">` for the bundle's entry chunk. `as="fetch"` with `crossorigin` matches how the map fetches them (`fetch()` in CORS mode), so the browser reuses the preloaded response; a different `as` or a missing `crossorigin` downloads the file twice. A bundler renames the WASM and the atlas with a content hash (`cavea_web_bg-<hash>.wasm`): take the hashed names from its manifest (Vite's `build.manifest`, webpack's `assets-manifest`), or pass `assets.baseUrl` to serve them from a fixed place and preload those URLs.
 - **Self-host assets** on the same origin or a CDN with long cache lifetimes; all files are content-hashed.
 - **Content Security Policy.** WASM compilation needs `script-src 'wasm-unsafe-eval'`. The renderer uses no `eval` and no inline scripts. Realtime needs the server's origin in `connect-src`. Styles need nothing: the interface's stylesheet is one constructed `CSSStyleSheet` adopted by the shadow root (`adoptedStyleSheets`), and positions, colours and tokens are set through the CSSOM (`element.style.setProperty`), neither of which `style-src` governs. Browsers without constructable stylesheets (Safari before 16.4) get a `<style>` element instead, which a policy without `style-src 'unsafe-inline'` (or a nonce, not supported yet) blocks: the map then works unstyled. The colour reading of §8 draws on a 1 × 1 canvas, which needs no permission.
 - **Server-side rendering.** Importing the package on the server is safe; nothing touches `window` until `createSeatMap` runs, which rejects with `not_browser` outside a browser.

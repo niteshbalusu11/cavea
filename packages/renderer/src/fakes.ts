@@ -109,6 +109,11 @@ export function fakeEnv() {
     /** `--cavea-*` custom properties the page sets, as computed on the root (without the prefix). */
     css: {} as Record<string, string>,
     makeView: (): EngineView => view.engine,
+    /** `navigator.onLine`, and whether the page is shown. */
+    online: true,
+    shown: true,
+    /** Waiters of `usable`, released by `setUsable`. */
+    waiting: [] as Array<() => void>,
   };
   let attached: AttachOptions | undefined;
   let dark: ((dark: boolean) => void) | undefined;
@@ -166,6 +171,15 @@ export function fakeEnv() {
         dark = undefined;
       };
     },
+    online: () => state.online,
+    usable: (signal) =>
+      state.online && state.shown
+        ? Promise.resolve()
+        : new Promise((resolve) => {
+            state.waiting.push(resolve);
+            signal.addEventListener("abort", () => state.waiting.splice(0));
+          }),
+    retryMs: 1,
     holdTimeoutMs: 30,
     contextLostMs: 30,
     metricsMs: 40,
@@ -188,6 +202,16 @@ export function fakeEnv() {
       state.css = css;
       for (const listener of state.watchers) {
         listener();
+      }
+    },
+    /** The page goes on- or offline, or is hidden or shown. */
+    setUsable(online: boolean, shown = true): void {
+      state.online = online;
+      state.shown = shown;
+      if (online && shown) {
+        for (const resume of state.waiting.splice(0)) {
+          resume();
+        }
       }
     },
     /** Settles WASM and chart (the view comes from `state.makeView`). */

@@ -16,15 +16,17 @@ use cavea_render::backend::{
     BackendError, BufferDesc, BufferId, Caps, DrawCall, GpuBackend, Rect, ResourceId, Target,
     TextureDesc, TextureId,
 };
-use cavea_render::protocol::{Command, Event};
+use cavea_render::focus::{self, Dir};
+use cavea_render::protocol::{CameraTarget, Command, Event, Modifiers, ObjectRef};
 use cavea_render::{Engine, hit::hit_test, scene::Scene};
 use cavea_testkit::presets::{self, DEFAULT_SEED, PRESETS};
 use serde_json::{Value, json};
 
 /// The benchmarks, in run order. `compile` covers every preset.
-pub const NAMES: [&str; 6] = [
+pub const NAMES: [&str; 7] = [
     "decode",
     "hit-test",
+    "focus",
     "snapshot-apply",
     "delta-apply",
     "label-build",
@@ -218,6 +220,33 @@ pub fn run(names: &[&str], mut progress: impl FnMut(&str)) -> Result<Vec<Measure
             (median / n, min / n, samples),
         );
     }
+    if wanted("focus") {
+        let scene = Scene::decode(&ccf).context("stadium-100k scene")?;
+        let mut rng = Rng(5);
+        let dirs = [Dir::Left, Dir::Right, Dir::Up, Dir::Down];
+        let cases: Vec<(u32, Dir)> = (0..10_000)
+            .map(|_| {
+                let dir = dirs.get(rng.below(4)).copied().unwrap_or(Dir::Right);
+                (rng.below(scene.pos.len()) as u32, dir)
+            })
+            .collect();
+        let n = cases.len() as f64;
+        let (median, min, samples) = sample(|| {
+            timed(|| {
+                (cases.iter())
+                    .filter(|&&(from, dir)| focus::step(&scene, from, dir).is_some())
+                    .count()
+            })
+        });
+        let what = format!("{seats} seats, an arrow key's search from a random seat");
+        push(
+            &mut out,
+            "focus-step",
+            what,
+            Some((20e3, "11 §3")),
+            (median / n, min / n, samples),
+        );
+    }
     let engine = || {
         let mut e = Engine::new(NoGpu(0));
         e.handle(Command::LoadChart { ccf: ccf.clone() });
@@ -243,6 +272,47 @@ pub fn run(names: &[&str], mut progress: impl FnMut(&str)) -> Result<Vec<Measure
         !e.drain_events()
             .any(|ev| matches!(ev, Event::Error { .. } | Event::Resync { .. }))
     };
+    if wanted("focus") {
+        // An arrow key through the engine: the search, the camera's follow
+        // and the event. At overview the follow zooms in; the camera is put
+        // back between runs, untimed.
+        for (name, overview) in [("focus-key overview", true), ("focus-key detail", false)] {
+            let mut e = engine();
+            e.handle(Command::SetReducedMotion(true));
+            let target = if overview {
+                let b = e.chart_bounds().context("no chart bounds")?;
+                CameraTarget::Bounds(b)
+            } else {
+                CameraTarget::Object(ObjectRef::Idx(0))
+            };
+            e.handle(Command::SetCamera {
+                target: target.clone(),
+            });
+            e.handle(Command::Tick { time_ms: 0.0 });
+            let mut clock = 0.0;
+            let key = |e: &mut Engine<NoGpu>| {
+                e.handle(Command::Key {
+                    key: "ArrowRight".to_owned(),
+                    modifiers: Modifiers::default(),
+                });
+                e.drain_events().count()
+            };
+            key(&mut e);
+            let m = sample(|| {
+                if overview {
+                    e.handle(Command::SetCamera {
+                        target: target.clone(),
+                    });
+                    clock += 16.0;
+                    e.handle(Command::Tick { time_ms: clock });
+                    e.drain_events().for_each(drop);
+                }
+                timed(|| key(&mut e))
+            });
+            let what = "an arrow key: search, camera, event".to_owned();
+            push(&mut out, name, what, Some((50e3, "11 §3")), m);
+        }
+    }
     let mut rng = Rng(11);
     let state: Vec<u8> = (0..seats).map(|_| u8::from(rng.unit() < 0.3)).collect();
     if wanted("snapshot-apply") {

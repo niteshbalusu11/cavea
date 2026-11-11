@@ -95,6 +95,11 @@ export interface SeatMapOptions {
   messages?: Messages;
   /** The interface's direction; `auto` (default): `locale`'s if given, else the page's. */
   dir?: "ltr" | "rtl" | "auto";
+  /**
+   * Aborting it before the map is ready rejects `createSeatMap` (`aborted`)
+   * and removes everything; after, it destroys the map (05 §9).
+   */
+  signal?: AbortSignal;
   assets?: {
     /** Where `cavea_web_bg.wasm` and `glyphs.png` are served; default next to this package. */
     baseUrl?: string | URL;
@@ -217,6 +222,7 @@ const CHECKS: Record<string, (v: unknown) => boolean> = {
   messages: (v) => isObject(v) && Object.values(v).every((m) => m === undefined || isMessage(m)),
   dir: (v) => ["ltr", "rtl", "auto"].includes(v as string),
   ui: isObject,
+  signal: (v) => isObject(v) && typeof v["aborted"] === "boolean" && "addEventListener" in v,
   assets: (v) =>
     isObject(v) &&
     (v["baseUrl"] === undefined || isUrl(v["baseUrl"])) &&

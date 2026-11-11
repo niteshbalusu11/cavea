@@ -5,7 +5,7 @@ import { customState, type AdapterContext } from "./adapter.ts";
 import { CaveaError, warner } from "./errors.ts";
 import type { RendererEvent } from "./events.ts";
 import type { FakeNode } from "./fakedom.ts";
-import { fakeEnv, flush, loaded, READY, seat } from "./fakes.ts";
+import { fakeEnv, loaded, READY, seat, sleep } from "./fakes.ts";
 import { localeDirection, translator } from "./messages.ts";
 import { validateOptions, type SeatMapOptions, type ThemeName } from "./options.ts";
 import { checkPricing, prices, type CategoryPricing } from "./pricing.ts";
@@ -246,9 +246,10 @@ describe("elements", () => {
     const off = await loaded({
       ui: { zoomControls: false, legend: false, tooltip: false, toasts: false, loading: false },
     });
-    expect(off.root.children.map((c) => c.tagName)).toEqual(["CANVAS"]);
+    // The canvas and the selections' live region (11 §5), which is not an option.
+    expect(off.root.children.map((c) => c.tagName)).toEqual(["CANVAS", "DIV"]);
     off.drain(hover("A-1-1"), { type: "selectionInvalid", rule: "max", objects: ["A-1-2"] });
-    expect(off.root.children).toHaveLength(1);
+    expect(off.root.children).toHaveLength(2);
   });
 
   test("options of the interface are checked; later ones warn", () => {
@@ -480,7 +481,7 @@ describe("elements", () => {
     const mark = '<img src=x onerror="alert(1)">';
     const { root, view, drain } = await loaded({
       selection: { max: 1 },
-      messages: { zoomIn: mark, legend: mark, max: { other: mark } },
+      messages: { zoomIn: mark, legend: mark, max: { other: mark }, mapHelp: mark, mapLabel: mark },
       pricing: [
         {
           category: mark,
@@ -515,6 +516,17 @@ describe("elements", () => {
       },
       { type: "objectUnavailable", label: mark },
       { type: "selectionInvalid", rule: "max", objects: [mark] },
+      // The proxy's name and the live region (11 §5).
+      {
+        type: "objectFocus",
+        object: { label: mark, category: mark, section: mark, row: mark, seat: mark, flags: 1 },
+        at: [1, 1],
+      },
+      {
+        type: "selectionChanged",
+        expiresAt: null,
+        selected: [{ label: mark, category: mark, section: mark, row: mark, seat: mark, flags: 1 }],
+      },
     );
     const tags = new Set([...root.walk()].map((n) => n.tagName));
     expect(
@@ -540,7 +552,12 @@ describe("elements", () => {
     // The markup arrived, as text.
     expect(
       [...root.walk()].filter((n) => n.tagName === "#TEXT" && n.data.includes(mark)).length,
-    ).toBeGreaterThan(8);
+    ).toBeGreaterThan(10);
+    const canvas = root.children[0];
+    expect([canvas?.getAttribute("aria-label"), canvas?.children[2]?.textContent]).toEqual([
+      mark,
+      mark,
+    ]);
     expect(one(root, "zoom-in")?.getAttribute("aria-label")).toBe(mark);
     // A category key that is not an identifier is not spliced into CSS.
     expect(
@@ -661,9 +678,10 @@ describe("loading and error states", () => {
     const f = fakeEnv();
     const errors: CaveaError[] = [];
     let attempts = 0;
+    // The first try and three retries fail (05 §9).
     f.env.fetchBytes = () =>
-      attempts++ === 0
-        ? Promise.reject(new Error("HTTP 503"))
+      attempts++ < 4
+        ? Promise.reject(Object.assign(new Error("HTTP 503"), { status: 503 }))
         : Promise.resolve(new Uint8Array([1]));
     let done = false;
     const promise = createMap(f.env, {} as HTMLElement, {
@@ -673,7 +691,7 @@ describe("loading and error states", () => {
     void promise.then(() => (done = true));
     expect(visible(one(f.root, "loading"))).toBe(true);
     f.wasm.resolve(() => f.view.engine);
-    await flush();
+    await sleep(50);
     expect([visible(one(f.root, "loading")), visible(one(f.root, "error")), done]).toEqual([
       false,
       true,
@@ -684,7 +702,7 @@ describe("loading and error states", () => {
     one(f.root, "retry")?.click();
     const map = await promise;
     expect([attempts, visible(one(f.root, "error")), visible(one(f.root, "loading"))]).toEqual([
-      2,
+      5,
       false,
       true,
     ]);
