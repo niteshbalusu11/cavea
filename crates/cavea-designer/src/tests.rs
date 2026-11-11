@@ -843,3 +843,86 @@ fn measure_canvas() {
     let _ = s.overlay();
     println!("overlay() with everything selected: {:.3} ms", ms(t0));
 }
+
+/// 04 §11 with transforms: while every other section is dragged, with more
+/// ranges that do not move than draw calls allowed, joining them never
+/// takes in moved seats, so no seat is drawn twice in a frame (once moved,
+/// once where it was).
+#[test]
+fn moved_seats_are_drawn_once() {
+    let doc = preset("stadium-100k");
+    let mut s = Session::load(doc).expect("load");
+    let fit = s.fit().expect("fit");
+    let size = s.document().settings().seat_size;
+    // The whole chart in view at the seats level: a very large canvas.
+    let zoom = 6.0 / size;
+    let view = View {
+        centre: [
+            (fit.min[0] + fit.max[0]) / 2.0,
+            (fit.min[1] + fit.max[1]) / 2.0,
+        ],
+        zoom,
+        width: (fit.max[0] - fit.min[0]) * zoom + 100.0,
+        height: (fit.max[1] - fit.min[1]) * zoom + 100.0,
+        dpr: 1.0,
+    };
+    let mut p = painter(view);
+    settle(&mut p, &s);
+    let roots: Vec<u32> = s.document().children(None).to_vec();
+    let every_other: Vec<u32> = roots.iter().copied().step_by(2).collect();
+    s.set_tool(ToolId::Select);
+    s.select(Level::Top, every_other.iter().copied());
+    let first = every_other[0];
+    let holder = s
+        .document()
+        .children(Some(first))
+        .first()
+        .copied()
+        .unwrap_or(first);
+    let seat = s
+        .index()
+        .seats(holder)
+        .iter()
+        .find(|x| !x.removed)
+        .expect("seat")
+        .pos;
+    let from = s.index().to_world(holder, seat).expect("world");
+    let ptr = |w: [f64; 2], t: f64| Pointer {
+        world: w,
+        screen: [w[0] * zoom, w[1] * zoom],
+        zoom,
+        button: Button::Primary,
+        kind: PointerKind::Mouse,
+        mods: Modifiers::default(),
+        time: t,
+    };
+    s.input(Input::PointerDown(ptr(from, 1e6)));
+    s.input(Input::PointerMove(ptr(
+        [from[0] + 300.0, from[1] + 200.0],
+        1e6 + 16.0,
+    )));
+    p.engine_mut().backend_mut().clear();
+    p.draw(&s, 1.0);
+    assert!(s.editor().gesture_open());
+    assert!(!p.engine().moving().is_empty(), "pieces are moved");
+    let ([st, dy], _) = p.engine().live_buffers().expect("buffers");
+    let seat_draws: Vec<_> = (p.engine().backend().draws.iter())
+        .filter(|d| d.buffers == [Some(st), Some(dy)])
+        .collect();
+    let mut drawn: Vec<std::ops::Range<u32>> =
+        seat_draws.iter().flat_map(|d| d.ranges.clone()).collect();
+    drawn.sort_by_key(|r| r.start);
+    for w in drawn.windows(2) {
+        assert!(
+            w[0].end <= w[1].start,
+            "seats drawn twice: {:?} and {:?}",
+            w[0],
+            w[1]
+        );
+    }
+    // 90 sections stay, each its own range between moved ones: none can be
+    // joined without taking in moved seats, so the 64-call target gives way
+    // for the drag's duration.
+    let stationary = seat_draws.first().map_or(0, |d| d.ranges.len());
+    assert_eq!(stationary, 90);
+}

@@ -742,9 +742,52 @@ impl<B: GpuBackend> Engine<B> {
                 None => push_range(&mut self.ranges, seats),
             }
         }
-        cull::merge_smallest_gaps(&mut self.ranges, MAX_SEAT_DRAW_CALLS);
+        self.merge_static_ranges();
         // The next frame without transforms culls afresh.
         self.culled = None;
+    }
+
+    /// Brings the ranges that do not move down to `MAX_SEAT_DRAW_CALLS` as
+    /// `cull::ranges` does, joining across the smallest gaps, but never
+    /// across a gap holding moved seats: those are drawn with their group's
+    /// matrix, and drawn again here they would show where they were.
+    fn merge_static_ranges(&mut self) {
+        let ranges = &mut self.ranges;
+        let Some(excess) = ranges.len().checked_sub(MAX_SEAT_DRAW_CALLS) else {
+            return;
+        };
+        let mut moved: Vec<Range<u32>> = (self.live.groups.iter())
+            .flat_map(|g| g.spans.iter())
+            .filter_map(|&s| self.live.pieces.get(s).map(|(_, span)| span.seats.clone()))
+            .filter(|r| !r.is_empty())
+            .collect();
+        moved.sort_by_key(|r| r.start);
+        let blocked = |gap: Range<u32>| {
+            let i = moved.partition_point(|m| m.end <= gap.start);
+            moved.get(i).is_some_and(|m| m.start < gap.end)
+        };
+        // Gaps that may be joined, smallest first, ties in `idx` order.
+        let mut gaps: Vec<(u32, usize)> = (1..ranges.len())
+            .filter_map(|i| {
+                let gap = ranges.get(i - 1)?.end..ranges.get(i)?.start;
+                (!blocked(gap.clone())).then_some((gap.end - gap.start, i))
+            })
+            .collect();
+        gaps.sort_unstable();
+        let mut join = vec![false; ranges.len()];
+        for &(_, i) in gaps.iter().take(excess) {
+            if let Some(j) = join.get_mut(i) {
+                *j = true;
+            }
+        }
+        let mut out: Vec<Range<u32>> = Vec::with_capacity(MAX_SEAT_DRAW_CALLS);
+        for (r, j) in ranges.iter().zip(join) {
+            match out.last_mut() {
+                Some(last) if j => last.end = r.end,
+                _ => out.push(r.clone()),
+            }
+        }
+        *ranges = out;
     }
 
     fn seat_mode(&self) -> f32 {

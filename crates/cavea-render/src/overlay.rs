@@ -178,10 +178,20 @@ impl Batch {
             ratio,
             atlas: atlas.generation,
         };
-        if self.built == Some(basis) && (self.mesh_buf.is_some() || self.counts == [0; 2]) {
+        if self.built == Some(basis) {
+            return Ok(false);
+        }
+        // Nothing to draw: no buffers, no build (an engine that is given no
+        // overlay, as the buyer's is not, never makes any).
+        if self.shapes.is_empty() {
+            self.counts = [0; 2];
+            self.built = Some(basis);
             return Ok(false);
         }
         self.builds += 1;
+        // Whether this build's own requests were held back by the cap: the
+        // flag may still be up from the labels' build of the same frame.
+        let capped = std::mem::take(&mut atlas.capped);
         self.vertices.clear();
         self.indices.clear();
         self.text.clear();
@@ -339,7 +349,9 @@ impl Batch {
                 }
             }
         }
-        waiting |= atlas.capped;
+        let held = atlas.capped;
+        atlas.capped |= capped;
+        waiting |= held;
         let index_bytes: Vec<u8> = self.indices.iter().flat_map(|i| i.to_le_bytes()).collect();
         self.mesh_buf = Some(fill_pair(
             backend,
@@ -355,7 +367,7 @@ impl Batch {
         // A raster on its way changes the atlas's generation when it
         // arrives; one held back by the per-build cap does not, so the next
         // frame builds again.
-        self.built = (!atlas.capped).then_some(basis);
+        self.built = (!held).then_some(basis);
         Ok(waiting)
     }
 
