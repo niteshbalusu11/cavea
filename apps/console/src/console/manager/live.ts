@@ -98,6 +98,8 @@ export function createLive(options: {
    * before something newer was learnt about a seat leaves that seat alone. */
   let clock = 0;
   const stamp = () => ++clock;
+  /** The stamp of the whole read last merged (`learnSeats`' floor). */
+  let floor = 0;
   const drawn = new Set<string>();
   let selected = new Set<string>();
   let inspected: string | null = null;
@@ -130,7 +132,7 @@ export function createLive(options: {
   };
 
   const learn = (objects: readonly EventObject[], labels: readonly string[], at: number) =>
-    learnSeats(nonFree, learnt, objects, labels, at);
+    learnSeats(nonFree, learnt, objects, labels, at, floor);
 
   async function read(labels: readonly string[]): Promise<void> {
     const unique = [...new Set(labels)];
@@ -181,6 +183,8 @@ export function createLive(options: {
       );
       const previous = nonFree;
       nonFree = mergeRead(found, previous, learnt, started);
+      // Stamps older than the read are covered by the floor from now on.
+      floor = started;
       for (const [label, at] of learnt) if (at < started) learnt.delete(label);
       sync(new Set([...drawn, ...nonFree.keys()]));
       countsAtRead = counts;
@@ -192,6 +196,8 @@ export function createLive(options: {
       bump();
     } finally {
       reading = false;
+      // A status's pages stop when another's failed.
+      mine.abort();
       if (pages === mine) pages = null;
     }
   }
@@ -210,9 +216,12 @@ export function createLive(options: {
     try {
       const answer = checkEvent(await call("getEvent", { path: { event } }, conn.signal));
       options.onEvent(answer);
+      // Hidden or gone while it was answered: nothing more until shown.
+      if (stopped || paused) return;
       const watched = [...selected];
       if (inspected !== null) watched.push(inspected);
       if (watched.length > 0) await read(watched);
+      if (stopped || paused) return;
       const counts = answer.counts;
       if (
         counts !== undefined &&
@@ -256,6 +265,7 @@ export function createLive(options: {
       ctx = null;
       nonFree = new Map();
       learnt.clear();
+      floor = 0;
       drawn.clear();
       selected = new Set();
       last = null;

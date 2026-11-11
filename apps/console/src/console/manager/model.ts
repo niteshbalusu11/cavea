@@ -122,7 +122,11 @@ export function learnSeats(
   objects: readonly EventObject[],
   labels: readonly string[],
   at: number,
+  /** The stamp of the last whole read merged: an answer to a request sent
+   * before it began is older than what it read, and is dropped whole. */
+  floor = 0,
 ): string[] {
+  if (at < floor) return [];
   const given = new Map(objects.map((o) => [o.label, o]));
   const taken: string[] = [];
   for (const label of labels) {

@@ -148,6 +148,10 @@ test("an answer to a request sent before a newer one leaves what was learnt sinc
   // A read sent after the booking is taken, free included.
   expect(learnSeats(nonFree, learnt, [], ["A-1"], 3)).toEqual(["A-1"]);
   expect(nonFree.has("A-1")).toBe(false);
+  // A whole read that began at stamp 5 was merged (its stamps pruned): a
+  // seat read sent at 4 and answered after it is dropped, whatever seat.
+  expect(learnSeats(nonFree, new Map(), [], ["A-3"], 4, 5)).toEqual([]);
+  expect(learnSeats(nonFree, new Map(), [o("A-3", "held")], ["A-3"], 6, 5)).toEqual(["A-3"]);
 });
 
 test("a whole read pages only statuses some seat has, and waits in proportion to its cost", () => {
