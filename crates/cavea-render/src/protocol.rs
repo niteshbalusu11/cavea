@@ -235,6 +235,23 @@ pub enum Command {
     SetGlyphAtlas {
         rgba: Vec<u8>,
     },
+    /// The host's answer to `Event::TextRequest` `id` (04 §12): `width` ×
+    /// `height` bytes of coverage, rows from the top, drawn at `px` device
+    /// pixels per em (at most the size asked for). Empty when the host
+    /// cannot draw the string.
+    SetText {
+        id: u32,
+        width: u32,
+        height: u32,
+        px: u32,
+        pixels: Vec<u8>,
+    },
+    /// A built-in string the engine draws (`soldOut`, default "Sold out"),
+    /// from the SDK's message catalogue. At most 64 bytes.
+    SetMessage {
+        key: String,
+        text: String,
+    },
     SetMode(Mode),
     /// Refused with `InvalidInput` while anything is selected or a request
     /// is outstanding.
@@ -449,6 +466,17 @@ pub enum Event {
     },
     Announce {
         text: String,
+    },
+    /// Draw `text` in the CSS font family `font` at `weight` and `px` device
+    /// pixels per em, white on transparent, and answer with
+    /// `Command::SetText` (04 §12). Emitted while building labels; the host
+    /// rasterises after the frame, never during it.
+    TextRequest {
+        id: u32,
+        text: String,
+        px: u16,
+        weight: u16,
+        font: String,
     },
     Metrics {
         marks: Vec<(Mark, f64)>,

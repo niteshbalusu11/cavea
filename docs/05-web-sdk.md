@@ -344,7 +344,7 @@ Set as CSS custom properties on the container or passed as `theme`.
 | `--cavea-ring-hover`, `--cavea-ring-focus` | |
 | `--cavea-section-tint` | Strength of the overview tint, 0–1 |
 | `--cavea-dim` | Opacity of filtered-out objects |
-| `--cavea-font` | Font family for dynamic text and controls |
+| `--cavea-font` | Font family for dynamic text (section labels, text objects, labels the baked atlas cannot draw) and controls. Default: the system stack `system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", Arial, sans-serif`. Only fonts the page already has are used; the map never fetches one |
 | `--cavea-radius`, `--cavea-shadow` | Controls |
 | `--cavea-category-<key>` | Override one category's colour |
 

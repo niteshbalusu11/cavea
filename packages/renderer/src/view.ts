@@ -7,6 +7,10 @@ export interface EngineView {
   free(): void;
   loadChart(ccf: Uint8Array): void;
   setGlyphAtlas(rgba: Uint8Array): void;
+  /** The raster for a `textRequest`: width, height, em in device pixels, coverage bytes. */
+  setText(id: number, width: number, height: number, px: number, pixels: Uint8Array): void;
+  /** A built-in string the map draws (`soldOut`). */
+  setMessage(key: string, text: string): void;
   /** One SNAPSHOT, DELTA or PRIVATE frame; `false` for frames it does not take. */
   applyFrame(frame: Uint8Array): boolean;
   /** Label state, converted in one call; each returns the unknown labels. */

@@ -5,7 +5,9 @@
 //
 // Query parameters. Chart: `seats` (default 100000), `seed` (default 1),
 // `preset` (a `cavea-testkit` preset such as `arena` instead of the stadium),
-// `shape` (0 circle, 1 rounded, 2 chair), all compiled in the browser; or
+// `shape` (0 circle, 1 rounded, 2 chair), `script=1` (section labels and text
+// objects in other scripts, right-to-left ones among them), all compiled in
+// the browser; or
 // `chart=url` to fetch a compiled chart, which the map then fetches in
 // parallel with the WASM, the atlas and the fake host's state. Map: `theme`
 // (light, dark, high-contrast, auto; default auto), `gestures=greedy|
@@ -43,13 +45,15 @@ import {
   type Theme,
 } from "@cavea/renderer";
 // Debug-only exports, present in `--demo` builds; never part of the SDK.
-import { View } from "../../../packages/renderer/wasm/cavea_web.js";
+import * as wasm from "../../../packages/renderer/wasm/cavea_web.js";
 
 interface DemoStatics {
-  demoChart(seats: number, seed: number, shape: number, preset: string): Uint8Array;
+  demoChart(seats: number, seed: number, shape: number, preset: string, script: number): Uint8Array;
   demoLabels(ccf: Uint8Array): string[];
 }
-const demo = View as unknown as Partial<DemoStatics>;
+const demo = wasm.View as unknown as Partial<DemoStatics>;
+/** Seat label draws, dynamic text and row label draws, all draws, atlas bytes, strings rasterised. */
+const textStats = (wasm as unknown as { demoTextStats?: () => Uint32Array }).demoTextStats;
 
 function element<T extends HTMLElement>(id: string, type: new () => T): T {
   const node = document.getElementById(id);
@@ -118,7 +122,13 @@ async function generated(): Promise<{ ccf: Uint8Array; labels: string[] }> {
       "This WASM has no demo exports. Run `cargo xtask build-web --demo` and reload.",
     );
   }
-  const ccf = demo.demoChart(num("seats", 100_000), num("seed", 1), num("shape", 0), preset);
+  const ccf = demo.demoChart(
+    num("seats", 100_000),
+    num("seed", 1),
+    num("shape", 0),
+    preset,
+    num("script", 0),
+  );
   return { ccf, labels: demo.demoLabels(ccf) };
 }
 
@@ -240,6 +250,13 @@ function note(line: string): void {
   console.log(`[cavea-demo] ${line}`);
   showSelection();
 }
+/** The text readout: label draw calls of the last frame and the dynamic atlas. */
+let textLine = "";
+function showText(): void {
+  const [seat = 0, text = 0, all = 0, bytes = 0, strings = 0] = textStats?.() ?? [];
+  textLine = `draws ${all} (seat labels ${seat}, text ${text}); atlas ${bytes / 1024} KiB, ${strings} strings rasterised`;
+  showSelection();
+}
 function showSelection(): void {
   const selection = map?.getSelection();
   const at = selection?.expiresAt ?? null;
@@ -247,7 +264,7 @@ function showSelection(): void {
   selectionLine.textContent =
     `selected ${selection?.objects.length ?? 0}/${max}: ${selection?.objects.map((o) => o.label).join(" ") ?? ""}\n` +
     `held: ${server === null ? held.size : selection?.holdToken ? "by token" : "none"}, expire ${expires}; checkout ${selection?.valid === false ? "not ready" : "ready"}; ` +
-    `hover: ${hover || "none"}\n${lastNote}`;
+    `hover: ${hover || "none"}\n${lastNote}\n${textLine}`;
 }
 
 const options: SeatMapOptions = {
@@ -348,6 +365,8 @@ try {
     options.chart = { url: chartUrl };
   }
   map = await createSeatMap(container, options);
+  // A timer for the readout only; the map's frame loop stays idle.
+  setInterval(showText, 500);
   Object.assign(window, {
     caveaDemo: {
       map,
@@ -355,6 +374,7 @@ try {
       events,
       second,
       crowd,
+      textStats: () => [...(textStats?.() ?? [])],
       resnapshot: () => ctx?.applySnapshot(snapshot()),
       take(label: string) {
         taken.add(label);
