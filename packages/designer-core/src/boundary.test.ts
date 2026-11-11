@@ -331,6 +331,9 @@ describe("the designer module", () => {
     const seat = preview.rows[0]?.seats[0];
     if (seat === undefined) throw new Error("no seat previewed");
     expect(s.sample(block, seat.oid)).toContain("I");
+    // The hovered seat: the one under the pointer, not far from it.
+    expect(s.seatUnder(seat.at, 1)).toEqual({ node: block, oid: seat.oid });
+    expect(s.seatUnder([seat.at[0] + 1e6, seat.at[1]], 1)).toBeNull();
     s.cancelNumbering();
     s.number(numbering);
     // A composite is named by its first command: the blocks' row labels.
