@@ -149,6 +149,79 @@ impl Config {
     }
 }
 
+/// A setting the server runs with but should not in production (12 §4,
+/// SEC-006): logged once at start as a `warn` record with `setting`, never
+/// the value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Insecure {
+    /// The variable, such as `CAVEA_CONSOLE_COOKIE_SECURE`.
+    pub setting: &'static str,
+    /// What it exposes, for the record's message.
+    pub why: &'static str,
+}
+
+impl Config {
+    /// Every insecure setting this configuration has. The development
+    /// defaults (no `CAVEA_PUBLIC_URL`, or one on `localhost`) and a correct
+    /// production set-up have none but an unset admin key, which turns
+    /// endpoints off.
+    #[must_use]
+    pub fn insecure(&self) -> Vec<Insecure> {
+        let mut found = Vec::new();
+        let mut flag = |on: bool, setting: &'static str, why: &'static str| {
+            if on {
+                found.push(Insecure { setting, why });
+            }
+        };
+        flag(
+            self.public_url
+                .as_ref()
+                .is_some_and(|u| !u.is_https() && !u.is_loopback()),
+            "CAVEA_PUBLIC_URL",
+            "is not HTTPS: sessions, keys and hold tokens cross the network in clear; use TLS in production",
+        );
+        flag(
+            !self.console_cookie_secure,
+            "CAVEA_CONSOLE_COOKIE_SECURE",
+            "is false: the console session cookie is sent over plain HTTP; only for a development server",
+        );
+        flag(
+            self.admin_key.is_none(),
+            "CAVEA_ADMIN_KEY",
+            "is not set: /v1/workspaces and /metrics refuse every request",
+        );
+        flag(
+            self.rate_limit_holds == 0,
+            "CAVEA_RATE_LIMIT_HOLDS",
+            "is 0: public holds are not rate limited, so a bot can hold the house (12 §3 T1)",
+        );
+        flag(
+            self.rate_limit_reads == 0,
+            "CAVEA_RATE_LIMIT_READS",
+            "is 0: public reads and realtime connection attempts are not rate limited",
+        );
+        flag(
+            self.rate_limit_sign_in == 0,
+            "CAVEA_RATE_LIMIT_SIGN_IN",
+            "is 0: console sign-in is not rate limited per address (12 §3 T9)",
+        );
+        flag(
+            self.trusted_proxies.trusts_everyone(),
+            "CAVEA_TRUSTED_PROXIES",
+            "trusts every address: any client chooses the address its rate limits count against",
+        );
+        found
+    }
+
+    /// Log [`Self::insecure`]: one `warn` record each, `insecure setting`
+    /// with `setting` and `why`. Called once, at start.
+    pub fn warn_insecure(&self) {
+        for found in self.insecure() {
+            tracing::warn!(setting = found.setting, why = found.why, "insecure setting");
+        }
+    }
+}
+
 /// The host name: `HOSTNAME` if set (as in containers), else the kernel's.
 fn hostname() -> Option<String> {
     let name = std::env::var("HOSTNAME")
@@ -199,6 +272,23 @@ impl PublicUrl {
     #[must_use]
     pub fn is_https(&self) -> bool {
         self.0.starts_with("https://")
+    }
+
+    /// Whether its host is `localhost`, `127.0.0.1` or `[::1]`: a browser
+    /// treats it as secure without TLS, and it is never reached from another
+    /// machine.
+    #[must_use]
+    pub fn is_loopback(&self) -> bool {
+        let rest = self.0.split_once("://").map_or("", |(_, r)| r);
+        let authority = rest.split('/').next().unwrap_or_default();
+        let host = match authority.strip_prefix('[') {
+            Some(v6) => v6.split(']').next().unwrap_or_default(),
+            None => authority.split(':').next().unwrap_or_default(),
+        };
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
     }
 }
 

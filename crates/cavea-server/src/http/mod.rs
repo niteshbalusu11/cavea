@@ -17,6 +17,7 @@ mod console;
 mod error;
 mod events;
 pub mod extract;
+pub mod headers;
 pub mod health;
 mod keys;
 mod members;
@@ -98,8 +99,8 @@ fn routes() -> openapi::Routes {
 }
 
 /// Add the fallbacks (the console's files, else problem+json), the default
-/// body limit, CORS for the public routes, the panic layer and the request
-/// span layer. The layers only wrap routes added before them, so every route
+/// body limit, CORS for the public routes, the panic layer, the security
+/// headers of each route family (`headers`) and the request span layer. The layers only wrap routes added before them, so every route
 /// goes in before this.
 fn finish(routes: Router<AppState>, state: AppState) -> Router {
     routes
@@ -116,6 +117,11 @@ fn finish(routes: Router<AppState>, state: AppState) -> Router {
         // Inside the request span, so that a panic's `500` carries the request
         // id and is logged and counted under its route.
         .layer(panic::CatchPanicLayer)
+        // Outside the panic layer, so that its `500` carries them too.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            headers::layer,
+        ))
         .layer(
             RequestLayer::new()
                 .quiet(&["/healthz", "/readyz", "/metrics"])

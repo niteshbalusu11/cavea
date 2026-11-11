@@ -3957,7 +3957,7 @@
     },
     "/v1/events": {
       "get": {
-        "description": "Archived events included. The cursor is an event key.",
+        "description": "Archived events included, oldest first. The cursor is an event key. `chart` keeps one chart's events; a chart the workspace does not have is `404`.",
         "operationId": "listEvents",
         "parameters": [
           {
@@ -3968,6 +3968,15 @@
           },
           {
             "$ref": "#/components/parameters/After"
+          },
+          {
+            "description": "A chart's key: only events on one of its versions.",
+            "in": "query",
+            "name": "chart",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -3994,6 +4003,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"

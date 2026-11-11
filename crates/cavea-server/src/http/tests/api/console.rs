@@ -52,8 +52,9 @@ async fn setup_token(pool: &PgPool) -> String {
 
 /// CON-002: while no user exists, start-up stores a token and logs one link;
 /// of two setups at once with it, exactly one creates the owner, who owns
-/// every workspace and is signed in; the token is burnt, and once an owner
-/// exists start-up stores and logs nothing.
+/// every workspace that exists and is signed in, but no workspace made
+/// after; the token is burnt, and once an owner exists start-up stores and
+/// logs nothing.
 #[tokio::test]
 #[ignore = "needs CAVEA_TEST_DATABASE_URL"]
 async fn setup_creates_one_owner_once() {
@@ -130,6 +131,33 @@ async fn setup_creates_one_owner_once() {
             console_call(&app, Method::GET, "/console/api/me", Some(&id), None, None).await;
         assert_eq!(response.status(), 200);
         assert_eq!(again["user"], me["user"]);
+
+        // A workspace the admin key makes after setup is no one's: the owner
+        // is owner of the workspaces that existed at setup, not of every
+        // later one (09 §2, D-51); the admin key's invitation gives it an
+        // owner (D-61).
+        let c = Tenant::create(&app, "c").await;
+        let (_, again) =
+            console_call(&app, Method::GET, "/console/api/me", Some(&id), None, None).await;
+        assert_eq!(again["workspaces"].as_array().unwrap().len(), 2, "{again}");
+        let (response, problem) = console_call(
+            &app,
+            Method::GET,
+            "/v1/events",
+            Some(&id),
+            Some(&c.id),
+            None,
+        )
+        .await;
+        assert_problem(&response, &problem, Code::Forbidden);
+        assert_eq!(problem["details"]["reason"], "workspace");
+        let members: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM memberships WHERE workspace_id = $1::uuid")
+                .bind(&c.id[3..])
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(members, 0);
 
         // Burnt, and nothing more once an owner exists.
         let (response, _) = call(

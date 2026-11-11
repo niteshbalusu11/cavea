@@ -46,6 +46,7 @@ fn main() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     let _logging =
         cavea_telemetry::init(&config.log, config.log_format).context("CAVEA_LOG is invalid")?;
+    config.warn_insecure();
     // Requests, actors and commits on one runtime; realtime connections'
     // streams on another, so that fanning out never queues a request behind
     // tens of thousands of ready subscribers (08 §8.3, D-41).
@@ -72,9 +73,6 @@ async fn run(config: Config, streams: tokio::runtime::Handle) -> anyhow::Result<
         .await
         .with_context(|| format!("cannot bind {}", config.listen))?;
     tracing::info!(addr = %listener.local_addr()?, version = env!("CARGO_PKG_VERSION"), "listening");
-    if config.admin_key.is_none() {
-        tracing::warn!("CAVEA_ADMIN_KEY is not set: the workspace endpoints refuse every request");
-    }
     let seats = Seats::new(
         db.clone(),
         &config,
@@ -87,12 +85,6 @@ async fn run(config: Config, streams: tokio::runtime::Handle) -> anyhow::Result<
         Timing::default(),
         streams,
     );
-    if let Some(url) = config.public_url.as_ref().filter(|u| !u.is_https()) {
-        tracing::warn!(
-            public_url = url.as_str(),
-            "CAVEA_PUBLIC_URL is not HTTPS; use TLS in production"
-        );
-    }
     // While no user exists: the one-time link to create the owner (09 §2),
     // the one secret the server logs (12 §4).
     let public_url = config.public_url.as_ref().map(|u| u.as_str());

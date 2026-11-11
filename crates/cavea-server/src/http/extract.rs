@@ -227,6 +227,12 @@ impl Page {
     pub const DEFAULT_LIMIT: u32 = 100;
     pub const MAX_LIMIT: u32 = 100;
 
+    /// A page from a list's own query, which has more parameters.
+    #[must_use]
+    pub fn new(limit: Option<u32>, after: Option<String>) -> Self {
+        Self { limit, after }
+    }
+
     /// The page size, 1 to [`Self::MAX_LIMIT`].
     pub fn limit(&self) -> Result<u32, ApiError> {
         match self.limit.unwrap_or(Self::DEFAULT_LIMIT) {
