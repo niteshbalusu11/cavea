@@ -11,7 +11,7 @@ A seat-map toolkit for ticketing platforms: a buyer-facing seat picker for web a
 
 ## Development
 
-You need Rust (rustup reads `rust-toolchain.toml`), bun, and Docker for PostgreSQL. `wasm-opt` from binaryen is optional.
+You need Nix (with flakes) and Docker for PostgreSQL. `flake.nix` provides the pinned Rust toolchain, bun, `wasm-opt`, `psql` and `brotli`: run `nix develop`, or `direnv allow` once to load it on `cd`, or prefix a single command with `nix develop -c`. Without Nix: Rust through rustup (it reads `rust-toolchain.toml`), bun at the version in `package.json`, and optionally binaryen for `wasm-opt`.
 
 ```sh
 cargo xtask build-web                               # WASM renderer into packages/renderer/wasm/
