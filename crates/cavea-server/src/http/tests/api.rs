@@ -687,6 +687,27 @@ const ROUTES: &[(Method, &str, Needs, u16, Option<&str>)] = &[
         Some(r#"{"hold_token":"{token}"}"#),
     ),
     (
+        Method::POST,
+        "/v1/events/{event}/book",
+        Needs::Secret,
+        200,
+        Some(r#"{"objects":{"version":"{hash}","idx":[1]},"order_ref":"o-1"}"#),
+    ),
+    (
+        Method::POST,
+        "/v1/events/{event}/release",
+        Needs::Secret,
+        200,
+        Some(r#"{"objects":{"version":"{hash}","idx":[1]}}"#),
+    ),
+    (
+        Method::POST,
+        "/v1/events/{event}/change-status",
+        Needs::Secret,
+        200,
+        Some(r#"{"objects":{"version":"{hash}","idx":[2]},"status":"blocked"}"#),
+    ),
+    (
         Method::DELETE,
         "/v1/hold-tokens/{token}",
         Needs::Secret,

@@ -7,7 +7,7 @@
 //! (and a date-time crate) out of the build.
 
 mod migrations;
-mod reply;
+pub mod reply;
 
 use std::fmt::Write as _;
 use std::future::Future;
