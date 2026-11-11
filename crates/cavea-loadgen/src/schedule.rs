@@ -111,4 +111,35 @@ mod tests {
             );
         }
     }
+
+    /// When the generator itself stalls, the work started late is still
+    /// given its scheduled `due`, so latency measured from it includes the
+    /// stall: a blocked thread does not hide a slow server.
+    #[test]
+    fn a_stalled_generator_is_charged_from_the_schedule() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let lags = Arc::new(Mutex::new(Vec::new()));
+        let begin = Instant::now();
+        let s = rt.block_on(open_loop(begin, 1_000.0, 20, 100, |k, due| {
+            let lags = lags.clone();
+            async move {
+                assert_eq!(due, begin + Duration::from_millis(k));
+                if k == 0 {
+                    // The only thread is blocked for 30 ms.
+                    std::thread::sleep(Duration::from_millis(30));
+                }
+                lags.lock().unwrap().push(Instant::now() - due);
+            }
+        }));
+        assert_eq!(s.started, 20);
+        let lags = lags.lock().unwrap();
+        // Starts 1 to 19 were due in the stall and ran after it.
+        assert!(
+            lags.iter().skip(1).all(|l| *l >= Duration::from_millis(10)),
+            "{lags:?}"
+        );
+    }
 }

@@ -79,6 +79,27 @@ impl Hist {
         }
         self.max
     }
+
+    /// What was recorded since `earlier`, an earlier copy of this histogram;
+    /// its maximum is the top of the highest bucket used.
+    pub fn since(&self, earlier: &Hist) -> Hist {
+        let mut out = Hist::default();
+        for (i, (now, then)) in self.counts.iter().zip(earlier.counts.iter()).enumerate() {
+            let c = now.saturating_sub(*then);
+            if let Some(slot) = out.counts.get_mut(i) {
+                *slot = c;
+            }
+            if c > 0 {
+                out.n += c;
+                out.max = if i + 1 >= BUCKETS {
+                    self.max
+                } else {
+                    lower(i + 1).saturating_sub(1).min(self.max)
+                };
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]

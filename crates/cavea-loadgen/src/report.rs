@@ -30,6 +30,9 @@ fn latency(h: &Hist) -> Value {
 }
 
 /// Server budgets (01 §5): name, the operation, the quantile, milliseconds.
+/// A hold is measured from when it was sent: its arrival's schedule is
+/// charged to the token, the arrival's first request (`start_lag` shows how
+/// far the generator itself fell behind, `hold_from_due` the whole arrival).
 const BUDGETS: [(&str, &str, f64, f64); 3] = [
     ("hold request p99", "hold", 0.99, 15.0),
     ("snapshot request p99", "snapshot", 0.99, 3.0),
@@ -73,6 +76,13 @@ pub fn build(cfg: &Config, profile: &str, o: &Outcome) -> (Value, u8) {
         .get("hold")
         .map_or(0, |h| h.ok + h.errors.values().sum::<u64>());
     let (equal, differ, unverified) = o.converged;
+    let lag_p99 = o.stats.ops.get("start_lag").map_or(0.0, |l| ms(l.hist.quantile(0.99)));
+    let cpu = &o.cpu;
+    let wall = cpu.wall_s.max(1e-3);
+    let (objects_seen, tokens_read, resolution) = match &o.audit {
+        Some((a, b, r)) => (Some(*a), Some(*b), Some(r.clone())),
+        None => (None, None, None),
+    };
     let exit = if o.violations_total > 0 || differ > 0 {
         EXIT_CORRECTNESS
     } else if budget_missed {
@@ -85,7 +95,7 @@ pub fn build(cfg: &Config, profile: &str, o: &Outcome) -> (Value, u8) {
         "profile": profile,
         "settings": {
             "url": cfg.url, "workspace": o.workspace, "event": o.event, "objects": o.objects,
-            "subscribers": cfg.subscribers, "buyers": cfg.buyers, "ramp_s": cfg.ramp.as_secs_f64(),
+            "subscribers": cfg.subscribers, "connect_rate": cfg.connect_rate, "buyers": cfg.buyers, "ramp_s": cfg.ramp.as_secs_f64(),
             "rate": cfg.rate, "duration_s": cfg.duration.as_secs_f64(),
             "pick": if cfg.clustered { "clustered" } else { "random" },
             "release_share": cfg.release_share, "book_share": cfg.book_share,
@@ -100,12 +110,21 @@ pub fn build(cfg: &Config, profile: &str, o: &Outcome) -> (Value, u8) {
             "arrivals_skipped_in_flight_bound": s.skipped,
             "offered_per_s": s.offered as f64 / span, "started_per_s": s.started as f64 / span,
             "holds_per_s": holds as f64 / elapsed, "elapsed_s": elapsed,
+            "start_lag_p99_ms": lag_p99,
+            // The generator started arrivals late: its figures understate the server's.
+            "generator_behind": lag_p99 > 5.0,
+        },
+        "requests": {
+            "retried_after_outage": o.stats.retried,
+            "gave_up_after_outage": o.stats.gave_up,
+            "unknown_outcomes": o.unknown,
         },
         "ops": ops,
         "delta_delivery": latency(&o.stats.delta),
         "connections": {
             "opened": o.stats.opened, "failed": o.stats.failed, "dropped": o.stats.dropped,
             "resyncs": o.stats.resyncs, "closes": o.stats.closes, "frames": o.stats.frames,
+            "reconnects": o.stats.reconnects,
         },
         "checks": {
             "violations_total": o.violations_total,
@@ -113,6 +132,16 @@ pub fn build(cfg: &Config, profile: &str, o: &Outcome) -> (Value, u8) {
             "convergence": {"equal": equal, "differ": differ, "unverified": unverified},
         },
         "budgets": budgets,
+        "outages": o.outages.iter().map(|(a, b)| json!({"start_unix_ms": a, "end_unix_ms": b, "s": (b - a) as f64 / 1_000.0})).collect::<Vec<_>>(),
+        "subscriber_gaps": o.gaps.iter().map(|(a, b)| json!({"start_unix_ms": a, "end_unix_ms": b, "s": (b - a) as f64 / 1_000.0})).collect::<Vec<_>>(),
+        "cpu": {
+            "load_wall_s": cpu.wall_s, "generator_cpu_s": cpu.generator_s, "server_cpu_s": cpu.server_s,
+            "generator_cores": cpu.generator_s / wall, "server_cores": cpu.server_s.map(|s| s / wall),
+        },
+        "audit": {
+            "objects_not_free": objects_seen, "tokens_read": tokens_read,
+            "unknown_resolved": resolution.map(|r| r.into_iter().map(|(k, [a, n, u])| (k.to_owned(), json!({"applied": a, "not_applied": n, "undecided": u}))).collect::<serde_json::Map<_, _>>()),
+        },
         "timeseries": o.series,
         "exit": exit,
     });
@@ -158,8 +187,34 @@ pub fn summary(r: &Value) -> String {
     let c = &r["connections"];
     let _ = writeln!(
         s,
-        "  connections: {} opened, {} failed, {} dropped, {} resyncs, closes {}, {} frames",
-        c["opened"], c["failed"], c["dropped"], c["resyncs"], c["closes"], c["frames"]
+        "  connections: {} opened, {} failed, {} given up, {} reconnects, {} resyncs, closes {}, {} frames",
+        c["opened"], c["failed"], c["dropped"], c["reconnects"], c["resyncs"], c["closes"], c["frames"]
+    );
+    let q = &r["requests"];
+    let _ = writeln!(
+        s,
+        "  outages: {} seen; requests retried {}, given up {}, unknown outcomes {}; subscriber gaps {}",
+        r["outages"].as_array().map_or(0, Vec::len),
+        q["retried_after_outage"],
+        q["gave_up_after_outage"],
+        q["unknown_outcomes"],
+        r["subscriber_gaps"].as_array().map_or(0, Vec::len)
+    );
+    let cpu = &r["cpu"];
+    let _ = writeln!(
+        s,
+        "  cpu over {:.1} s of load: generator {:.2} cores, server {} cores; start lag p99 {} ms{}",
+        cpu["load_wall_s"].as_f64().unwrap_or(0.0),
+        cpu["generator_cores"].as_f64().unwrap_or(0.0),
+        cpu["server_cores"].as_f64().map_or("?".into(), |c| format!("{c:.2}")),
+        l["start_lag_p99_ms"],
+        if l["generator_behind"] == true { " (the generator fell behind its schedule)" } else { "" }
+    );
+    let a = &r["audit"];
+    let _ = writeln!(
+        s,
+        "  audit: {} objects not free, {} tokens read; unknown outcomes resolved {}",
+        a["objects_not_free"], a["tokens_read"], a["unknown_resolved"]
     );
     for b in r["budgets"].as_array().into_iter().flatten() {
         let _ = writeln!(

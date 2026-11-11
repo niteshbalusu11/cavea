@@ -43,6 +43,12 @@ pub enum ViewError {
         have: u32,
         got: u32,
     },
+    /// A SNAPSHOT behind the `seq` the view had already reached: a state it
+    /// was shown has been lost (published, so committed, 08 §4.5).
+    Regressed {
+        have: u64,
+        got: u64,
+    },
 }
 
 impl std::fmt::Display for ViewError {
@@ -52,6 +58,9 @@ impl std::fmt::Display for ViewError {
             Self::Gap { have, from } => write!(f, "DELTA from seq {from} applied at seq {have}"),
             Self::DeltaDuringResync => f.write_str("DELTA after RESYNC before its SNAPSHOT"),
             Self::Objects { have, got } => write!(f, "frame for {got} objects, chart has {have}"),
+            Self::Regressed { have, got } => {
+                write!(f, "SNAPSHOT at seq {got} after the view reached seq {have}")
+            }
         }
     }
 }
@@ -60,6 +69,7 @@ impl std::fmt::Display for ViewError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Applied {
     Nothing,
+    Hello,
     /// A DELTA moved the view from `from` to `to`.
     Delta {
         from: u64,
@@ -131,8 +141,15 @@ impl SeatView {
                     got: h.objects,
                 });
             }
-            ServerFrame::Hello(_) | ServerFrame::Private(_) => Applied::Nothing,
+            ServerFrame::Hello(_) => Applied::Hello,
+            ServerFrame::Private(_) => Applied::Nothing,
             ServerFrame::Snapshot(s) => {
+                if s.seq < self.seq {
+                    return Err(ViewError::Regressed {
+                        have: self.seq,
+                        got: s.seq,
+                    });
+                }
                 self.load(s)?;
                 Applied::Snapshot
             }
@@ -162,6 +179,12 @@ impl SeatView {
             ServerFrame::Ping(n) => Applied::Pong(*n),
             ServerFrame::Close(r) => Applied::Close(r.0),
         })
+    }
+
+    /// The connection was lost: the next one resumes from `seq`, whose state
+    /// the view still has, so a RESYNC on the old one is moot.
+    pub fn reconnecting(&mut self) {
+        self.resyncing = false;
     }
 
     /// Indices that differ from `other`, at most `limit` of them.
@@ -284,6 +307,20 @@ mod tests {
         assert_eq!(
             (view.seq, (0..n).all(|i| view.available(i))),
             (seq + 5, true)
+        );
+        // A lost connection resumes from `seq`: DELTAs from it apply even
+        // after a RESYNC on the old one; a SNAPSHOT behind it is refused.
+        view.apply(&frame(&wire::encode_resync())).unwrap();
+        view.reconnecting();
+        let next = wire::encode_delta(View::Public, seq + 5, seq + 6, &[], n, &[]).unwrap();
+        assert!(view.apply(&frame(&next)).is_ok());
+        let old = wire::encode_snapshot(View::Public, seq + 4, &vec![0; n as usize], &[]).unwrap();
+        assert_eq!(
+            view.apply(&frame(&old)),
+            Err(ViewError::Regressed {
+                have: seq + 6,
+                got: seq + 4
+            })
         );
     }
 

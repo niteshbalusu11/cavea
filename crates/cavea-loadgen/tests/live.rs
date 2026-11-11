@@ -70,8 +70,31 @@ fn healthy(port: u16) -> bool {
     out.starts_with("HTTP/1.1 200")
 }
 
-fn loadgen(port: u16, chart: &PathBuf, report: &PathBuf, extra: &str) -> (i32, Value) {
-    let status = Command::new(env!("CARGO_BIN_EXE_cavea-loadgen"))
+/// The server on `port`, once it answers.
+fn start(url: &str, port: u16) -> Child {
+    let server = Command::new(server_binary())
+        .env("CAVEA_DATABASE_URL", url)
+        .env("CAVEA_LISTEN", format!("127.0.0.1:{port}"))
+        .env("CAVEA_ADMIN_KEY", ADMIN)
+        .env("CAVEA_NODE_ID", "loadgen-live-test")
+        .env("CAVEA_LOG", "warn")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    while !healthy(port) {
+        assert!(
+            start.elapsed() < Duration::from_secs(60),
+            "the server did not start"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    server
+}
+
+fn generator(port: u16, chart: &PathBuf, report: &PathBuf, extra: &str) -> Child {
+    Command::new(env!("CARGO_BIN_EXE_cavea-loadgen"))
         .args(["--url", &format!("http://127.0.0.1:{port}"), "--chart"])
         .arg(chart)
         .arg("--json")
@@ -79,10 +102,19 @@ fn loadgen(port: u16, chart: &PathBuf, report: &PathBuf, extra: &str) -> (i32, V
         .args(extra.split_whitespace())
         .env("CAVEA_ADMIN_KEY", ADMIN)
         .stdout(Stdio::null())
-        .status()
-        .unwrap();
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap()
+}
+
+fn finish(mut child: Child, report: &PathBuf) -> (i32, Value) {
+    let status = child.wait().unwrap();
     let report: Value = serde_json::from_str(&std::fs::read_to_string(report).unwrap()).unwrap();
     (status.code().unwrap_or(-1), report)
+}
+
+fn loadgen(port: u16, chart: &PathBuf, report: &PathBuf, extra: &str) -> (i32, Value) {
+    finish(generator(port, chart, report, extra), report)
 }
 
 #[test]
@@ -122,24 +154,7 @@ fn short_runs_check_clean_and_the_reconciler_agrees() {
         .local_addr()
         .unwrap()
         .port();
-    let server = Command::new(server_binary())
-        .env("CAVEA_DATABASE_URL", &url)
-        .env("CAVEA_LISTEN", format!("127.0.0.1:{port}"))
-        .env("CAVEA_ADMIN_KEY", ADMIN)
-        .env("CAVEA_LOG", "warn")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    guard.server = Some(server);
-    let start = Instant::now();
-    while !healthy(port) {
-        assert!(
-            start.elapsed() < Duration::from_secs(60),
-            "the server did not start"
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    guard.server = Some(start(&url, port));
 
     // A stampede on 2,000 seats, then sustained arrivals with blocks: correct
     // (a debug server may miss the budgets: exit 4), everything checked.
@@ -173,6 +188,27 @@ fn short_runs_check_clean_and_the_reconciler_agrees() {
         );
     }
 
+    // The server killed (SIGKILL) during a sustained run and started again on
+    // the same port: the generator reconnects its subscribers, retries what
+    // met the outage, resolves what it could not, and finds nothing wrong.
+    let shape = "--profile l2 --subscribers 20 --rate 100 --duration-s 8 --blocks-per-sec 5 --quiet-ms 3000";
+    let run = generator(port, &chart, &report, shape);
+    std::thread::sleep(Duration::from_secs(3));
+    if let Some(mut s) = guard.server.take() {
+        s.kill().unwrap();
+        s.wait().unwrap();
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    guard.server = Some(start(&url, port));
+    let (code, r) = finish(run, &report);
+    assert!(code == 0 || code == 4, "exit {code}: {:#}", r["checks"]);
+    assert_eq!(r["checks"]["violations_total"], 0, "{:#}", r["checks"]);
+    let cv = &r["checks"]["convergence"];
+    assert_eq!((&cv["differ"], &cv["unverified"]), (&0.into(), &0.into()), "{cv:#}");
+    assert!(cv["equal"].as_u64().unwrap() > 0);
+    assert!(r["connections"]["reconnects"].as_u64().unwrap() > 0, "{:#}", r["connections"]);
+    assert!(!r["outages"].as_array().unwrap().is_empty());
+
     let verify = Command::new(server_binary())
         .args(["verify", "--all"])
         .env("CAVEA_DATABASE_URL", &url)
@@ -180,5 +216,5 @@ fn short_runs_check_clean_and_the_reconciler_agrees() {
         .unwrap();
     let out = String::from_utf8_lossy(&verify.stdout);
     assert_eq!(verify.status.code(), Some(0), "{out}");
-    assert!(out.contains("2 event(s) verified: clean"), "{out}");
+    assert!(out.contains("3 event(s) verified: clean"), "{out}");
 }

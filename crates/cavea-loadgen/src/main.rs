@@ -22,6 +22,7 @@ const USAGE: &str =
   --profile l1|l2         defaults for 13 §7.2: l1 a stampede (50,000 subscribers,
                           5,000 buyers within 3 s), l2 2,000 holds/s for 600 s
   --subscribers N         watchers that never hold
+  --connect-rate R        subscriptions started a second before the load (2,000)
   --buyers N --ramp-ms MS a stampede: N buyers, each subscribed, holding within MS
   --rate R --duration-s S sustained: R buyer arrivals a second for S seconds
   --pick clustered|random --release-share F --book-share F --retry-book-share F
@@ -32,6 +33,8 @@ const USAGE: &str =
   --max-in-flight N --probes N --seed N --interval-ms MS --quiet-ms MS
   --server-pid PID        sample the server's RSS (same machine only)
   --json FILE             write the JSON report there (the summary goes to stdout)
+  --acks FILE             write every acknowledgement's seq, op and oids (CSV), to
+                          compare with the server's event_log after a fault
 Exit: 0 ok, 1 a correctness check failed, 2 usage, 3 could not run, 4 a budget missed.";
 
 /// The configuration, the profile's name and the JSON report's path.
@@ -132,6 +135,7 @@ fn parse(
         secret_key: env("CAVEA_SECRET_KEY"),
         publishable_key: env("CAVEA_PUBLISHABLE_KEY"),
         subscribers,
+        connect_rate: num(&mut map, "connect-rate", 2_000.0)?.max(1.0),
         buyers,
         ramp: Duration::from_millis(ramp),
         rate,
@@ -160,6 +164,7 @@ fn parse(
                     .map_err(|_| "--server-pid takes a number".to_owned())
             })
             .transpose()?,
+        acks: map.remove("acks"),
     };
     let json = map.remove("json");
     if let Some(k) = map.keys().next() {
@@ -176,6 +181,19 @@ fn open_files_limit() -> Option<u64> {
     let text = std::fs::read_to_string("/proc/self/limits").ok()?;
     let line = text.lines().find(|l| l.starts_with("Max open files"))?;
     line.split_whitespace().nth(3)?.parse().ok()
+}
+
+/// Open (then close) `n` descriptors while the process has one thread, so
+/// that its descriptor table is already that large when the run opens its
+/// sockets. Linux grows the table by doubling, and in a process of several
+/// threads each doubling waits for an RCU grace period (10 to 20 ms measured
+/// on this kernel) during which no thread can open a socket: stalls that
+/// would be charged to the server. A single-threaded process does not wait.
+fn grow_fd_table(n: u64) {
+    let files: Vec<std::fs::File> = (0..n.min(1 << 20))
+        .map_while(|_| std::fs::File::open("/dev/null").ok())
+        .collect();
+    drop(files);
 }
 
 fn main() {
@@ -209,6 +227,7 @@ fn real_main() -> u8 {
         );
         return report::EXIT_COULD_NOT_RUN;
     }
+    grow_fd_table(sockets);
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -306,6 +325,11 @@ mod tests {
                 converged: (3, 0, 0),
                 series: vec![],
                 wall: Duration::from_secs(1),
+                outages: vec![],
+                gaps: vec![],
+                cpu: crate::run::Cpu::default(),
+                audit: None,
+                unknown: 0,
             }
         };
         let (r, exit) = report::build(&cfg, "custom", &outcome(vec![], 2));
@@ -321,6 +345,9 @@ mod tests {
             "connections",
             "checks",
             "budgets",
+            "outages",
+            "cpu",
+            "audit",
             "timeseries",
             "exit",
         ] {
