@@ -97,7 +97,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **REN-017** Seat static and dynamic buffers with the specified layout (04 §6)
 - [x] **REN-018** Palette texture and visual state mapping (04 §9)
 - [x] **REN-019** `mesh` program: decoration layers and section fills (04 §7)
-- [ ] **REN-020** `image` program and lazy background image loading (04 §7)
+- [x] **REN-020** `image` program and lazy background image loading (04 §7)
 - [x] **REN-021** Level-of-detail levels with cross-fade and hysteresis (04 §10)
 - [x] **REN-022** Section availability counters and overview tint (04 §5, §10)
 - [x] **REN-023** Chunk culling and merging of visible ranges; stay under 64 seat draw calls (04 §11)

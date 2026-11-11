@@ -10,7 +10,10 @@
 // rows prefixed "Ряд " and seats numbered a, b, c: labels the baked atlas
 // lacks), all compiled in the browser; or
 // `chart=url` to fetch a compiled chart, which the map then fetches in
-// parallel with the WASM, the atlas and the fake host's state. Map: `theme`
+// parallel with the WASM, the atlas and the fake host's state. `image=url`:
+// every background image the chart asks for (04 §7) is fetched from there
+// (`assets.image`); with `server=`, images come from the server by default.
+// Map: `theme`
 // (light, dark, high-contrast, auto; default auto), `gestures=greedy|
 // cooperative|none` (cooperative puts the map in a scrolling page),
 // `reducedMotion=1|0`, `camera=x:y:width:height` (initial view in chart
@@ -477,6 +480,10 @@ try {
     options.chart = { bytes: chart.ccf };
   } else {
     options.chart = { url: chartUrl };
+  }
+  const image = params.get("image");
+  if (image !== null) {
+    options.assets = { image: () => image };
   }
   await new Promise((resolve) => setTimeout(resolve, Number(params.get("wait") ?? 0)));
   map = await createSeatMap(container, options);
