@@ -32,6 +32,7 @@ use serde::Serialize;
 use sqlx::PgPool;
 
 use crate::config::Config;
+use crate::limiter::Limiter;
 use crate::realtime::Realtime;
 use crate::seats::Seats;
 
@@ -50,6 +51,8 @@ pub struct AppState {
     pub seats: Seats,
     /// Realtime connections: their limits, counters and shutdown.
     pub realtime: Realtime,
+    /// The public endpoints' rate limits (08 §12).
+    pub limiter: Arc<Limiter>,
 }
 
 /// The whole HTTP surface.

@@ -7,6 +7,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use cavea_server::config::Config;
 use cavea_server::http::AppState;
+use cavea_server::limiter::Limiter;
 use cavea_server::realtime::{Realtime, Timing};
 use cavea_server::seats::{Seats, ServerClock};
 use cavea_server::store;
@@ -37,7 +38,9 @@ async fn main() -> anyhow::Result<()> {
         config.rt_max_per_ip.get(),
         Timing::default(),
     );
+    let limiter = Limiter::new(config.rate_limit_holds, config.rate_limit_reads);
     let state = AppState {
+        limiter: Arc::new(limiter),
         config: Arc::new(config),
         db,
         seats,

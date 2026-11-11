@@ -203,7 +203,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **SRV-015** Public endpoints with CORS and origin allow-list (08 §6.2, §11). Done for the event, hold-token, hold and release routes; `state`, `stream`, `rt`, `best-available`, `sections`, `rows` and `assets` come with realtime (RT), best-available, the list view and asset upload
 - [ ] **SRV-016** Session token verification and `require_session` (08 §11)
 - [x] **SRV-017** Idempotency-Key handling and mismatch detection (08 §6.1)
-- [ ] **SRV-018** Rate limiting per key and IP with trusted-proxy handling (08 §12)
+- [x] **SRV-018** Rate limiting per key and IP with trusted-proxy handling (08 §12)
 - [ ] **SRV-019** OpenAPI document generated and served (08 §6.1)
 - [ ] **SRV-020** Health, readiness and Prometheus metrics (08 §15)
 - [x] **SRV-021** Graceful shutdown: flush, close subscribers, release leases (08 §14)
@@ -219,8 +219,8 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **RT-004** Fan-out of shared pre-encoded frames (08 §4.5)
 - [x] **RT-005** Slow-consumer detection and RESYNC (08 §8.3)
 - [x] **RT-006** Ping, pong and idle timeouts (08 §8.3)
-- [ ] **RT-007** SSE transport (08 §8.4)
-- [ ] **RT-008** Polling with `after_seq` (08 §8.4)
+- [x] **RT-007** SSE transport (08 §8.4)
+- [x] **RT-008** Polling with `after_seq` (08 §8.4)
 - [x] **RT-009** HTTP snapshot with ETag and cache headers (08 §8.5)
 - [x] **RT-010** PRIVATE frames for the caller's holds (08 §8.1)
 

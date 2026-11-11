@@ -1,39 +1,44 @@
-//! The realtime routes (08 §6.2, §8): the public snapshot and the WebSocket.
-//! Both take the publishable key in the `key` query parameter ([`QueryKey`]).
-//! The hold token travels only inside the WebSocket's SUBSCRIBE, never in a
-//! URL.
+//! The realtime routes (08 §6.2, §8): the public snapshot and polling, the
+//! WebSocket and the SSE stream. Each takes the publishable key in the `key`
+//! query parameter ([`QueryKey`]). The hold token travels only inside the
+//! WebSocket's SUBSCRIBE, never in a URL, so SSE and polling carry no PRIVATE
+//! frames.
 //!
 //! A connection's task logs one record when it subscribes and one when it
 //! closes, in a `realtime` span that carries the upgrade request's id; nothing
 //! per frame at `info`.
 
 use std::convert::Infallible;
-use std::net::{IpAddr, SocketAddr};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use axum::Router;
-use axum::body::{Body, Bytes};
+use axum::body::{Body, Bytes, HttpBody};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{ConnectInfo, FromRequestParts, State};
+use axum::extract::{FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::map_response;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use base64::Engine as _;
 use cavea_engine::{EventId, Frame, TokenHash};
 use cavea_format::wire::{self, ClientFrame, CloseReason, WireError};
+use serde::Deserialize;
+use tokio::sync::mpsc;
 use tokio::time::{Instant, timeout};
 use tracing::{Instrument as _, Span, field, info, info_span};
 
-use super::auth::{Auth, QueryKey, has_hex_tail};
-use super::extract::{Path, invalid};
+use super::auth::{Auth, ClientIp, QueryKey, has_hex_tail};
+use super::extract::{Path, Query, invalid};
 use super::public::none_match;
-use super::seats::{Find, target, token_hash};
+use super::seats::{Find, Target, target, token_hash};
 use super::{ApiError, AppState, Code};
 use crate::config::CorsOrigins;
 use crate::realtime::{
     Ending, Feed, Gone, Inbound, Link, MAX_CLIENT_MESSAGE, MAX_MESSAGES_PER_PING, Out, Refused,
-    Slot, Stats, close, run,
+    Slot, Stats, Transport, close, run,
 };
 
 pub(super) fn routes() -> Router<AppState> {
@@ -41,6 +46,10 @@ pub(super) fn routes() -> Router<AppState> {
         .route(
             "/v1/public/events/{event}/state",
             get(state).layer(map_response(no_store_errors)),
+        )
+        .route(
+            "/v1/public/events/{event}/stream",
+            get(stream).layer(map_response(no_store_errors)),
         )
         .route("/v1/public/rt", get(websocket))
 }
@@ -65,39 +74,63 @@ fn unavailable() -> ApiError {
         .with_message("The event's state is unavailable; retry shortly.")
 }
 
-// ---- snapshot (08 §8.5) ----
+// ---- snapshot and polling (08 §8.4, §8.5) ----
 
-/// The public SNAPSHOT with `ETag: "<seq>"`, read from the engine's published
-/// state without a message to the actor, and cacheable for
-/// `CAVEA_SNAPSHOT_MAX_AGE`.
+#[derive(Debug, Deserialize)]
+struct StateQuery {
+    #[serde(default)]
+    after_seq: Option<u64>,
+}
+
+/// The public SNAPSHOT with `ETag: "<seq>"`, or with `after_seq`, one DELTA
+/// from it, the SNAPSHOT, or `204` when nothing was published after it. Read
+/// from the engine's published state, without a message to the actor. A frame
+/// may be cached for `CAVEA_SNAPSHOT_MAX_AGE`: it stays true, only less
+/// current. A `204` may not: it stops being true at the next publication.
 async fn state(
     QueryKey(auth): QueryKey,
     Path(event): Path<String>,
+    Query(query): Query<StateQuery>,
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Result<Response, ApiError> {
     let target = target(&state, &auth, Find::Key(&event)).await?;
-    let frame = state
-        .seats
-        .registry
-        .snapshot(target.id)
-        .await
-        .map_err(|_| unavailable())?;
-    let etag = HeaderValue::try_from(format!("\"{}\"", frame.seq())).map_err(ApiError::internal)?;
-    let (listed, any) = none_match(&headers, &etag);
-    let mut response = if listed || any {
-        StatusCode::NOT_MODIFIED.into_response()
-    } else {
-        frame_body(frame)
+    let registry = &state.seats.registry;
+    let mut response = match query.after_seq {
+        None => {
+            let frame = registry
+                .snapshot(target.id)
+                .await
+                .map_err(|_| unavailable())?;
+            let etag = HeaderValue::try_from(format!("\"{}\"", frame.seq()))
+                .map_err(ApiError::internal)?;
+            let (listed, any) = none_match(&headers, &etag);
+            let mut response = if listed || any {
+                StatusCode::NOT_MODIFIED.into_response()
+            } else {
+                frame_body(frame)
+            };
+            response.headers_mut().insert(header::ETAG, etag);
+            response
+        }
+        Some(after) => match registry.after(target.id, after).await {
+            Ok(Some(frame)) => frame_body(frame),
+            Ok(None) => {
+                let mut response = StatusCode::NO_CONTENT.into_response();
+                response
+                    .headers_mut()
+                    .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+                return Ok(response);
+            }
+            Err(_) => return Err(unavailable()),
+        },
     };
     let cache = format!(
         "public, max-age={}, stale-while-revalidate=5",
         state.config.snapshot_max_age
     );
     let cache = HeaderValue::try_from(cache).map_err(ApiError::internal)?;
-    let headers = response.headers_mut();
-    headers.insert(header::ETAG, etag);
-    headers.insert(header::CACHE_CONTROL, cache);
+    response.headers_mut().insert(header::CACHE_CONTROL, cache);
     Ok(response)
 }
 
@@ -110,19 +143,6 @@ fn frame_body(frame: Frame) -> Response {
 }
 
 // ---- connections ----
-
-/// The client's IP: the socket's peer. `CAVEA_TRUSTED_PROXIES` (SRV-018) will
-/// read a forwarding header here instead. `None` without a socket (tests).
-pub(super) struct ClientIp(Option<IpAddr>);
-
-impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
-    type Rejection = Infallible;
-
-    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Infallible> {
-        let peer = parts.extensions.get::<ConnectInfo<SocketAddr>>();
-        Ok(Self(peer.map(|ConnectInfo(addr)| addr.ip())))
-    }
-}
 
 /// A connection slot, or why there is none (12 §3 T11).
 fn admit(state: &AppState, ClientIp(ip): ClientIp) -> Result<Slot, ApiError> {
@@ -137,13 +157,13 @@ fn admit(state: &AppState, ClientIp(ip): ClientIp) -> Result<Slot, ApiError> {
 
 /// The span of one connection's task: not a child of the request, which ends
 /// when the response starts, but carrying its id.
-fn connection_span(transport: &'static str, auth: &Auth) -> Span {
+fn connection_span(transport: Transport, auth: &Auth) -> Span {
     let request_id = cavea_telemetry::request_id().map(|id| id.to_string());
     info_span!(
         parent: None,
         "realtime",
         request_id = request_id.as_deref().unwrap_or_default(),
-        transport,
+        transport = transport.as_str(),
         workspace = %auth.workspace(),
         event = field::Empty,
     )
@@ -197,7 +217,7 @@ async fn websocket(
             .with_detail("reason", "origin"));
     }
     let slot = admit(&state, ip)?;
-    let span = connection_span("websocket", &auth);
+    let span = connection_span(Transport::WebSocket, &auth);
     // The read buffer holds one client message; tungstenite's default
     // allocates 128 KiB per connection. Frames are flushed one at a time, so
     // nothing is gained by buffering writes.
@@ -218,6 +238,8 @@ async fn websocket(
 struct WsLink(WebSocket);
 
 impl Link for WsLink {
+    const HEARS_CLIENT: bool = true;
+
     async fn send(&mut self, out: Out) -> Result<(), Gone> {
         let bytes = match out {
             Out::Frame(frame) => Bytes::from_owner(frame),
@@ -400,7 +422,7 @@ async fn follow(
         .subscribe(target.id, s.last_seq, token)
         .await
         .map_err(|_| UNAVAILABLE)?;
-    let _counted = state.realtime.subscribed();
+    let _counted = state.realtime.subscribed(Transport::WebSocket);
     info!(
         last_seq = s.last_seq,
         private = token.is_some(),
@@ -412,4 +434,130 @@ async fn follow(
         token,
     };
     Ok(run(&state.realtime, link, &feed, sub, stats).await)
+}
+
+// ---- SSE (08 §8.4) ----
+
+#[derive(Debug, Deserialize)]
+struct StreamQuery {
+    #[serde(default)]
+    last_seq: Option<u64>,
+}
+
+/// `GET /v1/public/events/{event}/stream`: the frames of the WebSocket, each
+/// base64 in a `data:` line, SNAPSHOT and DELTA with `id: <seq>`. Resumes from
+/// `Last-Event-ID` (an `EventSource` reconnecting), else from `last_seq`. No
+/// hold token, so no PRIVATE frames. A client that stops reading blocks the
+/// task's write once the one-frame channel and the connection's write queue
+/// (hyper's: at most 16 chunks) are full; at the stall limit the task ends and
+/// its subscription with it. The socket is hyper's: it stays open, holding
+/// the body and with it the connection's slot, until the client reads again
+/// or the connection breaks.
+async fn stream(
+    QueryKey(auth): QueryKey,
+    Path(event): Path<String>,
+    Query(query): Query<StreamQuery>,
+    ip: ClientIp,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Response, ApiError> {
+    let last_seq = match headers.get("last-event-id") {
+        Some(id) => id
+            .to_str()
+            .ok()
+            .and_then(|id| id.trim().parse().ok())
+            .ok_or_else(|| invalid("last_event_id", "`Last-Event-ID` must be a seq."))?,
+        None => query.last_seq.unwrap_or(0),
+    };
+    let target = target(&state, &auth, Find::Key(&event)).await?;
+    let slot = admit(&state, ip)?;
+    let span = connection_span(Transport::Sse, &auth);
+    span.record("event", target.key.as_str());
+    // One frame waits here at most; the rest stay in the engine's channel.
+    let (tx, rx) = mpsc::channel(1);
+    tokio::spawn(sse_session(state, target, last_seq, SseLink(tx)).instrument(span));
+    let mut response = Body::new(SseBody { rx, _slot: slot }).into_response();
+    let headers = response.headers_mut();
+    let pairs = [
+        (header::CONTENT_TYPE, "text/event-stream"),
+        (header::CACHE_CONTROL, "no-cache"),
+    ];
+    for (name, value) in pairs {
+        headers.insert(name, HeaderValue::from_static(value));
+    }
+    // Proxies such as nginx otherwise buffer the stream.
+    headers.insert("x-accel-buffering", HeaderValue::from_static("no"));
+    Ok(response)
+}
+
+async fn sse_session(state: AppState, target: Target, last_seq: u64, mut link: SseLink) {
+    let started = Instant::now();
+    let mut stats = Stats::default();
+    let registry = &state.seats.registry;
+    let reason = if target.archived {
+        close(&mut link, CloseReason::ARCHIVED).await;
+        "archived"
+    } else if let Ok(sub) = registry.subscribe(target.id, last_seq, None).await {
+        let _counted = state.realtime.subscribed(Transport::Sse);
+        info!(last_seq, "realtime subscribed");
+        let feed = Feed {
+            registry,
+            event: target.id,
+            token: None,
+        };
+        run(&state.realtime, &mut link, &feed, sub, &mut stats)
+            .await
+            .as_str()
+    } else {
+        close(&mut link, CloseReason::SHUTTING_DOWN).await;
+        "unavailable"
+    };
+    closed(started, stats, reason);
+}
+
+struct SseLink(mpsc::Sender<Bytes>);
+
+impl Link for SseLink {
+    const HEARS_CLIENT: bool = false;
+
+    async fn send(&mut self, out: Out) -> Result<(), Gone> {
+        let base64 = base64::engine::general_purpose::STANDARD;
+        let event = match out {
+            Out::Frame(frame) => format!(
+                "id: {}\ndata: {}\n\n",
+                frame.seq(),
+                base64.encode(frame.bytes())
+            ),
+            Out::Bytes(bytes) => format!("data: {}\n\n", base64.encode(bytes)),
+            Out::Ping(_) => ":\n\n".to_owned(),
+        };
+        self.0.send(Bytes::from(event)).await.map_err(|_| Gone)
+    }
+
+    /// The client sends nothing; this resolves when it disconnects.
+    async fn recv(&mut self) -> Inbound {
+        self.0.closed().await;
+        Inbound::Gone
+    }
+}
+
+/// The SSE response body: what the connection's task writes, and the
+/// connection's slot, given back when hyper drops the body with the response.
+struct SseBody {
+    rx: mpsc::Receiver<Bytes>,
+    _slot: Slot,
+}
+
+impl HttpBody for SseBody {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<Bytes>, Infallible>>> {
+        self.rx
+            .poll_recv(cx)
+            .map(|event| event.map(|e| Ok(http_body::Frame::data(e))))
+    }
 }

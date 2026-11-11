@@ -1,7 +1,8 @@
-//! The realtime hub (08 §8): the node's long-lived connections, their limits
-//! and counters, their shutdown, and [`run`], the loop that feeds one engine
-//! subscription to one connection through its transport's [`Link`]. The HTTP
-//! side (the upgrade, SUBSCRIBE, the snapshot) is in `http::realtime`.
+//! The realtime hub (08 §8): the node's WebSocket and SSE connections, their
+//! limits and counters, their shutdown, and [`run`], the loop that feeds one
+//! engine subscription to one connection through its transport's [`Link`].
+//! The HTTP side (the upgrade, SUBSCRIBE, the SSE body, the snapshot and
+//! polling) is in `http::realtime`.
 //!
 //! One connection is one task. It waits on four things at once: the shutdown
 //! signal, the client, the subscription and one timer, which is re-armed for
@@ -35,7 +36,7 @@ use tokio::time::{Instant, sleep_until, timeout};
 /// The protocol's timers (08 §8.3). Fixed in production; tests shorten them.
 #[derive(Debug, Clone, Copy)]
 pub struct Timing {
-    /// PING every this long.
+    /// PING (an SSE comment) every this long.
     pub ping: Duration,
     /// A WebSocket whose client has sent nothing for this long is closed.
     pub idle: Duration,
@@ -66,6 +67,23 @@ pub const MAX_CLIENT_MESSAGE: usize = 2048;
 /// How long a CLOSE frame may take to write.
 const CLOSE_WRITE: Duration = Duration::from_secs(1);
 
+/// A long-lived transport. Polling has no connection and is not counted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transport {
+    WebSocket,
+    Sse,
+}
+
+impl Transport {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::WebSocket => "websocket",
+            Self::Sse => "sse",
+        }
+    }
+}
+
 /// The node's realtime connections. Cheap to clone; one per server, in
 /// `AppState`.
 #[derive(Clone)]
@@ -82,8 +100,9 @@ struct Inner {
     /// Open connections, subscribed or not.
     open: watch::Sender<usize>,
     per_ip: Mutex<HashMap<IpAddr, u32>>,
-    /// Subscribed connections, for `cavea_rt_subscribers{transport}`.
-    subscribers: AtomicUsize,
+    /// Subscribed connections per [`Transport`], for
+    /// `cavea_rt_subscribers{transport}`.
+    subscribers: [AtomicUsize; 2],
     /// RESYNCs sent, for `cavea_rt_resyncs_total`.
     resyncs: AtomicU64,
 }
@@ -117,7 +136,7 @@ impl Realtime {
                 stop: watch::Sender::new(false),
                 open: watch::Sender::new(0),
                 per_ip: Mutex::default(),
-                subscribers: AtomicUsize::new(0),
+                subscribers: [AtomicUsize::new(0), AtomicUsize::new(0)],
                 resyncs: AtomicU64::new(0),
             }),
         }
@@ -183,10 +202,10 @@ impl Realtime {
         *self.inner.open.borrow()
     }
 
-    /// Subscribed connections.
+    /// Subscribed connections on `transport`.
     #[must_use]
-    pub fn subscribers(&self) -> usize {
-        self.inner.subscribers.load(Ordering::Relaxed)
+    pub fn subscribers(&self, transport: Transport) -> usize {
+        self.inner.subscribers[transport as usize].load(Ordering::Relaxed)
     }
 
     /// RESYNCs sent since start-up.
@@ -195,11 +214,11 @@ impl Realtime {
         self.inner.resyncs.load(Ordering::Relaxed)
     }
 
-    /// Count a subscriber while the guard lives.
+    /// Count a subscriber on `transport` while the guard lives.
     #[must_use]
-    pub fn subscribed(&self) -> Subscribed {
-        self.inner.subscribers.fetch_add(1, Ordering::Relaxed);
-        Subscribed(self.clone())
+    pub fn subscribed(&self, transport: Transport) -> Subscribed {
+        self.inner.subscribers[transport as usize].fetch_add(1, Ordering::Relaxed);
+        Subscribed(self.clone(), transport)
     }
 
     /// Resolves once shutdown has begun.
@@ -238,11 +257,11 @@ impl Drop for Slot {
 
 /// One subscriber, counted while it lives.
 #[derive(Debug)]
-pub struct Subscribed(Realtime);
+pub struct Subscribed(Realtime, Transport);
 
 impl Drop for Subscribed {
     fn drop(&mut self) {
-        self.0.inner.subscribers.fetch_sub(1, Ordering::Relaxed);
+        self.0.inner.subscribers[self.1 as usize].fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -253,7 +272,7 @@ pub enum Out {
     Frame(Frame),
     /// A frame built for this connection: HELLO, RESYNC, CLOSE.
     Bytes(Vec<u8>),
-    /// PING with this nonce.
+    /// PING with this nonce (a comment on SSE).
     Ping(u64),
 }
 
@@ -275,6 +294,10 @@ pub struct Gone;
 
 /// One transport's side of a connection.
 pub trait Link: Send {
+    /// Whether the client can send anything. Only then is it closed for
+    /// silence.
+    const HEARS_CLIENT: bool;
+
     /// Write one frame and flush it.
     fn send(&mut self, out: Out) -> impl Future<Output = Result<(), Gone>> + Send;
 
@@ -408,7 +431,13 @@ where
     }
     let mut heard = Instant::now();
     let mut next_ping = heard + timing.ping;
-    let deadline = |heard: Instant, next_ping: Instant| next_ping.min(heard + timing.idle);
+    let deadline = |heard: Instant, next_ping: Instant| {
+        if L::HEARS_CLIENT {
+            next_ping.min(heard + timing.idle)
+        } else {
+            next_ping
+        }
+    };
     let (mut nonce, mut messages) = (0u64, 0u32);
     let timer = sleep_until(deadline(heard, next_ping));
     tokio::pin!(timer);
@@ -435,7 +464,7 @@ where
             // back PING or the silence deadline.
             () = &mut timer => {
                 let now = Instant::now();
-                if now >= heard + timing.idle {
+                if L::HEARS_CLIENT && now >= heard + timing.idle {
                     return Err(Ending::Idle);
                 }
                 if now >= next_ping {
@@ -603,6 +632,8 @@ pub(crate) mod tests {
     }
 
     impl Link for Mock {
+        const HEARS_CLIENT: bool = true;
+
         async fn send(&mut self, out: Out) -> Result<(), Gone> {
             if !self.delay.is_zero() {
                 tokio::time::sleep(self.delay).await;

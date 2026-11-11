@@ -752,6 +752,21 @@ const ROUTES: &[(Method, &str, Needs, u16, Option<&str>)] = &[
         200,
         None,
     ),
+    (
+        Method::GET,
+        "/v1/public/events/{event}/state?after_seq=1",
+        Needs::QueryKey,
+        200,
+        None,
+    ),
+    // Read up to the response head: the body is a stream.
+    (
+        Method::GET,
+        "/v1/public/events/{event}/stream",
+        Needs::QueryKey,
+        200,
+        None,
+    ),
     // Without an upgrade; a WebSocket naming another workspace's event is in
     // `realtime::websocket_follows_the_event`.
     (Method::GET, "/v1/public/rt", Needs::QueryKey, 400, None),
@@ -872,5 +887,6 @@ async fn tenant_isolation() {
 }
 
 mod charts;
+mod limits;
 mod realtime;
 mod seats;

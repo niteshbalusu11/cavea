@@ -5,6 +5,8 @@
 pub mod charts;
 pub mod config;
 pub mod http;
+pub mod limiter;
+pub mod net;
 pub mod realtime;
 pub mod seats;
 pub mod store;
@@ -26,7 +28,9 @@ pub const DRAIN: Duration = Duration::from_secs(10);
 /// [`SHUTDOWN_DEADLINE`] (08 §14): every realtime connection is sent CLOSE 3
 /// and closed, so that none holds the drain open; the listener closes and
 /// requests in flight get up to [`DRAIN`] to finish, their commands included;
-/// then every actor commits what it accepted and releases its lease.
+/// then every actor commits what it accepted and releases its lease, and only
+/// then does the server wait, until the deadline, for connections that have
+/// not closed yet (a stalled SSE response, whose client does not read).
 pub async fn serve(
     listener: TcpListener,
     state: http::AppState,
@@ -60,12 +64,14 @@ pub async fn serve(
             if tokio::time::timeout(DRAIN, &mut server).await.is_err() {
                 tracing::warn!("requests still in flight after the drain period; closing them");
             }
-            if tokio::time::timeout_at(deadline, realtime.closed()).await.is_err() {
-                tracing::warn!(open = realtime.connections(), "realtime connections still open");
-            }
             preload.abort();
             if tokio::time::timeout_at(deadline, seats.shutdown()).await.is_err() {
                 tracing::error!("actors did not stop within the shutdown deadline");
+            }
+            // After the actors: a stalled SSE response keeps its slot until
+            // its client reads, which must not take the actors' time.
+            if tokio::time::timeout_at(deadline, realtime.closed()).await.is_err() {
+                tracing::warn!(open = realtime.connections(), "realtime connections still open");
             }
         }
     }
