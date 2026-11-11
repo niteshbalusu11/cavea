@@ -7,10 +7,18 @@ import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { createSignal, For, Show } from "solid-js";
 import { formatNumber, msg } from "../i18n/messages.ts";
 import { Button, IconButton } from "../ui/controls.tsx";
-import { CheckField, SelectField, TextField } from "../ui/fields.tsx";
+import { CheckField, ColorField, SelectField, TextField } from "../ui/fields.tsx";
 import { Icon } from "../ui/Icon.tsx";
-import { afterMenu, Confirm, menuContent, menuItem, menuSeparator } from "../ui/overlays.tsx";
+import {
+  afterMenu,
+  Confirm,
+  menuContent,
+  menuItem,
+  menuKeys,
+  menuSeparator,
+} from "../ui/overlays.tsx";
 import type { Editor } from "./editor.ts";
+import { display, isMac, LAYER_MOVE } from "./shortcuts.ts";
 
 /** Colours offered to a new category, in turn. */
 const PALETTE = [
@@ -23,7 +31,6 @@ const PALETTE = [
   "#4D7C0F",
   "#C026D3",
 ];
-const HEX = /^#[0-9a-fA-F]{6}$/;
 const ratio = (n: number) => formatNumber(Math.round(n * 10) / 10);
 
 export function CategoriesPanel(props: { editor: Editor }) {
@@ -60,6 +67,15 @@ export function CategoriesPanel(props: { editor: Editor }) {
       setEditing(key);
     }
   };
+  /** Moves a category by `by` places (Alt+↑/↓, or a drop), keeping focus on it. */
+  const move = (key: string, to: number) => {
+    const at = list().findIndex((c) => c.key === key);
+    const index = Math.max(0, Math.min(list().length - 1, to));
+    if (at < 0 || at === index) return;
+    editor.run((s) => s.moveCategory(key, index));
+  };
+  const [drop, setDrop] = createSignal<{ index: number; after: boolean } | null>(null);
+  let dragged: string | null = null;
   const openRemove = (cat: CategoryView, merge: boolean) => {
     setTarget(list().find((c) => c.key !== cat.key)?.key ?? null);
     setRemoving({ cat, merge });
@@ -79,13 +95,67 @@ export function CategoriesPanel(props: { editor: Editor }) {
       <ul class="min-h-0 flex-1 overflow-y-auto" aria-label={msg("categories.label")}>
         <For each={list()}>
           {(cat, i) => (
-            <li class="border-b border-line">
+            <li
+              class="relative border-b border-line"
+              onDragOver={(e) => {
+                if (dragged === null) return;
+                e.preventDefault();
+                const r = e.currentTarget.getBoundingClientRect();
+                setDrop({ index: i(), after: e.clientY > r.top + 18 });
+              }}
+              onDragLeave={() => setDrop(null)}
+              onDrop={(e) => {
+                e.preventDefault();
+                const d = drop();
+                const key = dragged;
+                dragged = null;
+                setDrop(null);
+                if (key === null || d === null) return;
+                const from = list().findIndex((c) => c.key === key);
+                // The index counted without the moved category (07 §7).
+                const to = d.index + (d.after ? 1 : 0);
+                move(key, to > from ? to - 1 : to);
+              }}
+            >
+              <Show when={drop()?.index === i()}>
+                <div
+                  class="pointer-events-none absolute inset-x-1 z-10 h-0.5 rounded-full bg-accent-fill"
+                  style={{ [drop()?.after === true ? "bottom" : "top"]: "-1px" }}
+                />
+              </Show>
               <div
-                class="group flex h-9 items-center gap-2 pr-1 pl-2"
+                class="group flex h-9 items-center gap-1.5 pr-1 pl-0.5"
                 classList={{ "bg-accent-soft": cat.active }}
               >
+                <span
+                  draggable="true"
+                  title={msg("categories.drag")}
+                  class="flex h-6 w-4 cursor-grab items-center justify-center text-faint opacity-0 group-hover:opacity-100"
+                  onDragStart={(e) => {
+                    dragged = cat.key;
+                    if (e.dataTransfer) {
+                      e.dataTransfer.effectAllowed = "move";
+                      e.dataTransfer.setData("text/plain", cat.key);
+                    }
+                  }}
+                  onDragEnd={() => {
+                    dragged = null;
+                    setDrop(null);
+                  }}
+                >
+                  <Icon name="grip" class="size-3.5" />
+                </span>
                 <button
                   type="button"
+                  aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+                  onKeyDown={(e) => {
+                    if (!e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+                    e.preventDefault();
+                    const el = e.currentTarget;
+                    move(cat.key, i() + (e.key === "ArrowUp" ? -1 : 1));
+                    // The row re-renders in its new place: keep focus on it.
+                    requestAnimationFrame(() => el.isConnected && el.focus());
+                  }}
                   aria-pressed={cat.active}
                   aria-label={`${cat.label}: ${cat.active ? msg("categories.active") : msg("categories.makeActive")}`}
                   class="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1 text-left"
@@ -119,7 +189,7 @@ export function CategoriesPanel(props: { editor: Editor }) {
                 <DropdownMenu gutter={4} placement="bottom-end">
                   <DropdownMenu.Trigger
                     class="inline-flex size-6 items-center justify-center rounded-md text-muted hover:bg-hover hover:text-fg"
-                    aria-label={msg("categories.edit", { label: cat.label })}
+                    aria-label={msg("categories.more", { label: cat.label })}
                   >
                     <Icon name="more" />
                   </DropdownMenu.Trigger>
@@ -128,16 +198,18 @@ export function CategoriesPanel(props: { editor: Editor }) {
                       <DropdownMenu.Item
                         class={menuItem}
                         disabled={i() === 0}
-                        onSelect={() => editor.run((s) => s.moveCategory(cat.key, i() - 1))}
+                        onSelect={() => move(cat.key, i() - 1)}
                       >
                         {msg("categories.moveUp")}
+                        <span class={menuKeys}>{display(LAYER_MOVE.up, isMac())}</span>
                       </DropdownMenu.Item>
                       <DropdownMenu.Item
                         class={menuItem}
                         disabled={i() === list().length - 1}
-                        onSelect={() => editor.run((s) => s.moveCategory(cat.key, i() + 1))}
+                        onSelect={() => move(cat.key, i() + 1)}
                       >
                         {msg("categories.moveDown")}
+                        <span class={menuKeys}>{display(LAYER_MOVE.down, isMac())}</span>
                       </DropdownMenu.Item>
                       <DropdownMenu.Separator class={menuSeparator} />
                       <DropdownMenu.Item
@@ -185,9 +257,14 @@ export function CategoriesPanel(props: { editor: Editor }) {
               description={
                 r().merge
                   ? msg("categories.mergeBody", { label: r().cat.label, n: r().cat.objects })
-                  : inUse()
+                  : r().cat.objects > 0
                     ? msg("categories.deleteBody", { label: r().cat.label, n: r().cat.objects })
-                    : msg("categories.deleteUnused", { label: r().cat.label })
+                    : inUse()
+                      ? msg("categories.deleteRefs", {
+                          label: r().cat.label,
+                          n: r().cat.references,
+                        })
+                      : msg("categories.deleteUnused", { label: r().cat.label })
               }
               confirm={r().merge ? msg("action.merge") : msg("action.delete")}
               variant={r().merge ? "primary" : "danger"}
@@ -228,21 +305,12 @@ function Edit(props: {
   others: CategoryView[];
   update: (c: Partial<Category>) => string | null;
 }) {
-  const [colour, setColour] = createSignal(props.cat.color);
-  const valid = () => HEX.test(colour());
-  const contrast = () => (valid() ? (props.editor.run((s) => s.contrast(colour())) ?? null) : null);
+  /** The colour being picked or typed, before it is committed. */
+  const [colour, setColour] = createSignal<string | null>(null);
+  const shown = () => colour() ?? props.cat.color;
+  const contrast = () => props.editor.run((s) => s.contrast(shown())) ?? null;
   const similar = () =>
-    valid()
-      ? props.others.filter(
-          (o) => props.editor.run((s) => s.tooSimilar(colour(), o.color)) === true,
-        )
-      : [];
-  const commitColour = (value: string) => {
-    if (!HEX.test(value)) return msg("categories.badHex");
-    return value.toUpperCase() === props.cat.color.toUpperCase()
-      ? null
-      : props.update({ color: value.toUpperCase() });
-  };
+    props.others.filter((o) => props.editor.run((s) => s.tooSimilar(shown(), o.color)) === true);
   return (
     <div class="bg-app pt-1 pb-2">
       <TextField
@@ -255,45 +323,27 @@ function Edit(props: {
         value={props.cat.key}
         onCommit={(key) => props.update({ key })}
       />
-      <div class="grid grid-cols-[88px_minmax(0,1fr)] items-center gap-x-2 px-3 py-0.5">
-        <span class="text-sm text-muted">{msg("categories.colour")}</span>
-        <div class="flex items-center gap-1.5">
-          <input
-            type="color"
-            aria-label={msg("categories.colour")}
-            class="h-6 w-8 shrink-0 cursor-pointer rounded-sm border border-control-line bg-control p-0.5"
-            value={valid() ? colour().toLowerCase() : "#000000"}
-            onInput={(e) => setColour(e.currentTarget.value.toUpperCase())}
-            onChange={(e) => commitColour(e.currentTarget.value)}
-          />
-          <input
-            aria-label={msg("categories.hex")}
-            class="h-6 w-full min-w-0 rounded-sm border border-control-line bg-control px-1.5 font-mono text-sm text-fg aria-invalid:border-danger"
-            value={colour()}
-            aria-invalid={!valid()}
-            onInput={(e) => setColour(e.currentTarget.value.trim())}
-            onKeyDown={(e) => e.key === "Enter" && commitColour(colour())}
-            onBlur={() => {
-              if (commitColour(colour()) !== null) setColour(props.cat.color);
-            }}
-          />
-        </div>
-      </div>
-      <div class="space-y-0.5 py-1 pr-3 pl-[108px] text-xs" aria-live="polite">
-        <Show when={!valid()}>
-          <p class="text-danger">{msg("categories.badHex")}</p>
-        </Show>
+      <ColorField
+        label={msg("categories.colour")}
+        value={props.cat.color}
+        onInput={setColour}
+        onCommit={(color) => {
+          setColour(null);
+          return color === null ? null : props.update({ color });
+        }}
+      />
+      <div class="space-y-0.5 py-0.5 pr-3 pl-[108px] text-xs empty:hidden" aria-live="polite">
         <Show when={contrast()?.weak === true && contrast()}>
           {(c) => (
             <p class="flex gap-1 text-warning">
-              <Icon name="warning" class="mt-px size-3.5" />
+              <Icon name="warning" class="mt-px size-3.5 shrink-0" />
               {msg("categories.weak", { light: ratio(c().light), dark: ratio(c().dark) })}
             </p>
           )}
         </Show>
         <Show when={similar().length > 0}>
           <p class="flex gap-1 text-warning">
-            <Icon name="warning" class="mt-px size-3.5" />
+            <Icon name="warning" class="mt-px size-3.5 shrink-0" />
             {msg("categories.similar", {
               others: similar()
                 .map((o) => o.label)

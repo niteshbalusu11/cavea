@@ -1,6 +1,14 @@
 // One open chart: the session, the stores the frame loop fills, the
 // shell's camera, and the actions the menus, panels and shortcuts share.
-import type { Input, Key, Modifiers, Rect, Session, ToolId } from "@cavea/designer-core";
+import type {
+  DesignerFailure,
+  Input,
+  Key,
+  Modifiers,
+  Rect,
+  Session,
+  ToolId,
+} from "@cavea/designer-core";
 import { createSignal, type Accessor } from "solid-js";
 import { createStore, reconcile, type SetStoreFunction } from "solid-js/store";
 import { msg } from "../i18n/messages.ts";
@@ -18,8 +26,8 @@ export interface Camera {
 export const ZOOM = { min: 0.002, max: 64, step: 1.25 } as const;
 const clampZoom = (z: number) => Math.min(ZOOM.max, Math.max(ZOOM.min, z));
 
-/** What happened to a call: its value, or the refusal in words. */
-export type Outcome<T> = { ok: T } | { error: string };
+/** What happened to a call: its value, or the refusal in words and as data. */
+export type Outcome<T> = { ok: T } | { error: string; failure: DesignerFailure };
 
 export interface Editor {
   session: Session;
@@ -84,7 +92,7 @@ async function readClipboard(): Promise<string | null> {
 export function createEditor(session: Session, onPanic: (message: string) => void): Editor {
   // The first frame is read before the stores exist, so that they start
   // full; every later one reconciles into them.
-  const first: Partial<Views> = {};
+  const first: Partial<Views> = { numbering: null };
   let set: SetStoreFunction<Views> | null = null;
   const panic = (error: unknown): boolean => {
     const f = failureOf(error);
@@ -123,10 +131,10 @@ export function createEditor(session: Session, onPanic: (message: string) => voi
     try {
       return { ok: call(session) };
     } catch (error) {
-      if (panic(error)) return { error: msg("panic.title") };
       const f = failureOf(error);
+      if (f !== null && panic(error)) return { error: msg("panic.title"), failure: f };
       if (f === null || f.kind === "panic") throw error;
-      return { error: failureMessage(f) };
+      return { error: failureMessage(f), failure: f };
     }
   };
   const run = <T>(call: (s: Session) => T): T | undefined => {

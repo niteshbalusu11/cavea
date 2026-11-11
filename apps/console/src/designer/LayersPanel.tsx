@@ -2,13 +2,16 @@
 // fed page by page from `layers(start, count)` through the frame loop. A
 // tree for the keyboard (arrows, Home, End, Enter or Space to select, Alt
 // with an arrow to move), drag and drop to reorder and reparent, and a
-// context menu with the arrange actions.
+// context menu with the arrange actions. A selection made elsewhere (select
+// all, a finding, the insert form, later the canvas) is revealed: its
+// section expanded and its first row scrolled into view.
 import type { Drop, LayerRow, NodeKind, Order } from "@cavea/designer-core";
 import { ContextMenu } from "@kobalte/core/context-menu";
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import { msg } from "../i18n/messages.ts";
 import { Icon, type IconName } from "../ui/Icon.tsx";
-import { menuContent, menuItem, menuKeys, menuSeparator } from "../ui/overlays.tsx";
+import { menuContent, menuItem, menuKeys, menuSeparator, notify } from "../ui/overlays.tsx";
+import { groupSelection, groupReason, selectedIds } from "./commands.ts";
 import { scrollToShow, windowFor } from "../ui/window.ts";
 import type { Editor } from "./editor.ts";
 import { display, isMac, keyOf, LAYER_MOVE } from "./shortcuts.ts";
@@ -87,6 +90,27 @@ export function LayersPanel(props: { editor: Editor }) {
     show(i);
   };
   createEffect(on(editor.revealed, (r) => r !== null && moveCursor(r.row), { defer: true }));
+  // A selection made elsewhere (or while another tab was shown): once the
+  // frame has read both views, reveal its first item unless a selected row
+  // is already shown.
+  createEffect(
+    on(
+      () => {
+        const sel = editor.views.selection;
+        return `${JSON.stringify(sel.level)} ${sel.ids.join()}`;
+      },
+      () =>
+        queueMicrotask(() => {
+          const sel = editor.views.selection;
+          const level = sel.level;
+          // Rows and seats belong to their block's row, which they reveal.
+          const first = level.kind === "rows" || level.kind === "seats" ? level.id : sel.ids[0];
+          if (first === undefined) return;
+          if (page().rows.some((r) => r.selected || r.id === first)) return;
+          editor.reveal(first);
+        }),
+    ),
+  );
   createEffect(
     on(
       () => page().total,
@@ -95,9 +119,23 @@ export function LayersPanel(props: { editor: Editor }) {
     ),
   );
 
-  /** What a drag or a move takes: the selected rows shown, if `row` is one. */
-  const subjects = (row: LayerRow): LayerRow[] =>
-    row.selected ? page().rows.filter((r) => r.selected) : [row];
+  /** The selected rows of the tree: those shown, or the whole tree read
+   * once when some are outside the window. */
+  const selectedRows = (): LayerRow[] => {
+    const shown = page().rows.filter((r) => r.selected);
+    if (shown.length >= editor.views.selection.count) return shown;
+    return (editor.run((s) => s.layers(0, page().total))?.rows ?? []).filter((r) => r.selected);
+  };
+  /** What a drag or a move takes: the whole selection, if `row` is in it. */
+  const subjects = (row: LayerRow): number[] => {
+    if (!row.selected) return [row.id];
+    const ids = selectedIds(editor);
+    if (ids === null) {
+      notify(msg("reason.tooMany", { n: editor.views.selection.ids.length }), "error");
+      return [];
+    }
+    return ids;
+  };
   const move = (ids: number[], to: Drop) => {
     if (editor.run((s) => s.moveLayers(ids, to)) !== undefined) editor.reveal(ids[0]);
   };
@@ -110,12 +148,15 @@ export function LayersPanel(props: { editor: Editor }) {
   /** One row up or down, past the moving rows, into and out of sections on
    * the way (Alt+arrow). */
   const step = (row: LayerRow, dir: -1 | 1) => {
-    const rows = subjects(row);
-    const ids = rows.map((r) => r.id);
+    const ids = subjects(row);
+    if (ids.length === 0) return;
+    const rows = row.selected ? selectedRows() : [row];
     const moving = new Set(ids);
     // Sections are top-level only (07 §5.5): with one in the selection, the
     // move goes between top-level rows, never into a section.
-    const top = rows.some((r) => r.kind === "section");
+    const top =
+      rows.some((r) => r.kind === "section") ||
+      (row.selected && editor.views.selection.kinds.some((k) => k.kind === "section"));
     /** A row the move passes over: a moving one, or a child for a top move. */
     const passed = (r: LayerRow) => moving.has(r.id) || (top && r.depth > 0);
     // The end of the moving rows in the direction of the move.
@@ -263,7 +304,7 @@ export function LayersPanel(props: { editor: Editor }) {
                     setMenuRow(row);
                   }}
                   onDragStart={(e) => {
-                    dragged = subjects(row).map((r) => r.id);
+                    dragged = subjects(row);
                     e.dataTransfer?.setData("text/plain", dragged.join(","));
                     if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
                   }}
@@ -403,14 +444,8 @@ export function LayersPanel(props: { editor: Editor }) {
           </ContextMenu.Item>
           <ContextMenu.Item
             class={menuItem}
-            disabled={sel().level.kind !== "top" || menuRow()?.kind === "section"}
-            onSelect={() => {
-              const ids = page()
-                .rows.filter((r) => r.selected && r.depth === 0)
-                .map((r) => r.id);
-              const id = editor.run((s) => s.group(ids, null));
-              if (id !== undefined) editor.reveal(id);
-            }}
+            disabled={groupReason(editor) !== null}
+            onSelect={() => groupSelection(editor)}
           >
             {msg("layers.group")}
           </ContextMenu.Item>

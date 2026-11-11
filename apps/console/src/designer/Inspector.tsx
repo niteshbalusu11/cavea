@@ -2,10 +2,19 @@
 // kind, "Mixed" where the selection differs, every change one `setField`
 // (07 §2.3); number fields scrub. The chart's settings when nothing is
 // selected.
-import type { Curve, Field, Num, Shared } from "@cavea/designer-core";
+import type { Curve, Field, NodeKind, Num, Shared } from "@cavea/designer-core";
 import { Show, type JSX } from "solid-js";
 import { formatNumber, msg, msgOf, type MessageId } from "../i18n/messages.ts";
-import { CheckField, NumberField, SelectField, TextField, type Option } from "../ui/fields.tsx";
+import { Button } from "../ui/controls.tsx";
+import {
+  CheckField,
+  ColorField,
+  NumberField,
+  SelectField,
+  TextField,
+  type Option,
+} from "../ui/fields.tsx";
+import { groupSelection, groupReason, selectedSection } from "./commands.ts";
 import type { Editor } from "./editor.ts";
 
 const same = <T,>(s: Shared<T>): T | null => (s === "mixed" ? null : s.same);
@@ -24,7 +33,23 @@ function Group(props: { title: string; children: JSX.Element }) {
   );
 }
 
-export function Inspector(props: { editor: Editor }) {
+/** "1 row block", "2 row blocks". */
+export const countOf = (k: { kind: NodeKind; count: number }): string =>
+  k.count === 1
+    ? msg("inspector.one", { kind: msg(`kindOne.${k.kind}`) })
+    : msg("inspector.many", { n: k.count, kinds: msg(`kinds.${k.kind}`) });
+
+/** "Row block", "2 row blocks", "3 objects: 2 row blocks, 1 shape". */
+export function selectionName(kinds: { kind: NodeKind; count: number }[], count: number): string {
+  const each = countOf;
+  const [only] = kinds;
+  if (kinds.length === 1 && only !== undefined) {
+    return only.count === 1 ? msg(`kind.${only.kind}`) : each(only);
+  }
+  return msg("inspector.objects", { n: count, list: kinds.map(each).join(", ") });
+}
+
+export function Inspector(props: { editor: Editor; onNumbering: () => void }) {
   const editor = props.editor;
   const v = () => editor.views.inspector;
   const set = (field: Field): string | null => {
@@ -125,14 +150,24 @@ export function Inspector(props: { editor: Editor }) {
     if (v().chart !== null) return msg("inspector.settings");
     if (sel.level.kind === "rows") return msg("inspector.level.rows");
     if (sel.level.kind === "seats") return msg("inspector.level.seats");
-    const [only] = sel.kinds;
-    if (sel.kinds.length === 1 && only !== undefined) {
-      return only.count === 1
-        ? msg(`kind.${only.kind}`)
-        : msg("inspector.many", { n: only.count, kinds: msg(`kinds.${only.kind}`) });
-    }
-    return msg("inspector.selected", { n: sel.count });
+    return selectionName(sel.kinds, sel.count);
   };
+  const colour = (field: Name, value: Shared<string | null>, nullable: boolean) => (
+    <ColorField
+      label={msg(`field.${field}` as MessageId)}
+      value={same(value)}
+      mixed={value === "mixed"}
+      nullable={nullable}
+      onCommit={(picked) => set({ field, value: picked } as Field)}
+    />
+  );
+  const numbering = () => (
+    <div class="px-3 pt-1.5 pl-[108px]">
+      <Button class="h-6 px-2 text-sm" onClick={() => props.onNumbering()}>
+        {msg("inspector.numbering")}
+      </Button>
+    </div>
+  );
   const categories = (): Option[] => [
     { value: "", label: msg("inspector.inherit") },
     ...editor.views.categories.categories.map((c) => ({ value: c.key, label: c.label })),
@@ -197,8 +232,10 @@ export function Inspector(props: { editor: Editor }) {
                 label={msg("field.floor")}
                 options={floors()}
                 value={(() => {
+                  // A node without a floor field is on the first floor.
                   const f = c().floor;
-                  return f === null ? null : (same(f)?.toString() ?? null);
+                  if (f === null || f === "mixed") return null;
+                  return String(f.same ?? editor.views.floors.floors[0]?.id ?? "");
                 })()}
                 onChange={(id) => void set({ field: "floor", value: Number(id) })}
               />
@@ -226,6 +263,17 @@ export function Inspector(props: { editor: Editor }) {
               checked={same(c().hidden)}
               onChange={(on) => void set({ field: "hidden", value: on })}
             />
+            <Show when={editor.views.selection.count > 1 && groupReason(editor) === null}>
+              <div class="px-3 pt-1.5 pl-[108px]">
+                <Button
+                  class="h-6 px-2 text-sm"
+                  icon="section"
+                  onClick={() => groupSelection(editor)}
+                >
+                  {msg("layers.group")}
+                </Button>
+              </div>
+            </Show>
           </Group>
         )}
       </Show>
@@ -241,7 +289,7 @@ export function Inspector(props: { editor: Editor }) {
             {choice("align", "align", ["left", "center", "right"], same(b().align))}
             {num("stagger", b().stagger, "field.stagger", 0.5)}
             {num("skew", b().skew)}
-            <p class="px-3 pt-1 text-sm text-faint">{msg("inspector.numberingPending")}</p>
+            {numbering()}
           </Group>
         )}
       </Show>
@@ -262,6 +310,7 @@ export function Inspector(props: { editor: Editor }) {
                 })()}
               </span>
             </div>
+            {numbering()}
           </Group>
         )}
       </Show>
@@ -279,6 +328,27 @@ export function Inspector(props: { editor: Editor }) {
                   : msg("inspector.outlineAuto")}
               </span>
             </div>
+            <Show when={selectedSection(editor)}>
+              {(id) => (
+                <div class="flex flex-wrap gap-1.5 px-3 pt-1.5 pl-[108px]">
+                  <Show when={same(sec().autoOutline) === true}>
+                    <Button
+                      class="h-6 px-2 text-sm"
+                      onClick={() => editor.run((s) => s.convertOutline(id()))}
+                    >
+                      {msg("inspector.convertOutline")}
+                    </Button>
+                  </Show>
+                  <Button
+                    class="h-6 px-2 text-sm"
+                    onClick={() => editor.run((s) => s.dissolve(id()))}
+                  >
+                    {msg("inspector.dissolve")}
+                  </Button>
+                </div>
+              )}
+            </Show>
+            {numbering()}
           </Group>
         )}
       </Show>
@@ -290,8 +360,8 @@ export function Inspector(props: { editor: Editor }) {
             <Show when={sh().width}>{(w) => num("width", w())}</Show>
             <Show when={sh().height}>{(h) => num("height", h())}</Show>
             <Show when={sh().cornerRadius}>{(r) => num("cornerRadius", r())}</Show>
-            <Show when={sh().fill}>{(f) => text("fill", f(), true)}</Show>
-            {text("stroke", sh().stroke, true)}
+            <Show when={sh().fill}>{(f) => colour("fill", f(), true)}</Show>
+            {colour("stroke", sh().stroke, true)}
             {num("strokeWidth", sh().strokeWidth)}
             {num("opacity", sh().opacity, "field.opacity", 0.05)}
           </Group>
@@ -304,7 +374,7 @@ export function Inspector(props: { editor: Editor }) {
             {text("text", t().text, false)}
             {num("textSize", t().size)}
             {num("weight", t().weight, "field.weight", 100)}
-            {text("color", t().color, false)}
+            {colour("color", t().color, false)}
             {choice("textAlign", "align", ["left", "center", "right"], same(t().align))}
             {num("minZoom", t().minZoom, "field.minZoom", 0.1)}
           </Group>

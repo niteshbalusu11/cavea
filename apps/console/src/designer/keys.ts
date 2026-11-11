@@ -40,8 +40,15 @@ export function focusOf(target: EventTarget | null): Focus {
   return target.closest("[data-canvas]") !== null ? "canvas" : "widget";
 }
 
+/** The shell's own dialogs a shortcut opens. */
+export interface Shell {
+  save: () => void;
+  palette: () => void;
+  help: () => void;
+}
+
 /** The shell's side of each live shortcut of the table, by id. */
-export function actions(editor: Editor, save: () => void): Record<string, () => void> {
+export function actions(editor: Editor, shell: Shell): Record<string, () => void> {
   const sel = () => editor.views.selection;
   const snap = (change: (s: SnapSettings) => Partial<SnapSettings>) => {
     const s = editor.views.tool.snap;
@@ -68,7 +75,7 @@ export function actions(editor: Editor, save: () => void): Record<string, () => 
         return { objects: on, spacing: on, rows: on, angles: on, guides: on };
       }),
     grid: () => snap((s) => ({ grid: !s.grid })),
-    save,
+    ...shell,
   };
 }
 

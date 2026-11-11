@@ -21,9 +21,13 @@ import { CanvasHost } from "./CanvasHost.tsx";
 import { CategoriesPanel } from "./CategoriesPanel.tsx";
 import { createEditor, type Editor } from "./editor.ts";
 import { failureMessage, failureOf } from "./errors.ts";
+import { commands } from "./commands.ts";
+import { Help } from "./Help.tsx";
 import { Inspector } from "./Inspector.tsx";
 import { actions, bindKeys } from "./keys.ts";
 import { LayersPanel } from "./LayersPanel.tsx";
+import { NumberingPanel } from "./NumberingPanel.tsx";
+import { Palette } from "./Palette.tsx";
 import { LAYOUT_KEY, parseLayout, SIDE, SPLIT, type Layout, type PanelTab } from "./layout.ts";
 import { StatusBar, ToolRail } from "./Rails.tsx";
 import { emptyChart, fileName, type ChartSource } from "./source.ts";
@@ -260,15 +264,39 @@ function Shell(props: {
     setLayoutSignal(next);
     save(LAYOUT_KEY, next);
   };
-  const act = actions(editor, props.save);
+  const [palette, setPalette] = createSignal(false);
+  const [help, setHelp] = createSignal(false);
+  const [numbering, setNumbering] = createSignal(false);
+  const openNumbering = () => {
+    setLayout({ inspectorOpen: true });
+    setNumbering(true);
+  };
+  const act = actions(editor, {
+    save: props.save,
+    palette: () => setPalette(true),
+    help: () => setHelp(true),
+  });
   onCleanup(bindKeys(editor, act));
+  const all = commands(editor, act, {
+    help: () => setHelp(true),
+    numbering: openNumbering,
+    tab: (tab) => setLayout({ tab, panelsOpen: true }),
+    inspector: () => setLayout({ inspectorOpen: !layout().inspectorOpen }),
+    newChart: props.ui.onNew,
+    open: props.ui.onOpen,
+  });
   let column: HTMLElement | undefined;
 
   const v = () => editor.views.validation;
 
   return (
     <div class="flex h-full flex-col">
-      <TopBar editor={editor} {...props.ui} />
+      <TopBar
+        editor={editor}
+        {...props.ui}
+        onPalette={() => setPalette(true)}
+        onHelp={() => setHelp(true)}
+      />
       <div class="flex min-h-0 flex-1">
         <ToolRail editor={editor} />
         <CanvasHost editor={editor} />
@@ -299,12 +327,18 @@ function Shell(props: {
             }}
           >
             <PanelHeader
-              title={msg("panel.inspector")}
+              title={msg(numbering() ? "panel.numbering" : "panel.inspector")}
               open={layout().inspectorOpen}
               onToggle={() => setLayout({ inspectorOpen: !layout().inspectorOpen })}
+              onBack={numbering() ? () => setNumbering(false) : undefined}
             />
             <Show when={layout().inspectorOpen}>
-              <Inspector editor={editor} />
+              <Show
+                when={numbering()}
+                fallback={<Inspector editor={editor} onNumbering={openNumbering} />}
+              >
+                <NumberingPanel editor={editor} onClose={() => setNumbering(false)} />
+              </Show>
             </Show>
           </section>
           <Show when={layout().inspectorOpen && layout().panelsOpen}>
@@ -379,14 +413,34 @@ function Shell(props: {
         act={act}
         onProblems={() => setLayout({ tab: "validation", panelsOpen: true })}
       />
+      <Palette open={palette()} commands={() => all} onClose={() => setPalette(false)} />
+      <Help open={help()} onClose={() => setHelp(false)} />
     </div>
   );
 }
 
-function PanelHeader(props: { title: string; open: boolean; onToggle: () => void }) {
+function PanelHeader(props: {
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+  /** A panel shown in this one's place: the way back. */
+  onBack?: (() => void) | undefined;
+}) {
   return (
     <div class="flex h-8 shrink-0 items-center justify-between border-b border-line pr-1 pl-3">
-      <h2 class="text-sm font-medium text-fg">{props.title}</h2>
+      <h2 class="flex items-center gap-1 text-sm font-medium text-fg">
+        <Show when={props.onBack}>
+          {(back) => (
+            <IconButton
+              icon="chevronLeft"
+              label={msg("panel.back")}
+              class="-ml-2 size-6"
+              onClick={() => back()()}
+            />
+          )}
+        </Show>
+        {props.title}
+      </h2>
       <IconButton
         icon={props.open ? "chevronDown" : "chevronRight"}
         label={msg(props.open ? "panel.collapse" : "panel.expand", { panel: props.title })}

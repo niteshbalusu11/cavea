@@ -17,6 +17,8 @@ export function TopBar(props: {
   onNew: () => void;
   onOpen: () => void;
   onSave: () => void;
+  onPalette: () => void;
+  onHelp: () => void;
 }) {
   const views = props.editor.views;
   const navigate = useNavigate();
@@ -45,7 +47,7 @@ export function TopBar(props: {
               <Icon name="plus" />
               {msg("menu.new")}
             </DropdownMenu.Item>
-            <DropdownMenu.Item class={menuItem} onSelect={props.onOpen}>
+            <DropdownMenu.Item class={menuItem} onSelect={afterMenu(props.onOpen)}>
               <Icon name="file" />
               {msg("menu.open")}
             </DropdownMenu.Item>
@@ -53,6 +55,17 @@ export function TopBar(props: {
               <Icon name="download" />
               {msg("menu.export")}
               <span class={menuKeys}>{keyOf("save")}</span>
+            </DropdownMenu.Item>
+            <DropdownMenu.Separator class={menuSeparator} />
+            <DropdownMenu.Item class={menuItem} onSelect={afterMenu(props.onPalette)}>
+              <Icon name="search" />
+              {msg("shortcut.palette")}
+              <span class={menuKeys}>{keyOf("palette")}</span>
+            </DropdownMenu.Item>
+            <DropdownMenu.Item class={menuItem} onSelect={afterMenu(props.onHelp)}>
+              <Icon name="keyboard" />
+              {msg("shortcut.help")}
+              <span class={menuKeys}>{keyOf("help")}</span>
             </DropdownMenu.Item>
             <DropdownMenu.Separator class={menuSeparator} />
             <DropdownMenu.Sub overlap gutter={4}>

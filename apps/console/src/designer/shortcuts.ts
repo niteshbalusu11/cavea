@@ -1,8 +1,8 @@
 // The designer's keyboard shortcuts (07 §4, §8) as one table: it binds the
-// keys, and it feeds the tooltips and, later, the command palette and the
-// `?` help (DSN-009). On macOS, Cmd replaces Ctrl. An action that does not
-// exist yet is in the table as `pending`, with the task that brings it,
-// and is bound to nothing.
+// keys, and it feeds the tooltips, the command palette and the `?` help
+// (DSN-009). On macOS, Cmd replaces Ctrl. An action that does not exist
+// yet is in the table as `pending`, with the task that brings it, and is
+// bound to nothing.
 import type { ToolId } from "@cavea/designer-core";
 import type { MessageId } from "../i18n/messages.ts";
 
@@ -24,11 +24,16 @@ export interface Chord {
  */
 export type Route = "call" | "tool" | "input";
 
+/** The help's groups, in its order (07 §8, §4). */
+export const GROUPS = ["edit", "select", "arrange", "view", "general", "tools"] as const;
+export type Group = (typeof GROUPS)[number];
+
 export interface Shortcut {
   id: string;
   label: MessageId;
   chords: Chord[];
   route: Route;
+  group: Group;
   /** Fires while a text field has focus (only what the platform does not
    * do in a field itself). */
   inFields?: true;
@@ -41,43 +46,84 @@ const tool = (id: ToolId, key: string, shift = false): Shortcut => ({
   label: `tool.${id}`,
   chords: [{ key, shift }],
   route: "tool",
+  group: "tools",
 });
-const later = (id: string, label: MessageId, chords: Chord[], task: string): Shortcut => ({
-  id,
-  label,
-  chords,
-  route: "call",
-  pending: task,
-});
+const later = (
+  id: string,
+  label: MessageId,
+  group: Group,
+  chords: Chord[],
+  task: string,
+): Shortcut => ({ id, label, group, chords, route: "call", pending: task });
 const arrows = ["arrowleft", "arrowright", "arrowup", "arrowdown"];
 
 export const SHORTCUTS: readonly Shortcut[] = [
-  { id: "undo", label: "shortcut.undo", chords: [{ key: "z", mod: true }], route: "call" },
+  {
+    id: "undo",
+    group: "edit",
+    label: "shortcut.undo",
+    chords: [{ key: "z", mod: true }],
+    route: "call",
+  },
   {
     id: "redo",
+    group: "edit",
     label: "shortcut.redo",
     chords: [{ key: "z", mod: true, shift: true }],
     route: "call",
   },
-  { id: "copy", label: "shortcut.copy", chords: [{ key: "c", mod: true }], route: "call" },
-  { id: "cut", label: "shortcut.cut", chords: [{ key: "x", mod: true }], route: "call" },
-  { id: "paste", label: "shortcut.paste", chords: [{ key: "v", mod: true }], route: "call" },
+  {
+    id: "copy",
+    group: "edit",
+    label: "shortcut.copy",
+    chords: [{ key: "c", mod: true }],
+    route: "call",
+  },
+  {
+    id: "cut",
+    group: "edit",
+    label: "shortcut.cut",
+    chords: [{ key: "x", mod: true }],
+    route: "call",
+  },
+  {
+    id: "paste",
+    group: "edit",
+    label: "shortcut.paste",
+    chords: [{ key: "v", mod: true }],
+    route: "call",
+  },
   {
     id: "duplicate",
+    group: "edit",
     label: "shortcut.duplicate",
     chords: [{ key: "d", mod: true }],
     route: "call",
   },
   {
     id: "selectAll",
+    group: "select",
     label: "shortcut.selectAll",
     chords: [{ key: "a", mod: true }],
     route: "call",
   },
-  { id: "lock", label: "shortcut.lock", chords: [{ key: "l", mod: true }], route: "call" },
-  { id: "hide", label: "shortcut.hide", chords: [{ key: "h", mod: true }], route: "call" },
+  {
+    id: "lock",
+    group: "arrange",
+    label: "shortcut.lock",
+    chords: [{ key: "l", mod: true }],
+    route: "call",
+  },
+  {
+    id: "hide",
+    group: "arrange",
+    label: "shortcut.hide",
+    chords: [{ key: "h", mod: true }],
+    route: "call",
+  },
   {
     id: "zoomIn",
+    group: "view",
     label: "shortcut.zoomIn",
     chords: [
       { key: "=", mod: true, shift: "any" },
@@ -85,18 +131,44 @@ export const SHORTCUTS: readonly Shortcut[] = [
     ],
     route: "call",
   },
-  { id: "zoomOut", label: "shortcut.zoomOut", chords: [{ key: "-", mod: true }], route: "call" },
-  { id: "zoomFit", label: "shortcut.zoomFit", chords: [{ key: "0", mod: true }], route: "call" },
+  {
+    id: "zoomOut",
+    group: "view",
+    label: "shortcut.zoomOut",
+    chords: [{ key: "-", mod: true }],
+    route: "call",
+  },
+  {
+    id: "zoomFit",
+    group: "view",
+    label: "shortcut.zoomFit",
+    chords: [{ key: "0", mod: true }],
+    route: "call",
+  },
   {
     id: "zoomSelection",
+    group: "view",
     label: "shortcut.zoomSelection",
     chords: [{ key: "2", mod: true }],
     route: "call",
   },
-  { id: "snap", label: "shortcut.snap", chords: [{ key: "'", mod: true }], route: "call" },
-  { id: "grid", label: "shortcut.grid", chords: [{ key: ";", mod: true }], route: "call" },
+  {
+    id: "snap",
+    group: "view",
+    label: "shortcut.snap",
+    chords: [{ key: "'", mod: true }],
+    route: "call",
+  },
+  {
+    id: "grid",
+    group: "view",
+    label: "shortcut.grid",
+    chords: [{ key: ";", mod: true }],
+    route: "call",
+  },
   {
     id: "save",
+    group: "general",
     label: "shortcut.save",
     chords: [{ key: "s", mod: true }],
     route: "call",
@@ -104,14 +176,28 @@ export const SHORTCUTS: readonly Shortcut[] = [
   },
   {
     id: "delete",
+    group: "edit",
     label: "shortcut.delete",
     chords: [{ key: "delete" }, { key: "backspace" }],
     route: "input",
   },
-  { id: "deselect", label: "shortcut.deselect", chords: [{ key: "escape" }], route: "input" },
-  { id: "stepIn", label: "shortcut.stepIn", chords: [{ key: "enter" }], route: "input" },
+  {
+    id: "deselect",
+    group: "select",
+    label: "shortcut.deselect",
+    chords: [{ key: "escape" }],
+    route: "input",
+  },
+  {
+    id: "stepIn",
+    group: "select",
+    label: "shortcut.stepIn",
+    chords: [{ key: "enter" }],
+    route: "input",
+  },
   {
     id: "nudge",
+    group: "select",
     label: "shortcut.nudge",
     chords: arrows.map((key) => ({ key, shift: "any" })),
     route: "input",
@@ -129,23 +215,37 @@ export const SHORTCUTS: readonly Shortcut[] = [
   later(
     "group",
     "shortcut.group",
+    "arrange",
     [{ key: "g", mod: true }],
     "07 §5.1: decoration groups need schema 2",
   ),
   later(
     "ungroup",
     "shortcut.ungroup",
+    "arrange",
     [{ key: "g", mod: true, shift: true }],
     "07 §5.1: decoration groups need schema 2",
   ),
-  later("rulers", "shortcut.rulers", [{ key: "r", mod: true }], "DSN-031"),
-  later("palette", "shortcut.palette", [{ key: "k", mod: true }], "DSN-009"),
-  later("help", "shortcut.help", [{ key: "?", shift: "any" }], "DSN-009"),
-  later("tool.table", "shortcut.table", [{ key: "t" }], "DSN-050"),
-  later("tool.booth", "shortcut.booth", [{ key: "b" }], "DSN-051"),
-  later("tool.area", "shortcut.area", [{ key: "g" }], "DSN-052"),
-  later("tool.image", "shortcut.image", [{ key: "i" }], "DSN-020"),
-  later("tool.measure", "shortcut.measure", [{ key: "m" }], "DSN-054"),
+  {
+    id: "palette",
+    label: "shortcut.palette",
+    group: "general",
+    chords: [{ key: "k", mod: true }],
+    route: "call",
+  },
+  {
+    id: "help",
+    label: "shortcut.help",
+    group: "general",
+    chords: [{ key: "?", shift: "any" }],
+    route: "call",
+  },
+  later("rulers", "shortcut.rulers", "view", [{ key: "r", mod: true }], "DSN-031"),
+  later("tool.table", "shortcut.table", "tools", [{ key: "t" }], "DSN-050"),
+  later("tool.booth", "shortcut.booth", "tools", [{ key: "b" }], "DSN-051"),
+  later("tool.area", "shortcut.area", "tools", [{ key: "g" }], "DSN-052"),
+  later("tool.image", "shortcut.image", "tools", [{ key: "i" }], "DSN-020"),
+  later("tool.measure", "shortcut.measure", "tools", [{ key: "m" }], "DSN-054"),
 ];
 
 /** The layers tree's own keys for moving a row (07 §15: a keyboard way to
@@ -229,4 +329,51 @@ export function display(chord: Chord, mac: boolean): string {
 export function keyOf(id: string, mac = isMac()): string | null {
   const chord = SHORTCUTS.find((s) => s.id === id)?.chords[0];
   return chord === undefined ? null : display(chord, mac);
+}
+
+/** One line of the shortcut help. */
+export interface HelpRow {
+  /** The table's row, or a layers-tree key's id. */
+  id: string;
+  label: MessageId;
+  keys: string[];
+  /** The task that brings it, for a row not bound yet. */
+  pending?: string;
+}
+
+/** The layers tree's own keys (07 §8), for the help. */
+const TREE_KEYS: { id: string; label: MessageId; keys: (mac: boolean) => string[] }[] = [
+  { id: "tree.move", label: "help.tree.move", keys: () => ["↑", "↓", "Home", "End"] },
+  { id: "tree.page", label: "help.tree.page", keys: () => ["PgUp", "PgDn"] },
+  { id: "tree.expand", label: "help.tree.expand", keys: () => ["→", "←"] },
+  { id: "tree.select", label: "help.tree.select", keys: () => ["↵", "Space"] },
+  {
+    id: "tree.extend",
+    label: "help.tree.extend",
+    keys: (mac) => [mac ? "⇧↵" : "Shift+↵", mac ? "⌘↵" : "Ctrl+↵"],
+  },
+  {
+    id: "tree.reorder",
+    label: "help.tree.reorder",
+    keys: (mac) => [display(LAYER_MOVE.up, mac), display(LAYER_MOVE.down, mac)],
+  },
+];
+
+/** The shortcut help (`?`, DSN-009), generated from the table: every row,
+ * grouped as 07 §8 and §4 group them, then the layers tree's keys. */
+export function helpSections(mac: boolean): { group: Group | "tree"; rows: HelpRow[] }[] {
+  const sections: { group: Group | "tree"; rows: HelpRow[] }[] = GROUPS.map((group) => ({
+    group,
+    rows: SHORTCUTS.filter((s) => s.group === group).map((s) => ({
+      id: s.id,
+      label: s.label,
+      keys: s.chords.map((c) => display(c, mac)),
+      ...(s.pending === undefined ? {} : { pending: s.pending }),
+    })),
+  }));
+  sections.push({
+    group: "tree",
+    rows: TREE_KEYS.map((t) => ({ id: t.id, label: t.label, keys: t.keys(mac) })),
+  });
+  return sections;
 }

@@ -118,7 +118,7 @@ describe("the frame loop", () => {
     loop.setLayersWindow(0, 50);
     loop.tick();
 
-    const fresh = (): Views => ({
+    const fresh = (): Omit<Views, "numbering"> => ({
       history: raw.history(),
       title: raw.title(),
       floors: raw.floors(),
