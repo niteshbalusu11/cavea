@@ -4,6 +4,7 @@
 // search yet, so the screen says how far they reach), each event's seat
 // counts, the create form, and archive.
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
+import { A } from "@solidjs/router";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { checkChartList, checkEvent, checkEventList } from "../api/check.ts";
 import { call } from "../api/client.ts";
@@ -275,7 +276,9 @@ function EventRow(props: { event: Event; chartName: string; onArchive: () => voi
         <span class="block font-mono text-sm text-muted">{props.event.key}</span>
       </td>
       <td class={td}>
-        {props.chartName}
+        <A href={`/charts/${encodeURIComponent(props.event.chart)}`} class="text-accent underline">
+          {props.chartName}
+        </A>
         <span class="block text-sm text-muted">
           {msg("events.versionShort", { number: props.event.version.number })}
         </span>

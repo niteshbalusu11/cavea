@@ -395,6 +395,32 @@ export function CopyField(props: { label: string; value: string; mono?: boolean 
   );
 }
 
+/** A short identifier with a copy button beside it (a chart's key). */
+export function CopyText(props: { value: string; label: string }) {
+  const [copied, setCopied] = createSignal(false);
+  return (
+    <span class="inline-flex items-center gap-1">
+      <code class="font-mono text-base text-muted">{props.value}</code>
+      <Tip label={copied() ? msg("copy.copied") : props.label}>
+        <Tooltip.Trigger
+          as="button"
+          type="button"
+          aria-label={props.label}
+          class="inline-flex size-6 items-center justify-center rounded-md text-muted hover:bg-hover hover:text-fg"
+          onClick={() =>
+            void navigator.clipboard.writeText(props.value).then(
+              () => setCopied(true),
+              () => setCopied(false),
+            )
+          }
+        >
+          <Icon name={copied() ? "check" : "file"} />
+        </Tooltip.Trigger>
+      </Tip>
+    </span>
+  );
+}
+
 /** Tabs: arrow keys move between them (Kobalte). */
 export function Tabs<V extends string>(props: {
   label: string;
