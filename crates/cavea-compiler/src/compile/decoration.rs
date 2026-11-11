@@ -268,13 +268,18 @@ fn shape(
     }
 
     if let Some(color) = fill.filter(|_| s.kind != doc::ShapeKind::Line) {
-        // Every subpath is filled as if closed; flat ones add nothing.
-        let rings: Vec<Vec<P>> = paths
-            .iter()
-            .map(|(r, _)| r)
-            .filter(|r| !flat(r))
-            .cloned()
-            .collect();
+        // Every subpath is filled as if closed, so an open one that ends
+        // where it starts loses that repeat; flat ones add nothing.
+        let mut rings = Vec::with_capacity(paths.len());
+        for (r, _) in &paths {
+            let mut ring = r.clone();
+            while ring.len() > 1 && ring.first() == ring.last() {
+                ring.pop();
+            }
+            if !flat(&ring) {
+                rings.push(ring);
+            }
+        }
         if rings.is_empty() {
             return Err(geometry("zero size"));
         }

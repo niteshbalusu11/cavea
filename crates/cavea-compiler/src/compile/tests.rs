@@ -1141,6 +1141,13 @@ fn shapes_cover_their_true_area_and_stay_in_bounds() {
             300.0 * tol,
             [0.0, 0.0, 100.0, 50.0],
         ),
+        // Open, but back at its start: filled as if closed.
+        (
+            r#""kind":"path","d":"M0 0 L 200 0 L 200 50 L 0 50 L 0 0""#,
+            10_000.0,
+            0.0,
+            [0.0, 0.0, 200.0, 50.0],
+        ),
     ];
     let own = to_own([1000.0, -500.0], 30.0, [40.0, 20.0], 15.0);
     let check = |fields: &str, style: &str, area: f64, slack: f64, b: [f64; 4]| {
