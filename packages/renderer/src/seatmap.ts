@@ -623,7 +623,8 @@ export async function createMap(
       case "selectionInvalid": {
         const rule = event.rule;
         call("onSelectionInvalid", rule, event.objects.map(lookup));
-        for (const label of event.objects) {
+        // `min` is readiness: no toast speaks of its objects.
+        for (const label of rule === "min" ? [] : event.objects) {
           told.add(label);
         }
         // `min` is readiness, not a refusal; `not_free` from a hold comes as `objectUnavailable`.
@@ -837,6 +838,21 @@ export async function createMap(
       animate,
     );
 
+  /** Starts waiting for a retry of the error state (`load`). */
+  let failing = 0;
+  /** The error state without Retry, if the built-in loading state is on. */
+  function notice(id: "offline" | "contextLost"): void {
+    if (options.ui?.loading !== false) {
+      void ui?.failed(id, false);
+    }
+  }
+  /** Ends the loading or error state once the map is drawn and no start waits for Retry. */
+  function settled(): void {
+    if (marks["first_frame"] !== undefined && failing === 0) {
+      ui?.loading(false);
+    }
+  }
+
   let lostTimer: ReturnType<typeof setTimeout> | undefined;
   function onContext(restored: boolean): void {
     clearTimeout(lostTimer);
@@ -846,11 +862,11 @@ export async function createMap(
         report(
           new CaveaError("context_lost", `the WebGL context was lost for ${env.contextLostMs} ms`),
         );
-        void ui?.failed("contextLost", false);
+        notice("contextLost");
       }, env.contextLostMs);
       timers.add(lostTimer);
-    } else if (marks["first_frame"] !== undefined) {
-      ui?.loading(false);
+    } else {
+      settled();
     }
   }
 
@@ -927,7 +943,7 @@ export async function createMap(
     });
     const shown = show && !env.online() && marks["first_frame"] === undefined && ui !== undefined;
     if (shown) {
-      void ui?.failed("offline", false);
+      notice("offline");
     }
     await env.usable(abort.signal);
     if (shown) {
@@ -960,15 +976,25 @@ export async function createMap(
    * succeed is reported and offered again (D-48); otherwise it is fatal.
    */
   async function load<T>(code: CaveaErrorCode, run: () => T | Promise<T>): Promise<T> {
-    for (;;) {
+    for (let retried = false; ; retried = true) {
       try {
-        return await retrying(run);
+        const value = await retrying(run);
+        if (retried) {
+          settled();
+        }
+        return value;
       } catch (error) {
         if (ui === undefined || options.ui?.loading === false || destroyed || permanent(error)) {
           throw new CaveaError(code, String(error), true, error);
         }
         report(new CaveaError(code, String(error), false, error));
-        await ui.failed(env.online() ? "loadFailed" : "offline");
+        // Shown until Retry, even over a map already drawn.
+        failing += 1;
+        try {
+          await ui.failed(env.online() ? "loadFailed" : "offline");
+        } finally {
+          failing -= 1;
+        }
         ui.loading(true);
       }
     }
@@ -1100,7 +1126,7 @@ export async function createMap(
       onFrame: (_time, ms) => {
         if (chart !== undefined && marks["first_frame"] === undefined) {
           mark("first_frame");
-          ui?.loading(false);
+          settled();
         }
         // The first frame drawn with the first state applied.
         if (marks["state_ready"] !== undefined && marks["interactive"] === undefined) {

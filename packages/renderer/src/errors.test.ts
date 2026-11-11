@@ -172,6 +172,52 @@ describe("error state", () => {
   });
 });
 
+describe("error state over a drawn map", () => {
+  test("a first state that keeps failing keeps its Retry after the first frame", async () => {
+    const f = fakeEnv();
+    let connects = 0;
+    const state = customState({
+      connect: () =>
+        ++connects <= 4
+          ? Promise.reject(http(503))
+          : Promise.resolve({ kind: "map", unavailable: [] }),
+      disconnect() {},
+    });
+    const promise = createMap(f.env, {} as HTMLElement, { chart: { url: "c.ccf" }, state });
+    f.load();
+    await sleep(50);
+    f.attached()?.onFrame?.(0, 0);
+    expect([shown(f.root, "error"), shown(f.root, "retry")]).toEqual([true, true]);
+    part(f.root, "retry")?.click();
+    const map = await promise;
+    expect([connects, shown(f.root, "error"), shown(f.root, "loading")]).toEqual([5, false, false]);
+    map.destroy();
+  });
+
+  test("without the loading state, offline and a lost context reject nothing", async () => {
+    const rejections: unknown[] = [];
+    const listener = (reason: unknown): void => {
+      rejections.push(reason);
+    };
+    process.on("unhandledRejection", listener);
+    try {
+      const m = start([new TypeError("network")], { ui: { loading: false } });
+      m.setUsable(false);
+      await sleep(20);
+      m.setUsable(true);
+      const map = await m.promise;
+      m.attached()?.onContext?.(false);
+      await sleep(50);
+      expect(m.codes()).toEqual(["context_lost"]);
+      map.destroy();
+      await flush();
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", listener);
+    }
+  });
+});
+
 describe("cancelling", () => {
   test("aborting the signal while the error shows rejects and removes everything", async () => {
     const controller = new AbortController();

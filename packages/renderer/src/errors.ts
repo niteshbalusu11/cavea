@@ -62,10 +62,13 @@ export class CaveaError extends Error {
 /**
  * Whether a failure cannot succeed if tried again (05 §9): an HTTP status of
  * 400 to 499 other than 408 and 429 (an `Error` with a `status`, as the
- * SDK's fetches throw), or WebAssembly that does not compile or link, or that
+ * SDK's fetches throw), a fatal `CaveaError` (no WebAssembly), or WebAssembly that does not compile or link, or that
  * a Content Security Policy refuses.
  */
 export function permanent(error: unknown): boolean {
+  if (error instanceof CaveaError && error.fatal) {
+    return true;
+  }
   const status = (error as { status?: unknown } | null)?.status;
   if (typeof status === "number") {
     return status >= 400 && status < 500 && status !== 408 && status !== 429;

@@ -141,6 +141,14 @@ describe("announcements", () => {
     expect(live.textContent).toBe("A, Row 1, Seat 3 selected. 1 seat selected. ");
   });
 
+  test("readiness (min) is no toast: the removals after it are said", async () => {
+    const { drain, live } = await map({ selection: { min: 2 } });
+    drain(selected("A-1-2", "A-1-3"));
+    drain(selected("A-1-2"), { type: "selectionInvalid", rule: "min", objects: ["A-1-2"] });
+    drain(selected());
+    expect(live.textContent).toBe("A, Row 1, Seat 2 deselected. 0 seats selected.");
+  });
+
   test("a seat taken, lost or refused is said by its toast only", async () => {
     const { drain, live, root } = await map();
     const toasts = (): number => root.parts("toast").length;

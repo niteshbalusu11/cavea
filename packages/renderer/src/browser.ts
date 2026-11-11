@@ -23,11 +23,15 @@ let loading: Promise<unknown> | undefined;
  */
 export function loadWasm(source?: InitInput): Promise<unknown> {
   if (typeof WebAssembly === "undefined") {
-    return Promise.reject(new Error("WebAssembly is not available"));
+    return Promise.reject(new CaveaError("wasm_unavailable", "WebAssembly is not available", true));
   }
-  loading ??= init({
-    module_or_path: source ?? new URL("../wasm/cavea_web_bg.wasm", import.meta.url),
-  }).catch((error: unknown) => {
+  const input = source ?? new URL("../wasm/cavea_web_bg.wasm", import.meta.url);
+  // Fetched here, so an HTTP failure keeps its status (05 §9: a 404 is not retried).
+  loading ??= (
+    typeof input === "string" || input instanceof URL
+      ? fetchOk(input).then((r) => init({ module_or_path: r }))
+      : init({ module_or_path: input })
+  ).catch((error: unknown) => {
     loading = undefined;
     throw error;
   });
@@ -46,12 +50,17 @@ function once(key: string, start: () => Promise<Uint8Array>): Promise<Uint8Array
   return promise;
 }
 
-async function fetchBytes(url: string | URL, signal?: AbortSignal): Promise<Uint8Array> {
+/** `url`'s response; one that is not OK throws with its status. */
+async function fetchOk(url: string | URL, signal?: AbortSignal): Promise<Response> {
   const response = await fetch(url, signal === undefined ? {} : { signal });
   if (!response.ok) {
     throw httpError(String(url), response.status);
   }
-  return new Uint8Array(await response.arrayBuffer());
+  return response;
+}
+
+async function fetchBytes(url: string | URL, signal?: AbortSignal): Promise<Uint8Array> {
+  return new Uint8Array(await (await fetchOk(url, signal)).arrayBuffer());
 }
 
 const href = (url: string | URL): string => new URL(url, document.baseURI).href;

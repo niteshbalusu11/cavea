@@ -438,7 +438,7 @@ Codes: `invalid_option`, `not_browser`, `wasm_unavailable`, `webgl_unavailable`,
 | Page hidden before the first frame | none | The skeleton | Nothing | Paused; resumes when shown |
 | A chart the server no longer has (404, 410), an unknown event or a refused key (4xx) | `chart_fetch_failed` or `state_connect_failed`, fatal | Nothing: the map is removed | Rejection | None |
 | A chart that does not decode | `bad_chart`, fatal | Nothing | Rejection | None |
-| WASM blocked by a Content Security Policy, or broken; no WebAssembly | `wasm_unavailable`, fatal | Nothing (the list view, REN-071, A11Y-015, is not built) | Rejection | None |
+| WASM blocked by a Content Security Policy, broken, or not on the server (4xx); no WebAssembly | `wasm_unavailable`, fatal | Nothing (the list view, REN-071, A11Y-015, is not built) | Rejection | None |
 | WebGL2 unavailable | `webgl_unavailable`, fatal | Nothing (the Canvas 2D fallback, REN-070, is not built) | Rejection | None |
 | The host aborts `signal` before the map is ready | `aborted`, fatal | Nothing: the map is removed, the adapter disconnected | Rejection | Stopped |
 | The host aborts `signal` after | none | Nothing: the map is destroyed | — | — |
@@ -449,7 +449,7 @@ Codes: `invalid_option`, `not_browser`, `wasm_unavailable`, `webgl_unavailable`,
 | Hold request fails for network reasons | `hold_failed` | The seat reverts; a toast | `onHoldFailed`, `onError` | The adapter's (`caveaServer` retries once, §4.1); the SDK reverts and reports a rejected `hold` |
 | Unknown option | none | Nothing | A console warning in development builds (§3.6) | — |
 
-The error state, the offline wait and the retries before the first frame are what the buyer sees of a failed start; a failure after the map is ready never replaces it (the atlas, the context, the realtime connection). Measured in the tests (`packages/renderer/src/errors.test.ts`) with a fake platform: each row above produces its code, interface state and callback.
+The error state, the offline wait and the retries before the first frame are what the buyer sees of a failed start; a failure after the map is ready never replaces it (the atlas, the context, the realtime connection), except a lost context's notice; and the first frame does not end an error state that waits for Retry (the first state can fail after the chart is drawn). Measured in the tests (`packages/renderer/src/errors.test.ts`) with a fake platform: each row above produces its code, interface state and callback.
 
 After `onReady`, the renderer never throws into host code: methods, callbacks, input and frames report through `onError`.
 

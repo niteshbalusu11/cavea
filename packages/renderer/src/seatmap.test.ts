@@ -702,6 +702,17 @@ test("preloadSeatMap fetches a chart once for every later map; a failure is not 
 
 test("the WASM loads once per page; a failed load is tried again", async () => {
   const { loadWasm } = await import("./browser.ts");
+  const { permanent } = await import("./errors.ts");
+  // An HTTP failure keeps its status, so a 404 is not retried (05 §9).
+  const g = globalThis as { fetch: typeof fetch };
+  const realFetch = g.fetch;
+  g.fetch = (() => Promise.resolve(new Response("", { status: 404 }))) as unknown as typeof fetch;
+  try {
+    const failure = await loadWasm("https://x/cavea_web_bg.wasm").catch((e: unknown) => e);
+    expect([(failure as { status?: number }).status, permanent(failure)]).toEqual([404, true]);
+  } finally {
+    g.fetch = realFetch;
+  }
   await expect(loadWasm(new Uint8Array([0, 1, 2, 3]))).rejects.toThrow();
   const bytes = await Bun.file(new URL("../wasm/cavea_web_bg.wasm", import.meta.url)).arrayBuffer();
   const first = loadWasm(bytes);
