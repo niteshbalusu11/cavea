@@ -21,6 +21,17 @@
         width: 100%;
         height: 100%;
       }
+      /* Cooperative mode: the map sits in a page that scrolls. */
+      .scrolling canvas {
+        position: relative;
+        display: block;
+        height: 80vh;
+      }
+      .scrolling::after {
+        content: "";
+        display: block;
+        height: 150vh;
+      }
       output {
         position: fixed;
         top: 0;
@@ -29,6 +40,7 @@
         white-space: pre;
         background: rgb(255 255 255 / 0.85);
         z-index: 1;
+        pointer-events: none;
       }
     </style>
   </head>

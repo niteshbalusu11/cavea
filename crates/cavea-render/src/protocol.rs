@@ -70,6 +70,19 @@ pub struct Modifiers {
     pub meta: bool,
 }
 
+/// Which gestures move the camera (04 §14, `gestureHandling` in 05 §3.3).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GestureHandling {
+    /// The map takes every gesture.
+    #[default]
+    Greedy,
+    /// One-finger touch drags and plain wheel go to the page; two fingers,
+    /// ctrl+wheel and mouse drags move the map.
+    Cooperative,
+    /// No gesture moves the camera. Taps, long presses and hover still work.
+    None,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum CameraTarget {
     Bounds(Bounds),
@@ -138,13 +151,16 @@ pub enum Command {
     SetPrivateHolds {
         holds: Vec<PrivateHold>,
     },
-    /// Canvas size in CSS pixels and the device pixel ratio.
+    /// Canvas size in CSS pixels, the device pixel ratio, and the highest
+    /// ratio to render at (`maxDpr`, 04 §21). Applied at the next `Tick`.
     Resize {
         width: f32,
         height: f32,
         dpr: f32,
+        max_dpr: f32,
     },
-    /// Position in CSS pixels relative to the canvas.
+    /// Position in CSS pixels relative to the canvas; time on the same clock as
+    /// `Tick`. Queued and applied at the next `Tick` (04 §18).
     Pointer {
         kind: PointerKind,
         id: u32,
@@ -153,12 +169,14 @@ pub enum Command {
         y: f32,
         time_ms: f64,
     },
+    /// Delta in CSS pixels (the host converts lines and pages). Queued like `Pointer`.
     Wheel {
         dx: f32,
         dy: f32,
         x: f32,
         y: f32,
         modifiers: Modifiers,
+        time_ms: f64,
     },
     Key {
         key: String,
@@ -167,10 +185,14 @@ pub enum Command {
     SetCamera {
         target: CameraTarget,
     },
+    /// `None` picks 250–600 ms by distance (04 §13).
     FlyTo {
         target: CameraTarget,
-        duration_ms: u32,
+        duration_ms: Option<u32>,
     },
+    SetGestureHandling(GestureHandling),
+    /// With reduced motion, camera changes are instant and drags have no inertia.
+    SetReducedMotion(bool),
     Select {
         objects: Vec<ObjectRef>,
     },

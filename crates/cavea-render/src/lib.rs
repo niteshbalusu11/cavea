@@ -4,12 +4,17 @@
 //! See `docs/04-renderer.md`.
 //!
 //! Built so far: the command and event protocol, the backend trait with the
-//! `glow` backend (feature `glow`), the `shape` program and the seat buffers.
+//! `glow` backend (feature `glow`), the `shape` program, the seat buffers, the
+//! host service traits, the camera, the gesture recogniser and on-demand frames.
 
 pub mod backend;
+pub mod camera;
 pub mod engine;
+pub mod gesture;
+pub mod host;
 pub mod protocol;
 pub mod seat;
+pub mod tuning;
 
 pub use engine::{Engine, backing_size};
 

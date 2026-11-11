@@ -7,6 +7,7 @@ import init, { version, type InitInput } from "../wasm/cavea_web.js";
  * resolved. Interim surface for the demo; the public SDK is `docs/05-web-sdk.md`.
  */
 export { View } from "../wasm/cavea_web.js";
+export { attach, type AttachOptions, type Attached, type GestureHandling } from "./host.ts";
 
 /** The loaded renderer. */
 export interface Renderer {

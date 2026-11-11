@@ -3,8 +3,11 @@
 // (0 circle, 1 rounded square, 2 chair, 3 diamond), `camera=x:y:width:height`
 // in chart units, and `mark=start:count` to set that range of seats to the
 // "unavailable" visual state after the first frame, which uploads only that
-// dynamic sub-range.
-import { loadRenderer, View } from "@cavea/renderer";
+// dynamic sub-range. Pan and zoom with mouse, wheel, trackpad or touch;
+// `gestures=greedy|cooperative|none` sets gesture handling (cooperative makes
+// the page scroll around the map), `reducedMotion=1` turns animation off.
+// `window.caveaDemo` counts frames and WebGL errors for scripted checks.
+import { attach, loadRenderer, View, type GestureHandling } from "@cavea/renderer";
 
 /** Exports present only in `cargo xtask build-web --demo` builds. */
 interface DemoExports {
@@ -43,6 +46,13 @@ const seed = Number(params.get("seed") ?? 1);
 const shape = Number(params.get("shape") ?? 0);
 const mark = params.get("mark")?.split(":").map(Number);
 const camera = params.get("camera")?.split(":").map(Number);
+const gesturesParam = params.get("gestures");
+const gestures: GestureHandling =
+  gesturesParam === "cooperative" || gesturesParam === "none" ? gesturesParam : "greedy";
+const reducedMotion = params.has("reducedMotion") ? params.get("reducedMotion") === "1" : undefined;
+if (gestures === "cooperative") {
+  document.body.classList.add("scrolling");
+}
 
 const renderer = await loadRenderer();
 const view = new View(canvas) as View & Partial<DemoExports>;
@@ -54,37 +64,21 @@ report(
   }`,
 );
 
-let scheduled = false;
-let frames = 0;
+const stats = { frames: 0, glErrors: 0 };
+Object.assign(window, { caveaDemo: stats });
 let afterFirstFrame: (() => void) | undefined;
+let host: ReturnType<typeof attach> | undefined;
 
-function schedule(): void {
-  if (!scheduled) {
-    scheduled = true;
-    requestAnimationFrame(draw);
-  }
-}
-
-function draw(time: number): void {
-  scheduled = false;
-  const start = performance.now();
-  const again = view.frame(time);
-  frames += 1;
+function onFrame(): void {
+  stats.frames += 1;
   const error = gl?.getError() ?? -1;
-  report(
-    `frame ${frames}: ${(performance.now() - start).toFixed(2)} ms CPU; gl.getError() = ${error}`,
-  );
-  if (again) {
-    schedule();
+  if (error !== 0) {
+    stats.glErrors += 1;
   }
+  report(`frame ${stats.frames}: gl.getError() = ${error}`);
   const next = afterFirstFrame;
   afterFirstFrame = undefined;
   next?.();
-}
-
-function resize(): void {
-  view.resize(canvas.clientWidth, canvas.clientHeight, devicePixelRatio);
-  schedule();
 }
 
 if (
@@ -107,8 +101,14 @@ if (
     afterFirstFrame = () => {
       setVisual(from, count, VISUAL_UNAVAILABLE);
       report(`set seats ${from}..${from + count} unavailable`);
-      schedule();
+      host?.update();
     };
   }
-  new ResizeObserver(resize).observe(canvas);
+  const options = { gestureHandling: gestures, onFrame };
+  host = attach(
+    view,
+    canvas,
+    reducedMotion === undefined ? options : { ...options, reducedMotion },
+  );
+  report(`gesture handling: ${gestures}`);
 }
