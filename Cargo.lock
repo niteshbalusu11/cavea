@@ -223,6 +223,7 @@ dependencies = [
  "brotli",
  "cavea-compiler",
  "cavea-format",
+ "cavea-render",
  "cavea-testkit",
  "serde_json",
 ]

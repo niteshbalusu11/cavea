@@ -1,0 +1,6 @@
+# libFuzzer grows each corpus with files named by hash; only the seeds
+# (`seed-*`) are committed. Crashes land in artifacts/.
+corpus/*/*
+!corpus/*/seed-*
+artifacts/
+coverage/

@@ -10,6 +10,10 @@
 //!   `cavea-web/demo`); it is not the production payload and is never gated.
 //! - `check-deps`: enforce the workspace dependency rule from
 //!   `docs/01-architecture.md` §3.
+//! - `determinism`: run the tests that pin compiled hashes natively and for
+//!   wasm32 under bun (`docs/13-testing-benchmarks.md` §4).
+
+mod determinism;
 
 use std::{
     collections::BTreeSet,
@@ -52,8 +56,11 @@ fn main() -> Result<()> {
         ["build-web", "--update-baseline"] => build_web(Mode::UpdateBaseline),
         ["build-web", "--demo"] => build_web(Mode::Demo),
         ["check-deps"] => check_deps(),
+        ["determinism"] => determinism::determinism(),
         _ => {
-            eprintln!("usage: cargo xtask <build-web [--demo | --update-baseline] | check-deps>");
+            eprintln!(
+                "usage: cargo xtask <build-web [--demo | --update-baseline] | check-deps | determinism>"
+            );
             std::process::exit(2);
         }
     }

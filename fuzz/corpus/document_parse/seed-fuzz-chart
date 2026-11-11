@@ -1,0 +1,9 @@
+{"schema":1,"name":"fuzz","nextOid":1000,
+  "categories":[{"key":"a","label":"A","color":"#2563EB"},{"key":"b","label":"B","color":"#DC2626","accessible":true}],
+  "floors":[{"id":1,"name":"Ground","focalPoint":[0,-500]},{"id":2,"name":"Upper","level":1}],
+  "nodes":[
+    {"id":10,"type":"section","floor":1,"label":"A","category":"a","children":[{"id":11,"type":"rowBlock",
+      "rows":[{"rid":12,"seats":15,"oids":[[100,15]]},{"rid":13,"seats":15,"oids":[[200,15]],"removed":[7]},{"rid":14,"seats":16,"oids":[[300,16]]}]}]},
+    {"id":20,"type":"section","floor":1,"label":"B","category":"b","origin":[1200,0],"rotation":20,"children":[{"id":21,"type":"rowBlock",
+      "curve":{"kind":"arc","radius":900},"rows":[{"rid":22,"seats":15,"oids":[[400,15]]},{"rid":23,"seats":15,"oids":[[500,15]]},{"rid":24,"seats":15,"oids":[[600,15]]}]}]},
+    {"id":30,"type":"row","floor":2,"label":"Z","category":"a","path":{"kind":"polyline","points":[[0,0],[600,0]]},"seats":12,"oids":[[700,12]]}]}

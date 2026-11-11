@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "name": "Small hall",
+  "nextOid": 100,
+  "categories": [{ "key": "standard", "label": "Standard", "color": "#2563EB", "accessible": true }],
+  "floors": [{ "id": 1, "name": "Hall", "focalPoint": [0, -400] }],
+  "nodes": [
+    { "id": 1, "type": "section", "label": "Hall", "category": "standard",
+      "children": [
+        { "id": 2, "type": "rowBlock",
+          "rows": [
+            { "rid": 3, "seats": 10, "oids": [[10, 10]] },
+            { "rid": 4, "seats": 12, "oids": [[20, 12]] }
+          ] }
+      ] }
+  ]
+}
