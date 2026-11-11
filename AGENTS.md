@@ -141,6 +141,8 @@ Keep it small and fast.
 - Follow the `full-stop` skill: build, prove locally, review with `sol-loop`, rebase, file the pull request. Builders do not wait on CI and do not merge; the orchestrator runs the merge gate and merges (`docs/ORCHESTRATION.md` §7).
 - Review is by GPT-6.1 Sol at high reasoning effort, through `sol-loop`. The builder does not approve its own work.
 - Squash-merge. Rebase onto `main` before merging; never force-push `main`.
+- Push your branch as soon as it has a commit, and again after every review round and rebase: a worktree is removed when its session ends, and work that exists only there is lost with it.
+- Never end your turn while a command you started is still running: run long commands in the foreground, or wait for them in the same turn. A session that stops to wait may never be woken.
 - Make the smallest change that completes the task. No unrelated cleanup.
 - If code and spec disagree, fix one of them in the same pull request. A reversed design decision gets a new entry in `docs/DECISIONS.md`.
 - Check the payload effect of any new dependency in `cavea-core`, `cavea-format` or `cavea-web`.
