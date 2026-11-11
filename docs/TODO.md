@@ -195,7 +195,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **SRV-007** Chart endpoints: create, draft with etag, validate, publish, versions (08 §6.2)
 - [x] **SRV-008** Compile on publish; store public, precompressed and full artefacts (03 §4.6)
 - [x] **SRV-009** Serve compiled charts with immutable caching and content negotiation (03 §4.6)
-- [x] **SRV-010** Asset upload and serving (08 §6.2). Upload, sniffing and public serving (D-47); E007 at publish for an asset the workspace does not hold, and attaching a thumbnail to a version (DSN-040), are not built
+- [x] **SRV-010** Asset upload and serving (08 §6.2). Upload, sniffing and public serving (D-47), image bytes in memory bounded per node, E007 at validate and publish for an image the workspace does not hold; attaching a thumbnail to a version is DSN-040
 - [x] **SRV-011** Event endpoints: create, get, patch, archive (08 §6.2)
 - [x] **SRV-012** Hold-token endpoints (08 §6.2)
 - [x] **SRV-013** Seat operation endpoints: hold, release, book, change status (08 §6.2)
@@ -321,9 +321,9 @@ Do not start a milestone until the previous one's exit criteria are met.
 ### Console
 
 - [ ] **CON-001** Application shell, router, navigation, workspace switcher (09 §1). The foundation is built (`apps/console`: router, the console frame and its navigation, themes, tokens, the message catalogue, base components; 09 §9 as built); the workspace switcher waits for sign-in and workspaces in the console (CON-003)
-- [ ] **CON-002** First-run setup with a one-time link (09 §2)
-- [ ] **CON-003** Sign-in, sessions, CSRF, optional TOTP (09 §2, §10)
-- [ ] **CON-004** Roles and permission checks on every route (09 §2)
+- [ ] **CON-002** First-run setup with a one-time link (09 §2). The server side is built: the logged link, `POST /console/api/setup`, one owner under a race, owner of every workspace (D-49). The console owes the `/console/setup` page that reads the token from the fragment
+- [ ] **CON-003** Sign-in, sessions, CSRF, optional TOTP (09 §2, §10). The server side is built but TOTP: argon2id, `/console/api/session`, `me`, `password`, the `__Host-` cookie with idle and absolute ends, CSRF and origin checks on every cookie mutation (08 §11, D-48). Owed: TOTP (`POST /console/api/totp`; SHA-1 HMAC is in the tree), password reset, and the console's sign-in screen, CSRF header and dev proxy (09 §9)
+- [ ] **CON-004** Roles and permission checks on every route (09 §2). Roles are stored per workspace and listed by `GET /console/api/me`; the console session is not yet a credential on `/v1`
 - [ ] **CON-005** Charts list with thumbnails, search, card menu, empty state (09 §3.1)
 - [ ] **CON-006** Chart detail: versions, events, settings (09 §3.2)
 - [ ] **CON-007** Events list and create form (09 §4.1)
@@ -348,7 +348,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 - [ ] **SEC-001** Review the threat table against the implementation; file gaps (12 §3)
 - [ ] **SEC-002** SSRF guard for outbound requests (12 §3 T8)
-- [ ] **SEC-003** Login rate limiting and session rotation (12 §3 T9)
+- [x] **SEC-003** Login rate limiting and session rotation (12 §3 T9). Per-address budget, per (account, address) and per-account back-off that never waits on an address the member signed in from (08 §12, D-49); a new session at every sign-in, every session ended by a password change
 - [ ] **SEC-004** Content Security Policy and security headers for the console (12 §3 T7)
 - [ ] **SEC-005** Verify all user-supplied strings render as text in renderer, list view and console (12 §3 T7)
 - [ ] **SEC-006** Secure defaults check at startup with warnings (12 §4)

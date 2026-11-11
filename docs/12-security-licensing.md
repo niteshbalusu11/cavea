@@ -37,8 +37,8 @@ Everything arriving from a browser is untrusted, including chart files and realt
 | T6 | Malicious compiled chart or realtime frame | Hardened, fuzzed decoders; strict limits; the renderer loads charts only from the configured origin |
 | T7 | Script injection through labels, names or categories, or through uploaded images | All such strings are rendered as text, never as HTML, in the renderer, list view and console; a strict Content Security Policy on the console; hosts that return HTML from a custom tooltip own that risk, and the docs say so. An upload's type is decided by its bytes against PNG, JPEG and WebP (never SVG, never the client's header or file name); a truncated file or one with data after its end is refused; it is served with its sniffed type, `nosniff` and `Content-Security-Policy: default-src 'none'; sandbox` (`08-server.md` §6.2) |
 | T8 | Server-side request forgery through webhook URLs or image import | Resolve the host and refuse private, loopback and link-local ranges by default; do not follow redirects to such ranges; timeouts and size caps |
-| T9 | Console account takeover | argon2id; optional TOTP; login rate limiting; session rotation on sign-in; HTTP-only SameSite cookies; CSRF tokens; audit log |
-| T10 | Embed token misuse | Lifetime of at most one hour; scoped to one workspace and one chart or event; bound to the embedding origin; `frame-ancestors` restricted to allowed origins |
+| T9 | Console account takeover | argon2id (m = 19 MiB, t = 2, p = 1, OWASP's first set; 8 ms a hash measured locally), on blocking threads two at a time per node, so a burst cannot stall holds; passwords 15 to 128 characters; constant-time comparison; an unknown email and a wrong password answer alike after the same work (a dummy hash). Sign-in rate limited per client address (10 a minute) and backed off per (account, address) and per account, never against an address the member has signed in from (`08-server.md` §12, D-49). Sessions: 256-bit identifiers stored as SHA-256, a `__Host-` cookie that is `HttpOnly`, `Secure`, `SameSite=Lax`; 12 hours idle, 7 days at most; a new identifier at every sign-in; a password change ends every session; sign-out ends it on the server. Every cookie-authenticated non-safe request carries a CSRF token derived from the session and must come from the server's own origin; no credentialed CORS anywhere (`08-server.md` §11, D-48). Not built yet: TOTP, role checks on `/v1` (CON-004), the audit log (CON-013) |
+| T10 | Embed token misuse (embed tokens are not built yet) | Lifetime of at most one hour; scoped to one workspace and one chart or event; bound to the embedding origin; `frame-ancestors` restricted to allowed origins |
 | T11 | Denial of service on realtime | Connection limits per IP; handshake and idle timeouts; frame size limits; slow consumers are dropped to resync; snapshots are cacheable at a CDN |
 | T12 | Replayed or duplicated booking calls | Idempotency keys; all-or-nothing commands |
 | T13 | Forged webhooks at the customer's endpoint | HMAC signature with a timestamp; the docs require a five-minute tolerance check |
@@ -55,9 +55,9 @@ Everything arriving from a browser is untrusted, including chart files and realt
 - Public best-available: off.
 - Exact general-admission counts in public state: off.
 - Private network destinations for webhooks: refused.
-- Console sign-up: disabled; accounts are created by invitation.
+- Console sign-up: disabled. The first account is the owner, made with the one-time setup link of a server that has no user (`09-console.md` §2); others will come by invitation (CON-012).
 - CORS for secret-key routes: none.
-- Logs: no hold tokens, no order references unless enabled, no request bodies.
+- Logs: no hold tokens, no order references unless enabled, no request bodies; no passwords or their hashes, console session identifiers, CSRF tokens or emails (a console user appears as `usr_…`). The one secret ever logged is the first-run setup link, on purpose: one `info` record, only while no user exists, valid once for an hour (`09-console.md` §2).
 - TLS: required in production; the server warns when `CAVEA_PUBLIC_URL` is not HTTPS.
 - Admin key: there is no default; it must be set explicitly (`CAVEA_ADMIN_KEY`, at least 32 characters, or the server will not start). Unset, the admin endpoints refuse every request (`DECISIONS.md` D-24).
 

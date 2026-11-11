@@ -67,6 +67,18 @@ pub struct Config {
     pub rate_limit_reads: u32,
     /// `CAVEA_ASSET_MAX_BYTES`: the largest image `POST /v1/assets` takes.
     pub asset_max_bytes: NonZeroU32,
+    /// `CAVEA_PUBLIC_URL`: the server's external base URL, such as
+    /// `https://seats.example.com`, without a trailing slash. The setup link
+    /// starts with it.
+    pub public_url: Option<PublicUrl>,
+    /// `CAVEA_CONSOLE_COOKIE_SECURE`: whether the console session cookie is
+    /// `Secure` and `__Host-` prefixed (the default). `false` only for a
+    /// development server reached over plain HTTP from another host than
+    /// `localhost`.
+    pub console_cookie_secure: bool,
+    /// `CAVEA_RATE_LIMIT_SIGN_IN`: console sign-in, setup and password-change
+    /// attempts per minute per client address; 0 is unlimited.
+    pub rate_limit_sign_in: u32,
 }
 
 impl Config {
@@ -107,6 +119,9 @@ impl Config {
             asset_max_bytes: setting("CAVEA_ASSET_MAX_BYTES", || {
                 NonZeroU32::MIN.saturating_add((10 << 20) - 1)
             })?,
+            public_url: optional("CAVEA_PUBLIC_URL")?,
+            console_cookie_secure: setting("CAVEA_CONSOLE_COOKIE_SECURE", || true)?,
+            rate_limit_sign_in: setting("CAVEA_RATE_LIMIT_SIGN_IN", || 10)?,
         }
         .checked()
     }
@@ -166,6 +181,41 @@ impl FromStr for CorsOrigins {
             .filter(|l| !l.is_empty())
             .ok_or("must be * or a comma-separated list of origins such as https://tickets.example.com")?;
         Ok(Self::List(list))
+    }
+}
+
+/// `CAVEA_PUBLIC_URL`: `http://` or `https://`, a host, an optional port and
+/// path, without spaces; kept without a trailing slash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicUrl(String);
+
+impl PublicUrl {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Whether it is `https://` (12 §4: the server warns otherwise).
+    #[must_use]
+    pub fn is_https(&self) -> bool {
+        self.0.starts_with("https://")
+    }
+}
+
+impl FromStr for PublicUrl {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim().trim_end_matches('/');
+        let rest = s
+            .strip_prefix("https://")
+            .or_else(|| s.strip_prefix("http://"))
+            .ok_or("must start with https:// or http://")?;
+        let host = rest.split('/').next().unwrap_or_default();
+        if host.is_empty() || s.len() > 2048 || !s.bytes().all(|b| b.is_ascii_graphic()) {
+            return Err("must be a URL such as https://seats.example.com");
+        }
+        Ok(Self(s.to_owned()))
     }
 }
 

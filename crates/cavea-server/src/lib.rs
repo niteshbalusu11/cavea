@@ -5,6 +5,7 @@
 pub mod assets;
 pub mod charts;
 pub mod config;
+pub mod console;
 pub mod http;
 pub mod limiter;
 pub mod metrics;

@@ -13,6 +13,7 @@ mod assets;
 pub mod auth;
 #[macro_use]
 mod charts;
+mod console;
 mod error;
 mod events;
 pub mod extract;
@@ -25,6 +26,7 @@ mod public;
 mod realtime;
 mod seats;
 mod session;
+pub mod staff;
 mod workspaces;
 
 use std::sync::Arc;
@@ -64,6 +66,8 @@ pub struct AppState {
     pub health: Health,
     /// The image bytes held in memory at once (`crate::assets::Memory`).
     pub asset_memory: crate::assets::Memory,
+    /// The console's sign-in back-off (`crate::console::guard`).
+    pub sign_in: Arc<crate::console::guard::Guard>,
 }
 
 /// The whole HTTP surface.
@@ -84,6 +88,7 @@ fn routes() -> openapi::Routes {
         .merge(assets::routes())
         .merge(public::routes())
         .merge(realtime::routes())
+        .merge(console::routes())
 }
 
 /// Add the problem+json fallbacks, the default body limit, CORS for the public

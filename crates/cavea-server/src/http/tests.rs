@@ -60,11 +60,17 @@ fn state() -> AppState {
         rate_limit_holds: 120,
         rate_limit_reads: 3_000,
         asset_max_bytes: std::num::NonZeroU32::MIN.saturating_add((10 << 20) - 1),
+        public_url: None,
+        console_cookie_secure: true,
+        // Off: tests sign in more often than people do; the budget has its
+        // own test.
+        rate_limit_sign_in: 0,
     };
     // Never connects: no route under test reaches the database.
     let db = sqlx::postgres::PgPoolOptions::new().connect_lazy_with(Default::default());
     AppState {
         asset_memory: crate::assets::Memory::new(config.asset_max_bytes.get()),
+        sign_in: Arc::default(),
         seats: Seats::new(db.clone(), &config, ServerClock::System, None),
         realtime: Realtime::new(100, 10, Timing::default()),
         limiter: Arc::new(Limiter::new(
@@ -849,11 +855,15 @@ async fn cors_on_public_routes_only() {
                 }
             }
         }
-        // Secret-key routes: no CORS at all; `OPTIONS` is an unknown method.
+        // Secret-key and console-session routes: no CORS at all, so no other
+        // origin reads anything sent with the cookie; `OPTIONS` is an unknown
+        // method.
         for (method, uri) in [
             ("POST", "/v1/events/e/hold"),
             ("GET", "/v1/hold-tokens/x"),
             ("POST", "/v1/hold-tokens"),
+            ("GET", "/console/api/me"),
+            ("DELETE", "/console/api/session"),
         ] {
             let (response, problem) = send_from(&app, method, uri, allowed, true).await;
             assert_problem(&response, &problem, Code::NotFound);

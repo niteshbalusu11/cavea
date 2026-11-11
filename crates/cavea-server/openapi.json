@@ -19,6 +19,12 @@
           "minimum": 1,
           "type": "integer"
         }
+      },
+      "SetCookie": {
+        "description": "The console session: `__Host-cavea_console=cs_…; Path=/; Max-Age=604800; HttpOnly; SameSite=Lax; Secure` (without `__Host-` and `Secure` when `CAVEA_CONSOLE_COOKIE_SECURE=false`); `Max-Age=0` clears it.",
+        "schema": {
+          "type": "string"
+        }
       }
     },
     "parameters": {
@@ -36,6 +42,15 @@
         "in": "path",
         "name": "chart",
         "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "CsrfToken": {
+        "description": "Required: the session's `csrf_token` from `GET /console/api/me` (or sign-in).",
+        "in": "header",
+        "name": "Cavea-Csrf-Token",
+        "required": false,
         "schema": {
           "type": "string"
         }
@@ -452,6 +467,170 @@
         "required": [
           "data",
           "next"
+        ],
+        "type": "object"
+      },
+      "ConsoleMe": {
+        "additionalProperties": false,
+        "properties": {
+          "csrf_token": {
+            "description": "Send it in `Cavea-Csrf-Token` with every non-safe request.",
+            "type": "string"
+          },
+          "session": {
+            "additionalProperties": false,
+            "properties": {
+              "absolute_expires_at": {
+                "description": "However it is used.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "expires_at": {
+                "description": "Unless used again.",
+                "format": "date-time",
+                "type": "string"
+              }
+            },
+            "required": [
+              "expires_at",
+              "absolute_expires_at"
+            ],
+            "type": "object"
+          },
+          "user": {
+            "additionalProperties": false,
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "id": {
+                "description": "`usr_` and 32 hex digits: the actor in event logs.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "email"
+            ],
+            "type": "object"
+          },
+          "workspaces": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "description": "`ws_` and 32 hex digits: send it in `Cavea-Workspace`.",
+                  "type": "string"
+                },
+                "key": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "role": {
+                  "enum": [
+                    "owner",
+                    "admin",
+                    "editor",
+                    "operator",
+                    "viewer"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "key",
+                "name",
+                "role"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "user",
+          "workspaces",
+          "csrf_token",
+          "session"
+        ],
+        "type": "object"
+      },
+      "ConsolePassword": {
+        "additionalProperties": false,
+        "properties": {
+          "current_password": {
+            "type": "string"
+          },
+          "new_password": {
+            "description": "15 to 128 characters; no other rule.",
+            "maxLength": 128,
+            "minLength": 15,
+            "type": "string"
+          }
+        },
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "type": "object"
+      },
+      "ConsoleSetup": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "description": "The owner's email; stored trimmed and lowercased.",
+            "type": "string"
+          },
+          "password": {
+            "description": "15 to 128 characters; no other rule.",
+            "maxLength": 128,
+            "minLength": 15,
+            "type": "string"
+          },
+          "token": {
+            "description": "The one-time token of the setup link's fragment.",
+            "type": "string"
+          },
+          "workspace": {
+            "additionalProperties": false,
+            "description": "The first workspace, created only when none exists (default key `main`, name `Main`). Existing workspaces all get the owner.",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "name"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "token",
+          "email",
+          "password"
+        ],
+        "type": "object"
+      },
+      "ConsoleSignIn": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
         ],
         "type": "object"
       },
@@ -1617,6 +1796,12 @@
         "scheme": "bearer",
         "type": "http"
       },
+      "consoleSession": {
+        "description": "A staff member's console session (09 §2), set by `POST /console/api/session` or `/console/api/setup`; `cavea_console` when `CAVEA_CONSOLE_COOKIE_SECURE=false`. Not the buyer's session token. With it, a non-safe method sends `Cavea-Csrf-Token`.",
+        "in": "cookie",
+        "name": "__Host-cavea_console",
+        "type": "apiKey"
+      },
       "holdToken": {
         "description": "The buyer's hold token.",
         "in": "header",
@@ -1650,12 +1835,288 @@
     }
   },
   "info": {
-    "description": "The Cavea server's REST API (`docs/08-server.md` §6). JSON bodies with `snake_case` fields; times are RFC 3339 UTC. Every response carries `Cavea-Request-Id`; a caller may send its own (1 to 64 characters of `A-Z a-z 0-9 . _ -`). Errors are `application/problem+json` with a stable `code` (08 §6.4): match on `code`, not on `message`. Lists are `{\"data\": [..], \"next\": <cursor or null>}`, oldest first; pass `next` back as `after`. The WebSocket protocol of `GET /v1/public/rt` is 08 §8, which OpenAPI cannot describe.",
+    "description": "The Cavea server's REST API (`docs/08-server.md` §6). JSON bodies with `snake_case` fields; times are RFC 3339 UTC. Every response carries `Cavea-Request-Id`; a caller may send its own (1 to 64 characters of `A-Z a-z 0-9 . _ -`). Errors are `application/problem+json` with a stable `code` (08 §6.4): match on `code`, not on `message`. Lists are `{\"data\": [..], \"next\": <cursor or null>}`, oldest first; pass `next` back as `after`. The WebSocket protocol of `GET /v1/public/rt` is 08 §8, which OpenAPI cannot describe. The `/console/api` routes take the console session cookie (09 §10); their non-safe methods send `Cavea-Csrf-Token`.",
     "title": "Cavea server API",
     "version": "0.0.0"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/console/api/me": {
+      "get": {
+        "description": "The user, their workspaces and roles, the session's CSRF token.",
+        "operationId": "consoleMe",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleMe"
+                }
+              }
+            },
+            "description": "The user",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "The signed-in user",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/console/api/password": {
+      "post": {
+        "description": "Ends every session of the user, this one included, and starts a new one. A wrong current password is `403` `credentials`.",
+        "operationId": "consolePassword",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsolePassword"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleMe"
+                }
+              }
+            },
+            "description": "Signed in again",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "Set-Cookie": {
+                "$ref": "#/components/headers/SetCookie"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Change your password",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/console/api/session": {
+      "delete": {
+        "description": "Ends the session on the server and clears the cookie.",
+        "operationId": "consoleSignOut",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Signed out",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "Set-Cookie": {
+                "$ref": "#/components/headers/SetCookie"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Sign out",
+        "tags": [
+          "console"
+        ]
+      },
+      "post": {
+        "description": "A new session every time (any presented one is ended). A wrong email or password is `401` `credentials`, the same for both; repeated failures wait (`429`, `backoff`, `Retry-After`).",
+        "operationId": "consoleSignIn",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsoleSignIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleMe"
+                }
+              }
+            },
+            "description": "Signed in",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "Set-Cookie": {
+                "$ref": "#/components/headers/SetCookie"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [],
+        "summary": "Sign in",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/console/api/setup": {
+      "post": {
+        "description": "09 §2. Works while no user exists, once, with the token of the link the server logged at start-up (valid one hour; a restart makes a new one). The owner becomes owner of every workspace; with none, `workspace` (default `main`) is created. Signs the owner in. A wrong, expired or used token, or a server that has an owner, is `401` `setup_token`.",
+        "operationId": "consoleSetup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsoleSetup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleMe"
+                }
+              }
+            },
+            "description": "The owner, signed in",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "Set-Cookie": {
+                "$ref": "#/components/headers/SetCookie"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [],
+        "summary": "Create the owner with the one-time setup token",
+        "tags": [
+          "console"
+        ]
+      }
+    },
     "/healthz": {
       "get": {
         "operationId": "healthz",

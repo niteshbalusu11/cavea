@@ -82,10 +82,25 @@ async fn run(config: Config, streams: tokio::runtime::Handle) -> anyhow::Result<
         Timing::default(),
         streams,
     );
-    let limiter = Limiter::new(config.rate_limit_holds, config.rate_limit_reads);
+    if let Some(url) = config.public_url.as_ref().filter(|u| !u.is_https()) {
+        tracing::warn!(
+            public_url = url.as_str(),
+            "CAVEA_PUBLIC_URL is not HTTPS; use TLS in production"
+        );
+    }
+    // While no user exists: the one-time link to create the owner (09 §2),
+    // the one secret the server logs (12 §4).
+    let public_url = config.public_url.as_ref().map(|u| u.as_str());
+    if let Some(link) = cavea_server::console::setup::prepare(&db, public_url).await? {
+        cavea_server::console::setup::announce(&link, public_url.is_some());
+    }
+    tokio::task::spawn_blocking(cavea_server::console::password::warm).await?;
+    let limiter = Limiter::new(config.rate_limit_holds, config.rate_limit_reads)
+        .with_sign_in(config.rate_limit_sign_in);
     let state = AppState {
         limiter: Arc::new(limiter),
         asset_memory: cavea_server::assets::Memory::new(config.asset_max_bytes.get()),
+        sign_in: Arc::default(),
         config: Arc::new(config),
         db,
         seats,

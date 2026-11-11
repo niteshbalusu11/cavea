@@ -1,5 +1,6 @@
 //! Rate limits on the public endpoints (08 §12): a token bucket per
-//! (publishable key, client address, budget), in memory, per node.
+//! (publishable key, client address, budget), in memory, per node; and on
+//! console sign-in attempts per client address ([`Budget::SignIn`], 12 §3 T9).
 //!
 //! Each bucket is one number, its theoretical arrival time (GCRA): a bucket
 //! with a rate of `n` a minute admits `n` at once from rest and then one every
@@ -37,6 +38,9 @@ pub enum Budget {
     /// Everything else: event info, the snapshot and polling, token state,
     /// and each WebSocket or SSE connection attempt.
     Reads,
+    /// Console sign-in, setup and password-change attempts, per client
+    /// address alone (the key is 0).
+    SignIn,
 }
 
 /// What a bucket is kept under: 32 bytes.
@@ -61,10 +65,11 @@ pub struct Limiter {
     /// Microseconds between two admissions, per budget; `None` is unlimited.
     holds: Option<u64>,
     reads: Option<u64>,
+    sign_in: Option<u64>,
     hasher: RandomState,
     shards: Box<[Mutex<Shard>]>,
     /// Refusals per [`Budget`], for `cavea_rate_limited_total`.
-    refused: [AtomicU64; 2],
+    refused: [AtomicU64; 3],
 }
 
 impl std::fmt::Debug for Limiter {
@@ -72,8 +77,13 @@ impl std::fmt::Debug for Limiter {
         f.debug_struct("Limiter")
             .field("holds", &self.holds)
             .field("reads", &self.reads)
+            .field("sign_in", &self.sign_in)
             .finish_non_exhaustive()
     }
+}
+
+fn interval(per_minute: u32) -> Option<u64> {
+    (per_minute > 0).then(|| MINUTE_US / u64::from(per_minute))
 }
 
 /// Refused: retry after this many seconds, at least 1.
@@ -81,10 +91,10 @@ impl std::fmt::Debug for Limiter {
 pub struct Limited(pub u64);
 
 impl Limiter {
-    /// Holds and reads per minute; 0 turns a budget off.
+    /// Holds and reads per minute; 0 turns a budget off. Sign-in attempts
+    /// are off until [`Limiter::with_sign_in`].
     #[must_use]
     pub fn new(holds_per_minute: u32, reads_per_minute: u32) -> Self {
-        let interval = |n: u32| (n > 0).then(|| MINUTE_US / u64::from(n));
         let hasher = RandomState::new();
         let shards = (0..SHARDS)
             .map(|_| {
@@ -97,10 +107,18 @@ impl Limiter {
         Self {
             holds: interval(holds_per_minute),
             reads: interval(reads_per_minute),
+            sign_in: None,
             hasher,
             shards,
-            refused: [AtomicU64::new(0), AtomicU64::new(0)],
+            refused: [const { AtomicU64::new(0) }; 3],
         }
+    }
+
+    /// Sign-in attempts per minute per client address; 0 turns it off.
+    #[must_use]
+    pub fn with_sign_in(mut self, per_minute: u32) -> Self {
+        self.sign_in = interval(per_minute);
+        self
     }
 
     /// Requests refused for `budget` since start-up.
@@ -121,6 +139,7 @@ impl Limiter {
         let Some(interval) = (match budget {
             Budget::Holds => self.holds,
             Budget::Reads => self.reads,
+            Budget::SignIn => self.sign_in,
         }) else {
             return Ok(());
         };

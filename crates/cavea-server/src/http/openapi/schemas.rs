@@ -556,6 +556,112 @@ Without: booked objects.",
             ),
         ),
         (
+            "ConsoleSetup",
+            object(
+                &[
+                    (
+                        "token",
+                        text("The one-time token of the setup link's fragment."),
+                    ),
+                    (
+                        "email",
+                        text("The owner's email; stored trimmed and lowercased."),
+                    ),
+                    (
+                        "password",
+                        described(
+                            json!({ "type": "string", "minLength": 15, "maxLength": 128 }),
+                            "15 to 128 characters; no other rule.",
+                        ),
+                    ),
+                ],
+                &[(
+                    "workspace",
+                    described(
+                        object(&[("key", string()), ("name", string())], &[]),
+                        "The first workspace, created only when none exists (default key \
+`main`, name `Main`). Existing workspaces all get the owner.",
+                    ),
+                )],
+            ),
+        ),
+        (
+            "ConsoleSignIn",
+            object(&[("email", string()), ("password", string())], &[]),
+        ),
+        (
+            "ConsolePassword",
+            object(
+                &[
+                    ("current_password", string()),
+                    (
+                        "new_password",
+                        described(
+                            json!({ "type": "string", "minLength": 15, "maxLength": 128 }),
+                            "15 to 128 characters; no other rule.",
+                        ),
+                    ),
+                ],
+                &[],
+            ),
+        ),
+        (
+            "ConsoleMe",
+            object(
+                &[
+                    (
+                        "user",
+                        object(
+                            &[
+                                (
+                                    "id",
+                                    text("`usr_` and 32 hex digits: the actor in event logs."),
+                                ),
+                                ("email", string()),
+                            ],
+                            &[],
+                        ),
+                    ),
+                    (
+                        "workspaces",
+                        array(object(
+                            &[
+                                (
+                                    "id",
+                                    text("`ws_` and 32 hex digits: send it in `Cavea-Workspace`."),
+                                ),
+                                ("key", string()),
+                                ("name", string()),
+                                (
+                                    "role",
+                                    json!({ "enum": ["owner", "admin", "editor", "operator", "viewer"] }),
+                                ),
+                            ],
+                            &[],
+                        )),
+                    ),
+                    (
+                        "csrf_token",
+                        text("Send it in `Cavea-Csrf-Token` with every non-safe request."),
+                    ),
+                    (
+                        "session",
+                        object(
+                            &[
+                                ("expires_at", described(time(), "Unless used again.")),
+                                (
+                                    "absolute_expires_at",
+                                    described(time(), "However it is used."),
+                                ),
+                            ],
+                            &[],
+                        ),
+                    ),
+                ],
+                &[],
+            ),
+        ),
+        (
             "Asset",
             object(
                 &[

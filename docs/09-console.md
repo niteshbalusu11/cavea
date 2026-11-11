@@ -49,6 +49,14 @@ The workspace switcher sits under the logo. Users with one workspace do not see 
 | Operator | View | Block, release, book, assign channels | — | — |
 | Viewer | View | View, reports | — | — |
 
+As built (server side; CON-002 to CON-004, SEC-003): the screens come later.
+
+- **First run.** While no user exists, each start logs one `info` record holding the setup link, `{CAVEA_PUBLIC_URL}/console/setup#token=<64 hex digits>` (the path alone when `CAVEA_PUBLIC_URL` is unset). The token is in the fragment, which never reaches a server or a `Referer`. It works once, for an hour; a restart makes a new one and the old stops working. The console's `/console/setup` page reads the fragment and posts it with an email and a password to `POST /console/api/setup`. The owner becomes **owner of every workspace that exists** (made earlier with the admin key); with none, the request's `workspace` (`{key, name}`, default `main`, `Main`) is created. Workspaces the admin key creates after setup have no members until members management exists (CON-012). Once a user exists, nothing is logged or stored, and setup answers `401` (`setup_token`) as it does to a wrong token. Of two setups at once, one creates the owner.
+- **Passwords:** 15 to 128 characters, no other rule (NIST SP 800-63B rev. 4 for a single factor); argon2id with m = 19 MiB, t = 2, p = 1 (12 §3 T9). Emails are trimmed and lowercased; nothing is sent to them.
+- **Sessions:** the cookie `__Host-cavea_console` (`HttpOnly`, `SameSite=Lax`, `Secure`, `Path=/`), ending 12 hours after the last request and 7 days after sign-in in any case (08 §11). Sign-in always starts a new session; a password change ends all of the user's.
+- **Roles** are stored per workspace and `GET /console/api/me` lists them; the console session on `/v1`, with the role table above checked on every route, is CON-004.
+- **Not built:** TOTP (the tree has SHA-1 through the WebSocket crate, so it needs no new crate; CON-003), members and invitations (CON-012), password reset, single sign-on.
+
 ## 3. Charts
 
 ### 3.1 List
@@ -178,6 +186,8 @@ Report charts show one measure each, label values directly, and use the same col
 
 As built (`apps/console`, CON-001 in part): Solid Router 1.0.1, Tailwind 4.3.3 through its Vite plugin, Kobalte 0.13.14, each pinned. TanStack Query, the API client, form validation and Playwright arrive with the first screen that talks to the server. Routes: `/charts`, `/events`, `/reports`, `/developers` and `/settings` in the console frame (left navigation, content at most 1,280 px; every screen but Charts says it is not built yet), and full-window tools outside it, the designer at `/designer/local` for a chart from a file. The design tokens are CSS custom properties in `src/styles.css`, light and dark; Tailwind's own palette and type scale are removed, so a component can use only tokens, and a test checks the text and control pairs for WCAG 2.2 AA contrast in both themes. The theme is the system's unless the user picks one (stored per browser), applied as `data-theme` on the root. Every user-visible string is in one English catalogue, `src/i18n/messages.ts`, by stable id; groups keyed by the edit core's values (node kinds, tools, units, command and import error codes, undo entry keys, inspector fields, the compiler's finding codes) are typed against the generated types, and a test fails when the types or the compiler gain a value without a message. Numbers and times go through `Intl`. The base components are in `src/ui`.
 
+**Talking to the server in development.** The console is one origin with the server in production (CON-015 embeds it). In development the Vite dev server must proxy `/console/api` and `/v1` to `cavea-server` (Vite's `server.proxy`, with `changeOrigin` left `false` so the server sees the dev server's `Host`), and the console calls relative URLs. The browser then sees one origin: the session cookie is first-party, `Sec-Fetch-Site` is `same-origin`, and the server needs no CORS for credentials, which it never gives (08 §11). `http://localhost` counts as secure in browsers, so the default `Secure`, `__Host-` cookie works there; only a dev server reached over plain HTTP by another host name needs `CAVEA_CONSOLE_COOKIE_SECURE=false`. Do not call the server's port directly from the page: the cookie would be cross-site and every console request refused. (`/v1` takes the console session once CON-004 is in; until then the console signs in and reads `me` only.)
+
 ## 10. Console-only endpoints
 
 Under `/console/api`, cookie-authenticated:
@@ -187,7 +197,17 @@ Under `/console/api`, cookie-authenticated:
 | `POST /console/api/session` , `DELETE` | Sign in, sign out |
 | `GET /console/api/me` | User, workspaces, roles |
 | `POST /console/api/setup` | First-run owner creation with the one-time token |
-| `GET/POST/PATCH/DELETE /console/api/members` | Membership management |
-| `POST /console/api/totp` | Enrol and verify |
+| `GET/POST/PATCH/DELETE /console/api/members` | Membership management (not built: CON-012) |
+| `POST /console/api/totp` | Enrol and verify (not built: CON-003) |
+| `POST /console/api/password` | Change one's password; every session of the user ends and a new one starts |
 
 Everything else goes through `/v1` with the console session accepted as a credential.
+
+As built, for the console's screens (the shapes are `ConsoleSetup`, `ConsoleSignIn`, `ConsolePassword` and `ConsoleMe` in the OpenAPI document, tag `console`):
+
+- `POST /console/api/setup` `{token, email, password, workspace?: {key, name}}` → `201` `ConsoleMe` and the cookie. `401` `setup_token`; `400` `invalid_field` (`email`, `password`, `key`, `name`); `409` for a taken workspace key.
+- `POST /console/api/session` `{email, password}` → `200` `ConsoleMe` and the cookie. `401` `credentials` (a wrong email and a wrong password alike); `429` `backoff` or `sign_in` with `Retry-After`; `503` `password_hashing`.
+- `DELETE /console/api/session` → `204`, cookie cleared.
+- `GET /console/api/me` → `ConsoleMe`: `{user: {id: "usr_…", email}, workspaces: [{id: "ws_…", key, name, role}], csrf_token, session: {expires_at, absolute_expires_at}}`. A `401` with `reason: "console_session"` anywhere means: sign in again.
+- `POST /console/api/password` `{current_password, new_password}` → `200` `ConsoleMe` and a new cookie; `403` `credentials` for a wrong current password.
+- **Every non-safe request** with the cookie sends `Cavea-Csrf-Token: <csrf_token>` (from `me` or the sign-in reply); `403` `csrf` without it, `403` `origin` from another site.

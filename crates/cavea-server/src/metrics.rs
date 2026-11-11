@@ -131,13 +131,30 @@ pub fn render(state: &AppState) -> String {
     out.family(
         "cavea_rate_limited_total",
         "counter",
-        "Public requests refused by the rate limiter, by budget.",
+        "Requests refused by the rate limiter, by budget.",
     );
-    for (budget, name) in [(Budget::Holds, "holds"), (Budget::Reads, "reads")] {
+    for (budget, name) in [
+        (Budget::Holds, "holds"),
+        (Budget::Reads, "reads"),
+        (Budget::SignIn, "sign_in"),
+    ] {
         out.sample(
             "cavea_rate_limited_total",
             &[("budget", name)],
             state.limiter.refused(budget),
+        );
+    }
+    out.family(
+        "cavea_console_sign_ins_total",
+        "counter",
+        "Console sign-in attempts by result: ok, credentials (wrong email or password) or \
+backoff (refused unchecked after repeated failures).",
+    );
+    for outcome in crate::console::guard::Outcome::ALL {
+        out.sample(
+            "cavea_console_sign_ins_total",
+            &[("result", outcome.as_str())],
+            state.sign_in.counted(outcome),
         );
     }
     let (open, idle) = (state.db.size(), state.db.num_idle());
