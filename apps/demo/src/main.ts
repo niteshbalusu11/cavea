@@ -1,65 +1,49 @@
-// Draws a synthetic stadium, compiled in the browser, with the Rust renderer,
-// to see and measure it. Query parameters: `seats` (default 100000), `seed`
-// (default 1), `preset` (a `cavea-testkit` preset such as `stadium-100k`
-// instead of the stadium; `seats` must then be its seat count), `shape` (0
-// circle, 1 rounded, 2 chair), `theme`
-// (light, dark, high-contrast), `camera=x:y:width:height` in chart units,
-// `sold` (fraction of seats unavailable in the first snapshot, in runs;
-// default 0.3) or `mark=start:count` to make exactly that range unavailable.
-// State reaches the view as realtime protocol frames (08 §8) built here. Pan and zoom
-// with mouse, wheel, trackpad or touch; `gestures=greedy|cooperative|none`
-// sets gesture handling (cooperative makes the page scroll around the map),
-// `reducedMotion=1` turns animation off.
+// A seat map built with the public API only: `createSeatMap` and a
+// `customState` adapter that plays a ticketing backend in the page. Build the
+// WASM with `cargo xtask build-web --demo` first: the synthetic charts come
+// from its debug-only exports.
 //
-// Tap or click seats to select and deselect them. A fake host answers each
-// hold request after `holdMs` (default 400) milliseconds, then marks the seats
-// unavailable in a DELTA and lists them in a PRIVATE frame, as the server does;
-// `fail=n` makes every n-th hold fail as taken by someone else, so the revert
-// shows. `max` and `min` set the selection rules (default 4 and 0); `manual=1`
-// selects without holds. Small seats zoom instead of selecting (touch below
-// 18 px, mouse below 5 px).
+// Query parameters. Chart: `seats` (default 100000), `seed` (default 1),
+// `preset` (a `cavea-testkit` preset such as `arena` instead of the stadium),
+// `shape` (0 circle, 1 rounded, 2 chair), all compiled in the browser; or
+// `chart=url` to fetch a compiled chart, which the map then fetches in
+// parallel with the WASM, the atlas and the fake host's state. Map: `theme`
+// (light, dark, high-contrast, auto; default auto), `gestures=greedy|
+// cooperative|none` (cooperative puts the map in a scrolling page),
+// `reducedMotion=1|0`, `max` and `min` (selection rules, default 4 and 0).
 //
-// A simulated crowd: `crowd=ms` sends a DELTA every `ms` milliseconds taking
-// `crowdSize` (default 20) random seats and freeing as many; `snipe=1` also
-// takes one selected seat the buyer does not hold, so it is knocked out;
-// `gap=n` skips a sequence number every n-th delta, so the view asks to
-// resync and the host answers with a SNAPSHOT.
+// Fake host: `sold` (fraction of seats unavailable at start, in runs; default
+// 0.3) or `mark=start:count` (exactly that `idx` range); `stateDelay=ms`
+// holds the first state back; each hold is answered after `holdMs` (default
+// 400) ms, and `fail=n` refuses every n-th as taken by someone else;
+// `manual=1` gives the adapter no hold or release, so selecting holds
+// nothing. `crowd=ms` takes `crowdSize` (default 20) random seats and frees
+// as many every `ms` ms; `snipe=1` also takes a selected seat the buyer does
+// not hold yet, so it is knocked out.
 //
-// The chart has a pitch below the seats and a translucent band above them
-// (mesh decoration). Each frame line reports the level of detail
-// (`cameraChanged`), the WebGL draw calls the frame made, and the seat
-// labels: chunks built, chunks kept, label draw calls. Seat numbers show from
-// 14 px seats once the glyph atlas has arrived; `atlasDelay=ms` holds it back
-// that long, `atlas=url` fetches it from elsewhere (a bad URL shows the map
-// without labels and an `error` event).
-//
-// `window.caveaDemo` counts frames, WebGL errors and draw calls (`lod`,
-// `frameDraws`), keeps every engine event in `events`, and offers
-// `setTheme(name)`, `crowd(on)`, `resnapshot()`, `take(label)` (someone else
-// takes a seat, in a DELTA), `sell(from, count)` (the same for an `idx`
-// range), `gap()` (a DELTA that skips a sequence number, so the view asks
-// to resync and this host answers with a SNAPSHOT) and `camera(x, y, width,
-// height)` (fits that chart rectangle) for scripted checks.
+// `window.caveaDemo` has the map (`map.select([...])`, `map.setTheme(...)`,
+// `map.destroy()` from the console), the seat `labels`, the callback log in
+// `events`, and `take(label)`, `crowd(on)`, `resnapshot()` and
+// `second(hidden)` (a second map on the page, sharing the WASM).
 import {
-  attach,
+  createSeatMap,
+  customState,
   loadRenderer,
-  View,
+  type AdapterContext,
   type GestureHandling,
-  type RendererEvent,
+  type SeatMap,
+  type SeatMapOptions,
+  type Snapshot,
+  type Theme,
 } from "@cavea/renderer";
+// Debug-only exports, present in `--demo` builds; never part of the SDK.
+import { View } from "../../../packages/renderer/wasm/cavea_web.js";
 
-/** Exports present only in `cargo xtask build-web --demo` builds. */
-interface DemoExports {
-  setCamera(x: number, y: number, width: number, height: number): void;
-  idxOf(label: string): number | undefined;
-  labelStats(): Uint32Array;
-}
 interface DemoStatics {
   demoChart(seats: number, seed: number, shape: number, preset: string): Uint8Array;
+  demoLabels(ccf: Uint8Array): string[];
 }
-
-type Theme = "light" | "dark" | "high-contrast";
-const UNAVAILABLE = 1;
+const demo = View as unknown as Partial<DemoStatics>;
 
 function element<T extends HTMLElement>(id: string, type: new () => T): T {
   const node = document.getElementById(id);
@@ -68,147 +52,49 @@ function element<T extends HTMLElement>(id: string, type: new () => T): T {
   }
   return node;
 }
-
 const status = element("status", HTMLOutputElement);
 const selectionLine = element("selection", HTMLOutputElement);
-const canvas = element("seats", HTMLCanvasElement);
+const container = element("map", HTMLDivElement);
 
 const lines: string[] = [];
 function report(line: string): void {
   lines.push(line);
-  // Keep the first lines (load results) and the most recent frame.
-  if (lines.length > 9) {
-    lines.splice(5, lines.length - 9);
+  if (lines.length > 8) {
+    lines.splice(4, lines.length - 8);
   }
   status.textContent = lines.join("\n");
   console.log(`[cavea-demo] ${line}`);
 }
 
 const params = new URLSearchParams(location.search);
-const seats = Number(params.get("seats") ?? 100_000);
-const seed = Number(params.get("seed") ?? 1);
-const shape = Number(params.get("shape") ?? 0);
+const num = (name: string, fallback: number): number => Number(params.get(name) ?? fallback);
+const chartUrl = params.get("chart");
 const preset = params.get("preset") ?? "";
-const sold = Number(params.get("sold") ?? 0.3);
+const sold = num("sold", 0.3);
 const mark = params.get("mark")?.split(":").map(Number);
-const camera = params.get("camera")?.split(":").map(Number);
-const themeParam = params.get("theme");
-const theme: Theme = themeParam === "dark" || themeParam === "high-contrast" ? themeParam : "light";
+const themeParam = params.get("theme") ?? "auto";
+const theme = (
+  ["light", "dark", "high-contrast"].includes(themeParam) ? themeParam : "auto"
+) as Theme;
 const gesturesParam = params.get("gestures");
 const gestures: GestureHandling =
   gesturesParam === "cooperative" || gesturesParam === "none" ? gesturesParam : "greedy";
-const reducedMotion = params.has("reducedMotion") ? params.get("reducedMotion") === "1" : undefined;
-const max = Number(params.get("max") ?? 4);
-const min = Number(params.get("min") ?? 0);
+const max = num("max", 4);
+const min = num("min", 0);
 const manual = params.get("manual") === "1";
-const failEvery = Number(params.get("fail") ?? 0);
-const holdMs = Number(params.get("holdMs") ?? 400);
-const crowdMs = Number(params.get("crowd") ?? 0);
-const crowdSize = Number(params.get("crowdSize") ?? 20);
+const failEvery = num("fail", 0);
+const holdMs = num("holdMs", 400);
+const stateDelay = num("stateDelay", 0);
+const crowdMs = num("crowd", 0);
+const crowdSize = num("crowdSize", 20);
 const snipe = params.get("snipe") === "1";
-const gapEvery = Number(params.get("gap") ?? 0);
-const atlasDelay = Number(params.get("atlasDelay") ?? 0);
+document.body.dataset["theme"] = theme as string;
 if (gestures === "cooperative") {
   document.body.classList.add("scrolling");
 }
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-const renderer = await loadRenderer(undefined, params.get("atlas") ?? undefined);
-const glyphAtlas = renderer.glyphAtlas.then(
-  (pixels) =>
-    new Promise<Uint8Array>((resolve) =>
-      setTimeout(() => {
-        report(`glyph atlas (${pixels.length} B RGBA) applied after frame ${stats.frames}`);
-        resolve(pixels);
-      }, atlasDelay),
-    ),
-);
-const view = new View(canvas) as View & Partial<DemoExports>;
-const statics = View as typeof View & Partial<DemoStatics>;
-const gl = canvas.getContext("webgl2");
-const debug = gl?.getExtension("WEBGL_debug_renderer_info");
-report(
-  `renderer ${renderer.version()}; GPU: ${
-    debug && gl ? String(gl.getParameter(debug.UNMASKED_RENDERER_WEBGL)) : "unknown"
-  }`,
-);
-
-let host: ReturnType<typeof attach> | undefined;
-function setTheme(name: Theme): void {
-  view.setTheme(name);
-  document.body.dataset["theme"] = name;
-  host?.update();
-}
-const events: RendererEvent[] = [];
-const stats = {
-  frames: 0,
-  glErrors: 0,
-  lod: "",
-  drawCalls: 0,
-  frameDraws: 0,
-  labels: [0, 0, 0],
-  setTheme,
-  events,
-  crowd: (on: boolean) => crowd(on),
-  resnapshot: () => sendSnapshot(),
-  take: (label: string) => sendDelta(new Map(idxOf([label]).map((i) => [i, 1]))),
-  sell: (from: number, count: number) =>
-    sendDelta(new Map(Array.from({ length: count }, (_, k) => [from + k, 1]))),
-  gap: () => sendDelta(new Map(), true),
-  camera: (x: number, y: number, width: number, height: number) => {
-    view.setCamera?.(x, y, width, height);
-    host?.update();
-  },
-};
-Object.assign(window, { caveaDemo: stats });
-let afterFirstFrame: (() => void) | undefined;
-
-/** Counts the draw calls the renderer makes (seats, overlays, meshes). */
-function countDraws(context: WebGL2RenderingContext): void {
-  const instanced = context.drawArraysInstanced.bind(context);
-  context.drawArraysInstanced = (...args) => {
-    stats.drawCalls += 1;
-    instanced(...args);
-  };
-  const elements = context.drawElements.bind(context);
-  context.drawElements = (...args) => {
-    stats.drawCalls += 1;
-    elements(...args);
-  };
-}
-if (gl) {
-  countDraws(gl);
-}
-let drawsBefore = 0;
-let loadedAt = 0;
-
-function onFrame(time: number): void {
-  stats.frames += 1;
-  const error = gl?.getError() ?? -1;
-  if (error !== 0) {
-    stats.glErrors += 1;
-  }
-  if (stats.frames === 1) {
-    report(`first frame ${(performance.now() - loadedAt).toFixed(1)} ms after loadChart returned`);
-  }
-  stats.frameDraws = stats.drawCalls - drawsBefore;
-  drawsBefore = stats.drawCalls;
-  stats.labels = [...(view.labelStats?.() ?? [])];
-  const frames = stats.frames;
-  const [built = 0, kept = 0, labelDraws = 0] = stats.labels;
-  // After this frame's events, so the level is the one it was drawn at.
-  queueMicrotask(() =>
-    report(
-      `frame ${frames} at ${time.toFixed(0)}: gl.getError() = ${error}; ` +
-        `level ${stats.lod}, ${stats.frameDraws} draw calls; ` +
-        `labels: ${built} chunks built, ${kept} kept, ${labelDraws} draws`,
-    ),
-  );
-  const next = afterFirstFrame;
-  afterFirstFrame = undefined;
-  next?.();
-}
-
-let rngState = seed >>> 0 || 1;
+let rngState = num("seed", 1) >>> 0 || 1;
 function random(): number {
   rngState ^= rngState << 13;
   rngState ^= rngState >>> 17;
@@ -216,256 +102,231 @@ function random(): number {
   return (rngState >>> 0) / 2 ** 32;
 }
 
-/** Seeded runs of unavailable seats covering about `fraction` of the chart. */
-function soldRuns(fraction: number, set: (start: number, count: number) => void): number {
-  let runs = 0;
-  for (let at = 0; at < seats;) {
+/** The chart's bytes and seat labels, when compiled here. */
+async function generated(): Promise<{ ccf: Uint8Array; labels: string[] }> {
+  await loadRenderer();
+  if (demo.demoChart === undefined || demo.demoLabels === undefined) {
+    throw new Error(
+      "This WASM has no demo exports. Run `cargo xtask build-web --demo` and reload.",
+    );
+  }
+  const ccf = demo.demoChart(num("seats", 100_000), num("seed", 1), num("shape", 0), preset);
+  return { ccf, labels: demo.demoLabels(ccf) };
+}
+
+/** The fake host: public state and the buyer's holds, by label, as a custom backend keeps them. */
+let labels: string[] = [];
+const taken = new Set<string>();
+const held = new Set<string>();
+let ctx: AdapterContext | undefined;
+let holds = 0;
+const expiry = (): number => Date.now() + 15 * 60_000;
+const snapshot = (): Snapshot => ({
+  kind: "map",
+  unavailable: [...taken],
+  mine: [...held],
+  expiresAt: expiry(),
+});
+
+function soldRuns(fraction: number): void {
+  for (let at = 0; at < labels.length;) {
     const count = 1 + Math.floor(random() * 24);
-    const gap = Math.floor((random() * 2 * count * (1 - fraction)) / Math.max(fraction, 1e-3));
-    at += gap;
-    if (at >= seats) {
-      break;
+    at += Math.floor((random() * 2 * count * (1 - fraction)) / Math.max(fraction, 1e-3));
+    for (const label of labels.slice(at, at + count)) {
+      taken.add(label);
     }
-    set(at, Math.min(count, seats - at));
     at += count;
-    runs += 1;
   }
-  return runs;
 }
 
-/** Unsigned LEB128 (08 §8), for numbers up to 2^53. */
-function varint(out: number[], value: number): void {
-  let v = value;
-  while (v >= 0x80) {
-    out.push((v % 0x80) | 0x80);
-    v = Math.floor(v / 0x80);
-  }
-  out.push(v);
-}
-
-/** A `list()` of increasing `idx`, each followed by `field` bytes, then no areas. */
-function list(out: number[], idx: number[], field?: (i: number) => number): Uint8Array {
-  varint(out, idx.length);
-  let previous = 0;
-  idx.forEach((value, i) => {
-    varint(out, value - previous);
-    previous = value;
-    if (field !== undefined) {
-      out.push(field(i));
+const adapter = customState({
+  async connect(context) {
+    ctx = context;
+    if (chartUrl !== null) {
+      // As a real host fetches its state; here the labels come from the chart.
+      const response = await fetch(chartUrl, { signal: context.signal });
+      const ccf = new Uint8Array(await response.arrayBuffer());
+      await loadRenderer();
+      labels = demo.demoLabels?.(ccf) ?? [];
     }
-  });
-  out.push(0);
-  return Uint8Array.from(out);
-}
+    if (mark !== undefined && mark.length === 2) {
+      const [from = 0, count = 0] = mark;
+      labels.slice(from, from + count).forEach((label) => taken.add(label));
+    } else if (sold > 0) {
+      soldRuns(sold);
+    }
+    await sleep(stateDelay);
+    report(
+      `state: ${taken.size} of ${labels.length} seats unavailable (after ${stateDelay} ms delay)`,
+    );
+    return snapshot();
+  },
+  ...(manual
+    ? {}
+    : {
+        async hold(requested: string[]) {
+          await sleep(holdMs);
+          holds += 1;
+          for (const label of requested) {
+            taken.add(label);
+          }
+          ctx?.applyDelta({ unavailable: requested });
+          if (failEvery > 0 && holds % failEvery === 0) {
+            const failed = requested.map((label) => ({ label, reason: "object_not_free" }));
+            return { ok: false as const, code: "object_not_free", failed };
+          }
+          requested.forEach((label) => held.add(label));
+          ctx?.setMine([...held], expiry());
+          return { ok: true as const };
+        },
+        async release(released: string[]) {
+          await sleep(holdMs / 2);
+          for (const label of released) {
+            held.delete(label);
+            taken.delete(label);
+          }
+          ctx?.setMine([...held], expiry());
+          ctx?.applyDelta({ available: released });
+        },
+      }),
+  resync: () => ctx?.applySnapshot(snapshot()),
+  disconnect: () => crowd(false),
+});
 
-/** Numbers in increasing order (a typed array sorts numerically). */
-function sorted(values: Iterable<number>): Uint32Array {
-  // oxlint-disable-next-line unicorn/no-array-sort -- sorts its own fresh copy; toSorted is ES2023
-  return Uint32Array.from(values).sort();
-}
-
-/** The fake host: the public state, the buyer's holds, and late answers. */
-const publicState = new Uint8Array(seats);
-function fill(from: number, count: number): void {
-  publicState.fill(UNAVAILABLE, from, from + count);
-}
-let seq = 0;
-let deltas = 0;
-const held = new Set<number>();
-
-function apply(frame: Uint8Array): void {
-  try {
-    view.applyFrame(frame);
-  } catch (error) {
-    note(`frame refused: ${String(error)}`);
-  }
-  host?.update();
-}
-function sendSnapshot(): void {
-  const out = [0x02];
-  varint(out, seq);
-  varint(out, seats);
-  out.push(0);
-  varint(out, seats);
-  apply(Uint8Array.from([...out, ...publicState, 0]));
-}
-/** Sets codes and sends them as one DELTA; `skip` leaves a sequence gap. */
-function sendDelta(changes: Map<number, number>, skip = false): void {
-  const idx = [...sorted(changes.keys())];
-  idx.forEach((i) => (publicState[i] = changes.get(i) ?? 0));
-  const out = [0x03];
-  varint(out, skip ? seq + 1 : seq);
-  seq += 1;
-  varint(out, skip ? seq + 1 : seq);
-  apply(list(out, idx, (i) => changes.get(idx[i] ?? 0) ?? 0));
-}
-function sendPrivate(): void {
-  const out = [0x04];
-  varint(out, Date.now() + 15 * 60_000);
-  apply(list(out, [...sorted(held)]));
-}
-function idxOf(labels: string[]): number[] {
-  return labels.flatMap((label) => view.idxOf?.(label) ?? []);
-}
+let map: SeatMap | undefined;
+let crowdTimer = 0;
 function crowdTick(): void {
-  const changes = new Map<number, number>();
-  for (let n = 0; n < crowdSize * 4 && changes.size < crowdSize * 2; n++) {
-    const i = Math.floor(random() * seats);
-    if (!held.has(i) && !changes.has(i)) {
-      changes.set(i, changes.size < crowdSize ? 1 : 0);
+  const unavailable: string[] = [];
+  const available: string[] = [];
+  for (let n = 0; n < crowdSize * 4 && unavailable.length + available.length < crowdSize * 2; n++) {
+    const label = labels[Math.floor(random() * labels.length)];
+    if (label !== undefined && !held.has(label)) {
+      (unavailable.length < crowdSize ? unavailable : available).push(label);
     }
   }
   if (snipe) {
-    const target = idxOf(selected).find((i) => !held.has(i));
+    const target = map?.getSelection().objects.find((o) => !held.has(o.label));
     if (target !== undefined) {
-      changes.set(target, 1);
+      unavailable.push(target.label);
     }
   }
-  deltas += 1;
-  const skip = gapEvery > 0 && deltas % gapEvery === 0;
-  sendDelta(changes, skip);
-  if (skip) {
-    note(`crowd delta ${deltas} skipped a seq: expect a resync`);
-  }
+  unavailable.forEach((label) => taken.add(label));
+  available.forEach((label) => taken.delete(label));
+  ctx?.applyDelta({ unavailable, available });
 }
-let crowdTimer = 0;
 function crowd(on: boolean): void {
   clearInterval(crowdTimer);
   crowdTimer = on && crowdMs > 0 ? window.setInterval(crowdTick, crowdMs) : 0;
 }
 
-let selected: string[] = [];
-let expiresAt: number | null = null;
-let holds = 0;
-let pending = 0;
+const events: unknown[][] = [];
+const log =
+  (name: string) =>
+  (...args: unknown[]): void => {
+    events.push([name, ...args]);
+  };
 let hover = "";
-let ready = true;
 let lastNote = "";
-function showSelection(): void {
-  const expiry = expiresAt === null ? "none" : new Date(expiresAt).toLocaleTimeString();
-  selectionLine.textContent =
-    `selected ${selected.length}/${max}: ${selected.join(" ")}\n` +
-    `holds in flight: ${pending}; held: ${held.size}, expire ${expiry}; ` +
-    `checkout ${ready ? "ready" : "not ready"}; hover: ${hover || "none"}\n${lastNote}`;
-}
 function note(line: string): void {
   lastNote = line;
   console.log(`[cavea-demo] ${line}`);
-}
-function onEvents(batch: RendererEvent[]): void {
-  for (const event of batch) {
-    events.push(event);
-    switch (event.type) {
-      case "selectionChanged":
-        selected = event.selected.map((o) => o.label);
-        expiresAt = event.expiresAt;
-        note(`selection: ${selected.join(", ") || "empty"}`);
-        break;
-      case "holdRequest": {
-        holds += 1;
-        pending += 1;
-        const fails = failEvery > 0 && holds % failEvery === 0;
-        note(`hold ${event.request} requested: ${event.labels.join(", ")}`);
-        setTimeout(() => {
-          pending -= 1;
-          const idx = idxOf(event.labels);
-          if (fails) {
-            note(`hold ${event.request} failed: ${event.labels.join(", ")} taken`);
-            view.holdFailed(event.request, "object_not_free", []);
-            sendDelta(new Map(idx.map((i) => [i, 1])));
-          } else {
-            note(`hold ${event.request} ok`);
-            view.holdOk(event.request);
-            idx.forEach((i) => held.add(i));
-            sendDelta(new Map(idx.map((i) => [i, 1])));
-            sendPrivate();
-          }
-          host?.update();
-        }, holdMs);
-        break;
-      }
-      case "releaseRequest": {
-        note(`release ${event.request}: ${event.labels.join(", ")}`);
-        const idx = idxOf(event.labels);
-        idx.forEach((i) => held.delete(i));
-        sendPrivate();
-        sendDelta(new Map(idx.map((i) => [i, 0])));
-        break;
-      }
-      case "selectionInvalid":
-        if (event.rule === "min") {
-          ready = false;
-        }
-        note(`refused (${event.rule}): ${event.objects.join(", ")}`);
-        break;
-      case "selectionValid":
-        ready = true;
-        break;
-      case "objectUnavailable":
-        note(`${event.label} was taken`);
-        break;
-      case "holdLost":
-        note(`hold lost: ${event.labels.join(", ")}`);
-        break;
-      case "resync":
-        note(`resync from seq ${String(event.seq)}: sending a snapshot at ${seq}`);
-        setTimeout(sendSnapshot, 0);
-        break;
-      case "objectHover":
-        hover = event.object?.label ?? "";
-        break;
-      case "cameraChanged":
-        stats.lod = event.lod;
-        break;
-      case "error":
-        report(`error ${event.code}: ${event.message}`);
-        break;
-      default:
-        break;
-    }
-  }
   showSelection();
 }
+function showSelection(): void {
+  const selection = map?.getSelection();
+  const at = selection?.expiresAt ?? null;
+  const expires = at === null ? "none" : new Date(at).toLocaleTimeString();
+  selectionLine.textContent =
+    `selected ${selection?.objects.length ?? 0}/${max}: ${selection?.objects.map((o) => o.label).join(" ") ?? ""}\n` +
+    `held: ${held.size}, expire ${expires}; checkout ${selection?.valid === false ? "not ready" : "ready"}; ` +
+    `hover: ${hover || "none"}\n${lastNote}`;
+}
 
-if (statics.demoChart === undefined || view.idxOf === undefined || view.setCamera === undefined) {
-  report("This WASM has no demo exports. Run `cargo xtask build-web --demo` and reload.");
-} else {
-  const compileStart = performance.now();
-  const ccf = statics.demoChart(seats, seed, shape, preset);
-  const loadStart = performance.now();
-  setTheme(theme);
-  view.loadChart(ccf);
-  loadedAt = performance.now();
-  report(
-    `compiled ${seats} seats in ${(loadStart - compileStart).toFixed(1)} ms (${ccf.length} B CCF); ` +
-      `loadChart ${(loadedAt - loadStart).toFixed(1)} ms; theme ${theme}`,
-  );
-  view.setRules(max, min);
-  if (manual) {
-    view.setManualSession(true);
-  }
-  if (camera !== undefined && camera.length === 4) {
-    const [x = 0, y = 0, width = 1, height = 1] = camera;
-    view.setCamera(x, y, width, height);
-  }
-  afterFirstFrame = () => {
-    if (mark !== undefined && mark.length === 2) {
-      const [from = 0, count = 0] = mark;
-      fill(from, count);
-      report(`seats ${from}..${from + count} unavailable`);
-    } else if (sold > 0) {
-      report(`${soldRuns(sold, fill)} runs unavailable`);
-    }
-    const start = performance.now();
-    sendSnapshot();
-    report(`snapshot at seq ${seq} applied in ${(performance.now() - start).toFixed(1)} ms`);
+const options: SeatMapOptions = {
+  state: adapter,
+  selection: { max, min },
+  theme,
+  gestureHandling: gestures,
+  onReady(info) {
+    log("ready")(info);
+    report(`ready: ${info.chart.seats} seats; marks ${JSON.stringify(info.marks)}`);
     crowd(true);
-  };
-  const options = { gestureHandling: gestures, onFrame, onEvents, glyphAtlas };
-  host = attach(
-    view,
-    canvas,
-    reducedMotion === undefined ? options : { ...options, reducedMotion },
-  );
-  report(`gesture handling: ${gestures}`);
+  },
+  onSelectionChange(selection) {
+    log("selectionChange")(
+      selection.objects.map((o) => o.label),
+      selection.valid,
+    );
+    note(`selection: ${selection.objects.map((o) => o.label).join(", ") || "empty"}`);
+  },
+  onObjectSelect: log("objectSelect"),
+  onObjectDeselect: log("objectDeselect"),
+  onSelectionInvalid(rule, objects) {
+    log("selectionInvalid")(
+      rule,
+      objects.map((o) => o.label),
+    );
+    note(`refused (${rule}): ${objects.map((o) => o.label).join(", ")}`);
+  },
+  onSelectionValid: log("selectionValid"),
+  onHoldPending: log("holdPending"),
+  onHoldSettled: log("holdSettled"),
+  onHoldFailed(failed) {
+    log("holdFailed")(failed.map((f) => [f.object.label, f.reason]));
+    note(`hold failed: ${failed.map((f) => `${f.object.label} (${f.reason})`).join(", ")}`);
+  },
+  onHoldLost: (objects) => note(`hold lost: ${objects.map((o) => o.label).join(", ")}`),
+  onObjectUnavailable(object) {
+    log("objectUnavailable")(object.label);
+    note(`${object.label} was taken`);
+  },
+  onObjectHover(object) {
+    hover = object?.label ?? "";
+    showSelection();
+  },
+  onCameraChange: log("cameraChange"),
+  onError(error) {
+    log("error")(error.code, error.message);
+    report(`error ${error.code}: ${error.message}`);
+  },
+};
+if (params.has("reducedMotion")) {
+  options.reducedMotion = params.get("reducedMotion") === "1";
+}
+
+/** Another map on the page with fixed state, sharing the loaded WASM; `hidden` creates it in a hidden box. */
+async function second(hidden = false): Promise<SeatMap> {
+  const box = document.createElement("div");
+  box.id = "second";
+  box.hidden = hidden;
+  document.body.append(box);
+  const chart = options.chart ?? { url: chartUrl ?? "" };
+  return createSeatMap(box, { chart, theme: "dark" });
+}
+
+try {
+  if (chartUrl === null) {
+    const chart = await generated();
+    labels = chart.labels;
+    options.chart = { bytes: chart.ccf };
+  } else {
+    options.chart = { url: chartUrl };
+  }
+  map = await createSeatMap(container, options);
+  Object.assign(window, {
+    caveaDemo: {
+      map,
+      labels,
+      events,
+      second,
+      crowd,
+      resnapshot: () => ctx?.applySnapshot(snapshot()),
+      take(label: string) {
+        taken.add(label);
+        ctx?.applyDelta({ unavailable: [label] });
+      },
+    },
+  });
+} catch (error) {
+  report(`createSeatMap failed: ${String(error)}`);
 }

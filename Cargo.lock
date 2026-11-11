@@ -337,6 +337,7 @@ name = "cavea-web"
 version = "0.0.0"
 dependencies = [
  "cavea-compiler",
+ "cavea-format",
  "cavea-render",
  "cavea-testkit",
  "glow",

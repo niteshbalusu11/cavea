@@ -5,10 +5,11 @@
 
 use std::fmt::Write;
 
-use cavea_render::protocol::{Event, Lod, ObjectInfo};
+use cavea_render::protocol::{ChartInfo, Event, Lod, ObjectInfo};
 
-/// Appends the events the host is told about (selection, hold and release
-/// requests, lost holds, resync, hover, focus, camera) as a JSON array; others are skipped.
+/// Appends the events the host is told about (chart ready, selection, hold
+/// and release requests, lost holds, resync, hover, focus, camera) as a JSON
+/// array; others are skipped.
 pub fn to_json(events: &[Event], out: &mut String) {
     out.push('[');
     let mut first = true;
@@ -34,6 +35,10 @@ fn write_event(event: &Event, out: &mut String) -> bool {
         out.push('"');
     };
     match event {
+        Event::Ready(info) => {
+            kind(out, "ready");
+            write_chart(out, info);
+        }
         Event::HoldRequest { request, labels } | Event::ReleaseRequest { request, labels } => {
             let hold = matches!(event, Event::HoldRequest { .. });
             kind(
@@ -57,14 +62,7 @@ fn write_event(event: &Event, out: &mut String) -> bool {
             field(out, "expiresAt");
             optional(out, *expires_at_ms);
             field(out, "selected");
-            out.push('[');
-            for (i, object) in selected.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                write_object(out, object);
-            }
-            out.push(']');
+            list(out, selected, write_object);
         }
         Event::SelectionInvalid { rule, objects } => {
             kind(out, "selectionInvalid");
@@ -131,7 +129,63 @@ fn field(out: &mut String, name: &str) {
     out.push_str("\":");
 }
 
+/// The chart metadata of `Ready`: name, floors, sections, categories (colour
+/// as RGBA bytes) and counts.
+fn write_chart(out: &mut String, c: &ChartInfo) {
+    field(out, "name");
+    string(out, &c.name);
+    field(out, "floors");
+    list(out, &c.floors, |out, f| {
+        out.push_str("{\"name\":");
+        string(out, &f.name);
+        let _ = write!(out, ",\"level\":{},\"seats\":{}}}", f.level, f.seats);
+    });
+    field(out, "sections");
+    list(out, &c.sections, |out, s| {
+        out.push_str("{\"label\":");
+        string(out, &s.label);
+        let _ = write!(out, ",\"floor\":{},\"seats\":{}}}", s.floor, s.seats);
+    });
+    field(out, "categories");
+    list(out, &c.categories, |out, k| {
+        out.push_str("{\"key\":");
+        string(out, &k.key);
+        field(out, "label");
+        string(out, &k.label);
+        let [r, g, b, a] = k.color;
+        let _ = write!(
+            out,
+            ",\"color\":[{r},{g},{b},{a}],\"objects\":{}}}",
+            k.objects
+        );
+    });
+    let _ = write!(out, ",\"objects\":{},\"seats\":{}", c.objects, c.seats);
+}
+
+fn list<T>(out: &mut String, items: &[T], mut item: impl FnMut(&mut String, &T)) {
+    out.push('[');
+    for (i, value) in items.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        item(out, value);
+    }
+    out.push(']');
+}
+
 fn write_object(out: &mut String, o: &ObjectInfo) {
+    object_fields(out, o);
+    out.push('}');
+}
+
+/// One object with its public status code, for `View::object`.
+pub fn object_with_status(out: &mut String, o: &ObjectInfo, status: u8) {
+    object_fields(out, o);
+    let _ = write!(out, ",\"status\":{status}}}");
+}
+
+/// An object's fields, without the closing brace.
+fn object_fields(out: &mut String, o: &ObjectInfo) {
     out.push_str("{\"label\":");
     string(out, &o.label);
     for (name, value) in [
@@ -144,7 +198,7 @@ fn write_object(out: &mut String, o: &ObjectInfo) {
         string(out, value);
     }
     field(out, "flags");
-    let _ = write!(out, "{}}}", o.flags);
+    let _ = write!(out, "{}", o.flags);
 }
 
 fn optional(out: &mut String, value: Option<u64>) {
@@ -157,14 +211,7 @@ fn optional(out: &mut String, value: Option<u64>) {
 }
 
 fn strings(out: &mut String, values: &[String]) {
-    out.push('[');
-    for (i, value) in values.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        string(out, value);
-    }
-    out.push(']');
+    list(out, values, |out, value| string(out, value));
 }
 
 fn string(out: &mut String, value: &str) {
@@ -241,5 +288,40 @@ mod tests {
         let mut out = String::new();
         to_json(&[Event::NeedFrame], &mut out);
         assert_eq!(out, "[]");
+        let mut out = String::new();
+        object_with_status(&mut out, &ObjectInfo::default(), 1);
+        assert_eq!(
+            out,
+            r#"{"label":"","category":"","section":"","row":"","seat":"","flags":0,"status":1}"#
+        );
+
+        use cavea_render::protocol::{CategoryInfo, FloorInfo, SectionInfo};
+        let ready = Event::Ready(ChartInfo {
+            name: "Hall".into(),
+            floors: vec![FloorInfo {
+                name: "Ground".into(),
+                level: -1,
+                seats: 2,
+            }],
+            sections: vec![SectionInfo {
+                label: "A".into(),
+                floor: 0,
+                seats: 2,
+            }],
+            categories: vec![CategoryInfo {
+                key: "vip".into(),
+                label: "VIP".into(),
+                color: [37, 99, 235, 255],
+                objects: 2,
+            }],
+            objects: 2,
+            seats: 2,
+        });
+        let mut out = String::new();
+        to_json(&[ready], &mut out);
+        assert_eq!(
+            out,
+            r##"[{"type":"ready","name":"Hall","floors":[{"name":"Ground","level":-1,"seats":2}],"sections":[{"label":"A","floor":0,"seats":2}],"categories":[{"key":"vip","label":"VIP","color":[37,99,235,255],"objects":2}],"objects":2,"seats":2}]"##
+        );
     }
 }

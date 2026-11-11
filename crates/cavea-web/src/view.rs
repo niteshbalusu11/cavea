@@ -10,7 +10,7 @@ use cavea_render::{
     backing_size,
     protocol::{
         BuiltinTheme, Command, Event, GestureHandling, HoldOutcome, Modifiers, ObjectFailure,
-        ObjectRef, PointerKind, PointerType, SessionMode,
+        ObjectRef, PointerKind, PointerType, SessionMode, StatusChange, ThemeToken,
     },
     tuning::{MAX_DPR_OTHER, MAX_DPR_TOUCH},
 };
@@ -202,18 +202,24 @@ impl View {
         self.send(Command::SetGlyphAtlas { rgba })
     }
 
-    /// A built-in theme: `light`, `dark` or `high-contrast` (04 §19).
+    /// A built-in theme, `light`, `dark` or `high-contrast`, with token
+    /// overrides as name and value pairs, flattened (04 §19).
     #[wasm_bindgen(js_name = setTheme)]
-    pub fn set_theme(&mut self, name: &str) -> Result<(), JsError> {
+    pub fn set_theme(&mut self, name: &str, tokens: Vec<String>) -> Result<(), JsError> {
         let base = match name {
             "light" => BuiltinTheme::Light,
             "dark" => BuiltinTheme::Dark,
             "high-contrast" => BuiltinTheme::HighContrast,
             _ => return Err(JsError::new("unknown theme")),
         };
+        let mut tokens = tokens.into_iter();
+        let mut pairs = Vec::new();
+        while let (Some(name), Some(value)) = (tokens.next(), tokens.next()) {
+            pairs.push(ThemeToken { name, value });
+        }
         self.send(Command::SetTheme {
             base,
-            tokens: Vec::new(),
+            tokens: pairs,
         })
     }
 
@@ -259,25 +265,30 @@ impl View {
     /// The hold of `request` failed with the server's `code` (`not_free`
     /// makes a seat unavailable; `not_found`, a token that expired or never
     /// existed, drops the whole selection). `labels`: the objects the server
-    /// named (08 §6.4: `label` of each failing object); empty for the whole
-    /// request.
+    /// named (08 §6.4: `label` of each failing object), each with its reason
+    /// in `reasons` or else `code`. `code` also goes as a failure naming no
+    /// object, so a request-level `not_found` drops the selection whatever
+    /// the objects' reasons; a failure naming none of the request's objects
+    /// reverts all of them.
     #[wasm_bindgen(js_name = holdFailed)]
     pub fn hold_failed(
         &mut self,
         request: u32,
         code: String,
         labels: Vec<String>,
+        reasons: Vec<String>,
     ) -> Result<(), JsError> {
-        let failure = |object| ObjectFailure {
-            object,
-            code: code.clone(),
-        };
+        let mut reasons = reasons.into_iter();
         let mut failures: Vec<ObjectFailure> = (labels.into_iter())
-            .map(|l| failure(ObjectRef::Label(l)))
+            .map(|l| ObjectFailure {
+                object: ObjectRef::Label(l),
+                code: reasons.next().unwrap_or_else(|| code.clone()),
+            })
             .collect();
-        if failures.is_empty() {
-            failures.push(failure(ObjectRef::Label(String::new())));
-        }
+        failures.push(ObjectFailure {
+            object: ObjectRef::Label(String::new()),
+            code,
+        });
         let outcome = HoldOutcome::Failed(failures);
         self.send(Command::HoldResult { request, outcome })
     }
@@ -302,6 +313,80 @@ impl View {
     pub fn set_snapshot(&mut self, seq: f64, codes: Vec<u8>) -> Result<(), JsError> {
         let seq = whole(seq)?;
         self.send(Command::SetSnapshot { seq, state: codes })
+    }
+
+    /// A custom adapter's state by label (05 §4), converted to `idx` here in
+    /// one call: every object available except `unavailable`, at `seq`.
+    /// Returns the labels the chart does not have, which are skipped.
+    #[wasm_bindgen(js_name = setSnapshotLabels)]
+    pub fn set_snapshot_labels(
+        &mut self,
+        seq: f64,
+        unavailable: Vec<String>,
+    ) -> Result<Vec<String>, JsError> {
+        let seq = whole(seq)?;
+        let mut unknown = Vec::new();
+        let mut state = self.codes(0)?;
+        self.mark(unavailable, &mut state, 1, &mut unknown);
+        self.send(Command::SetSnapshot { seq, state })?;
+        Ok(unknown)
+    }
+
+    /// A delta by label from `from` to `to`; a label in both lists ends
+    /// unavailable. Returns the unknown labels, which are skipped.
+    #[wasm_bindgen(js_name = applyDeltaLabels)]
+    pub fn apply_delta_labels(
+        &mut self,
+        from: f64,
+        to: f64,
+        unavailable: Vec<String>,
+        available: Vec<String>,
+    ) -> Result<Vec<String>, JsError> {
+        let (from_seq, to_seq) = (whole(from)?, whole(to)?);
+        let mut unknown = Vec::new();
+        let mut codes = self.codes(UNCHANGED)?;
+        self.mark(available, &mut codes, 0, &mut unknown);
+        self.mark(unavailable, &mut codes, 1, &mut unknown);
+        let changes = (0u32..)
+            .zip(codes)
+            .filter(|&(_, code)| code != UNCHANGED)
+            .map(|(idx, status)| StatusChange { idx, status })
+            .collect();
+        self.send(Command::ApplyDelta {
+            from_seq,
+            to_seq,
+            changes,
+        })?;
+        Ok(unknown)
+    }
+
+    /// The buyer's own holds by label and their expiry (Unix ms, 0 when
+    /// unknown). Returns the unknown labels, which are skipped.
+    #[wasm_bindgen(js_name = setPrivateLabels)]
+    pub fn set_private_labels(
+        &mut self,
+        labels: Vec<String>,
+        expires_at: f64,
+    ) -> Result<Vec<String>, JsError> {
+        let expires_at_ms = whole(expires_at)?;
+        let mut unknown = Vec::new();
+        let mut codes = self.codes(0)?;
+        self.mark(labels, &mut codes, 1, &mut unknown);
+        let objects = (0u32..).zip(codes).filter(|&(_, c)| c == 1).map(|(i, _)| i);
+        self.send(Command::SetPrivateHolds {
+            objects: objects.collect(),
+            expires_at_ms,
+        })?;
+        Ok(unknown)
+    }
+
+    /// One seat's details and status as JSON (`ObjectInfo` plus `status`: 0
+    /// available, 1 unavailable), or `undefined` for an unknown label.
+    pub fn object(&mut self, label: &str) -> Option<String> {
+        let (info, status) = self.engine.object(label)?;
+        let mut json = String::new();
+        crate::events::object_with_status(&mut json, &info, status);
+        Some(json)
     }
 
     /// `max` (1 to 100, default 100) and `min` (default 0) selection (02 §12).
@@ -330,37 +415,6 @@ impl View {
     #[wasm_bindgen(getter, js_name = needFrame)]
     pub fn need_frame(&self) -> bool {
         self.need_frame
-    }
-
-    /// Demo only: fits the given chart-unit rectangle into the view.
-    #[cfg(feature = "demo")]
-    #[wasm_bindgen(js_name = setCamera)]
-    pub fn set_camera(&mut self, x: f32, y: f32, width: f32, height: f32) -> Result<(), JsError> {
-        use cavea_render::protocol::{Bounds, CameraTarget};
-        self.send(Command::SetCamera {
-            target: CameraTarget::Bounds(Bounds {
-                x,
-                y,
-                width,
-                height,
-            }),
-        })
-    }
-
-    /// Demo only: seat label chunks built since the chart loaded, chunks kept,
-    /// and label draw calls in the last frame (04 §12).
-    #[cfg(feature = "demo")]
-    #[wasm_bindgen(js_name = labelStats)]
-    pub fn label_stats(&self) -> Vec<u32> {
-        let stats = self.engine.label_stats();
-        vec![stats.built, stats.cached, stats.draws]
-    }
-
-    /// Demo only: the `idx` of a seat's full label, for the fake host.
-    #[cfg(feature = "demo")]
-    #[wasm_bindgen(js_name = idxOf)]
-    pub fn idx_of(&mut self, label: &str) -> Option<u32> {
-        self.engine.idx_of(label)
     }
 
     /// Demo only: a synthetic chart compiled in the browser: the named
@@ -458,9 +512,46 @@ impl View {
         ));
         compile(&doc)
     }
+
+    /// Demo only: every seat's full label in `idx` order, for the demo's
+    /// fake host, which keeps state by label as a custom adapter does.
+    #[cfg(feature = "demo")]
+    #[wasm_bindgen(js_name = demoLabels)]
+    pub fn demo_labels(ccf: &[u8]) -> Result<Vec<String>, JsError> {
+        let scene =
+            cavea_render::scene::Scene::decode(ccf).map_err(|e| JsError::new(&e.to_string()))?;
+        let chart = &scene.chart;
+        Ok((0..chart.meta.seat_count)
+            .map(|idx| {
+                cavea_format::full_label::full_label(chart, idx)
+                    .map(|l| l.as_str().to_owned())
+                    .unwrap_or_default()
+            })
+            .collect())
+    }
 }
 
 impl View {
+    /// One code per object of the loaded chart, all `fill`.
+    fn codes(&self, fill: u8) -> Result<Vec<u8>, JsError> {
+        Ok(vec![fill; self.engine.objects().ok_or_else(no_chart)?])
+    }
+
+    /// Sets `code` at each label's `idx` in `codes`, in `idx` order whatever
+    /// the labels' order, so no sort is needed; unknown labels go to `unknown`.
+    fn mark(&mut self, labels: Vec<String>, codes: &mut [u8], code: u8, unknown: &mut Vec<String>) {
+        for label in labels {
+            match self
+                .engine
+                .idx_of(&label)
+                .and_then(|i| codes.get_mut(i as usize))
+            {
+                Some(slot) => *slot = code,
+                None => unknown.push(label),
+            }
+        }
+    }
+
     fn send(&mut self, command: Command) -> Result<(), JsError> {
         self.engine.handle(command);
         self.drain()
@@ -483,6 +574,13 @@ impl View {
         }
         error.map_or(Ok(()), Err)
     }
+}
+
+/// No change, in `apply_delta_labels`'s codes.
+const UNCHANGED: u8 = u8::MAX;
+
+fn no_chart() -> JsError {
+    JsError::new("no chart is loaded")
 }
 
 /// A whole number of at most 2^53, as JavaScript numbers hold exactly.
