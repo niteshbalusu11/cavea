@@ -281,66 +281,86 @@ fn snapshot_then_deltas_match_direct_application() {
     }
 }
 
-/// One valid frame of every type, with random contents and boundary values.
+/// Valid frames of every server type with random contents and boundary values,
+/// each checked to decode to what was encoded.
 fn frames(r: &mut Rng) -> Vec<(Vec<u8>, View)> {
     let mut out = Vec::new();
-    for _ in 0..20 {
-        let view = if r.chance(50) {
-            View::Public
-        } else {
-            View::Manager
-        };
+    for round in 0..20 {
+        let view = [View::Public, View::Manager][round % 2];
         let objects = [0, 1, 300, MAX_OBJECTS][r.below(4) as usize];
         let seq = seqs()[r.below(5) as usize];
         let hello = Hello {
             server_time_ms: seqs()[r.below(5) as usize],
-            chart_hash: [r.next() as u8; 16],
+            chart_hash: core::array::from_fn(|_| r.next() as u8),
             objects,
         };
-        out.push((encode_hello(&hello).unwrap(), view));
+        let f = encode_hello(&hello).unwrap();
+        assert_eq!(server(&f, view), ServerFrame::Hello(hello));
+        out.push((f, view));
+
+        // Changes, held objects and areas over `n` objects, the last included.
         let n = r.below(objects.min(2_000) + 1);
+        let k = r.below(200) as usize;
+        let mut changes = random_changes(r, n.max(1), k);
+        changes.push(Change {
+            idx: n.max(1) - 1,
+            code: MAX_STATUS,
+        });
+        coalesce(&mut changes);
+        if n == 0 {
+            changes.clear();
+        }
+        let idx: Vec<u32> = changes.iter().map(|c| c.idx).collect();
+        let areas: Vec<Area> = (idx.iter().step_by(7))
+            .map(|&idx| Area {
+                idx,
+                value: [0, u32::MAX, r.next() as u32][r.below(3) as usize],
+            })
+            .collect();
+
         let domain = statuses(r, n as usize, 15);
-        let areas: Vec<Area> = if n > 1 && r.chance(30) {
-            vec![
-                Area { idx: 0, value: 0 },
-                Area {
-                    idx: n - 1,
-                    value: u32::MAX,
-                },
-            ]
-        } else {
-            Vec::new()
+        let f = encode_snapshot(view, seq, &domain, &areas).unwrap();
+        let ServerFrame::Snapshot(s) = server(&f, view) else {
+            panic!("not a snapshot");
         };
-        let areas = &areas[..];
-        out.push((encode_snapshot(view, seq, &domain, areas).unwrap(), view));
+        assert_eq!(state_of(&f, view), reduce(view, &domain));
+        assert_eq!(s.areas(n).unwrap().collect::<Vec<_>>(), areas);
+        out.push((f, view));
         for e in [0, 1, 2] {
             let codes = reduce(View::Public, &domain);
             out.push((snapshot_frame(seq, e, &codes, &[]), View::Public));
         }
-        if objects > 0 {
-            let mut changes = {
-                let k = r.below(200) as usize;
-                random_changes(r, objects, k)
-            };
-            if r.chance(30) {
-                changes.push(Change {
-                    idx: objects - 1,
-                    code: 15,
-                });
-            }
-            coalesce(&mut changes);
-            let from = seq.min(u64::MAX - 1);
-            let to = from + 1 + u64::from(r.below(3)).min(u64::MAX - from - 1);
-            let d = encode_delta(view, from, to, &changes, objects, &[]).unwrap();
-            out.push((d, view));
-            let mut idx: Vec<u32> = changes.iter().map(|c| c.idx).collect();
-            idx.truncate(r.below(20) as usize);
-            let p = encode_private(seq, &idx, objects, areas).unwrap();
-            out.push((p, view));
+
+        let from = seq.min(u64::MAX - 1);
+        let to = [from + 1, u64::MAX][r.below(2) as usize];
+        let f = encode_delta(View::Manager, from, to, &changes, n, &areas).unwrap();
+        let ServerFrame::Delta(d) = server(&f, View::Manager) else {
+            panic!("not a delta");
+        };
+        assert_eq!((d.from_seq, d.to_seq), (from, to));
+        assert_eq!(d.changes(n).unwrap().collect::<Vec<_>>(), changes);
+        assert_eq!(d.areas(n).unwrap().collect::<Vec<_>>(), areas);
+        out.push((f, View::Manager));
+
+        let f = encode_private(seq, &idx, n, &areas).unwrap();
+        let ServerFrame::Private(p) = server(&f, view) else {
+            panic!("not a private frame");
+        };
+        assert_eq!(p.expires_at_ms, seq);
+        assert_eq!(p.objects(n).unwrap().collect::<Vec<_>>(), idx);
+        assert_eq!(p.areas(n).unwrap().collect::<Vec<_>>(), areas);
+        out.push((f, view));
+
+        let reason = CloseReason(r.next() as u8);
+        let simple = [
+            (encode_resync(), ServerFrame::Resync),
+            (encode_ping(seq), ServerFrame::Ping(seq)),
+            (encode_close(reason), ServerFrame::Close(reason)),
+        ];
+        for (f, frame) in simple {
+            assert_eq!(server(&f, view), frame);
+            out.push((f, view));
         }
-        out.push((encode_resync(), view));
-        out.push((encode_ping(seq), view));
-        out.push((encode_close(CloseReason(r.next() as u8)), view));
     }
     out
 }
@@ -372,69 +392,8 @@ fn client_frames(r: &mut Rng) -> Vec<Vec<u8>> {
 #[test]
 fn every_frame_round_trips() {
     let mut r = Rng(17);
-    for _ in 0..20 {
-        let objects = [0, 1, 300, MAX_OBJECTS][r.below(4) as usize];
-        let hello = Hello {
-            server_time_ms: seqs()[r.below(5) as usize],
-            chart_hash: core::array::from_fn(|_| r.next() as u8),
-            objects,
-        };
-        let f = encode_hello(&hello).unwrap();
-        assert_eq!(server(&f, View::Public), ServerFrame::Hello(hello));
-
-        let seq = seqs()[r.below(5) as usize];
-        let n = r.below(objects.min(3_000) + 1);
-        let mut changes = {
-            let k = r.below(500) as usize;
-            random_changes(&mut r, n.max(1), k)
-        };
-        coalesce(&mut changes);
-        if n == 0 {
-            changes.clear();
-        }
-        let areas: Vec<Area> = changes
-            .iter()
-            .step_by(7)
-            .map(|c| Area {
-                idx: c.idx,
-                value: r.next() as u32,
-            })
-            .collect();
-        let from = seq.min(u64::MAX - 1);
-        let f = encode_delta(View::Manager, from, u64::MAX, &changes, n, &areas).unwrap();
-        let ServerFrame::Delta(d) = server(&f, View::Manager) else {
-            panic!("not a delta");
-        };
-        assert_eq!((d.from_seq, d.to_seq), (from, u64::MAX));
-        assert_eq!(d.changes(n).unwrap().collect::<Vec<_>>(), changes);
-        assert_eq!(d.areas(n).unwrap().collect::<Vec<_>>(), areas);
-
-        let idx: Vec<u32> = changes.iter().map(|c| c.idx).collect();
-        let f = encode_private(seq, &idx, n, &areas).unwrap();
-        let ServerFrame::Private(p) = server(&f, View::Public) else {
-            panic!("not a private frame");
-        };
-        assert_eq!(p.expires_at_ms, seq);
-        assert_eq!(p.objects(n).unwrap().collect::<Vec<_>>(), idx);
-        assert_eq!(p.areas(n).unwrap().collect::<Vec<_>>(), areas);
-
-        let domain = statuses(&mut r, n as usize, 15);
-        let f = encode_snapshot(View::Manager, seq, &domain, &areas).unwrap();
-        let ServerFrame::Snapshot(s) = server(&f, View::Manager) else {
-            panic!("not a snapshot");
-        };
-        assert_eq!(s.areas(n).unwrap().collect::<Vec<_>>(), areas);
-
-        let nonce = r.next();
-        assert_eq!(
-            server(&encode_ping(nonce), View::Public),
-            ServerFrame::Ping(nonce)
-        );
-        let reason = CloseReason(r.next() as u8);
-        let f = encode_close(reason);
-        assert_eq!(server(&f, View::Public), ServerFrame::Close(reason));
-    }
-    assert_eq!(server(&encode_resync(), View::Public), ServerFrame::Resync);
+    frames(&mut r);
+    client_frames(&mut r);
     // The largest change count a frame may carry.
     let all: Vec<Change> = (0..MAX_OBJECTS)
         .map(|idx| Change { idx, code: 1 })
@@ -444,7 +403,6 @@ fn every_frame_round_trips() {
         panic!("not a delta");
     };
     assert!(d.changes(MAX_OBJECTS).unwrap().eq(all.iter().copied()));
-    client_frames(&mut r);
 }
 
 #[test]
@@ -507,6 +465,7 @@ fn hostile_frames_give_typed_errors() {
     let two_pow_32 = v(1 << 32);
     let a: &[u8] = &[0];
 
+    #[rustfmt::skip]
     let server_cases: Vec<(&str, Vec<u8>, View, WireError)> = vec![
         ("empty", vec![], Public, Truncated),
         ("type 0", vec![0x00], Public, UnknownType),
@@ -516,351 +475,89 @@ fn hostile_frames_give_typed_errors() {
         ("hello v2", hello(2, 1), Public, UnsupportedVersion),
         ("hello no version", vec![0x01], Public, Truncated),
         ("hello no time", vec![0x01, 1], Public, Truncated),
-        (
-            "hello short hash",
-            cat(&[&[0x01, 1], &v(5), &[0; 15]]),
-            Public,
-            Truncated,
-        ),
-        (
-            "hello no objects",
-            cat(&[&[0x01, 1], &v(5), &[0; 16]]),
-            Public,
-            Truncated,
-        ),
-        (
-            "hello too many objects",
-            hello(1, u64::from(MAX_OBJECTS) + 1),
-            Public,
-            OverLimit,
-        ),
-        (
-            "hello objects past u32",
-            cat(&[&[0x01, 1], &v(5), &[0; 16], &two_pow_32]),
-            Public,
-            BadVarint,
-        ),
-        (
-            "hello trailing",
-            cat(&[&hello(1, 3), &[0]]),
-            Public,
-            TrailingBytes,
-        ),
-        (
-            "varint 11 bytes",
-            cat(&[&[0x06], &endless]),
-            Public,
-            BadVarint,
-        ),
-        (
-            "varint past u64",
-            cat(&[&[0x06], &over_u64]),
-            Public,
-            BadVarint,
-        ),
+        ("hello short hash", cat(&[&[0x01, 1], &v(5), &[0; 15]]), Public, Truncated),
+        ("hello no objects", cat(&[&[0x01, 1], &v(5), &[0; 16]]), Public, Truncated),
+        ("hello too many objects", hello(1, u64::from(MAX_OBJECTS) + 1), Public, OverLimit),
+        ("hello objects past u32", cat(&[&[0x01, 1], &v(5), &[0; 16], &two_pow_32]), Public, BadVarint),
+        ("hello trailing", cat(&[&hello(1, 3), &[0]]), Public, TrailingBytes),
+        ("varint 11 bytes", cat(&[&[0x06], &endless]), Public, BadVarint),
+        ("varint past u64", cat(&[&[0x06], &over_u64]), Public, BadVarint),
         ("varint truncated", vec![0x06, 0x80], Public, Truncated),
         ("ping trailing", vec![0x06, 1, 0], Public, TrailingBytes),
         ("resync trailing", vec![0x05, 0], Public, TrailingBytes),
         ("close no reason", vec![0x07], Public, Truncated),
         ("close trailing", vec![0x07, 1, 1], Public, TrailingBytes),
         ("snapshot no seq", vec![0x02], Public, Truncated),
-        (
-            "snapshot no count",
-            cat(&[&[0x02], &v(1)]),
-            Public,
-            Truncated,
-        ),
-        (
-            "snapshot no encoding",
-            cat(&[&[0x02], &v(1), &v(3)]),
-            Public,
-            Truncated,
-        ),
-        (
-            "snapshot no length",
-            cat(&[&[0x02], &v(1), &v(3), &[0]]),
-            Public,
-            Truncated,
-        ),
-        (
-            "snapshot short payload",
-            cat(&[&[0x02], &v(1), &v(3), &[0], &v(3), &[0, 0]]),
-            Public,
-            Truncated,
-        ),
-        (
-            "snapshot no area count",
-            snap(3, 0, &[0, 0, 0], &[]),
-            Public,
-            Truncated,
-        ),
-        (
-            "snapshot too many objects",
-            snap(u64::from(MAX_OBJECTS) + 1, 1, &[], a),
-            Public,
-            OverLimit,
-        ),
-        (
-            "encoding 3",
-            snap(3, 3, &[0, 0, 0], a),
-            Public,
-            UnknownEncoding,
-        ),
-        (
-            "encoding 255",
-            snap(3, 255, &[0, 0, 0], a),
-            Manager,
-            UnknownEncoding,
-        ),
-        (
-            "bits on a manager stream",
-            snap(3, 2, &[0], a),
-            Manager,
-            UnknownEncoding,
-        ),
+        ("snapshot no count", cat(&[&[0x02], &v(1)]), Public, Truncated),
+        ("snapshot no encoding", cat(&[&[0x02], &v(1), &v(3)]), Public, Truncated),
+        ("snapshot no length", cat(&[&[0x02], &v(1), &v(3), &[0]]), Public, Truncated),
+        ("snapshot short payload", cat(&[&[0x02], &v(1), &v(3), &[0], &v(3), &[0, 0]]), Public, Truncated),
+        ("snapshot no area count", snap(3, 0, &[0, 0, 0], &[]), Public, Truncated),
+        ("snapshot too many objects", snap(u64::from(MAX_OBJECTS) + 1, 1, &[], a), Public, OverLimit),
+        ("encoding 3", snap(3, 3, &[0, 0, 0], a), Public, UnknownEncoding),
+        ("encoding 255", snap(3, 255, &[0, 0, 0], a), Manager, UnknownEncoding),
+        ("bits on a manager stream", snap(3, 2, &[0], a), Manager, UnknownEncoding),
         ("raw too short", snap(3, 0, &[0, 0], a), Public, BadCount),
-        (
-            "raw too long",
-            snap(3, 0, &[0, 0, 0, 0], a),
-            Public,
-            BadCount,
-        ),
-        (
-            "raw public code 2",
-            snap(3, 0, &[0, 2, 0], a),
-            Public,
-            BadValue,
-        ),
-        (
-            "raw manager code 16",
-            snap(3, 0, &[0, 16, 0], a),
-            Manager,
-            BadValue,
-        ),
+        ("raw too long", snap(3, 0, &[0, 0, 0, 0], a), Public, BadCount),
+        ("raw public code 2", snap(3, 0, &[0, 2, 0], a), Public, BadValue),
+        ("raw manager code 16", snap(3, 0, &[0, 16, 0], a), Manager, BadValue),
         ("bits one byte short", snap(9, 2, &[0], a), Public, BadCount),
-        (
-            "bits one byte long",
-            snap(8, 2, &[0, 0], a),
-            Public,
-            BadCount,
-        ),
-        (
-            "bits padding set",
-            snap(9, 2, &[0, 0b10], a),
-            Public,
-            BadValue,
-        ),
-        (
-            "runs past the count",
-            snap(3, 1, &[0, 2, 1, 2], a),
-            Public,
-            BadCount,
-        ),
-        (
-            "runs short of the count",
-            snap(3, 1, &[0, 2], a),
-            Public,
-            BadCount,
-        ),
+        ("bits one byte long", snap(8, 2, &[0, 0], a), Public, BadCount),
+        ("bits padding set", snap(9, 2, &[0, 0b10], a), Public, BadValue),
+        ("runs past the count", snap(3, 1, &[0, 2, 1, 2], a), Public, BadCount),
+        ("runs short of the count", snap(3, 1, &[0, 2], a), Public, BadCount),
         ("zero run", snap(3, 1, &[0, 0, 1, 3], a), Public, BadCount),
         ("run without length", snap(3, 1, &[0], a), Public, Truncated),
-        (
-            "run public code 2",
-            snap(3, 1, &[2, 3], a),
-            Public,
-            BadValue,
-        ),
-        (
-            "run past u32",
-            snap(3, 1, &cat(&[&[0], &two_pow_32]), a),
-            Public,
-            BadVarint,
-        ),
-        (
-            "snapshot area past objects",
-            snap(3, 0, &[0, 0, 0], &[1, 3, 0]),
-            Public,
-            OutOfRange,
-        ),
-        (
-            "snapshot areas repeat",
-            snap(3, 0, &[0, 0, 0], &[2, 1, 0, 0, 0]),
-            Public,
-            NotIncreasing,
-        ),
-        (
-            "snapshot area count too big",
-            snap(3, 0, &[0, 0, 0], &[3, 0, 0]),
-            Public,
-            BadCount,
-        ),
-        (
-            "snapshot trailing",
-            snap(3, 0, &[0, 0, 0], &[0, 0]),
-            Public,
-            TrailingBytes,
-        ),
+        ("run public code 2", snap(3, 1, &[2, 3], a), Public, BadValue),
+        ("run past u32", snap(3, 1, &cat(&[&[0], &two_pow_32]), a), Public, BadVarint),
+        ("snapshot area past objects", snap(3, 0, &[0, 0, 0], &[1, 3, 0]), Public, OutOfRange),
+        ("snapshot areas repeat", snap(3, 0, &[0, 0, 0], &[2, 1, 0, 0, 0]), Public, NotIncreasing),
+        ("snapshot area count too big", snap(3, 0, &[0, 0, 0], &[3, 0, 0]), Public, BadCount),
+        ("snapshot trailing", snap(3, 0, &[0, 0, 0], &[0, 0]), Public, TrailingBytes),
         ("delta no to_seq", cat(&[&[0x03], &v(1)]), Public, Truncated),
         ("delta same seq", delta(4, 4, &[0, 0]), Public, BadSeq),
         ("delta backwards", delta(4, 3, &[0, 0]), Public, BadSeq),
         ("delta no count", delta(1, 2, &[]), Public, Truncated),
-        (
-            "delta count too big",
-            delta(1, 2, &[3, 0, 1, 1, 1]),
-            Public,
-            BadCount,
-        ),
-        (
-            "delta count over limit",
-            delta(1, 2, &v(u64::from(MAX_OBJECTS) + 1)),
-            Public,
-            OverLimit,
-        ),
-        (
-            "delta change without code",
-            delta(1, 2, &[2, 0x80, 0x01, 1, 5]),
-            Public,
-            Truncated,
-        ),
-        (
-            "delta repeated idx",
-            delta(1, 2, &[2, 5, 1, 0, 1, 0]),
-            Public,
-            NotIncreasing,
-        ),
-        (
-            "delta idx at the limit",
-            delta(1, 2, &cat(&[&[1], &v(MAX_OBJECTS.into()), &[1], a])),
-            Public,
-            OutOfRange,
-        ),
-        (
-            "delta idx past u32",
-            delta(1, 2, &cat(&[&[1], &two_pow_32, &[1], a])),
-            Public,
-            BadVarint,
-        ),
-        (
-            "delta public code 2",
-            delta(1, 2, &[1, 0, 2, 0]),
-            Public,
-            BadValue,
-        ),
-        (
-            "delta manager code 16",
-            delta(1, 2, &[1, 0, 16, 0]),
-            Manager,
-            BadValue,
-        ),
-        (
-            "delta no area count",
-            delta(1, 2, &[1, 0, 1]),
-            Public,
-            Truncated,
-        ),
-        (
-            "delta trailing",
-            delta(1, 2, &[1, 0, 1, 0, 0]),
-            Public,
-            TrailingBytes,
-        ),
+        ("delta count too big", delta(1, 2, &[3, 0, 1, 1, 1]), Public, BadCount),
+        ("delta count over limit", delta(1, 2, &v(u64::from(MAX_OBJECTS) + 1)), Public, OverLimit),
+        ("delta change without code", delta(1, 2, &[2, 0x80, 0x01, 1, 5]), Public, Truncated),
+        ("delta repeated idx", delta(1, 2, &[2, 5, 1, 0, 1, 0]), Public, NotIncreasing),
+        ("delta idx at the limit", delta(1, 2, &cat(&[&[1], &v(MAX_OBJECTS.into()), &[1], a])), Public, OutOfRange),
+        ("delta idx past u32", delta(1, 2, &cat(&[&[1], &two_pow_32, &[1], a])), Public, BadVarint),
+        ("delta public code 2", delta(1, 2, &[1, 0, 2, 0]), Public, BadValue),
+        ("delta manager code 16", delta(1, 2, &[1, 0, 16, 0]), Manager, BadValue),
+        ("delta no area count", delta(1, 2, &[1, 0, 1]), Public, Truncated),
+        ("delta trailing", delta(1, 2, &[1, 0, 1, 0, 0]), Public, TrailingBytes),
         ("private no expiry", vec![0x04], Public, Truncated),
-        (
-            "private count too big",
-            cat(&[&[0x04], &v(9), &[4, 1, 1]]),
-            Public,
-            BadCount,
-        ),
-        (
-            "private repeated idx",
-            cat(&[&[0x04], &v(9), &[2, 1, 0, 0]]),
-            Public,
-            NotIncreasing,
-        ),
-        (
-            "private area count too big",
-            cat(&[&[0x04], &v(9), &[0, 1, 0]]),
-            Public,
-            BadCount,
-        ),
-        (
-            "private trailing",
-            cat(&[&[0x04], &v(9), &[0, 0, 0]]),
-            Public,
-            TrailingBytes,
-        ),
+        ("private count too big", cat(&[&[0x04], &v(9), &[4, 1, 1]]), Public, BadCount),
+        ("private repeated idx", cat(&[&[0x04], &v(9), &[2, 1, 0, 0]]), Public, NotIncreasing),
+        ("private area count too big", cat(&[&[0x04], &v(9), &[0, 1, 0]]), Public, BadCount),
+        ("private trailing", cat(&[&[0x04], &v(9), &[0, 0, 0]]), Public, TrailingBytes),
     ];
     for (name, frame, view, err) in server_cases {
         assert_eq!(decode_server(&frame, view), Err(err), "{name}");
     }
 
+    #[rustfmt::skip]
     let client_cases: Vec<(&str, Vec<u8>, WireError)> = vec![
         ("empty", vec![], Truncated),
         ("server type", encode_ping(1), UnknownType),
         ("type 0x12", vec![0x12], UnknownType),
         ("subscribe no version", vec![0x10], Truncated),
-        (
-            "subscribe v0",
-            cat(&[&[0x10, 0], &key(b"e"), &[0, 0, 0]]),
-            UnsupportedVersion,
-        ),
+        ("subscribe v0", cat(&[&[0x10, 0], &key(b"e"), &[0, 0, 0]]), UnsupportedVersion),
         ("no key", sub(&[]), Truncated),
         ("key cut short", sub(&[3, b'a']), Truncated),
-        (
-            "key over the limit",
-            sub(&key(&[b'a'; MAX_KEY_BYTES + 1])),
-            OverLimit,
-        ),
-        (
-            "key not UTF-8",
-            sub(&cat(&[&key(&[0xFF]), &[0, 0, 0]])),
-            BadValue,
-        ),
+        ("key over the limit", sub(&key(&[b'a'; MAX_KEY_BYTES + 1])), OverLimit),
+        ("key not UTF-8", sub(&cat(&[&key(&[0xFF]), &[0, 0, 0]])), BadValue),
         ("no last seq", sub(&key(b"e")), Truncated),
-        (
-            "no hold presence",
-            sub(&cat(&[&key(b"e"), &[0]])),
-            Truncated,
-        ),
+        ("no hold presence", sub(&cat(&[&key(b"e"), &[0]])), Truncated),
         ("presence 2", sub(&cat(&[&key(b"e"), &[0, 2]])), BadValue),
-        (
-            "hold token cut",
-            sub(&cat(&[&key(b"e"), &[0, 1, 4, 1]])),
-            Truncated,
-        ),
-        (
-            "token over the limit",
-            sub(&cat(&[
-                &key(b"e"),
-                &[0, 1],
-                &key(&[1; MAX_TOKEN_BYTES + 1]),
-            ])),
-            OverLimit,
-        ),
-        (
-            "no session presence",
-            sub(&cat(&[&key(b"e"), &[0, 0]])),
-            Truncated,
-        ),
-        (
-            "session presence 2",
-            sub(&cat(&[&key(b"e"), &[0, 0, 2]])),
-            BadValue,
-        ),
-        (
-            "session token over the limit",
-            sub(&cat(&[
-                &key(b"e"),
-                &[0, 0, 1],
-                &key(&[1; MAX_TOKEN_BYTES + 1]),
-            ])),
-            OverLimit,
-        ),
-        (
-            "subscribe trailing",
-            sub(&cat(&[&key(b"e"), &[0, 0, 0, 0]])),
-            TrailingBytes,
-        ),
+        ("hold token cut", sub(&cat(&[&key(b"e"), &[0, 1, 4, 1]])), Truncated),
+        ("token over the limit", sub(&cat(&[&key(b"e"), &[0, 1], &key(&[1; MAX_TOKEN_BYTES + 1])])), OverLimit),
+        ("no session presence", sub(&cat(&[&key(b"e"), &[0, 0]])), Truncated),
+        ("session presence 2", sub(&cat(&[&key(b"e"), &[0, 0, 2]])), BadValue),
+        ("session token over the limit", sub(&cat(&[&key(b"e"), &[0, 0, 1], &key(&[1; MAX_TOKEN_BYTES + 1])])), OverLimit),
+        ("subscribe trailing", sub(&cat(&[&key(b"e"), &[0, 0, 0, 0]])), TrailingBytes),
         ("pong no nonce", vec![0x11], Truncated),
         ("pong trailing", vec![0x11, 1, 1], TrailingBytes),
     ];

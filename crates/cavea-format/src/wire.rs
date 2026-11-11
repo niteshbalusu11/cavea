@@ -49,15 +49,12 @@ pub enum View {
 }
 
 impl View {
-    /// The code this view carries for a domain status.
-    fn code(self, status: u8) -> Result<u8, WireError> {
-        if status > MAX_STATUS {
-            return Err(WireError::BadValue);
-        }
-        Ok(match self {
+    /// The code this view carries for a domain status (at most 15).
+    fn code(self, status: u8) -> u8 {
+        match self {
             Self::Public => u8::from(status != 0),
             Self::Manager => status,
-        })
+        }
     }
 
     fn max_code(self) -> u8 {
@@ -744,14 +741,26 @@ fn put_varint(out: &mut Vec<u8>, mut v: u64) {
     out.push(v as u8);
 }
 
-fn varint_len(v: u32) -> usize {
-    match v {
-        0..0x80 => 1,
-        0x80..0x4000 => 2,
-        0x4000..0x20_0000 => 3,
-        0x20_0000..0x1000_0000 => 4,
-        _ => 5,
+fn varint_len(v: usize) -> usize {
+    (usize::BITS - (v | 1).leading_zeros()).div_ceil(7) as usize
+}
+
+/// Maximal runs of equal codes, as `view` sees `statuses`.
+fn code_runs(view: View, statuses: &[u8]) -> impl Iterator<Item = (u8, usize)> + '_ {
+    let mut rest = statuses;
+    core::iter::from_fn(move || {
+        let code = view.code(*rest.first()?);
+        let run = rest.iter().take_while(|&&s| view.code(s) == code).count();
+        rest = rest.get(run..).unwrap_or_default();
+        Some((code, run))
+    })
+}
+
+fn check_status(status: u8) -> Result<(), WireError> {
+    if status > MAX_STATUS {
+        return Err(WireError::BadValue);
     }
+    Ok(())
 }
 
 fn object_count(n: usize) -> Result<u32, WireError> {
@@ -807,22 +816,11 @@ pub fn encode_snapshot(
     areas: &[Area],
 ) -> Result<Vec<u8>, WireError> {
     let objects = object_count(statuses.len())?;
-    // One pass to size each encoding.
-    let mut runs_len = 0usize;
-    let mut max = 0u8;
-    let mut rest = statuses;
-    while let Some(&first) = rest.first() {
-        let code = view.code(first)?;
-        let mut run = 1;
-        for &s in rest.get(1..).unwrap_or_default() {
-            if view.code(s)? != code {
-                break;
-            }
-            run += 1;
-        }
+    statuses.iter().try_for_each(|&s| check_status(s))?;
+    let (mut runs_len, mut max) = (0, 0);
+    for (code, run) in code_runs(view, statuses) {
+        runs_len += 1 + varint_len(run);
         max = max.max(code);
-        runs_len += 1 + varint_len(run as u32);
-        rest = rest.get(run..).unwrap_or_default();
     }
     let n = statuses.len();
     let bits_len = (view == View::Public && max <= 1).then_some(n.div_ceil(8));
@@ -839,35 +837,17 @@ pub fn encode_snapshot(
     out.push(encoding as u8);
     put_varint(&mut out, len as u64);
     match encoding {
-        Encoding::Raw => {
-            for &s in statuses {
-                out.push(view.code(s)?);
-            }
-        }
+        Encoding::Raw => out.extend(statuses.iter().map(|&s| view.code(s))),
         Encoding::Runs => {
-            let mut rest = statuses;
-            while let Some(&first) = rest.first() {
-                let code = view.code(first)?;
-                let run = 1 + rest
-                    .get(1..)
-                    .unwrap_or_default()
-                    .iter()
-                    .take_while(|&&s| view.code(s) == Ok(code))
-                    .count();
+            for (code, run) in code_runs(view, statuses) {
                 out.push(code);
                 put_varint(&mut out, run as u64);
-                rest = rest.get(run..).unwrap_or_default();
             }
         }
-        Encoding::Bits => {
-            for chunk in statuses.chunks(8) {
-                let mut byte = 0u8;
-                for (bit, &s) in chunk.iter().enumerate() {
-                    byte |= view.code(s)? << bit;
-                }
-                out.push(byte);
-            }
-        }
+        Encoding::Bits => out.extend(statuses.chunks(8).map(|chunk| {
+            let bits = chunk.iter().enumerate();
+            bits.fold(0, |byte, (bit, &s)| byte | view.code(s) << bit)
+        })),
     }
     put_areas(&mut out, areas, objects)?;
     Ok(out)
@@ -903,8 +883,9 @@ pub fn encode_delta(
     put_varint(&mut out, u64::from(object_count(changes.len())?));
     let mut prev = None;
     for c in changes {
+        check_status(c.code)?;
         put_varint(&mut out, step(&mut prev, c.idx, objects)?);
-        out.push(view.code(c.code)?);
+        out.push(view.code(c.code));
     }
     put_areas(&mut out, areas, objects)?;
     Ok(out)
