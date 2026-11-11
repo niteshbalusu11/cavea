@@ -61,7 +61,9 @@ async function bytes(url: string): Promise<Uint8Array> {
 }
 
 async function render(panel: Panel): Promise<Rendered> {
-  ready ??= init({ module_or_path: "wasm/cavea_web_bg.wasm" }).then(() => loadGlyphAtlas("glyphs.png"));
+  ready ??= init({ module_or_path: "wasm/cavea_web_bg.wasm" }).then(() =>
+    loadGlyphAtlas("glyphs.png"),
+  );
   const atlas = await ready;
   let chart = charts.get(panel.chart);
   if (chart === undefined) {

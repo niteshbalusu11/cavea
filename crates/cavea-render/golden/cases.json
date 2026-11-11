@@ -13,12 +13,7 @@
     },
     "theatre-scripts": {
       "preset": "theatre",
-      "sections": [
-        "ملعب",
-        "גלריה",
-        "Ζώνη Γ",
-        "Партер"
-      ],
+      "sections": ["ملعب", "גלריה", "Ζώνη Γ", "Партер"],
       "text": "المسرح · במה",
       "rowPrefix": "Ряд ",
       "seatScheme": "alpha-lower"
@@ -31,94 +26,38 @@
       "panels": [
         {
           "chart": "theatre",
-          "size": [
-            240,
-            180
-          ],
-          "camera": [
-            -3000,
-            -600,
-            6000,
-            4500
-          ],
+          "size": [240, 180],
+          "camera": [-3000, -600, 6000, 4500],
           "unavailable": [
-            [
-              0,
-              150
-            ],
-            [
-              935,
-              465
-            ]
+            [0, 150],
+            [935, 465]
           ]
         },
         {
           "chart": "theatre",
-          "size": [
-            240,
-            180
-          ],
-          "camera": [
-            -1100,
-            300,
-            2200,
-            1650
-          ],
+          "size": [240, 180],
+          "camera": [-1100, 300, 2200, 1650],
           "unavailable": [
-            [
-              0,
-              150
-            ],
-            [
-              935,
-              465
-            ]
+            [0, 150],
+            [935, 465]
           ]
         },
         {
           "chart": "theatre",
-          "size": [
-            240,
-            180
-          ],
-          "camera": [
-            -350,
-            380,
-            704,
-            528
-          ],
+          "size": [240, 180],
+          "camera": [-350, 380, 704, 528],
           "unavailable": [
-            [
-              0,
-              150
-            ],
-            [
-              935,
-              465
-            ]
+            [0, 150],
+            [935, 465]
           ]
         },
         {
           "chart": "theatre",
-          "size": [
-            240,
-            180
-          ],
-          "camera": [
-            -190,
-            1000,
-            387,
-            290
-          ],
+          "size": [240, 180],
+          "camera": [-190, 1000, 387, 290],
           "unavailable": [
-            [
-              0,
-              150
-            ],
-            [
-              935,
-              465
-            ]
+            [0, 150],
+            [935, 465]
           ]
         }
       ]
@@ -129,116 +68,44 @@
       "panels": [
         {
           "chart": "theatre",
-          "size": [
-            320,
-            240
-          ],
-          "camera": [
-            -620,
-            380,
-            580,
-            440
-          ],
+          "size": [320, 240],
+          "camera": [-620, 380, 580, 440],
           "unavailable": [
-            [
-              485,
-              3
-            ],
-            [
-              30,
-              4
-            ]
+            [485, 3],
+            [30, 4]
           ],
-          "held": [
-            "Stalls Centre-A-103",
-            "Stalls Centre-A-104"
-          ],
-          "pending": [
-            "Stalls Centre-C-106"
-          ],
-          "hover": [
-            160,
-            182
-          ],
-          "keys": [
-            "ArrowRight"
-          ]
+          "held": ["Stalls Centre-A-103", "Stalls Centre-A-104"],
+          "pending": ["Stalls Centre-C-106"],
+          "hover": [160, 182],
+          "keys": ["ArrowRight"]
         },
         {
           "chart": "theatre",
-          "size": [
-            320,
-            240
-          ],
+          "size": [320, 240],
           "theme": "dark",
-          "camera": [
-            -620,
-            380,
-            580,
-            440
-          ],
+          "camera": [-620, 380, 580, 440],
           "unavailable": [
-            [
-              485,
-              3
-            ],
-            [
-              30,
-              4
-            ]
+            [485, 3],
+            [30, 4]
           ],
-          "held": [
-            "Stalls Centre-A-103",
-            "Stalls Centre-A-104"
-          ],
-          "pending": [
-            "Stalls Centre-C-106"
-          ],
-          "hover": [
-            160,
-            182
-          ],
-          "keys": [
-            "ArrowRight"
-          ]
+          "held": ["Stalls Centre-A-103", "Stalls Centre-A-104"],
+          "pending": ["Stalls Centre-C-106"],
+          "hover": [160, 182],
+          "keys": ["ArrowRight"]
         },
         {
           "chart": "theatre",
-          "size": [
-            320,
-            240
-          ],
+          "size": [320, 240],
           "theme": "high-contrast",
-          "camera": [
-            -620,
-            380,
-            580,
-            440
-          ],
+          "camera": [-620, 380, 580, 440],
           "unavailable": [
-            [
-              485,
-              3
-            ],
-            [
-              30,
-              4
-            ]
+            [485, 3],
+            [30, 4]
           ],
-          "held": [
-            "Stalls Centre-A-103",
-            "Stalls Centre-A-104"
-          ],
-          "pending": [
-            "Stalls Centre-C-106"
-          ],
-          "hover": [
-            160,
-            182
-          ],
-          "keys": [
-            "ArrowRight"
-          ]
+          "held": ["Stalls Centre-A-103", "Stalls Centre-A-104"],
+          "pending": ["Stalls Centre-C-106"],
+          "hover": [160, 182],
+          "keys": ["ArrowRight"]
         }
       ]
     },
@@ -248,66 +115,23 @@
       "panels": [
         {
           "chart": "theatre-rounded",
-          "size": [
-            240,
-            180
-          ],
-          "camera": [
-            -300,
-            380,
-            435,
-            330
-          ],
-          "unavailable": [
-            [
-              485,
-              3
-            ]
-          ],
-          "held": [
-            "Stalls Centre-A-103"
-          ]
+          "size": [240, 180],
+          "camera": [-300, 380, 435, 330],
+          "unavailable": [[485, 3]],
+          "held": ["Stalls Centre-A-103"]
         },
         {
           "chart": "theatre-chair",
-          "size": [
-            240,
-            180
-          ],
-          "camera": [
-            -300,
-            380,
-            435,
-            330
-          ],
-          "unavailable": [
-            [
-              485,
-              3
-            ]
-          ],
-          "held": [
-            "Stalls Centre-A-103"
-          ]
+          "size": [240, 180],
+          "camera": [-300, 380, 435, 330],
+          "unavailable": [[485, 3]],
+          "held": ["Stalls Centre-A-103"]
         },
         {
           "chart": "theatre-chair",
-          "size": [
-            240,
-            180
-          ],
-          "camera": [
-            -600,
-            380,
-            1200,
-            900
-          ],
-          "unavailable": [
-            [
-              485,
-              3
-            ]
-          ]
+          "size": [240, 180],
+          "camera": [-600, 380, 1200, 900],
+          "unavailable": [[485, 3]]
         }
       ]
     },
@@ -317,42 +141,18 @@
       "panels": [
         {
           "chart": "theatre-scripts",
-          "size": [
-            320,
-            240
-          ],
-          "camera": [
-            -2000,
-            -700,
-            4000,
-            3000
-          ]
+          "size": [320, 240],
+          "camera": [-2000, -700, 4000, 3000]
         },
         {
           "chart": "theatre-scripts",
-          "size": [
-            320,
-            240
-          ],
-          "camera": [
-            -660,
-            380,
-            375,
-            281
-          ]
+          "size": [320, 240],
+          "camera": [-660, 380, 375, 281]
         },
         {
           "chart": "theatre-scripts",
-          "size": [
-            320,
-            240
-          ],
-          "camera": [
-            -290,
-            380,
-            580,
-            440
-          ]
+          "size": [320, 240],
+          "camera": [-290, 380, 580, 440]
         }
       ]
     },
@@ -362,30 +162,14 @@
       "panels": [
         {
           "chart": "theatre",
-          "size": [
-            200,
-            150
-          ],
+          "size": [200, 150],
           "dpr": 2,
-          "camera": [
-            -620,
-            380,
-            300,
-            225
-          ],
+          "camera": [-620, 380, 300, 225],
           "unavailable": [
-            [
-              485,
-              3
-            ],
-            [
-              30,
-              4
-            ]
+            [485, 3],
+            [30, 4]
           ],
-          "held": [
-            "Stalls Centre-A-103"
-          ]
+          "held": ["Stalls Centre-A-103"]
         }
       ]
     }

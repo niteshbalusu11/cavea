@@ -171,7 +171,9 @@ const server = Bun.serve({
     }
     const chart = path.match(/^\/charts\/([a-z0-9-]+)\.ccf$/)?.[1];
     const file = chart === undefined ? files[path] : join(work, "charts", `${chart}.ccf`);
-    return file === undefined ? new Response("not found", { status: 404 }) : new Response(Bun.file(file));
+    return file === undefined
+      ? new Response("not found", { status: 404 })
+      : new Response(Bun.file(file));
   },
 });
 
@@ -191,7 +193,11 @@ async function drawAll(): Promise<{ version: string; images: Map<string, Image[]
           .catch((error: unknown) => {
             throw new Error(`${c.name}: ${String(error)}`);
           });
-        panels.push({ width: r.width, height: r.height, rgba: new Uint8Array(Buffer.from(r.rgba, "base64")) });
+        panels.push({
+          width: r.width,
+          height: r.height,
+          rgba: new Uint8Array(Buffer.from(r.rgba, "base64")),
+        });
       }
       images.set(c.name, panels);
     }
@@ -242,7 +248,8 @@ function compare(
       }
       worst = Math.max(worst, d);
       // Differing pixels red; the rest the drawn image, faded.
-      const grey = ((actual.rgba[i] ?? 0) + (actual.rgba[i + 1] ?? 0) + (actual.rgba[i + 2] ?? 0)) / 12 + 160;
+      const grey =
+        ((actual.rgba[i] ?? 0) + (actual.rgba[i + 1] ?? 0) + (actual.rgba[i + 2] ?? 0)) / 12 + 160;
       diff.set(d > CHANNEL_TOLERANCE ? [255, 0, 0, 255] : [grey, grey, grey, 255], i);
       if (d > CHANNEL_TOLERANCE) {
         let left = 0;
@@ -267,7 +274,9 @@ try {
   for (const [run, draw] of draws.entries()) {
     for (const [name, panels] of draw.images) {
       const other = first.images.get(name) ?? [];
-      const same = panels.every((p, i) => Buffer.from(p.rgba).equals(Buffer.from(other[i]?.rgba ?? [])));
+      const same = panels.every((p, i) =>
+        Buffer.from(p.rgba).equals(Buffer.from(other[i]?.rgba ?? [])),
+      );
       if (!same) {
         console.log(`FAIL ${name}: browser start ${run + 1} drew different pixels from start 1`);
         failed++;
@@ -275,10 +284,15 @@ try {
     }
   }
   if (runs > 1 && failed === 0) {
-    console.log(`determinism: ${runs} browser starts drew identical pixels for ${chosen.length} cases`);
+    console.log(
+      `determinism: ${runs} browser starts drew identical pixels for ${chosen.length} cases`,
+    );
   }
 
-  const recorded = await readFile(VERSION_FILE, "utf8").then((t) => t.trim(), () => "");
+  const recorded = await readFile(VERSION_FILE, "utf8").then(
+    (t) => t.trim(),
+    () => "",
+  );
   if (update) {
     await writeFile(VERSION_FILE, `${first.version}\n`);
   } else if (recorded !== first.version) {
@@ -301,7 +315,10 @@ try {
       console.log(`wrote ${c.name}.png: ${actual.width} × ${actual.height}, ${png.length} B`);
       continue;
     }
-    const stored = await readFile(file).then((b) => decode(new Uint8Array(b)), () => undefined);
+    const stored = await readFile(file).then(
+      (b) => decode(new Uint8Array(b)),
+      () => undefined,
+    );
     const keep = async (): Promise<void> => {
       await writeFile(join(OUT, "actual", `${c.name}.png`), encode(actual));
     };
@@ -345,7 +362,9 @@ try {
     console.log(`drawn images and differences: ${join(OUT, "actual")}`);
   }
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
-  console.log(`${chosen.length} cases, ${failed} failed, ${seconds} s (${first.version}, SwiftShader)`);
+  console.log(
+    `${chosen.length} cases, ${failed} failed, ${seconds} s (${first.version}, SwiftShader)`,
+  );
 } finally {
   server.stop(true);
 }

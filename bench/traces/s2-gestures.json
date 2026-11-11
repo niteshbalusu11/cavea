@@ -1,16 +1,8 @@
 {
-  "about": "S2 of 13 \u00a76.2, the 30-second gesture trace: from overview on stadium-100k, three pinches zoom into section 137 to the detail level, four slow one-finger pans run along its rows, three pinches zoom back out. Positions are for a 1000 x 800 viewport; the benchmark page scales them to its own",
+  "about": "S2 of 13 §6.2, the 30-second gesture trace: from overview on stadium-100k, three pinches zoom into section 137 to the detail level, four slow one-finger pans run along its rows, three pinches zoom back out. Positions are for a 1000 x 800 viewport; the benchmark page scales them to its own",
   "chart": "stadium-100k",
-  "viewport": [
-    1000,
-    800
-  ],
-  "camera": [
-    -15000,
-    -18500,
-    30000,
-    27000
-  ],
+  "viewport": [1000, 800],
+  "camera": [-15000, -18500, 30000, 27000],
   "summary": true,
   "steps": [
     [1000.0, "down", 1, "touch", 440.0, 400.0],

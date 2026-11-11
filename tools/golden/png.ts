@@ -122,7 +122,9 @@ export function decode(bytes: Uint8Array): Image {
       const [depth, colour, , , interlace] = data.subarray(8);
       channels = colour === 2 ? 3 : colour === 6 ? 4 : 0;
       if (depth !== 8 || channels === 0 || interlace !== 0) {
-        throw new Error(`unsupported PNG: depth ${depth}, colour type ${colour}, interlace ${interlace}`);
+        throw new Error(
+          `unsupported PNG: depth ${depth}, colour type ${colour}, interlace ${interlace}`,
+        );
       }
     } else if (type === "IDAT") {
       idat.push(data);

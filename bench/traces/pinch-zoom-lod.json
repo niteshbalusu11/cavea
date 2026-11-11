@@ -1,16 +1,8 @@
 {
   "about": "a two-finger pinch zooms about the fingers' midpoint from overview through the cross-fade into the seats level, and lifting the fingers selects nothing",
   "chart": "theatre",
-  "viewport": [
-    320,
-    240
-  ],
-  "camera": [
-    -3000,
-    -600,
-    6000,
-    4500
-  ],
+  "viewport": [320, 240],
+  "camera": [-3000, -600, 6000, 4500],
   "steps": [
     [100, "down", 1, "touch", 130, 120],
     [110, "down", 2, "touch", 190, 120],

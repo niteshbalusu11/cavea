@@ -1,16 +1,8 @@
 {
   "about": "mouse wheel notches zoom about the cursor from the seats level into detail and back, crossing the 14 px threshold up and its 12.6 px hysteresis edge down",
   "chart": "theatre",
-  "viewport": [
-    800,
-    600
-  ],
-  "camera": [
-    -1655,
-    200,
-    3310,
-    2480
-  ],
+  "viewport": [800, 600],
+  "camera": [-1655, 200, 3310, 2480],
   "steps": [
     [100, "wheel", 0, -100, 400, 300, 0],
     [150, "wheel", 0, -100, 400, 300, 0],

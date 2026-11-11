@@ -25,7 +25,9 @@ export async function sh(cmd: string[], cwd?: string): Promise<string> {
     proc.exited,
   ]);
   if (code !== 0) {
-    throw new Error(`${cmd.join(" ")} exited with ${code}:\n${`${out}\n${err}`.trim().slice(-2000)}`);
+    throw new Error(
+      `${cmd.join(" ")} exited with ${code}:\n${`${out}\n${err}`.trim().slice(-2000)}`,
+    );
   }
   return out;
 }
@@ -116,7 +118,7 @@ export class Browser {
     const decoder = new TextDecoder();
     const reader = proc.stderr.getReader();
     let url: string | undefined;
-    for (const deadline = Date.now() + 30_000; url === undefined && Date.now() < deadline; ) {
+    for (const deadline = Date.now() + 30_000; url === undefined && Date.now() < deadline;) {
       const { value, done } = await reader.read();
       if (done) {
         break;
@@ -154,10 +156,14 @@ export class Browser {
     sessionId?: string,
   ): Promise<Record<string, unknown>> {
     const id = ++this.id;
-    this.ws.send(JSON.stringify({ id, method, params, ...(sessionId === undefined ? {} : { sessionId }) }));
+    this.ws.send(
+      JSON.stringify({ id, method, params, ...(sessionId === undefined ? {} : { sessionId }) }),
+    );
     return new Promise((resolve, reject) => {
       this.pending.set(id, (m) =>
-        m.error === undefined ? resolve(m.result ?? {}) : reject(new Error(`${method}: ${m.error.message}`)),
+        m.error === undefined
+          ? resolve(m.result ?? {})
+          : reject(new Error(`${method}: ${m.error.message}`)),
       );
     });
   }
@@ -165,7 +171,10 @@ export class Browser {
   /** Opens `url` in a fresh browser context and returns a session on it once loaded. */
   async open(url: string): Promise<Page> {
     const { browserContextId } = await this.send("Target.createBrowserContext");
-    const { targetId } = await this.send("Target.createTarget", { url: "about:blank", browserContextId });
+    const { targetId } = await this.send("Target.createTarget", {
+      url: "about:blank",
+      browserContextId,
+    });
     const { sessionId } = await this.send("Target.attachToTarget", { targetId, flatten: true });
     const page = new Page(this, String(sessionId), String(browserContextId));
     await this.send("Runtime.enable", {}, page.session);
@@ -201,7 +210,9 @@ export class Page {
       { expression, awaitPromise: true, returnByValue: true },
       this.session,
     );
-    const details = reply["exceptionDetails"] as { exception?: { description?: string }; text?: string } | undefined;
+    const details = reply["exceptionDetails"] as
+      | { exception?: { description?: string }; text?: string }
+      | undefined;
     if (details !== undefined) {
       throw new Error(details.exception?.description ?? details.text ?? "evaluation failed");
     }
