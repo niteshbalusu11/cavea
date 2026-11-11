@@ -17,8 +17,14 @@
 // selects without holds. Small seats zoom instead of selecting (touch below
 // 18 px, mouse below 5 px).
 //
+// A simulated crowd: `crowd=ms` sends a DELTA every `ms` milliseconds taking
+// `crowdSize` (default 20) random seats and freeing as many; `snipe=1` also
+// takes one selected seat the buyer does not hold, so it is knocked out;
+// `gap=n` skips a sequence number every n-th delta, so the view asks to
+// resync and the host answers with a SNAPSHOT.
+//
 // `window.caveaDemo` counts frames and WebGL errors, keeps every engine event
-// in `events`, and offers `setTheme(name)`, `resnapshot()` and
+// in `events`, and offers `setTheme(name)`, `crowd(on)`, `resnapshot()` and
 // `take(label)` (someone else takes a seat, in a DELTA) and `gap()` (a DELTA
 // that skips a sequence number, so the view asks to resync and this host
 // answers with a SNAPSHOT) for scripted checks.
@@ -83,6 +89,10 @@ const min = Number(params.get("min") ?? 0);
 const manual = params.get("manual") === "1";
 const failEvery = Number(params.get("fail") ?? 0);
 const holdMs = Number(params.get("holdMs") ?? 400);
+const crowdMs = Number(params.get("crowd") ?? 0);
+const crowdSize = Number(params.get("crowdSize") ?? 20);
+const snipe = params.get("snipe") === "1";
+const gapEvery = Number(params.get("gap") ?? 0);
 if (gestures === "cooperative") {
   document.body.classList.add("scrolling");
 }
@@ -110,6 +120,7 @@ const stats = {
   glErrors: 0,
   setTheme,
   events,
+  crowd: (on: boolean) => crowd(on),
   resnapshot: () => sendSnapshot(),
   take: (label: string) => sendDelta(new Map(idxOf([label]).map((i) => [i, 1]))),
   gap: () => sendDelta(new Map(), true),
@@ -195,6 +206,7 @@ function fill(from: number, count: number): void {
   publicState.fill(UNAVAILABLE, from, from + count);
 }
 let seq = 0;
+let deltas = 0;
 const held = new Set<number>();
 
 function apply(frame: Uint8Array): void {
@@ -231,6 +243,33 @@ function sendPrivate(): void {
 function idxOf(labels: string[]): number[] {
   return labels.flatMap((label) => view.idxOf?.(label) ?? []);
 }
+function crowdTick(): void {
+  const changes = new Map<number, number>();
+  for (let n = 0; n < crowdSize * 4 && changes.size < crowdSize * 2; n++) {
+    const i = Math.floor(random() * seats);
+    if (!held.has(i) && !changes.has(i)) {
+      changes.set(i, changes.size < crowdSize ? 1 : 0);
+    }
+  }
+  if (snipe) {
+    const target = idxOf(selected).find((i) => !held.has(i));
+    if (target !== undefined) {
+      changes.set(target, 1);
+    }
+  }
+  deltas += 1;
+  const skip = gapEvery > 0 && deltas % gapEvery === 0;
+  sendDelta(changes, skip);
+  if (skip) {
+    note(`crowd delta ${deltas} skipped a seq: expect a resync`);
+  }
+}
+let crowdTimer = 0;
+function crowd(on: boolean): void {
+  clearInterval(crowdTimer);
+  crowdTimer = on && crowdMs > 0 ? window.setInterval(crowdTick, crowdMs) : 0;
+}
+
 let selected: string[] = [];
 let expiresAt: number | null = null;
 let holds = 0;
@@ -350,6 +389,7 @@ if (statics.demoChart === undefined || view.idxOf === undefined || view.setCamer
     const start = performance.now();
     sendSnapshot();
     report(`snapshot at seq ${seq} applied in ${(performance.now() - start).toFixed(1)} ms`);
+    crowd(true);
   };
   const options = { gestureHandling: gestures, onFrame, onEvents };
   host = attach(
