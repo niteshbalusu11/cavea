@@ -1,6 +1,8 @@
 // Draws a synthetic stadium, compiled in the browser, with the Rust renderer,
 // to see and measure it. Query parameters: `seats` (default 100000), `seed`
-// (default 1), `shape` (0 circle, 1 rounded, 2 chair), `theme`
+// (default 1), `preset` (a `cavea-testkit` preset such as `stadium-100k`
+// instead of the stadium; `seats` must then be its seat count), `shape` (0
+// circle, 1 rounded, 2 chair), `theme`
 // (light, dark, high-contrast), `camera=x:y:width:height` in chart units,
 // `sold` (fraction of seats unavailable in the first snapshot, in runs;
 // default 0.3) or `mark=start:count` to make exactly that range unavailable.
@@ -47,7 +49,7 @@ interface DemoExports {
   idxOf(label: string): number | undefined;
 }
 interface DemoStatics {
-  demoChart(seats: number, seed: number, shape: number): Uint8Array;
+  demoChart(seats: number, seed: number, shape: number, preset: string): Uint8Array;
 }
 
 type Theme = "light" | "dark" | "high-contrast";
@@ -80,6 +82,7 @@ const params = new URLSearchParams(location.search);
 const seats = Number(params.get("seats") ?? 100_000);
 const seed = Number(params.get("seed") ?? 1);
 const shape = Number(params.get("shape") ?? 0);
+const preset = params.get("preset") ?? "";
 const sold = Number(params.get("sold") ?? 0.3);
 const mark = params.get("mark")?.split(":").map(Number);
 const camera = params.get("camera")?.split(":").map(Number);
@@ -401,7 +404,7 @@ if (statics.demoChart === undefined || view.idxOf === undefined || view.setCamer
   report("This WASM has no demo exports. Run `cargo xtask build-web --demo` and reload.");
 } else {
   const compileStart = performance.now();
-  const ccf = statics.demoChart(seats, seed, shape);
+  const ccf = statics.demoChart(seats, seed, shape, preset);
   const loadStart = performance.now();
   setTheme(theme);
   view.loadChart(ccf);
