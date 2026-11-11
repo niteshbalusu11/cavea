@@ -1,6 +1,7 @@
 // Dialogs, toasts and menu styles. Kobalte traps focus in a dialog and
 // returns it to where it was on close; Escape closes.
 import { AlertDialog } from "@kobalte/core/alert-dialog";
+import { Dialog as KDialog } from "@kobalte/core/dialog";
 import { Toast, toaster } from "@kobalte/core/toast";
 import { Show, type JSX, type ParentProps } from "solid-js";
 import { msg } from "../i18n/messages.ts";
@@ -78,6 +79,62 @@ export function Confirm(
         </div>
       </AlertDialog.Portal>
     </AlertDialog>
+  );
+}
+
+/**
+ * A modal dialog for a tool of its own (the palette, the shortcut help, a
+ * form): focus is trapped inside and returns where it was on close;
+ * Escape and a press outside close it. `top` places it near the top of the
+ * window, as a palette sits, rather than centred.
+ */
+export function Dialog(
+  props: ParentProps<{
+    open: boolean;
+    title: string;
+    /** Shown as the title; otherwise the title is for assistive technology only. */
+    heading?: boolean;
+    onClose: () => void;
+    class?: string;
+    top?: boolean;
+    /** Focus this on open instead of the first focusable element. */
+    initial?: () => HTMLElement | undefined;
+  }>,
+) {
+  return (
+    <KDialog open={props.open} onOpenChange={(open) => !open && props.onClose()}>
+      <KDialog.Portal>
+        <KDialog.Overlay class="fixed inset-0 z-40 bg-scrim" />
+        <div
+          class="fixed inset-0 z-50 flex justify-center p-4"
+          classList={{
+            "items-start pt-[12vh]": props.top === true,
+            "items-center": props.top !== true,
+          }}
+        >
+          <KDialog.Content
+            class={`flex max-h-full w-full flex-col rounded-lg bg-raised shadow-menu outline-none ${props.class ?? "max-w-md"}`}
+            onOpenAutoFocus={(e) => {
+              const el = props.initial?.();
+              if (el === undefined) return;
+              e.preventDefault();
+              el.focus();
+            }}
+          >
+            <KDialog.Title
+              class={
+                props.heading === true
+                  ? "shrink-0 px-5 pt-4 pb-1 text-lg font-semibold text-fg"
+                  : "sr-only"
+              }
+            >
+              {props.title}
+            </KDialog.Title>
+            {props.children}
+          </KDialog.Content>
+        </div>
+      </KDialog.Portal>
+    </KDialog>
   );
 }
 

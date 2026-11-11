@@ -3,6 +3,7 @@
 // when either gains one without a message.
 import { expect, test } from "bun:test";
 import schema from "../../../../packages/designer-core/src/generated/schema.json";
+import { GROUPS } from "../designer/shortcuts.ts";
 import { catalogue, historyName, msg } from "./messages.ts";
 
 type T = { literal?: string; union?: T[]; object?: { name: string; type: T }[] };
@@ -25,6 +26,11 @@ test("every node kind, tool, unit and error code has a message", () => {
   const groups: [string, string[]][] = [
     ["kind", literals("NodeKind")],
     ["kinds", literals("NodeKind")],
+    ["kindOne", literals("NodeKind")],
+    ["scheme", literals("LabelScheme")],
+    ["rowDirection", literals("RowDirection")],
+    ["seatDirection", literals("SeatDirection")],
+    ["group", [...GROUPS, "tree"]],
     ["tool", literals("ToolId")],
     ["unit", literals("Unit")],
     ["commandError", literals("CommandError", "code")],

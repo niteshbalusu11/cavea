@@ -104,6 +104,11 @@ impl NodeKind {
     }
 }
 
+/// The most item ids [`SelectionView::ids`] lists. The view is read on
+/// every edit, a drag's frames included, so the list is bounded; the shell
+/// acts on more only through calls that work on the selection itself.
+pub const SELECTION_IDS: usize = 1_000;
+
 /// The selection in a line, for the inspector's header and the status bar.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -111,6 +116,10 @@ pub struct SelectionView {
     pub level: Level,
     /// Items selected: nodes, rows or seat positions by level.
     pub count: u32,
+    /// The selected items themselves (node ids, `rid`s or oids by level),
+    /// ascending, the first [`SELECTION_IDS`] of them: cut short when
+    /// `count` is larger.
+    pub ids: Vec<u32>,
     /// At a node level, how many of each kind, in [`NodeKind`] order.
     pub kinds: Vec<KindCount>,
     /// Selected nodes that are locked, and hidden (node levels).

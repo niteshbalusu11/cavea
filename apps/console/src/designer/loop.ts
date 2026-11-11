@@ -10,6 +10,7 @@ import type {
   HistoryView,
   InspectorView,
   LayersPage,
+  NumberingView,
   Session,
   SelectionView,
   StatusView,
@@ -29,6 +30,8 @@ export interface Views {
   categories: CategoriesView;
   validation: ValidationView;
   layers: LayersPage;
+  /** Read only while the numbering panel is open (`FrameLoop.watch`). */
+  numbering: NumberingView | null;
 }
 
 export interface Sink {
@@ -49,11 +52,18 @@ export type LoopSession = Pick<
   | "categories"
   | "validation"
   | "layers"
+  | "numbering"
   | "validate"
 >;
 
-/** Views nothing in this slice shows, so never read: `numbering` (DSN-027),
- * `overlay` and `cursor` (the canvas, DSN-004), `guides` (DSN-031). */
+/** Views read whenever they change. `numbering` is read only while the
+ * numbering panel shows (`watch`); `overlay` and `cursor` (the canvas,
+ * DSN-004) and `guides` (DSN-031) are never read yet. */
+const ON_DEMAND = { numbering: "numbering" } as const satisfies Partial<
+  Record<ViewName, keyof Views>
+>;
+type OnDemand = keyof typeof ON_DEMAND;
+
 const READ: Partial<Record<ViewName, keyof Views>> = {
   history: "history",
   title: "title",
@@ -96,6 +106,9 @@ export class FrameLoop {
   readonly #onError: (error: unknown) => void;
   #window: [number, number] = [0, 0];
   #windowDirty = false;
+  /** Views read on demand: shown by something now, and to read next frame. */
+  #watched = new Set<OnDemand>();
+  #dirty = new Set<OnDemand>();
   #cancelFrame: (() => void) | null = null;
   #cancelIdle: (() => void) | null = null;
   #unwatch: () => void = () => {};
@@ -149,6 +162,19 @@ export class FrameLoop {
     this.#windowDirty = true;
   }
 
+  /** Starts or stops reading a view read on demand (`numbering`): read on
+   * the next frame when started; while stopped it costs nothing. */
+  watch(view: OnDemand, on: boolean): void {
+    if (on === this.#watched.has(view)) return;
+    if (on) {
+      this.#watched.add(view);
+      this.#dirty.add(view);
+    } else {
+      this.#watched.delete(view);
+      this.#sink.set(view, null);
+    }
+  }
+
   /** Reads what changed now rather than at the next frame: for input that
    * acts on what a view shows, when keys come faster than frames. */
   flush(): void {
@@ -161,8 +187,14 @@ export class FrameLoop {
     const names = new Set(this.#session.changed());
     if (this.#windowDirty) names.add("layers");
     this.#windowDirty = false;
+    for (const name of this.#dirty) names.add(name);
+    this.#dirty.clear();
     for (const name of names) {
-      const view = READ[name];
+      const view =
+        READ[name] ??
+        (name in ON_DEMAND && this.#watched.has(name as OnDemand)
+          ? ON_DEMAND[name as OnDemand]
+          : undefined);
       if (view === undefined) continue;
       read.push(view);
       this.#read(view);
@@ -201,6 +233,8 @@ export class FrameLoop {
         return sink.set(view, s.categories());
       case "layers":
         return sink.set(view, s.layers(this.#window[0], this.#window[1]));
+      case "numbering":
+        return sink.set(view, s.numbering());
       case "validation": {
         const v = s.validation();
         this.#complete = v.complete;

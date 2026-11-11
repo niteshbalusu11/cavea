@@ -262,7 +262,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 ### Shell
 
 - [x] **DSN-008** Application shell: top bar, tool rail, canvas, inspector, panels, status bar; resizable and persistent (07 §3). `apps/console/src/designer`: the layout, the frame loop and its stores, the canvas region behind `CanvasHost` (camera, input conversion; drawing is DSN-004, DSN-005), persisted layout (07 §3, the shell). Floor add, rename and delete are DSN-053
-- [ ] **DSN-009** Command palette and shortcut help (07 §8)
+- [x] **DSN-009** Command palette and shortcut help (07 §8). Built in the shell (`Palette.tsx`, `commands.ts`, `Help.tsx`, 07 §3); searching charts and events from the palette (09 §8) waits for the console's server screens
 - [x] **DSN-010** All keyboard shortcuts, with macOS variants (07 §8). One table, `apps/console/src/designer/shortcuts.ts`; the rows whose actions do not exist yet are in it as pending with their tasks (group, rulers, palette, the table, booth, area, image and measure tools), and each of those tasks binds its row
 
 ### Tools
@@ -286,9 +286,9 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **DSN-024** Inspector for sections, shapes, text, images and chart settings (07 §5.5). The edit core is built: the `section`, `shape`, `text`, `image` and `chart` groups of `Session::inspector` (07 §2.3); a section's label position waits for a schema change (07 §5.5); the shell's inspector is built (`Inspector.tsx`)
 - [x] **DSN-025** Row-level editing: add or remove seats, shift, insert aisle, override label, delete row (07 §5.3)
 - [x] **DSN-026** Seat-edit mode: remove, restore, flags, category, label, nudge (07 §5.3)
-- [ ] **DSN-027** Numbering panel for rows and seats with canvas preview (07 §6). The edit core is built: `Session::numbering`, `preview_numbering`, `number`, `sample` (07 §2.3, §6); the shell owes the panel and drawing the preview's labels
-- [ ] **DSN-028** Categories panel: add, rename, recolour, merge, delete with reassignment; contrast warning (07 §7). The edit core is built: `Session::categories` and the category calls, `contrast`, `too_similar` (07 §2.3, §7); the shell owes the panel and the colour picker; the panel is on the unreviewed branch `slice/designer-shell-1-panels`, after the shell's pull request
-- [ ] **DSN-029** Layers panel: virtualised tree, drag to reparent, lock, hide (07 §3). The edit core is built: `Session::layers` by page, `expand_layer`, `reveal_layer`, `click_layer`, `move_layers`, `lock_layer`, `hide_layer` (07 §2.3); the shell owes the panel and its drag and drop; the panel is built (`LayersPanel.tsx`: virtual tree by page, keyboard, drag and drop, context menu). Still owed: revealing a selection made on the canvas or by select all, which needs the selected ids in a view (`selection_view` has none; 07 §3, the shell)
+- [ ] **DSN-027** Numbering panel for rows and seats with canvas preview (07 §6). The edit core is built: `Session::numbering`, `preview_numbering`, `number`, `sample` (07 §2.3, §6); the panel is built (`NumberingPanel.tsx`, 07 §6 "In the shell"); drawing the preview's labels on the canvas, and the hovered seat's sample, wait for the canvas (DSN-004, DSN-005)
+- [x] **DSN-028** Categories panel: add, rename, recolour, merge, delete with reassignment; contrast warning (07 §7). The edit core is built: `Session::categories` and the category calls, `contrast`, `too_similar` (07 §2.3, §7); the shell owes the panel and the colour picker; the panel is built (`CategoriesPanel.tsx`: the list, the active category, add, edit with the live W107 checks, reorder by drag or Alt+↑/↓, merge, delete with reassignment)
+- [x] **DSN-029** Layers panel: virtualised tree, drag to reparent, lock, hide (07 §3). The edit core is built: `Session::layers` by page, `expand_layer`, `reveal_layer`, `click_layer`, `move_layers`, `lock_layer`, `hide_layer`, and the selected ids in `selection_view` (07 §2.3); the panel is built (`LayersPanel.tsx`: virtual tree by page, keyboard, drag and drop of the whole selection, context menu, revealing a selection made elsewhere; 07 §3)
 - [x] **DSN-030** Snapping: grid, edges and centres, equal spacing, row alignment, angles (07 §5.2)
 - [ ] **DSN-031** Rulers and user guides (07 §5.2). The edit core is built: guides per floor as snap targets, `Session::add_guide` and the rest, `saved_guides` (07 §5.2); the shell owes the rulers, dragging guides out of them, and storing the guides beside the draft
 - [x] **DSN-032** Align, distribute, flip, duplicate, array duplicate (07 §5.1)
@@ -300,12 +300,12 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [ ] **DSN-035** Autosave with etag and save-state indicator (07 §9)
 - [ ] **DSN-036** IndexedDB safety net and recovery prompt (07 §9)
 - [ ] **DSN-037** Single-editor lock with take-over (07 §9)
-- [ ] **DSN-038** Continuous validation, panel, canvas markers (07 §10). The edit core is built: `Session::validate`, `validation`, `focus`, the overlay's `markers` (07 §2.3, §10); the shell owes the idle-time loop, the panel, the status-bar summary, the markers on the canvas and disabling publish; the shell's idle-time loop, the status-bar summary and disabling Publish are built (`loop.ts`, `Rails.tsx`, `TopBar.tsx`); the panel is on the unreviewed branch `slice/designer-shell-1-panels`, and the markers wait for the canvas
+- [ ] **DSN-038** Continuous validation, panel, canvas markers (07 §10). The edit core is built: `Session::validate`, `validation`, `focus`, the overlay's `markers` (07 §2.3, §10); the shell owes the idle-time loop, the panel, the status-bar summary, the markers on the canvas and disabling publish; the shell's idle-time loop, the status-bar summary and disabling Publish are built (`loop.ts`, `Rails.tsx`, `TopBar.tsx`); the panel is built (`ValidationPanel.tsx`: a virtual list, errors then warnings under headings with their counts, stale marked, a finding focuses and reveals its node); the markers wait for the canvas (DSN-004, DSN-005)
 - [ ] **DSN-039** Preview with the buyer renderer, device widths and sample states (07 §11)
 - [ ] **DSN-040** Publish flow: compile, diff, thumbnail upload (07 §11)
 - [x] **DSN-041** Export and import of chart document JSON (07 §12). The edit core is built: `Session::export`, `Session::import` with typed `ImportError`s (07 §12); the shell's menu items, file picker and drop, download, and the confirmation before replacing a chart are built (07 §12, in the shell)
-- [ ] **DSN-042** New-chart screen, three templates, first-run tour (07 §16)
-- [ ] **DSN-043** "Insert row block" form as the non-pointer path (07 §15)
+- [ ] **DSN-042** New-chart screen, three templates, first-run tour (07 §16). The new-chart screen and the three templates are on the unreviewed branch `slice/designer-shell-2-insert-new`; the five-step tour is about canvas gestures and waits for the canvas (DSN-004)
+- [ ] **DSN-043** "Insert row block" form as the non-pointer path (07 §15). The form is on the unreviewed branch `slice/designer-shell-2-insert-new`
 - [ ] **DSN-044** Performance pass on the 100,000-seat chart (07 §14)
 
 ### Testing

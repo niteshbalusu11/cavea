@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { display, find, SHORTCUTS, type Press } from "./shortcuts.ts";
+import { display, find, helpSections, SHORTCUTS, type Press } from "./shortcuts.ts";
 
 const press = (key: string, mods: Partial<Omit<Press, "key">> = {}): Press => ({
   key,
@@ -48,9 +48,39 @@ describe("the shortcut table", () => {
 
   test("pending actions are listed and bound to nothing", () => {
     const pending = SHORTCUTS.filter((s) => s.pending !== undefined).map((s) => s.id);
-    expect(pending).toContain("palette");
-    expect(id(press("k", { ctrlKey: true }))).toBeNull();
+    expect(pending).toContain("rulers");
+    expect(id(press("r", { ctrlKey: true }))).toBeNull();
     expect(id(press("g", { ctrlKey: true }))).toBeNull();
+  });
+
+  test("the palette and the help have their keys, the help on widgets too", () => {
+    expect(id(press("k", { ctrlKey: true }))).toBe("palette");
+    expect(id(press("k", { metaKey: true }), "canvas", true)).toBe("palette");
+    expect(id(press("?", { shiftKey: true }))).toBe("help");
+    expect(id(press("?", { shiftKey: true }), "widget")).toBe("help");
+    expect(id(press("?", { shiftKey: true }), "text")).toBeNull();
+  });
+
+  test("the help lists every row of the table once, in its group, for each platform", () => {
+    for (const mac of [false, true]) {
+      const sections = helpSections(mac);
+      const rows = sections.flatMap((s) => s.rows.filter((r) => !r.id.startsWith("tree.")));
+      expect(rows.length).toBe(SHORTCUTS.length);
+      expect(new Set(rows.map((r) => r.id))).toEqual(new Set(SHORTCUTS.map((s) => s.id)));
+      for (const s of SHORTCUTS) {
+        const section = sections.find((x) => x.rows.some((r) => r.id === s.id));
+        expect([s.id, section?.group]).toEqual([s.id, s.group]);
+        const row = section?.rows.find((r) => r.id === s.id);
+        expect(row?.keys).toEqual(s.chords.map((c) => display(c, mac)));
+        expect(row?.pending).toBe(s.pending);
+      }
+      expect(sections.every((s) => s.rows.length > 0)).toBe(true);
+    }
+    expect(
+      helpSections(true)
+        .flatMap((s) => s.rows)
+        .find((r) => r.id === "undo")?.keys,
+    ).toEqual(["⌘Z"]);
   });
 
   test("no two live shortcuts share a chord", () => {
