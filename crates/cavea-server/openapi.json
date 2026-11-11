@@ -140,6 +140,15 @@
           "type": "string"
         }
       },
+      "UserPath": {
+        "description": "A console user's id: `usr_` and 32 hex digits.",
+        "in": "path",
+        "name": "user",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
       "Workspace": {
         "description": "With a console session, required: the workspace acted on, `ws_` and 32 hex digits, one the user is a member of. Ignored with a secret key, whose workspace is its own.",
         "in": "header",
@@ -374,6 +383,24 @@
         ],
         "type": "object"
       },
+      "ChangeRole": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "enum": [
+              "owner",
+              "admin",
+              "editor",
+              "operator",
+              "viewer"
+            ]
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "type": "object"
+      },
       "ChangeStatus": {
         "additionalProperties": false,
         "properties": {
@@ -543,11 +570,16 @@
                     "enum": [
                       "charts.read",
                       "charts.write",
+                      "charts.archive",
                       "events.read",
                       "events.write",
+                      "seats.hold",
                       "seats.write",
+                      "channels.assign",
+                      "reports.read",
                       "developers",
-                      "settings"
+                      "settings",
+                      "ownership"
                     ]
                   },
                   "type": "array"
@@ -1315,6 +1347,28 @@
         ],
         "type": "object"
       },
+      "MemberList": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceMember"
+            },
+            "type": "array"
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "next"
+        ],
+        "type": "object"
+      },
       "MintKey": {
         "additionalProperties": false,
         "properties": {
@@ -1813,6 +1867,42 @@
           "next"
         ],
         "type": "object"
+      },
+      "WorkspaceMember": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "enum": [
+              "owner",
+              "admin",
+              "editor",
+              "operator",
+              "viewer"
+            ]
+          },
+          "user": {
+            "additionalProperties": false,
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "id": {
+                "description": "`usr_` and 32 hex digits.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "email"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "user",
+          "role"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -1907,6 +1997,202 @@
         "summary": "The signed-in user",
         "tags": [
           "console"
+        ]
+      }
+    },
+    "/console/api/members": {
+      "get": {
+        "description": "Ordered by user id.",
+        "operationId": "listMembers",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberList"
+                }
+              }
+            },
+            "description": "A page of members",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "List the workspace's members",
+        "tags": [
+          "console"
+        ],
+        "x-cavea-permission": "settings",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/console/api/members/{user}": {
+      "delete": {
+        "description": "Applies to the member's next request; the user and their other workspaces stay. Removing an owner needs `ownership`; the last owner cannot be removed.",
+        "operationId": "removeMember",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Remove a member",
+        "tags": [
+          "console"
+        ],
+        "x-cavea-permission": "settings",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
+        ]
+      },
+      "patch": {
+        "description": "Applies to the member's next request. Making or unmaking an owner needs `ownership`; the last owner cannot be changed (`400`, `last_owner`).",
+        "operationId": "changeMemberRole",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeRole"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceMember"
+                }
+              }
+            },
+            "description": "The member",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Change a member's role",
+        "tags": [
+          "console"
+        ],
+        "x-cavea-permission": "settings",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
         ]
       }
     },
@@ -2553,11 +2839,10 @@
         "tags": [
           "charts"
         ],
-        "x-cavea-permission": "charts.write",
+        "x-cavea-permission": "charts.archive",
         "x-cavea-roles": [
           "owner",
-          "admin",
-          "editor"
+          "admin"
         ]
       },
       "get": {
@@ -3631,11 +3916,10 @@
         "tags": [
           "events"
         ],
-        "x-cavea-permission": "seats.write",
+        "x-cavea-permission": "seats.hold",
         "x-cavea-roles": [
           "owner",
-          "admin",
-          "operator"
+          "admin"
         ]
       }
     },
@@ -3906,11 +4190,10 @@
         "tags": [
           "hold-tokens"
         ],
-        "x-cavea-permission": "seats.write",
+        "x-cavea-permission": "seats.hold",
         "x-cavea-roles": [
           "owner",
-          "admin",
-          "operator"
+          "admin"
         ]
       }
     },
@@ -4133,11 +4416,10 @@
         "tags": [
           "hold-tokens"
         ],
-        "x-cavea-permission": "seats.write",
+        "x-cavea-permission": "seats.hold",
         "x-cavea-roles": [
           "owner",
-          "admin",
-          "operator"
+          "admin"
         ]
       }
     },

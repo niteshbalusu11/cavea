@@ -54,13 +54,10 @@ pub(super) fn routes() -> Routes {
             read,
         )
         .add(
-            writing(Op::delete(
-                "/v1/charts/{chart}",
-                "archiveChart",
-                "Archive a chart",
-            ))
-            .about("Idempotent. Versions stay served.")
-            .reply(200, "Chart", "The chart, archived"),
+            Op::delete("/v1/charts/{chart}", "archiveChart", "Archive a chart")
+                .needs(Needs::Staff(Permission::ChartsArchive))
+                .about("Idempotent. Versions stay served.")
+                .reply(200, "Chart", "The chart, archived"),
             archive,
         )
         .add(

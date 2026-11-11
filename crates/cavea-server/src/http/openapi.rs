@@ -43,6 +43,10 @@ pub enum Needs {
     /// [`super::staff::Staff`] extractor, and the document shows it as
     /// `x-cavea-permission`.
     Staff(Permission),
+    /// A console session alone, of a member whose role grants the permission
+    /// in the workspace named by `Cavea-Workspace`: the `/console/api` routes
+    /// of a workspace ([`super::staff::Member`]).
+    Member(Permission),
     /// A console session alone: the `/console/api` routes of a signed-in user.
     Console,
     Publishable,
@@ -261,7 +265,7 @@ impl Op {
             statuses.extend([401, 403]);
         }
         let path_params = self.path_params().next().is_some();
-        let staff = matches!(self.needs, Needs::Staff(_));
+        let staff = matches!(self.needs, Needs::Staff(_) | Needs::Member(_));
         if path_params || self.body.is_some() || !self.params.is_empty() || self.idempotent || staff
         {
             statuses.push(400);
@@ -283,7 +287,7 @@ impl Op {
             Needs::Nothing => return json!([]),
             Needs::Admin => "adminKey",
             Needs::Staff(_) => return json!([{ "secretKey": [] }, { "consoleSession": [] }]),
-            Needs::Console => return json!([{ "consoleSession": [] }]),
+            Needs::Console | Needs::Member(_) => return json!([{ "consoleSession": [] }]),
             Needs::Publishable => "publishableKey",
             Needs::QueryKey => "publishableKeyQuery",
         };
@@ -301,11 +305,15 @@ impl Op {
             .path_params()
             .map(|name| component("parameters", &path_param_name(name)))
             .collect();
-        if matches!(self.needs, Needs::Staff(_)) {
+        if matches!(self.needs, Needs::Staff(_) | Needs::Member(_)) {
             params.push(component("parameters", "Workspace"));
         }
         let safe = matches!(self.method, Method::GET | Method::HEAD);
-        if matches!(self.needs, Needs::Staff(_) | Needs::Console) && !safe {
+        if matches!(
+            self.needs,
+            Needs::Staff(_) | Needs::Member(_) | Needs::Console
+        ) && !safe
+        {
             params.push(component("parameters", "CsrfToken"));
         }
         if self.idempotent {
@@ -344,7 +352,7 @@ impl Op {
         if let Some(description) = self.description {
             op["description"] = description.into();
         }
-        if let Needs::Staff(permission) = self.needs {
+        if let Needs::Staff(permission) | Needs::Member(permission) = self.needs {
             let roles: Vec<&str> = Role::ALL
                 .into_iter()
                 .filter(|r| r.allows(permission))
@@ -402,7 +410,7 @@ impl Routes {
         let filter = MethodFilter::try_from(op.method.clone()).unwrap_or(MethodFilter::GET);
         let mut route = layer(on(filter, handler));
         // The permission a console session's role must grant, for `Staff`.
-        if let Needs::Staff(permission) = op.needs {
+        if let Needs::Staff(permission) | Needs::Member(permission) = op.needs {
             route = route.layer(axum::Extension(permission));
         }
         self.router = self.router.route(op.path, route);
@@ -441,7 +449,7 @@ fn path_param_name(name: &str) -> String {
 }
 
 /// Path parameters: name, description.
-const PATH_PARAMS: [(&str, &str); 7] = [
+const PATH_PARAMS: [(&str, &str); 8] = [
     ("workspace", "A workspace id: `ws_` and 32 hex digits."),
     ("id", "An API key id: `key_` and 32 hex digits."),
     ("chart", "The customer's chart key (1 to 128 characters)."),
@@ -452,6 +460,7 @@ const PATH_PARAMS: [(&str, &str); 7] = [
         "A public chart artefact: its content hash, 32 lowercase hex digits, and `.ccf`.",
     ),
     ("hash", "An asset's content hash: 32 lowercase hex digits."),
+    ("user", "A console user's id: `usr_` and 32 hex digits."),
 ];
 
 /// The operation's tag: its resource.

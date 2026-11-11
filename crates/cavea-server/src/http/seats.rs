@@ -39,10 +39,12 @@ use cavea_core::limits::MAX_OBJECTS;
 
 pub(super) fn routes() -> Routes {
     let reading = |op: Op| op.needs(Needs::Staff(Permission::EventsRead));
+    // 09 §2: the operator may block, release and book, not hold.
+    let holding = |op: Op| op.needs(Needs::Staff(Permission::SeatsHold));
     let writing = |op: Op| op.needs(Needs::Staff(Permission::SeatsWrite));
     Routes::new()
         .add(
-            writing(Op::post(
+            holding(Op::post(
                 "/v1/hold-tokens",
                 "createHoldToken",
                 "Create a hold token",
@@ -79,7 +81,7 @@ pub(super) fn routes() -> Routes {
             release_token,
         )
         .add(
-            writing(Op::post(
+            holding(Op::post(
                 "/v1/hold-tokens/{token}/extend",
                 "extendHoldToken",
                 "Extend a hold token",
@@ -91,7 +93,7 @@ pub(super) fn routes() -> Routes {
             extend_token,
         )
         .add(
-            writing(Op::post(
+            holding(Op::post(
                 "/v1/events/{event}/hold",
                 "hold",
                 "Hold objects under a token",

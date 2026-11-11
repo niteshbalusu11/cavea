@@ -6,6 +6,8 @@
 //!   the console cookie, a signed-in member acting in the workspace named by
 //!   `Cavea-Workspace`, whose role grants the route's permission (declared in
 //!   the route table, `openapi::Needs::Staff`).
+//! - [`Member`]: the `/console/api` routes of a workspace (its members): the
+//!   console session only, with the same workspace and permission checks.
 //! - [`ConsoleUser`]: the `/console/api` routes of a signed-in user.
 //!
 //! Every non-safe method authenticated by the cookie must carry the session's
@@ -145,24 +147,17 @@ fn cookie_session(parts: &Parts, state: &AppState) -> Result<SessionId, ApiError
 
 /// The workspace a console request names: `ws_` and 32 lowercase hex digits.
 fn named_workspace(headers: &HeaderMap) -> Result<String, ApiError> {
-    let refused = |reason| {
-        let error = ApiError::new(if reason == "missing" {
-            Code::InvalidRequest
-        } else {
-            Code::Forbidden
-        });
-        error
+    let value = headers.get(WORKSPACE).ok_or_else(|| {
+        ApiError::new(Code::InvalidRequest)
             .with_message("Name a workspace you are a member of in `Cavea-Workspace`.")
             .with_detail("reason", "workspace")
-    };
-    let value = headers
-        .get(WORKSPACE)
-        .ok_or_else(|| refused("missing"))?
-        .to_str()
-        .map_err(|_| refused("not a member"))?;
-    super::auth::has_hex_tail(value, "ws_", 32)
-        .then(|| value[3..].to_owned())
-        .ok_or_else(|| refused("not a member"))
+    })?;
+    let value = value.to_str().map_err(|_| not_a_member())?;
+    value
+        .strip_prefix("ws_")
+        .filter(|_| super::auth::has_hex_tail(value, "ws_", 32))
+        .map(str::to_owned)
+        .ok_or_else(not_a_member)
 }
 
 /// Requires the workspace's secret key, or a console session of a member
@@ -189,31 +184,66 @@ impl FromRequestParts<AppState> for Staff {
                 )),
             };
         }
-        let permission = parts
-            .extensions
-            .get::<Permission>()
-            .copied()
-            .ok_or_else(|| ApiError::internal("the route declares no permission"))?;
-        let id = cookie_session(parts, state)?;
-        let workspace = named_workspace(&parts.headers)?;
-        let found = sessions::find(&state.db, &id.hash(), Some(&workspace))
-            .await?
-            .ok_or_else(console_session_refused)?;
-        let Some(role) = found.role else {
-            return Err(ApiError::new(Code::Forbidden)
-                .with_message("Name a workspace you are a member of in `Cavea-Workspace`.")
-                .with_detail("reason", "workspace"));
-        };
-        let auth = Auth::member(workspace, found.user, role);
-        cavea_telemetry::record_workspace(&auth.workspace().to_string());
-        if !role.allows(permission) {
-            return Err(ApiError::new(Code::Forbidden)
-                .with_message("Your role in this workspace does not allow this.")
-                .with_detail("reason", "role")
-                .with_detail("permission", permission.as_str()));
-        }
-        Ok(Self(auth))
+        member(parts, state).await.map(Self)
     }
+}
+
+/// Requires a console session of a member whose role grants the route's
+/// permission, in the workspace the request names: the `/console/api` routes
+/// of a workspace (its members), which no API key may call.
+#[derive(Debug, Clone)]
+pub struct Member(pub Auth);
+
+impl FromRequestParts<AppState> for Member {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
+        member(parts, state).await.map(Self)
+    }
+}
+
+/// The signed-in member acting in the workspace named by `Cavea-Workspace`:
+/// the cookie (CSRF and origin checked on a non-safe method before anything
+/// is read), then in one query the session and the user's role in that
+/// workspace, read afresh on every request, so a role changed or a
+/// membership removed applies to the next one. A workspace the user is not
+/// in, existing or not, is `403` `workspace`; a role without the route's
+/// permission `403` `role`.
+async fn member(parts: &Parts, state: &AppState) -> Result<Auth, ApiError> {
+    let permission = parts
+        .extensions
+        .get::<Permission>()
+        .copied()
+        .ok_or_else(|| ApiError::internal("the route declares no permission"))?;
+    let id = cookie_session(parts, state).map_err(|e| {
+        if e.code() == Code::Unauthorized {
+            console_session_refused()
+        } else {
+            e
+        }
+    })?;
+    let workspace = named_workspace(&parts.headers)?;
+    let found = sessions::find(&state.db, &id.hash(), Some(&workspace))
+        .await?
+        .ok_or_else(console_session_refused)?;
+    let Some(role) = found.role else {
+        return Err(not_a_member());
+    };
+    let auth = Auth::member(workspace, found.user, role);
+    cavea_telemetry::record_workspace(&auth.workspace().to_string());
+    if !role.allows(permission) {
+        return Err(ApiError::new(Code::Forbidden)
+            .with_message("Your role in this workspace does not allow this.")
+            .with_detail("reason", "role")
+            .with_detail("permission", permission.as_str()));
+    }
+    Ok(auth)
+}
+
+fn not_a_member() -> ApiError {
+    ApiError::new(Code::Forbidden)
+        .with_message("Name a workspace you are a member of in `Cavea-Workspace`.")
+        .with_detail("reason", "workspace")
 }
 
 /// Requires a console session: the `/console/api` routes of a signed-in user.

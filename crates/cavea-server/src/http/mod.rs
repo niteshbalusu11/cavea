@@ -19,6 +19,7 @@ mod events;
 pub mod extract;
 pub mod health;
 mod keys;
+mod members;
 mod objects;
 pub mod openapi;
 mod panic;
@@ -48,7 +49,7 @@ pub use error::{ApiError, Code};
 pub use extract::{Json, Path, Query};
 pub use health::Health;
 pub(crate) use public::parse_hash;
-pub use staff::Staff;
+pub use staff::{Member, Staff};
 
 /// Shared with every handler through `State<AppState>`. Cheap to clone.
 #[derive(Debug, Clone)]
@@ -90,6 +91,7 @@ fn routes() -> openapi::Routes {
         .merge(public::routes())
         .merge(realtime::routes())
         .merge(console::routes())
+        .merge(members::routes())
 }
 
 /// Add the problem+json fallbacks, the default body limit, CORS for the public
