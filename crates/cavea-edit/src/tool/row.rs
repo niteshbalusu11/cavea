@@ -8,7 +8,7 @@ use super::block::SEAT_PITCH;
 use super::draw::{Live, Spot, dist, finish, px};
 use super::snap;
 use super::{Button, Context, Cursor, Input, Key, Overlay, Pointer, Readout, Tool, tuning};
-use crate::draft::Draft;
+use crate::draft::{Draft, MIN_SIZE};
 use crate::index::P;
 use crate::selection::{Selection, View};
 
@@ -185,16 +185,19 @@ impl RowTool {
                     *dragged |= p.dragged_from(d);
                 }
                 let at = snap::point(cx, &p, live.created());
+                let end = spot.local(cx, at);
                 let draft = Draft::Row {
                     start: *a,
-                    end: spot.local(cx, at),
+                    end,
                     bend: None,
                     seat_pitch: SEAT_PITCH,
                 };
                 match spot.create(cx.category, &draft) {
                     Some(command) => drop(live.show(cx, command)),
-                    // Too short to be a row: nothing shows.
-                    None => live.clear(cx),
+                    // Too short to be a row: nothing shows. Too long: the
+                    // last row shown stays.
+                    None if dist(*a, end) < MIN_SIZE => live.clear(cx),
+                    None => {}
                 }
             }
             State::End { spot, b, live, .. } => {

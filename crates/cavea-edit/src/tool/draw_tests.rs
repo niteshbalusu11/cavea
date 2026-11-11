@@ -516,6 +516,13 @@ fn single_row_tool() {
         nodes: vec![Node::Row(row)],
         ..empty()
     });
+    // Past 4,095 seats the last row shown stays.
+    t.click([0.0, 3_000.0]);
+    t.to([550.0, 3_000.0], NONE);
+    t.to([300_000.0, 3_000.0], NONE);
+    let live = t.s.document().children(None).last().copied().expect("live");
+    assert!(matches!(t.node(live), Node::Row(r) if r.seats == 11));
+    t.key(Key::Escape);
     // Escape after the second click leaves nothing.
     let before = t.state();
     t.click([0.0, 2_000.0]);
@@ -1632,6 +1639,20 @@ fn snapping() {
     move_by(&mut t, b, [380.0, 280.0], [-146.0, -237.0], NONE);
     assert_eq!(shape_origin(&t, b), [255.0, 65.0]);
     t.s.undo().expect("undo");
+    // A resize handle inside a section: its own section is no target.
+    let only = SnapSettings {
+        grid: false,
+        spacing: false,
+        rows: false,
+        angles: false,
+        ..all
+    };
+    t.s.set_snap(only);
+    let lone = add(&mut t.s, rect([5_050.0, 5_050.0], [100.0, 100.0]));
+    let s = t.s.group(&[lone], None).expect("group");
+    t.s.select(Level::Section(s), [lone]);
+    t.by(HandleKind::Corner(Corner::BottomRight), [5.0, 5.0], NONE);
+    assert_eq!(shape(&t.node(lone)).size, Some([105.0, 105.0]));
     t.s.set_snap(all);
     // No flicker: C's left edge (203) and A's right edge (200) both in
     // reach; the one held first stays while it is.
@@ -1709,6 +1730,22 @@ fn row_alignment() {
     assert!((x - 900.0).abs() < 1e-9, "{x}");
     assert!(guides.iter().any(|g| matches!(g, Guide::Row { .. })));
     t.s.undo().expect("undo");
+    // A second neighbour with row lines 3 cu further: the line held stays
+    // while the pointer jitters between them.
+    let k = t.s.insert(None, &straight(6, 10)).expect("k");
+    place(&mut t.s, k, at(-900.0, 3.0), 30.0);
+    t.s.select(Level::Top, [m]);
+    t.down(from, NONE);
+    let mut ys = Vec::new();
+    for y in [-38.6, -38.4, -38.6, -38.4] {
+        let to = at(0.0, y);
+        t.to([from[0] + to[0], from[1] + to[1]], NONE);
+        let o = block(&t.node(m)).origin;
+        ys.push(((o[0] * nrm[0] + o[1] * nrm[1]) * 1e6).round() / 1e6);
+    }
+    t.key(Key::Escape);
+    t.up(from, NONE);
+    assert_eq!(ys, [190.0; 4]);
     let all = SnapSettings::default();
     t.s.set_snap(SnapSettings { rows: false, ..all });
     move_by(&mut t, m, from, at(0.0, -37.0), NONE);
@@ -1747,6 +1784,12 @@ fn angle_snapping() {
     let end = shape(&t.node(t.selected())).points.clone().expect("points")[1];
     let (s, c) = 15f64.to_radians().sin_cos();
     assert!(close(end, [r * c, r * s], 1e-9), "{end:?}");
+    // An edge in reach wins over a 15° step, even exactly on it.
+    add(&mut t.s, rect([150.0, 7_000.0], [100.0, 100.0]));
+    t.s.set_tool(ToolId::Line);
+    t.drag([0.0, 7_000.0], [100.0, 7_026.0], NONE);
+    let end = shape(&t.node(t.selected())).points.clone().expect("points")[1];
+    assert_eq!(end, [100.0, 26.0]);
 }
 
 /// A small theatre drawn with snapping on: a stage, its label centred on it

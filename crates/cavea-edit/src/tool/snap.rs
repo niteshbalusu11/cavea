@@ -82,6 +82,9 @@ struct Cand {
 pub(crate) struct Snap {
     pub(crate) settings: SnapSettings,
     held: [Option<(Kind, f64)>; 3],
+    /// The row line held: the neighbour block and its distance along that
+    /// block's y.
+    row: Option<(u32, f64)>,
     pub(crate) guides: Vec<Guide>,
 }
 
@@ -140,13 +143,14 @@ impl Snap {
         }
     }
 
-    /// Keeps the chosen candidates of both axes: the corrected vector and
-    /// their guides, an object's line spanning its box, the moved box after
-    /// the correction and `at`.
-    fn finish(&mut self, cands: [Vec<Cand>; 2], moved: &Rect, at: P) -> P {
+    /// Keeps the chosen candidates of both axes: the corrected vector, whether
+    /// any target was chosen, and their guides, an object's line spanning
+    /// its box, the moved box after the correction and `at`.
+    fn finish(&mut self, cands: [Vec<Cand>; 2], moved: &Rect, at: P) -> (P, bool) {
         let [x, y] = &cands;
         let picks = [choose(x, &mut self.held[0]), choose(y, &mut self.held[1])];
         let off = picks.map(|c| c.map_or(0.0, |c| c.off));
+        let any = picks.iter().any(Option::is_some);
         let (after, at) = (shift(moved, off), [at[0] + off[0], at[1] + off[1]]);
         for (a, c) in picks.iter().enumerate() {
             let Some(c) = c else {
@@ -163,7 +167,7 @@ impl Snap {
                 });
             }
         }
-        off
+        (off, any)
     }
 }
 
@@ -181,33 +185,40 @@ fn cand(kind: Kind, off: f64, target: f64) -> Cand {
 /// the grid and to edges, centres and row ends of nodes within
 /// `tuning::SNAP_REACH` px, except `exclude` (the node being drawn).
 pub(crate) fn point(cx: &mut Context<'_>, p: &Pointer, exclude: Option<u32>) -> P {
-    point_with(cx, p, exclude, true)
+    point_with(cx, p, exclude, true).0
 }
 
 /// A line's end: onto edges, centres and row ends, else onto a 15° step
 /// from `from`, else onto the grid (which, finer than the snap distance,
 /// would otherwise always win).
 pub(crate) fn line_end(cx: &mut Context<'_>, p: &Pointer, from: P, exclude: Option<u32>) -> P {
-    let mut at = point_with(cx, p, exclude, false);
-    if at == p.world {
-        at = direction(cx, p, from, at);
+    let (at, hit) = point_with(cx, p, exclude, false);
+    if hit {
+        return at;
     }
-    if at == p.world {
-        at = point_with(cx, p, exclude, true);
+    match direction(cx, p, from, at) {
+        Some(at) => at,
+        None => point_with(cx, p, exclude, true).0,
     }
-    at
 }
 
-fn point_with(cx: &mut Context<'_>, p: &Pointer, exclude: Option<u32>, grid: bool) -> P {
+/// The snapped point and whether a target was chosen. `exclude`, its
+/// section and what it holds are not targets.
+fn point_with(cx: &mut Context<'_>, p: &Pointer, exclude: Option<u32>, grid: bool) -> (P, bool) {
     let Some(thr) = cx.snap.on(p) else {
-        return p.world;
+        return (p.world, false);
     };
     let at = p.world;
     let mut cands: [Vec<Cand>; 2] = Default::default();
     if cx.snap.settings.objects {
         let reach = Rect::new(at, at).grow(tuning::SNAP_REACH / p.zoom);
-        let exclude: Vec<u32> = exclude.into_iter().collect();
         let doc = cx.editor.document();
+        let mut exclude: Vec<u32> = exclude.into_iter().collect();
+        if let Some(&id) = exclude.first() {
+            exclude.extend(doc.parent(id));
+            exclude.extend(doc.children(Some(id)));
+            exclude.sort_unstable();
+        }
         let anchors = cx.index.anchors(reach, &exclude);
         for anchor in anchors.iter().filter(|a| shown(doc, cx.floor, a.node)) {
             for (a, list) in cands.iter_mut().enumerate() {
@@ -226,8 +237,8 @@ fn point_with(cx: &mut Context<'_>, p: &Pointer, exclude: Option<u32>, grid: boo
         cx.snap.grid(at[a], thr, list);
     }
     let point = Rect::new(at, at);
-    let off = cx.snap.finish(cands, &point, at);
-    [at[0] + off[0], at[1] + off[1]]
+    let (off, any) = cx.snap.finish(cands, &point, at);
+    ([at[0] + off[0], at[1] + off[1]], any)
 }
 
 /// A selection being moved: its world bounds at the start, its parent, the
@@ -316,9 +327,9 @@ pub(crate) fn translation(cx: &mut Context<'_>, p: &Pointer, m: &Moving, delta: 
         }
         cx.snap.grid(moved.min[a], thr, list);
     }
-    if s.rows
-        && let Some(rows) = rows(cx, m, delta, &near, thr)
-    {
+    let rows = s.rows.then(|| rows(cx, m, delta, &near, thr)).flatten();
+    cx.snap.row = rows.as_ref().map(|r| r.line);
+    if let Some(rows) = rows {
         match rows.axis {
             Some(a) => {
                 if let Some(list) = cands.get_mut(a) {
@@ -333,7 +344,7 @@ pub(crate) fn translation(cx: &mut Context<'_>, p: &Pointer, m: &Moving, delta: 
             }
         }
     }
-    let off = cx.snap.finish(cands, &moved, mid2(&moved));
+    let (off, _) = cx.snap.finish(cands, &moved, mid2(&moved));
     [delta[0] + off[0], delta[1] + off[1]]
 }
 
@@ -390,6 +401,8 @@ struct RowSnap {
     axis: Option<usize>,
     /// The correction as a world vector.
     v: P,
+    /// The neighbour and row line snapped to.
+    line: (u32, f64),
 }
 
 /// A single straight block's front row onto the nearest row line of a
@@ -401,7 +414,15 @@ fn rows(cx: &Context<'_>, m: &Moving, delta: P, near: &[(u32, Rect)], thr: f64) 
     let parent = m.parent.and_then(|s| cx.index.place(s));
     let v = cx.index.to_parent(m.parent, delta);
     let o = [o0[0] + v[0], o0[1] + v[1]];
-    let mut best: Option<(f64, u32, P, P)> = None;
+    struct Row {
+        off: f64,
+        id: u32,
+        n: P,
+        base: P,
+        held: bool,
+        line: f64,
+    }
+    let mut best: Option<Row> = None;
     for &(id, _) in near {
         let Some(Node::RowBlock(b)) = doc.node(id) else {
             continue;
@@ -417,12 +438,30 @@ fn rows(cx: &Context<'_>, m: &Moving, delta: P, near: &[(u32, Rect)], thr: f64) 
         let y = (o[0] - b.origin[0]) * n[0] + (o[1] - b.origin[1]) * n[1];
         let line = (y / b.row_pitch).round() * b.row_pitch;
         let off = line - y;
-        if off.abs() <= thr && best.is_none_or(|x| off.abs() < x.0.abs()) {
+        // The line held at the last event stays while it is in reach.
+        let held = cx.snap.row == Some((id, line));
+        let better = |x: &Row| !x.held && (held || off.abs() < x.off.abs());
+        if off.abs() <= thr && best.as_ref().is_none_or(better) {
             let base = [b.origin[0] + line * n[0], b.origin[1] + line * n[1]];
-            best = Some((off, id, n, base));
+            best = Some(Row {
+                off,
+                id,
+                n,
+                base,
+                held,
+                line,
+            });
         }
     }
-    let (off, id, n, base) = best?;
+    let Row {
+        off,
+        id,
+        n,
+        base,
+        line,
+        ..
+    } = best?;
+    let line = (id, line);
     let turn = |v: P| parent.map_or(v, |pl| pl.turn(v));
     let v = turn([off * n[0], off * n[1]]);
     let nw = turn(n);
@@ -442,7 +481,12 @@ fn rows(cx: &Context<'_>, m: &Moving, delta: P, near: &[(u32, Rect)], thr: f64) 
     if let Some(a) = axis {
         (cand.off, cand.target) = (v[a], mid(&moved, a));
     }
-    Some(RowSnap { cand, axis, v })
+    Some(RowSnap {
+        cand,
+        axis,
+        v,
+        line,
+    })
 }
 
 /// The angular threshold, in degrees, at the pointer's distance from
@@ -463,9 +507,17 @@ pub(crate) fn angle(
     a: f64,
     facing: Option<f64>,
 ) -> f64 {
-    let Some(reach) = angle_reach(cx, p, pivot) else {
-        return a;
-    };
+    angle_pick(cx, p, (pivot, start), a, facing).unwrap_or(a)
+}
+
+fn angle_pick(
+    cx: &mut Context<'_>,
+    p: &Pointer,
+    (pivot, start): (P, f64),
+    a: f64,
+    facing: Option<f64>,
+) -> Option<f64> {
+    let reach = angle_reach(cx, p, pivot)?;
     let near = |t: f64| (normalise(t - a).abs() <= reach).then(|| cand(Kind::Object, 0.0, t));
     let step = (a / 15.0).round() * 15.0;
     let list: Vec<Cand> = facing
@@ -476,29 +528,24 @@ pub(crate) fn angle(
             ..c
         }))
         .collect();
-    let Some(t) = choose(&list, &mut cx.snap.held[2]).map(|c| c.target) else {
-        return a;
-    };
+    let t = choose(&list, &mut cx.snap.held[2]).map(|c| c.target)?;
     cx.snap.guides.push(Guide::Angle {
         centre: pivot,
         from: start,
         to: start + t,
     });
-    t
+    Some(t)
 }
 
 /// The direction from `from` to `to` (world), onto a multiple of 15°,
-/// keeping its length.
-fn direction(cx: &mut Context<'_>, p: &Pointer, from: P, to: P) -> P {
+/// keeping its length; `None` when no step is in reach.
+fn direction(cx: &mut Context<'_>, p: &Pointer, from: P, to: P) -> Option<P> {
     let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
     let theta = dy.atan2(dx).to_degrees();
-    let t = angle(cx, p, (from, 0.0), theta, None);
-    if t == theta {
-        return to;
-    }
+    let t = angle_pick(cx, p, (from, 0.0), theta, None)?;
     let (s, c) = t.to_radians().sin_cos();
     let r = dx.hypot(dy);
-    [from[0] + r * c, from[1] + r * s]
+    Some([from[0] + r * c, from[1] + r * s])
 }
 
 /// The rotation, in degrees, that turns row block `id` (its front, −y)
