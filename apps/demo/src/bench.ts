@@ -471,6 +471,8 @@ async function replayWithChanges(
   taken: Set<string>,
 ): Promise<FrameRun & { changes: number; deltaMs: Distribution }> {
   const applied: number[] = [];
+  /** Changes scheduled so far (1,000 a second) and changes sent: a seat drawn twice in one batch is sent once. */
+  let scheduled = 0;
   let changes = 0;
   let seed = 1;
   const random = (): number => {
@@ -478,14 +480,19 @@ async function replayWithChanges(
     return seed / 2 ** 31;
   };
   const frameRun = await replay(map, canvas, windows, (elapsed) => {
-    const due = Math.floor(elapsed) - changes;
+    const due = Math.floor(elapsed) - scheduled;
     if (due <= 0) {
       return;
     }
+    scheduled += due;
+    // One final status per seat: the SDK makes a seat in both lists unavailable.
+    const batch = new Set<string>();
+    for (let i = 0; i < due; i++) {
+      batch.add(labels[Math.floor(random() * labels.length)] ?? "");
+    }
     const unavailable: string[] = [];
     const available: string[] = [];
-    for (let i = 0; i < due; i++) {
-      const seat = labels[Math.floor(random() * labels.length)] ?? "";
+    for (const seat of batch) {
       if (taken.delete(seat)) {
         available.push(seat);
       } else {
@@ -493,7 +500,7 @@ async function replayWithChanges(
         unavailable.push(seat);
       }
     }
-    changes += due;
+    changes += batch.size;
     const before = performance.now();
     ctx.applyDelta({ unavailable, available });
     applied.push(performance.now() - before);

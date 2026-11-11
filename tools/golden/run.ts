@@ -293,6 +293,13 @@ try {
     (t) => t.trim(),
     () => "",
   );
+  if (update && recorded !== first.version && chosen.length < cases.cases.length) {
+    // One version file covers every baseline: a new browser redraws them all.
+    throw new Error(
+      `the baselines were drawn by ${recorded || "no recorded browser"}, this is ${first.version}: ` +
+        "update every case (`cargo xtask golden --update` with no case named), not some",
+    );
+  }
   if (update) {
     await writeFile(VERSION_FILE, `${first.version}\n`);
   } else if (recorded !== first.version) {
