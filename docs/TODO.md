@@ -240,8 +240,8 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **TST-021** Deterministic simulation harness with the fault table (13 §3.2)
 - [x] **TST-022** Reconciler: `cavea-server verify` (13 §3.3)
 - [x] **TST-023** Load generator `cavea-loadgen` (13 §7.1)
-- [ ] **TST-024** Scenarios L1 and L2 on reference hardware; record results (13 §7.2)
-- [ ] **TST-025** Chaos: `kill -9` and PostgreSQL restart during load (13 §7.3)
+- [ ] **TST-024** Scenarios L1 and L2 on reference hardware; record results (13 §7.2). Run locally at full scale (13 §7.4), not passed: L1 correct but hold p99 1.25 s (the 4 cores saturated by fanning out deltas to 55,000 subscribers); L2 correct for 600 s with memory flat, but hold p99 23 ms against a private database (commit latency on desktop storage) and stalls from the host's connection-tracking table. Reference-hardware runs remain for the owner
+- [x] **TST-025** Chaos: `kill -9` and PostgreSQL restart during load (13 §7.3). Passed locally (13 §7.4): 6 kills and 6 PostgreSQL restarts or kills under load, reconciler clean, every acknowledgement present, automatic recovery; a `500`-for-`503` defect fixed. Found, not fixed: a server whose log output fails (disk full, closed pipe) stops serving (`cavea-telemetry`, 13 §7.4). Reference-hardware runs remain for the owner
 - [ ] **TST-026** Authorisation matrix and tenant isolation tests (13 §10)
 - [ ] **TST-027** Fuzz targets `wire_decode`, `snapshot_apply` and HTTP (13 §5). `wire_decode` and `snapshot_apply` exist (`fuzz/`); the HTTP target waits for the OpenAPI document
 

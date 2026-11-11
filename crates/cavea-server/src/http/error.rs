@@ -303,6 +303,20 @@ fn unavailable(error: &sqlx::Error) -> bool {
     }
 }
 
+fn object_ref(object: &ObjectRef) -> Value {
+    match object {
+        ObjectRef::Label(label) => json!({ "label": &**label }),
+        ObjectRef::Idx(idx) => json!({ "idx": idx }),
+    }
+}
+
+fn object_failures(objects: &[ObjectFailure]) -> Value {
+    objects
+        .iter()
+        .map(|o| json!({ "idx": o.idx, "reason": o.reason.code() }))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
@@ -366,18 +380,4 @@ mod tests {
             assert_eq!(code(e), Code::InternalError);
         }
     }
-}
-
-fn object_ref(object: &ObjectRef) -> Value {
-    match object {
-        ObjectRef::Label(label) => json!({ "label": &**label }),
-        ObjectRef::Idx(idx) => json!({ "idx": idx }),
-    }
-}
-
-fn object_failures(objects: &[ObjectFailure]) -> Value {
-    objects
-        .iter()
-        .map(|o| json!({ "idx": o.idx, "reason": o.reason.code() }))
-        .collect()
 }
