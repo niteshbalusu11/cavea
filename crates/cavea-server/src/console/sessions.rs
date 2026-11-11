@@ -105,7 +105,7 @@ const REVOKE: &str = "DELETE FROM console_sessions WHERE id_hash = $1";
 const REVOKE_ALL: &str = "DELETE FROM console_sessions WHERE user_id = $1::uuid";
 
 /// End one session: sign-out, or the old session at sign-in (rotation).
-pub async fn revoke(db: &PgPool, id_hash: &[u8; 32]) -> Result<(), sqlx::Error> {
+pub async fn revoke(db: &mut PgConnection, id_hash: &[u8; 32]) -> Result<(), sqlx::Error> {
     sqlx::query(REVOKE)
         .bind(id_hash.as_slice())
         .execute(db)

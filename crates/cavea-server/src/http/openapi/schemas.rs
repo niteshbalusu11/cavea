@@ -686,6 +686,99 @@ Without: booked objects.",
         ("MemberList", list("WorkspaceMember")),
         ("ChangeRole", object(&[("role", roles())], &[])),
         (
+            "InviteMember",
+            object(&[("email", string()), ("role", roles())], &[]),
+        ),
+        ("InviteOwner", object(&[("email", string())], &[])),
+        (
+            "Invitation",
+            object(
+                &[
+                    ("id", text("`inv_` and 32 hex digits.")),
+                    ("email", string()),
+                    ("role", roles()),
+                    ("created_at", time()),
+                    ("expires_at", time()),
+                ],
+                &[],
+            ),
+        ),
+        ("InvitationList", list("Invitation")),
+        (
+            "InvitationCreated",
+            object(
+                &[
+                    ("invitation", r("Invitation")),
+                    (
+                        "link",
+                        text(
+                            "`{CAVEA_PUBLIC_URL}/console/invite#token=<64 hex digits>`, shown \
+only here: give it to the person invited. The console's page posts the token to \
+`/console/api/invitations/accept`.",
+                        ),
+                    ),
+                ],
+                &[],
+            ),
+        ),
+        (
+            "AcceptInvitation",
+            object(
+                &[("token", text("The 64 hex digits of the link's fragment."))],
+                &[(
+                    "password",
+                    described(
+                        json!({ "type": "string", "minLength": 15, "maxLength": 128 }),
+                        "Not signed in, for an email with no account: the new user's password.",
+                    ),
+                )],
+            ),
+        ),
+        ("RenameWorkspace", object(&[("name", string())], &[])),
+        (
+            "ConsoleWorkspace",
+            object(
+                &[
+                    ("id", text("`ws_` and 32 hex digits.")),
+                    ("key", string()),
+                    ("name", string()),
+                ],
+                &[],
+            ),
+        ),
+        (
+            "AuditEntry",
+            object(
+                &[
+                    ("id", text("`aud_` and a number.")),
+                    ("at", time()),
+                    (
+                        "actor",
+                        text("`usr_…`, `key_…`, `admin`, or `anonymous` (a failed sign-in)."),
+                    ),
+                    ("action", json!({ "enum": crate::audit::ACTIONS })),
+                    (
+                        "target",
+                        described(
+                            nullable(string()),
+                            "What was acted on: `usr_…`, `key_…`, `inv_…`, `ws_…`, or a chart's \
+or event's key.",
+                        ),
+                    ),
+                    (
+                        "detail",
+                        described(
+                            nullable(json!({ "type": "object" })),
+                            "Small facts: `role`, `from` and `to`, `kind`, `version`.",
+                        ),
+                    ),
+                    ("request_id", nullable(string())),
+                ],
+                &[],
+            ),
+        ),
+        ("AuditList", list("AuditEntry")),
+        (
             "Asset",
             object(
                 &[

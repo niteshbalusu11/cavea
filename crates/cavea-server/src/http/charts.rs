@@ -15,6 +15,7 @@ use super::extract::{Json, Page, Path, Query, RawJson, check_text, invalid};
 use super::openapi::{Needs, Op, Routes};
 use super::staff::Staff;
 use super::{ApiError, AppState, Code, List};
+use crate::audit::{self, Entry};
 use crate::charts::{self, ChartError, MAX_DRAFT_BYTES};
 use crate::console::Permission;
 
@@ -438,6 +439,11 @@ SELECT ",
     " FROM c LEFT JOIN chart_versions v ON v.id = c.published_version_id"
 );
 
+/// Whether the chart is unarchived, locking it: only an archive that changes
+/// it is audited.
+const LIVE_CHART: &str = "SELECT archived_at IS NULL FROM charts
+ WHERE workspace_id = $1::uuid AND key = $2 FOR UPDATE";
+
 /// Archive a chart: its draft can no longer be saved or published, its key
 /// stays taken, and its versions and their public URLs stay as they are
 /// (events pinned to them keep working; 08 §6.2).
@@ -446,10 +452,27 @@ async fn archive(
     Path(key): Path<String>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<Chart>, ApiError> {
-    let row: Option<ChartRow> = sqlx::query_as(ARCHIVE)
-        .bind(auth.workspace().uuid())
-        .bind(&key)
-        .fetch_optional(&state.db)
+    let actor = auth.actor();
+    let archive = async {
+        let mut tx = state.db.begin().await?;
+        let live: Option<bool> = sqlx::query_scalar(LIVE_CHART)
+            .bind(auth.workspace().uuid())
+            .bind(&key)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let row: Option<ChartRow> = sqlx::query_as(ARCHIVE)
+            .bind(auth.workspace().uuid())
+            .bind(&key)
+            .fetch_optional(&mut *tx)
+            .await?;
+        if live == Some(true) {
+            let entry = Entry::by(&auth, &actor, "chart.archived").target(&key);
+            audit::record(&mut tx, entry).await?;
+        }
+        tx.commit().await?;
+        Ok::<_, sqlx::Error>(row)
+    };
+    let row = archive
         .instrument(cavea_telemetry::db_span("archive_chart"))
         .await?;
     let chart = Chart::new(row.ok_or_else(not_found)?)?;
@@ -727,6 +750,7 @@ async fn publish(
     let stats = stats_json(&output);
     let compiled = &output.compiled;
     let started = std::time::Instant::now();
+    let actor = auth.actor();
     let store = async {
         let mut tx = state.db.begin().await?;
         let (current, is_archived): (i64, bool) = sqlx::query_as(LOCK_CHART)
@@ -769,6 +793,10 @@ async fn publish(
             .bind(&row.0)
             .execute(&mut *tx)
             .await?;
+        let entry = Entry::by(&auth, &actor, "chart.published")
+            .target(&key)
+            .detail(json!({ "version": format!("cv_{}", row.0), "created": created }));
+        audit::record(&mut tx, entry).await?;
         tx.commit().await?;
         Ok((created, row))
     };

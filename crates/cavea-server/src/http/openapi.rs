@@ -449,7 +449,7 @@ fn path_param_name(name: &str) -> String {
 }
 
 /// Path parameters: name, description.
-const PATH_PARAMS: [(&str, &str); 8] = [
+const PATH_PARAMS: [(&str, &str); 9] = [
     ("workspace", "A workspace id: `ws_` and 32 hex digits."),
     ("id", "An API key id: `key_` and 32 hex digits."),
     ("chart", "The customer's chart key (1 to 128 characters)."),
@@ -461,6 +461,10 @@ const PATH_PARAMS: [(&str, &str); 8] = [
     ),
     ("hash", "An asset's content hash: 32 lowercase hex digits."),
     ("user", "A console user's id: `usr_` and 32 hex digits."),
+    (
+        "invitation",
+        "An invitation's id: `inv_` and 32 hex digits.",
+    ),
 ];
 
 /// The operation's tag: its resource.

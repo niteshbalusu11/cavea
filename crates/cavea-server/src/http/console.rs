@@ -24,6 +24,7 @@ use super::extract::{Json, check_text, invalid_field};
 use super::openapi::{Needs, Op, Routes};
 use super::staff::{ConsoleUser, clear_cookie, same_origin, session_cookie, set_cookie};
 use super::{ApiError, AppState, Code};
+use crate::audit::{self, Entry};
 use crate::console::guard::Wait;
 use crate::console::password::{self, Busy};
 use crate::console::{
@@ -103,7 +104,7 @@ fn now_ms(state: &AppState) -> u64 {
 }
 
 /// The per-address budget of sign-in attempts (08 §12).
-fn budget(state: &AppState, addr: Option<IpAddr>) -> Result<(), ApiError> {
+pub(super) fn budget(state: &AppState, addr: Option<IpAddr>) -> Result<(), ApiError> {
     state
         .limiter
         .check(Budget::SignIn, 0, addr, now_ms(state))
@@ -122,7 +123,7 @@ fn backoff(Wait(seconds): Wait) -> ApiError {
         .with_retry_after(seconds)
 }
 
-fn busy(busy: Busy) -> ApiError {
+pub(super) fn busy(busy: Busy) -> ApiError {
     match busy {
         Busy::Timeout => ApiError::new(Code::Overloaded)
             .with_message("Too many sign-ins at once; retry shortly.")
@@ -145,7 +146,7 @@ const EMAIL: &str = "SELECT email FROM users WHERE id = $1::uuid";
 
 /// `ConsoleMe`: the user, their workspaces with roles and permissions, the
 /// CSRF token and the session's ends.
-async fn me_json(
+pub(super) async fn me_json(
     state: &AppState,
     id: &SessionId,
     session: &sessions::Found,
@@ -186,7 +187,7 @@ async fn me_json(
 }
 
 /// The reply of a new session: `ConsoleMe` and its cookie.
-async fn signed_in(
+pub(super) async fn signed_in(
     state: &AppState,
     status: StatusCode,
     id: &SessionId,
@@ -206,7 +207,7 @@ async fn signed_in(
     Ok(response)
 }
 
-fn new_session() -> Result<SessionId, ApiError> {
+pub(super) fn new_session() -> Result<SessionId, ApiError> {
     SessionId::generate().map_err(|e| ApiError::internal(e.to_string()))
 }
 
@@ -319,18 +320,32 @@ async fn sign_in(
             .map_err(busy)?,
         None => false,
     };
+    // The account's id when the email is one's; nothing of an address that
+    // is no account's.
+    let known = user.as_ref().map(|(id, _)| id.clone());
     let Some((user, _)) = user.filter(|_| verified) else {
         state.sign_in.failed(&account, addr, now);
         tracing::info!("console sign-in refused");
+        let mut conn = state.db.acquire().await?;
+        let entry = Entry {
+            workspace: None,
+            actor: "anonymous",
+            user: known.as_deref(),
+            action: "console.sign_in_failed",
+            target: None,
+            detail: None,
+        };
+        audit::record(&mut conn, entry)
+            .instrument(cavea_telemetry::db_span("audit"))
+            .await?;
         return Err(credentials());
     };
     state.sign_in.succeeded(&account, addr, now);
     // Rotation (12 §3 T9): a session presented with the sign-in ends; the
     // user gets a new identifier.
-    if let Some(Some(old)) = session_cookie(&headers, &state) {
-        sessions::revoke(&state.db, &old.hash()).await?;
-    }
+    let presented = session_cookie(&headers, &state).flatten();
     let id = new_session()?;
+    let actor = format!("usr_{user}");
     let start = async {
         let mut tx = state.db.begin().await?;
         // The password verified must still be the user's: a change committed
@@ -339,7 +354,11 @@ async fn sign_in(
         if !still_current(&mut tx, &user, stored.as_deref()).await? {
             return Ok(false);
         }
+        if let Some(old) = &presented {
+            sessions::revoke(&mut tx, &old.hash()).await?;
+        }
         sessions::insert(&mut tx, &id.hash(), &user).await?;
+        audit::record(&mut tx, Entry::console(&actor, &user, "console.sign_in")).await?;
         tx.commit().await?;
         Ok::<_, sqlx::Error>(true)
     };
@@ -358,8 +377,17 @@ async fn sign_out(
     State(state): State<AppState>,
     console: ConsoleUser,
 ) -> Result<Response, ApiError> {
-    sessions::revoke(&state.db, &console.id.hash()).await?;
-    tracing::info!(user = %format!("usr_{}", console.session.user), "console sign-out");
+    let user = &console.session.user;
+    let actor = format!("usr_{user}");
+    let end = async {
+        let mut tx = state.db.begin().await?;
+        sessions::revoke(&mut tx, &console.id.hash()).await?;
+        audit::record(&mut tx, Entry::console(&actor, user, "console.sign_out")).await?;
+        tx.commit().await
+    };
+    end.instrument(cavea_telemetry::db_span("end_console_session"))
+        .await?;
+    tracing::info!(user = %actor, "console sign-out");
     let mut response = StatusCode::NO_CONTENT.into_response();
     response
         .headers_mut()
@@ -452,6 +480,9 @@ async fn change_password(
             .await?;
         sessions::revoke_all(&mut tx, &user).await?;
         sessions::insert(&mut tx, &id.hash(), &user).await?;
+        let actor = format!("usr_{user}");
+        let entry = Entry::console(&actor, &user, "console.password_changed");
+        audit::record(&mut tx, entry).await?;
         tx.commit().await?;
         Ok::<_, sqlx::Error>(true)
     };

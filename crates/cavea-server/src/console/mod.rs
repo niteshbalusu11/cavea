@@ -123,7 +123,8 @@ pub enum Permission {
     ReportsRead,
     /// API keys (later webhooks, embed tokens). Owner, admin.
     Developers,
-    /// Workspace settings and members. Owner, admin.
+    /// Workspace settings, members and invitations, the audit log. Owner,
+    /// admin.
     Settings,
     /// Ownership transfer: making or unmaking an owner, which the members
     /// routes check besides `Settings`. Owner.
