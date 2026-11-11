@@ -265,17 +265,105 @@ impl From<Failure> for ApiError {
     }
 }
 
-/// A database error: `503 unavailable` when PostgreSQL cannot be reached or the
-/// pool is exhausted (08 §12), else `500`. A handler that expects a particular
-/// error, such as a unique violation, checks for it before using `?`.
+/// A database error: `503 unavailable` when PostgreSQL cannot be reached, is
+/// restarting or shutting down, or the pool is exhausted (08 §12, §16), else
+/// `500`. A handler that expects a particular error, such as a unique
+/// violation, checks for it before using `?`.
 impl From<sqlx::Error> for ApiError {
     fn from(error: sqlx::Error) -> Self {
-        match error {
-            sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed | sqlx::Error::Io(_) => Self {
+        if unavailable(&error) {
+            Self {
                 cause: Some(error.into()),
                 ..Self::new(Code::Unavailable)
-            },
-            _ => Self::internal(error),
+            }
+        } else {
+            Self::internal(error)
+        }
+    }
+}
+
+/// The database is down or going down, not wrong: the connection broke or
+/// could not be made (a handshake that is not PostgreSQL's, such as a port
+/// proxy's while the database restarts, is a protocol error), or PostgreSQL
+/// refused or ended it while starting, stopping or crashing.
+fn unavailable(error: &sqlx::Error) -> bool {
+    match error {
+        sqlx::Error::PoolTimedOut
+        | sqlx::Error::PoolClosed
+        | sqlx::Error::Io(_)
+        | sqlx::Error::Tls(_)
+        | sqlx::Error::Protocol(_)
+        | sqlx::Error::WorkerCrashed => true,
+        // Class 08 connection exceptions; admin_shutdown, crash_shutdown,
+        // cannot_connect_now; too_many_connections.
+        sqlx::Error::Database(e) => e.code().is_some_and(|c| {
+            c.starts_with("08") || matches!(&*c, "57P01" | "57P02" | "57P03" | "53300")
+        }),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct Db(&'static str);
+
+    impl std::fmt::Display for Db {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+
+    impl std::error::Error for Db {}
+
+    impl sqlx::error::DatabaseError for Db {
+        fn message(&self) -> &str {
+            self.0
+        }
+        fn code(&self) -> Option<Cow<'_, str>> {
+            Some(Cow::Borrowed(self.0))
+        }
+        fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+        fn as_error_mut(&mut self) -> &mut (dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+        fn into_error(self: Box<Self>) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+            self
+        }
+        fn kind(&self) -> sqlx::error::ErrorKind {
+            sqlx::error::ErrorKind::Other
+        }
+    }
+
+    /// Seen during a PostgreSQL restart under load (13 §7.3): a port proxy's
+    /// answer to the TLS request, and PostgreSQL ending connections as it
+    /// stops, were answered `500`, which clients do not retry.
+    #[test]
+    fn a_database_going_down_is_unavailable() {
+        let code = |e: sqlx::Error| ApiError::from(e).code();
+        for e in [
+            sqlx::Error::Protocol("unexpected response from SSLRequest: 0x00".into()),
+            sqlx::Error::Io(std::io::ErrorKind::ConnectionReset.into()),
+            sqlx::Error::PoolTimedOut,
+            sqlx::Error::WorkerCrashed,
+            sqlx::Error::Database(Box::new(Db("57P01"))),
+            sqlx::Error::Database(Box::new(Db("57P03"))),
+            sqlx::Error::Database(Box::new(Db("08006"))),
+        ] {
+            assert_eq!(code(e), Code::Unavailable);
+        }
+        for e in [
+            sqlx::Error::RowNotFound,
+            sqlx::Error::Database(Box::new(Db("23505"))),
+            sqlx::Error::ColumnNotFound("x".into()),
+        ] {
+            assert_eq!(code(e), Code::InternalError);
         }
     }
 }

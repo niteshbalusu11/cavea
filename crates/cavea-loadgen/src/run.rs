@@ -203,6 +203,8 @@ struct Shared {
     open: AtomicI64,
     order: AtomicU64,
     unbooks: AtomicI64,
+    /// Idle keep-alive connections for cancellations, as a backend's pool.
+    unbook_pool: Mutex<Vec<Client>>,
     stop: watch::Receiver<bool>,
 }
 
@@ -325,10 +327,16 @@ impl Client {
             Ok((s, v)) => Attempt::Reply(s, v),
             Err(e) => {
                 self.conn = None;
-                Attempt::Unknown(if e.to_string().contains("timed out") {
-                    "timeout"
-                } else {
-                    "transport"
+                let kind = e
+                    .chain()
+                    .find_map(|c| c.downcast_ref::<std::io::Error>())
+                    .map(std::io::Error::kind);
+                Attempt::Unknown(match kind {
+                    _ if e.to_string().contains("timed out") => "timeout",
+                    Some(std::io::ErrorKind::ConnectionReset) => "transport_reset",
+                    Some(std::io::ErrorKind::UnexpectedEof) => "transport_eof",
+                    Some(std::io::ErrorKind::BrokenPipe) => "transport_pipe",
+                    _ => "transport",
                 })
             }
         }
@@ -831,6 +839,7 @@ async fn prepare(
         open: AtomicI64::new(0),
         order: AtomicU64::new(0),
         unbooks: AtomicI64::new(0),
+        unbook_pool: Mutex::default(),
         stop,
     };
     Ok((Arc::new(shared), workspace, snapshot))
@@ -1469,7 +1478,9 @@ async fn book(
 async fn unbook(sh: Arc<Shared>, objects: Vec<u32>, n: u64) {
     sleep(sh.cfg.unbook_after).await;
     let mut rng = Rng(sh.cfg.seed ^ 0x0B00C ^ (n << 16));
-    let mut cl = Client::new(BACKEND_ADDRESS + BACKEND_WORKERS + 2 + n % 64);
+    let pooled = sh.unbook_pool.lock().ok().and_then(|mut p| p.pop());
+    let mut cl =
+        pooled.unwrap_or_else(|| Client::new(BACKEND_ADDRESS + BACKEND_WORKERS + 2 + n % 64));
     let path = format!("/v1/events/{}/release", query_escape(&sh.event));
     let req = Req::post(path, &sh.sk, json!({ "objects": sh.objects(&objects) }))
         .key(format!("lg-{}-unbook-{n}", sh.run_id));
@@ -1500,6 +1511,9 @@ async fn unbook(sh: Arc<Shared>, objects: Vec<u32>, n: u64) {
         }
         _ if s.unknown() => sh.unknown(BACKEND, Kind::Unbook, objects.clone(), &s, Some(n)),
         _ => sh.failed(BACKEND, Kind::Unbook, objects.clone(), Some(n)),
+    }
+    if let Ok(mut p) = sh.unbook_pool.lock() {
+        p.push(cl);
     }
     sh.unbooks.fetch_sub(1, Relaxed);
 }
