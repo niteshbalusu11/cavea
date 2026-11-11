@@ -39,6 +39,7 @@ async fn cors_open(mut response: Response) -> Response {
 
 const IDENTITY: &str = "SELECT public_ccf FROM chart_versions WHERE hash = $1 LIMIT 1";
 const BROTLI: &str = "SELECT public_ccf_br FROM chart_versions WHERE hash = $1 LIMIT 1";
+const EXISTS: &str = "SELECT EXISTS (SELECT FROM chart_versions WHERE hash = $1)";
 
 /// The public artefact with this content hash: brotli if `Accept-Encoding`
 /// allows it, else identity. Every row with the hash holds the same bytes.
@@ -60,9 +61,19 @@ async fn chart(
         format!("\"{hex}\"")
     };
     let etag = HeaderValue::try_from(etag).map_err(ApiError::internal)?;
+    let not_found = || ApiError::new(Code::NotFound).with_message("No such chart.");
     let (listed, any) = none_match(&headers, &etag);
-    let response = if listed {
-        // The content behind a hash never changes: the caller's copy is current.
+    let response = if listed || any {
+        // The caller's copy is current if the file exists: the bytes behind a
+        // hash never change, but a hash need not be (or still be) published.
+        let exists: bool = sqlx::query_scalar(EXISTS)
+            .bind(hash.as_slice())
+            .fetch_one(&state.db)
+            .instrument(cavea_telemetry::db_span("read_public_chart"))
+            .await?;
+        if !exists {
+            return Err(not_found());
+        }
         StatusCode::NOT_MODIFIED.into_response()
     } else {
         let bytes: Option<Vec<u8>> = sqlx::query_scalar(if brotli { BROTLI } else { IDENTITY })
@@ -70,16 +81,7 @@ async fn chart(
             .fetch_optional(&state.db)
             .instrument(cavea_telemetry::db_span("read_public_chart"))
             .await?;
-        let bytes =
-            bytes.ok_or_else(|| ApiError::new(Code::NotFound).with_message("No such chart."))?;
-        if any {
-            // `If-None-Match: *` and the file exists.
-            return Ok(cache_headers(
-                StatusCode::NOT_MODIFIED.into_response(),
-                etag,
-            ));
-        }
-        let mut response = bytes.into_response();
+        let mut response = bytes.ok_or_else(not_found)?.into_response();
         let headers = response.headers_mut();
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(CCF_TYPE));
         if brotli {

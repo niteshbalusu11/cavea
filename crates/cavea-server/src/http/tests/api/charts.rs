@@ -426,8 +426,13 @@ async fn public_chart_route() {
         let star = [(header::IF_NONE_MATCH, "*")];
         let (response, _) = fetch(&app, &url, &star).await;
         assert_eq!(response.status(), 304);
-        let unknown = format!("/v1/public/charts/{}.ccf", "0".repeat(32));
+        let zeros = "0".repeat(32);
+        let unknown = format!("/v1/public/charts/{zeros}.ccf");
         let (response, _) = fetch(&app, &unknown, &star).await;
+        assert_eq!(response.status(), 404);
+        // Nor does naming an unknown file's own tag make it exist.
+        let tag = format!("\"{zeros}\"");
+        let (response, _) = fetch(&app, &unknown, &[(header::IF_NONE_MATCH, &tag)]).await;
         assert_eq!(response.status(), 404);
 
         // HEAD: the headers of GET, no body.
