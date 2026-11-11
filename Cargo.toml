@@ -23,6 +23,8 @@ cavea-testkit = { path = "crates/cavea-testkit" }
 
 # third party
 anyhow = "1"
+# Content hash of compiled charts. `pure`: portable Rust only, no C or assembly.
+blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 # Default features off; each crate enables what it uses.
 axum = { version = "0.8.9", default-features = false }
 brotli = "9"

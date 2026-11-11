@@ -7,7 +7,10 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# BLAKE3-128 content hash of each artefact (03 §4.1); portable Rust, no C.
+blake3 = { workspace = true }
 cavea-core.workspace = true
+cavea-format.workspace = true
 serde.workspace = true
 # Exact float parsing so a document saved after loading keeps every coordinate.
 serde_json = { workspace = true, features = ["float_roundtrip"] }
