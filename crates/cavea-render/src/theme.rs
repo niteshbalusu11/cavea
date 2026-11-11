@@ -26,7 +26,12 @@ pub mod visual {
     pub const HELD_BY_OTHER: u8 = 6;
     /// Manager mode: a custom status, coloured from the status table.
     pub const CUSTOM: u8 = 7;
-    pub const COUNT: u32 = 8;
+    /// Overlays (04 §7 pass 12): stroke only, in the background colour (the
+    /// inner tone of a ring), the hover ring colour and the focus ring colour.
+    pub const RING_HALO: u8 = 8;
+    pub const RING_HOVER: u8 = 9;
+    pub const RING_FOCUS: u8 = 10;
+    pub const COUNT: u32 = 11;
 }
 
 /// Public status codes (`02-domain-model.md` §4.2).
@@ -208,6 +213,9 @@ impl Theme {
             let selected = [self.selected_fill, self.selected_fill, self.selected_ink];
             let ink = ink_on(base, self.bg);
             let own = [base, self.available_stroke, ink];
+            // Rings: a transparent fill of the ring's own colour, so the
+            // stroke blends into nothing.
+            let ring = |c: Rgba| [[c[0], c[1], c[2], 0], c, c];
             // Manager states (4–7) are placeholders until manager mode.
             let states = [
                 own,
@@ -218,6 +226,9 @@ impl Theme {
                 unavailable,
                 [base, self.fg, ink],
                 own,
+                ring(self.bg),
+                ring(self.ring_hover),
+                ring(self.ring_focus),
             ];
             for texel in states.iter().flatten() {
                 out.extend_from_slice(texel);

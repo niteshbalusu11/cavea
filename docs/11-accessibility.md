@@ -118,7 +118,7 @@ Because application mode changes how screen readers handle keys, the list view i
 | Non-text contrast | Seats, rings and controls have at least 3:1 against adjacent colours |
 | Text contrast | At least 4.5:1, including seat labels on every category colour (ink colour is chosen per palette entry) |
 | Colour-blind safety | Built-in palettes are checked under simulated protanopia, deuteranopia and tritanopia |
-| Target size | Selecting by touch requires seats of at least 24 CSS px; smaller seats trigger zoom-to-select |
+| Target size | A touch target is at least 24 CSS px: the hit tolerance reaches 12 px from a seat's centre. Seats smaller than 18 CSS px trigger zoom-to-select (`04-renderer.md` §15) |
 | Text resize and reflow | Built-in controls reflow at 200% text size and at 320 px width |
 | Forced colours | When `forced-colors` is active, the renderer switches to a theme built from system colours |
 | Motion | With reduced motion requested: no inertia, no fly-to animation, no pulse |

@@ -14,6 +14,7 @@ glow = ["dep:glow"]
 demo = []
 
 [dependencies]
+cavea-core.workspace = true
 cavea-format.workspace = true
 glow = { workspace = true, optional = true }
 

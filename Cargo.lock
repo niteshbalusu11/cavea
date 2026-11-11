@@ -256,6 +256,7 @@ name = "cavea-render"
 version = "0.0.0"
 dependencies = [
  "cavea-compiler",
+ "cavea-core",
  "cavea-format",
  "cavea-testkit",
  "glow",

@@ -7,9 +7,21 @@
 // Status changes upload only the dynamic sub-range they touch. Pan and zoom
 // with mouse, wheel, trackpad or touch; `gestures=greedy|cooperative|none`
 // sets gesture handling (cooperative makes the page scroll around the map),
-// `reducedMotion=1` turns animation off. `window.caveaDemo` counts frames and
-// WebGL errors and offers `setTheme(name)` for scripted checks.
-import { attach, loadRenderer, View, type GestureHandling } from "@cavea/renderer";
+// `reducedMotion=1` turns animation off.
+//
+// Tap or click seats to select and deselect them; `max` and `min` set the
+// selection rules (default 4 and 0). Hold requests come with REN-034; until
+// then selection works as in a manual session. Small seats zoom instead of
+// selecting (touch below 18 px, mouse below 5 px).
+// `window.caveaDemo` counts frames and WebGL errors, keeps every engine event
+// in `events`, and offers `setTheme(name)` for scripted checks.
+import {
+  attach,
+  loadRenderer,
+  View,
+  type GestureHandling,
+  type RendererEvent,
+} from "@cavea/renderer";
 
 /** Exports present only in `cargo xtask build-web --demo` builds. */
 interface DemoExports {
@@ -32,6 +44,7 @@ function element<T extends HTMLElement>(id: string, type: new () => T): T {
 }
 
 const status = element("status", HTMLOutputElement);
+const selectionLine = element("selection", HTMLOutputElement);
 const canvas = element("seats", HTMLCanvasElement);
 
 const lines: string[] = [];
@@ -58,6 +71,8 @@ const gesturesParam = params.get("gestures");
 const gestures: GestureHandling =
   gesturesParam === "cooperative" || gesturesParam === "none" ? gesturesParam : "greedy";
 const reducedMotion = params.has("reducedMotion") ? params.get("reducedMotion") === "1" : undefined;
+const max = Number(params.get("max") ?? 4);
+const min = Number(params.get("min") ?? 0);
 if (gestures === "cooperative") {
   document.body.classList.add("scrolling");
 }
@@ -79,7 +94,8 @@ function setTheme(name: Theme): void {
   document.body.dataset["theme"] = name;
   host?.update();
 }
-const stats = { frames: 0, glErrors: 0, setTheme };
+const events: RendererEvent[] = [];
+const stats = { frames: 0, glErrors: 0, setTheme, events };
 Object.assign(window, { caveaDemo: stats });
 let afterFirstFrame: (() => void) | undefined;
 let loadedAt = 0;
@@ -123,6 +139,51 @@ function soldRuns(fraction: number, set: (start: number, count: number) => void)
   return runs;
 }
 
+/** What the host shows: the counter, readiness and the hovered seat. */
+let selected: string[] = [];
+let hover = "";
+let ready = true;
+let lastNote = "";
+function showSelection(): void {
+  selectionLine.textContent =
+    `selected ${selected.length}/${max}: ${selected.join(" ")}\n` +
+    `checkout ${ready ? "ready" : "not ready"}; ` +
+    `hover: ${hover || "none"}\n${lastNote}`;
+}
+function note(line: string): void {
+  lastNote = line;
+  console.log(`[cavea-demo] ${line}`);
+}
+function onEvents(batch: RendererEvent[]): void {
+  for (const event of batch) {
+    events.push(event);
+    switch (event.type) {
+      case "selectionChanged":
+        selected = event.selected.map((o) => o.label);
+        note(`selection: ${selected.join(", ") || "empty"}`);
+        break;
+      case "selectionInvalid":
+        if (event.rule === "min") {
+          ready = false;
+        }
+        note(`refused (${event.rule}): ${event.objects.join(", ")}`);
+        break;
+      case "selectionValid":
+        ready = true;
+        break;
+      case "objectUnavailable":
+        note(`${event.label} was taken`);
+        break;
+      case "objectHover":
+        hover = event.object?.label ?? "";
+        break;
+      default:
+        break;
+    }
+  }
+  showSelection();
+}
+
 if (
   statics.demoChart === undefined ||
   view.setStatus === undefined ||
@@ -141,6 +202,7 @@ if (
     `compiled ${seats} seats in ${(loadStart - compileStart).toFixed(1)} ms (${ccf.length} B CCF); ` +
       `loadChart ${(loadedAt - loadStart).toFixed(1)} ms; theme ${theme}`,
   );
+  view.setRules(max, min);
   if (camera !== undefined && camera.length === 4) {
     const [x = 0, y = 0, width = 1, height = 1] = camera;
     view.setCamera(x, y, width, height);
@@ -157,7 +219,7 @@ if (
     }
     host?.update();
   };
-  const options = { gestureHandling: gestures, onFrame };
+  const options = { gestureHandling: gestures, onFrame, onEvents };
   host = attach(
     view,
     canvas,

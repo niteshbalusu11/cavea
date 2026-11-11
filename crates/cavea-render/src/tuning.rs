@@ -65,6 +65,29 @@ pub const MAX_DPR_OTHER: f32 = 3.0;
 /// Longest side of the backing store, in device pixels.
 pub const MAX_BACKING_PX: f32 = 4096.0;
 
+// Hit testing and selection (04 §15, §16).
+
+/// A tap hits a seat within this distance of its centre, or within the seat's
+/// half size if that is larger; touch and pen, then mouse (and hover).
+pub const HIT_TOLERANCE_TOUCH_PX: f64 = 12.0;
+pub const HIT_TOLERANCE_MOUSE_PX: f64 = 4.0;
+/// Seats smaller than this on screen are not selected by a touch or pen tap:
+/// the tap zooms to `ZOOM_TO_SELECT_SEAT_PX` instead (zoom-to-select).
+pub const SELECT_MIN_SEAT_TOUCH_PX: f64 = 18.0;
+/// The same for a mouse click.
+pub const SELECT_MIN_SEAT_MOUSE_PX: f64 = 5.0;
+/// Zoom-to-select makes the tapped seat this large, centred on the tap.
+pub const ZOOM_TO_SELECT_SEAT_PX: f64 = 32.0;
+/// Most objects a buyer can select: the largest object limit of a hold token
+/// for publishable keys (`02-domain-model.md` §5), and the default maximum.
+pub const MAX_SELECTED: u32 = 100;
+
+// Overlays (04 §7 pass 12).
+
+/// Width of the hover and focus rings and of the background-coloured halo
+/// between a ring and its seat (11 §3: 2 px, two-tone).
+pub const RING_WIDTH_PX: f32 = 2.0;
+
 // Level of detail (04 §10).
 
 /// Seats at least this large on screen are drawn at the detail level.

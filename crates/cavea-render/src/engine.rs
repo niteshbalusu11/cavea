@@ -1,8 +1,10 @@
 //! The engine: takes [`Command`]s, emits [`Event`]s, draws through a
 //! [`GpuBackend`]. Implemented so far: `LoadChart`, `SetTheme`, `Resize`,
 //! `Pointer`, `Wheel`, `SetCamera` and `FlyTo` with bounds,
-//! `SetGestureHandling`, `SetReducedMotion`, `Tick` and `ContextLost`; every
-//! other command is answered with an `Unsupported` error event.
+//! `SetGestureHandling`, `SetReducedMotion`, `Select`, `Deselect`,
+//! `ClearSelection`, `SetRules`, `Tick` and `ContextLost`; every other command
+//! is answered with an `Unsupported` error event. Taps, hover and selection
+//! are in [`select`].
 //!
 //! Frames (04 §18): input, camera commands and resizes are queued and applied
 //! at the start of the next `Tick`. A frame is drawn only when something is
@@ -10,6 +12,8 @@
 //! animation or a pending long press, so an idle engine asks for nothing.
 
 use std::ops::Range;
+
+use cavea_format::full_label::LabelIndex;
 
 use crate::{
     backend::{
@@ -25,13 +29,19 @@ use crate::{
         PointerType, ThemeToken,
     },
     scene::Scene,
-    seat,
-    theme::{PALETTE_WIDTH, Selection, Theme, TokenError, picker_visual},
+    seat::{self, SeatDynamic, SeatStatic},
+    theme::{PALETTE_WIDTH, Selection, Theme, TokenError, picker_visual, visual},
     tuning::{
         INERTIA_STOP_PX_PER_S, INERTIA_TIME_CONSTANT_MS, LOD_DETAIL_SEAT_PX, MAX_BACKING_PX,
-        MAX_DPR_OTHER, MAX_QUEUED_INPUT, MAX_SEAT_DRAW_CALLS,
+        MAX_DPR_OTHER, MAX_QUEUED_INPUT, MAX_SEAT_DRAW_CALLS, RING_WIDTH_PX,
     },
 };
+
+mod select;
+use select::SelectState;
+
+/// Overlay instances at most: a halo and a ring each for hover and focus.
+const OVERLAYS: usize = 4;
 
 /// The backing-store size in device pixels for a canvas of `width` × `height`
 /// CSS pixels, and the pixel ratio actually used: `min(dpr, max_dpr)`, lowered
@@ -65,6 +75,12 @@ struct Loaded {
     palette: TextureId,
     /// Seats whose dynamic bytes changed since the last upload.
     dirty: Option<Range<usize>>,
+    /// Instance buffers of the overlay pass (04 §7 pass 12), in CSS pixels,
+    /// and the bytes last written to them (static, then dynamic).
+    overlay: [BufferId; 2],
+    overlay_bytes: Vec<u8>,
+    /// Label to `idx`, built on the first lookup by label.
+    labels: Option<LabelIndex>,
 }
 
 /// Input and camera commands waiting for the next `Tick`, in arrival order.
@@ -137,11 +153,17 @@ pub struct Engine<B: GpuBackend> {
     recogniser: Recogniser,
     animations: Vec<Animation>,
     reduced_motion: bool,
+    selection: SelectState,
+    hover: Option<u32>,
+    /// The last mouse or pen position over the canvas, hit-tested again when
+    /// the camera moves.
+    hover_at: Option<[f64; 2]>,
+    focus: Option<u32>,
     dirty: bool,
     frame_requested: bool,
     context_lost: bool,
     start_ms: Option<f64>,
-    /// Intents seen, for tests, until hit testing consumes them.
+    /// Intents seen, for tests.
     #[cfg(test)]
     intents: Vec<Intent>,
     /// How many times the visible ranges were computed, for tests.
@@ -167,6 +189,10 @@ impl<B: GpuBackend> Engine<B> {
             recogniser: Recogniser::default(),
             animations: Vec::new(),
             reduced_motion: false,
+            selection: SelectState::default(),
+            hover: None,
+            hover_at: None,
+            focus: None,
             dirty: false,
             frame_requested: false,
             context_lost: false,
@@ -256,6 +282,15 @@ impl<B: GpuBackend> Engine<B> {
                     }
                 }
             }
+            Command::Select { objects } => self.select_objects(&objects),
+            Command::Deselect { objects } => self.deselect_objects(&objects),
+            Command::ClearSelection => self.clear_selection(),
+            Command::SetRules {
+                max,
+                min,
+                validators,
+                group_size,
+            } => self.set_rules(max, min, &validators, group_size),
             Command::Tick { time_ms } => self.frame(time_ms),
             Command::ContextLost => self.context_lost = true,
             _ => self.error(
@@ -275,7 +310,8 @@ impl<B: GpuBackend> Engine<B> {
     /// Sets the public status of the seats in `range` and derives their visual
     /// state (04 §9). Only that sub-range of the dynamic buffer is uploaded,
     /// at the next frame. `SetSnapshot` and `ApplyDelta` (04 §17) will call
-    /// this, once per run of equal status.
+    /// this, once per run of equal status. Selected seats keep their state or
+    /// leave the selection ([`select`]).
     #[cfg_attr(
         not(any(test, feature = "demo")),
         expect(
@@ -300,13 +336,10 @@ impl<B: GpuBackend> Engine<B> {
             return;
         }
         statuses.fill(status);
-        // No selection exists yet (04 §16).
         visuals.fill(picker_visual(status, Selection::None));
-        loaded.dirty = Some(match loaded.dirty.take() {
-            Some(dirty) => dirty.start.min(seats.start)..dirty.end.max(seats.end),
-            None => seats,
-        });
+        grow_dirty(&mut loaded.dirty, seats);
         self.redraw();
+        self.status_changed(range);
     }
 
     fn error(&mut self, code: ErrorCode, message: impl Into<String>) {
@@ -406,16 +439,40 @@ impl<B: GpuBackend> Engine<B> {
             format: TextureFormat::Rgba8,
             sampling: Sampling::Nearest,
         };
-        let palette = match self.backend.create_texture(desc, Some(&palette)) {
-            Ok(id) => id,
+        let mut created = vec![static_buf, dynamic_buf];
+        let mut buffer = |backend: &mut B, usage, len| {
+            let id = backend.create_buffer(vertex(usage), &vec![0; len]);
+            id.inspect(|&id| created.push(id))
+        };
+        let overlay = buffer(
+            &mut self.backend,
+            BufferUsage::Dynamic,
+            OVERLAYS * seat::STATIC_STRIDE,
+        )
+        .and_then(|a| {
+            buffer(
+                &mut self.backend,
+                BufferUsage::Dynamic,
+                OVERLAYS * seat::DYNAMIC_STRIDE,
+            )
+            .map(|b| [a, b])
+        });
+        let resources = overlay.and_then(|overlay| {
+            let texture = self.backend.create_texture(desc, Some(&palette));
+            texture.map(|palette| (overlay, palette))
+        });
+        let (overlay, palette) = match resources {
+            Ok(ids) => ids,
             Err(error) => {
-                self.backend.destroy(ResourceId::Buffer(static_buf));
-                self.backend.destroy(ResourceId::Buffer(dynamic_buf));
+                for id in created {
+                    self.backend.destroy(ResourceId::Buffer(id));
+                }
                 return Err(gpu(error));
             }
         };
 
         self.release_scene();
+        self.reset_selection();
         self.events.push(Event::Ready(scene.info()));
         self.scene = Some(Loaded {
             scene,
@@ -423,7 +480,11 @@ impl<B: GpuBackend> Engine<B> {
             dynamic_buf,
             palette,
             dirty: None,
+            overlay,
+            overlay_bytes: Vec::new(),
+            labels: None,
         });
+        self.flush_selection();
         // The next frame fits the new chart.
         self.camera = None;
         self.culled = None;
@@ -437,6 +498,9 @@ impl<B: GpuBackend> Engine<B> {
             self.backend.destroy(ResourceId::Buffer(loaded.static_buf));
             self.backend.destroy(ResourceId::Buffer(loaded.dynamic_buf));
             self.backend.destroy(ResourceId::Texture(loaded.palette));
+            for id in loaded.overlay {
+                self.backend.destroy(ResourceId::Buffer(id));
+            }
         }
     }
 
@@ -511,9 +575,17 @@ impl<B: GpuBackend> Engine<B> {
         self.apply_queue();
         self.recogniser.tick(time_ms, &mut self.actions);
         self.run_actions();
+        self.flush_selection();
         self.step_animations(time_ms);
         if self.camera != self.reported {
             self.reported = self.camera;
+            if self.recogniser.pressed() {
+                // A drag moves the chart with the pointer: the hovered seat
+                // stays under it, and the last hover position is stale.
+                self.hover_at = None;
+            } else {
+                self.rehover();
+            }
             if let (Some(camera), Some(loaded)) = (self.camera, &self.scene) {
                 let seat_px = f64::from(loaded.scene.seat_size) * camera.zoom;
                 self.events.push(Event::CameraChanged {
@@ -549,8 +621,11 @@ impl<B: GpuBackend> Engine<B> {
             },
             self.theme.clear(),
         );
-        if let Err((code, message)) = self.draw_seats(viewport, ((time_ms - start) / 1000.0) as f32)
-        {
+        let time = ((time_ms - start) / 1000.0) as f32;
+        let drawn = self
+            .draw_seats(viewport, time)
+            .and_then(|()| self.draw_overlays(viewport, time));
+        if let Err((code, message)) = drawn {
             self.error(code, message);
         }
         self.backend.end_frame();
@@ -742,15 +817,6 @@ impl<B: GpuBackend> Engine<B> {
         });
     }
 
-    /// Where hit testing and selection (REN-032..034) will take recognised
-    /// taps, long presses and hover; until then they are only recorded in tests.
-    fn on_intent(&mut self, intent: Intent) {
-        #[cfg(test)]
-        self.intents.push(intent);
-        #[cfg(not(test))]
-        let _ = intent;
-    }
-
     /// Uploads the dynamic buffer's dirty range, then draws the active
     /// floor's seats in the render chunks the view meets (04 §11).
     fn draw_seats(&mut self, viewport: Viewport, time: f32) -> Result<(), (ErrorCode, String)> {
@@ -827,6 +893,110 @@ impl<B: GpuBackend> Engine<B> {
         };
         self.backend.draw(&call).map_err(gpu)
     }
+
+    /// The overlay pass (04 §7 pass 12): a ring around the hovered and the
+    /// focused seat on the active floor, each a background-coloured halo
+    /// then the ring, `RING_WIDTH_PX` wide, outside the seat. Drawn in CSS
+    /// pixels with the `shape` program, so it is the same size at any zoom.
+    /// Its four instances are uploaded only when they change.
+    fn draw_overlays(&mut self, viewport: Viewport, time: f32) -> Result<(), (ErrorCode, String)> {
+        let (Some(loaded), Some(camera)) = (&mut self.scene, self.camera) else {
+            return Ok(());
+        };
+        let scene = &loaded.scene;
+        let cat = u16::try_from(scene.chart.categories.len()).unwrap_or(u16::MAX);
+        let mut statics = [0; OVERLAYS * seat::STATIC_STRIDE];
+        let mut dynamics = [0; OVERLAYS * seat::DYNAMIC_STRIDE];
+        let mut n = 0;
+        let rings = [
+            (self.hover, visual::RING_HOVER),
+            (self.focus, visual::RING_FOCUS),
+        ];
+        for (idx, ring) in rings {
+            let Some(seat) = idx
+                .filter(|idx| scene.active.contains(idx))
+                .and_then(|idx| scene.seat_static(idx))
+            else {
+                continue;
+            };
+            let [x, y] = camera.to_screen(seat.pos.map(f64::from), viewport.css);
+            let half = f64::from(seat.half) * 0.25 * camera.zoom;
+            let shape = match seat.shape {
+                seat::shape::CHAIR => seat::shape::ROUNDED_SQUARE,
+                other => other,
+            };
+            for (k, visual) in [(1.0, visual::RING_HALO), (2.0, ring)] {
+                let half_px = half + k * f64::from(RING_WIDTH_PX);
+                let instance = SeatStatic {
+                    pos: [x as f32, y as f32],
+                    // Quarter pixels, rounded without library maths; `as`
+                    // saturates.
+                    half: (half_px * 4.0 + 0.5) as u16,
+                    angle: seat.angle,
+                    shape,
+                };
+                let dynamic = SeatDynamic { cat, visual, fx: 0 };
+                let (s, d) = (n * seat::STATIC_STRIDE, n * seat::DYNAMIC_STRIDE);
+                if let (Some(s), Some(d)) = (
+                    statics.get_mut(s..s + seat::STATIC_STRIDE),
+                    dynamics.get_mut(d..d + seat::DYNAMIC_STRIDE),
+                ) {
+                    s.copy_from_slice(&instance.encode());
+                    d.copy_from_slice(&dynamic.encode());
+                }
+                n += 1;
+            }
+        }
+        if n == 0 {
+            return Ok(());
+        }
+        let gpu = |error: BackendError| (ErrorCode::Gpu, error.to_string());
+        let (statics, dynamics) = (
+            statics.get(..n * seat::STATIC_STRIDE).unwrap_or_default(),
+            dynamics.get(..n * seat::DYNAMIC_STRIDE).unwrap_or_default(),
+        );
+        let bytes = loaded.overlay_bytes.iter().copied();
+        if !bytes.eq(statics.iter().chain(dynamics).copied()) {
+            let [static_buf, dynamic_buf] = loaded.overlay;
+            self.backend
+                .update_buffer(static_buf, 0, statics)
+                .map_err(gpu)?;
+            self.backend
+                .update_buffer(dynamic_buf, 0, dynamics)
+                .map_err(gpu)?;
+            loaded.overlay_bytes.clear();
+            loaded.overlay_bytes.extend_from_slice(statics);
+            loaded.overlay_bytes.extend_from_slice(dynamics);
+        }
+        let Size { width, height } = viewport.css;
+        let (w, h) = ((2.0 / width) as f32, (2.0 / height) as f32);
+        let uniforms = Uniforms {
+            // CSS pixels, y down, to clip space.
+            view: [[w, 0.0, 0.0], [0.0, -h, 0.0], [-1.0, 1.0, 1.0]],
+            px_per_cu: viewport.ratio,
+            stroke_px: RING_WIDTH_PX * viewport.ratio,
+            stroke_min_px: 0.0,
+            dim: self.theme.dim,
+            time,
+        };
+        let range = 0..n as u32;
+        let call = DrawCall {
+            pipeline: Pipeline::Shape,
+            buffers: loaded.overlay.map(Some),
+            texture: Some(loaded.palette),
+            uniforms,
+            ranges: std::slice::from_ref(&range),
+        };
+        self.backend.draw(&call).map_err(gpu)
+    }
+}
+
+/// Grows the dirty range of the dynamic buffer to cover `seats`.
+fn grow_dirty(dirty: &mut Option<Range<usize>>, seats: Range<usize>) {
+    *dirty = Some(match dirty.take() {
+        Some(d) => d.start.min(seats.start)..d.end.max(seats.end),
+        None => seats,
+    });
 }
 
 /// Finite, non-empty, and with finite far edges, so the centre is finite too.

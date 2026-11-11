@@ -8,6 +8,7 @@ import init, { version, type InitInput } from "../wasm/cavea_web.js";
  */
 export { View } from "../wasm/cavea_web.js";
 export { attach, type AttachOptions, type Attached, type GestureHandling } from "./host.ts";
+export { takeEvents, type ObjectInfo, type RendererEvent } from "./events.ts";
 
 /** The loaded renderer. */
 export interface Renderer {
