@@ -1100,4 +1100,5 @@ pub(crate) fn install_panic_log() {
 }
 
 mod api;
+mod hardening;
 mod web;

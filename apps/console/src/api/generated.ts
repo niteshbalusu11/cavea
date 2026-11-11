@@ -597,7 +597,7 @@ export interface Operations {
     reply: VersionList;
   };
   listEvents: {
-    input: { query?: { limit?: number; after?: string } };
+    input: { query?: { limit?: number; after?: string; chart?: string } };
     reply: EventList;
   };
   createEvent: {

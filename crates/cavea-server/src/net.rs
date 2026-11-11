@@ -65,6 +65,17 @@ impl TrustedProxies {
     fn contains(&self, ip: IpAddr) -> bool {
         self.0.iter().any(|c| c.contains(ip))
     }
+
+    /// Whether a range is every IPv4 or every IPv6 address (`0.0.0.0/0`,
+    /// `::/0`): then any client names its own address in `X-Forwarded-For`
+    /// (12 §4, SEC-006).
+    #[must_use]
+    pub fn trusts_everyone(&self) -> bool {
+        let v4 = bits(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        self.0
+            .iter()
+            .any(|c| c.len == 0 || (c.len == 96 && c.net == v4))
+    }
 }
 
 impl FromStr for TrustedProxies {

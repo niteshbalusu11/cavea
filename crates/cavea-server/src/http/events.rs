@@ -23,9 +23,18 @@ pub(super) fn routes() -> Routes {
     Routes::new()
         .add(
             reading(Op::get("/v1/events", "listEvents", "List events"))
-                .about("Archived events included. The cursor is an event key.")
+                .about(
+                    "Archived events included, oldest first. The cursor is an event key. \
+`chart` keeps one chart's events; a chart the workspace does not have is `404`.",
+                )
                 .page()
-                .reply(200, "EventList", "A page of events"),
+                .query(
+                    "chart",
+                    serde_json::json!({ "type": "string" }),
+                    "A chart's key: only events on one of its versions.",
+                )
+                .reply(200, "EventList", "A page of events")
+                .errors(&[404]),
             list,
         )
         .add(
@@ -233,7 +242,8 @@ pub(super) fn archived() -> ApiError {
     )
 }
 
-/// Oldest first; archived events included. `after` is an event key.
+/// Oldest first; archived events included. `after` is an event key; `$4`,
+/// when not null, a chart key.
 const LIST: &str = concat!(
     "SELECT ",
     event_columns!(),
@@ -242,23 +252,53 @@ const LIST: &str = concat!(
  WHERE e.workspace_id = $1::uuid
    AND ($2::text IS NULL OR (e.created_at, e.id) >
         (SELECT created_at, id FROM events WHERE workspace_id = $1::uuid AND key = $2))
+   AND ($4::text IS NULL OR c.key = $4)
  ORDER BY e.created_at, e.id
  LIMIT $3"
 );
 
+const CHART_EXISTS: &str =
+    "SELECT EXISTS (SELECT FROM charts WHERE workspace_id = $1::uuid AND key = $2)";
+
+/// `?limit=&after=&chart=`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListQuery {
+    limit: Option<u32>,
+    after: Option<String>,
+    chart: Option<String>,
+}
+
 async fn list(
     Staff(auth): Staff,
-    Query(page): Query<Page>,
+    Query(query): Query<ListQuery>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<List<Event>>, ApiError> {
-    let limit = page.limit()?;
+    let limit = Page::new(query.limit, None).limit()?;
     let rows: Vec<EventRow> = sqlx::query_as(LIST)
         .bind(auth.workspace().uuid())
-        .bind(page.after.as_deref())
+        .bind(query.after.as_deref())
         .bind(i64::from(limit) + 1)
+        .bind(query.chart.as_deref())
         .fetch_all(&state.db)
         .instrument(cavea_telemetry::db_span("list_events"))
         .await?;
+    // An empty page may mean no such chart: asked only then.
+    if rows.is_empty()
+        && let Some(chart) = &query.chart
+    {
+        let exists: bool = sqlx::query_scalar(CHART_EXISTS)
+            .bind(auth.workspace().uuid())
+            .bind(chart)
+            .fetch_one(&state.db)
+            .instrument(cavea_telemetry::db_span("chart_exists"))
+            .await?;
+        if !exists {
+            return Err(ApiError::new(Code::NotFound)
+                .with_message("No such chart.")
+                .with_detail("missing", "chart"));
+        }
+    }
     let events = rows
         .into_iter()
         .map(Event::new)

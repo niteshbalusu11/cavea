@@ -769,6 +769,7 @@ const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
     (Method::POST, "/v1/assets", 201, Some("{png}")),
     (Method::GET, "/v1/public/assets/{asset}", 200, None),
     (Method::GET, "/v1/events", 200, None),
+    (Method::GET, "/v1/events?chart={chart}&limit=5", 200, None),
     (
         Method::POST,
         "/v1/events",
@@ -1617,10 +1618,12 @@ async fn authorisation_matrix() {
 mod assets;
 mod charts;
 mod console;
+mod events;
 mod limits;
 mod members;
 mod objects;
 mod realtime;
+mod scrub;
 mod seats;
 mod session;
 mod verify;

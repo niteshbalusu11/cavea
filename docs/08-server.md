@@ -532,7 +532,7 @@ Secret key unless marked.
 
 | Method and path | Purpose |
 |---|---|
-| `GET /v1/events` | List event objects, archived ones included; the cursor is an event key |
+| `GET /v1/events` | List event objects, oldest first, archived ones included; the cursor is an event key. `?chart=<key>` keeps the events on any version of one chart (the chart detail's Events tab, 09 §3.2), archived chart included; a chart the workspace does not have is `404` (`missing: "chart"`), as another workspace's is |
 | `POST /v1/events` | Create (`key`, `chart`, optional `version`, `name`, `settings`); `201` with the event object |
 | `GET /v1/events/{event}` | The event object with `counts` |
 | `PATCH /v1/events/{event}` | Change name or settings |
@@ -840,6 +840,25 @@ Every error is `application/problem+json` with exactly these members:
 - `401 unauthorized` has `details.reason`: `missing` (no `Authorization`), `malformed` (not `Bearer <token>`), `invalid` (unknown or revoked key, or not the admin key), or `session_token` with `details.session` one of `missing`, `invalid`, `expired`, `event` (§11). `403 forbidden` from authentication has `reason`: `key_kind` (the wrong kind of credential for the route), `origin` (§11), `self_revocation`, or `session` (a hold token bound to another `sub`, or used without a session, §11).
 - `hold_limit_exceeded` for the per-`sub` cap has `reason: "tokens_per_sub"` and `limit`.
 - `503 overloaded` carries `Retry-After: 1`.
+
+### 6.5 Security headers
+
+Set by one layer on the whole router (`http/headers.rs`, SEC-004), by the request's path, so every route, fallback and error gets its family's headers and a route added later inherits them; a test sends a request to every operation of the route table and to the console's files and unknown paths and checks each (`every_route_carries_its_familys_headers`). A header a handler sets itself is kept (an uploaded image's stricter `Content-Security-Policy`, §6.2).
+
+| Header | Console pages and files (every other path) | `/v1` secret-key and admin routes, `/console/api`, `/healthz`, `/readyz`, `/metrics` | `/v1/public/…`: publishable-key routes, realtime, chart and image files |
+|---|---|---|---|
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'` | `default-src 'none'; frame-ancestors 'none'` | `default-src 'none'; frame-ancestors 'none'` (an image: `default-src 'none'; sandbox`, §6.2) |
+| `X-Content-Type-Options` | `nosniff` | `nosniff` | `nosniff` |
+| `Referrer-Policy` | `no-referrer` | `no-referrer` | `no-referrer` |
+| `Permissions-Policy` | every powerful feature off: `accelerometer=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), publickey-credentials-get=(), serial=(), usb=(), xr-spatial-tracking=()` | — | — |
+| `Cross-Origin-Opener-Policy` | `same-origin` | — | — |
+| `Cross-Origin-Resource-Policy` | `same-origin` | `same-origin` | `cross-origin` |
+| `Strict-Transport-Security` | `max-age=31536000` when `CAVEA_PUBLIC_URL` is `https://` | the same | the same |
+| CORS | none | none | as §11: `Access-Control-Allow-Origin` from `CAVEA_CORS_ORIGINS` (`*` by default) on the key routes, `*` always on the chart and image files; never `Access-Control-Allow-Credentials` |
+
+- **The console's policy** was found against the built console (`cargo xtask build-server`), whose `index.html` is one module script and one stylesheet, both files: no inline script or style element, no `eval`. `'wasm-unsafe-eval'` compiles the designer's WebAssembly. Solid sets dynamic styles through the CSSOM, which `style-src` does not govern, but writes a constant `style={{…}}` into its compiled template as a `style` attribute (the designer's layer rows and tour dialog do), so `style` attributes are allowed and nothing else inline is (D-67). No image source but the origin: the glyph atlas is decoded from a fetched blob, which `img-src` does not govern; a feature that shows a picture from a person's own file adds `blob:` then. Proven in headless Chromium against the release build (scratch script, not committed): setup through the logged link, sign-in through the form, the charts list in a workspace and with a chart whose names are markup (shown as text, nothing injected), the events, developers, settings and account screens, the designer at `/designer/local` opening a chart file and drawing it (its WebAssembly loaded), with no `securitypolicyviolation` event and no exception or console error; then an injected inline `<script>`, an inline `onerror` handler and a script from another origin were each refused and reported. Trusted Types are not required: Solid builds its compiled templates with `innerHTML` on a `<template>`, which a Trusted Types policy would have to allow.
+- **The public family** stays embeddable: its CORS is unchanged (§11), and `Cross-Origin-Resource-Policy: cross-origin` says outright that any page may load it, which a page isolated with `Cross-Origin-Embedder-Policy: require-corp` needs for a `no-cors` load. No `Cross-Origin-Embedder-Policy` or `-Opener-Policy` is sent there: they would govern a document, and these are not documents. The API families' `default-src 'none'; frame-ancestors 'none'` has no effect on `fetch`, EventSource or WebSocket clients; it only keeps a response opened as a page from loading or being framed.
+- **HSTS** is sent only when `CAVEA_PUBLIC_URL` is HTTPS: browsers ignore it over plain HTTP, and a development server on `http://localhost` must not be pinned to HTTPS. No `includeSubDomains` or `preload`: the operator's other hosts are not the server's to decide. Behind a proxy that terminates TLS, the proxy may set its own; the server's is the same value.
 
 ## 7. Algorithms
 
@@ -1176,7 +1195,7 @@ Admin key and workspaces:
 | `CAVEA_LISTEN` | `0.0.0.0:8080` | |
 | `CAVEA_LOG` | `info` | Log filter, in `tracing` directive syntax such as `info,cavea_server=debug`. Records go to standard output through a queue of 16,384 written by a thread of its own; a record the queue cannot take or the output cannot write is dropped and counted (§15), never retried or reported on standard error |
 | `CAVEA_LOG_FORMAT` | `json` | `json` (one object per line, for production) or `text` (readable, for development) |
-| `CAVEA_PUBLIC_URL` | — | External base URL such as `https://seats.example.com` (`http://` or `https://`, kept without a trailing slash). The first-run setup link starts with it (09 §2); without it the link is a path. The server warns at start when it is not HTTPS. Later: webhooks |
+| `CAVEA_PUBLIC_URL` | — | External base URL such as `https://seats.example.com` (`http://` or `https://`, kept without a trailing slash). The first-run setup link starts with it (09 §2); without it the link is a path. When it is HTTPS, every response carries `Strict-Transport-Security` (§6.5); when it is not, and its host is not `localhost` or a loopback address, the server warns at start (below). Later: webhooks |
 | `CAVEA_LICENCE` | — | Licence file path or contents |
 | `CAVEA_ADMIN_KEY` | none | The operator's key for `/v1/workspaces`: 32 to 512 printable ASCII characters. Unset, those endpoints refuse every request (§11) |
 | `CAVEA_DB_POOL` | 16 | Connections to PostgreSQL, all opened at start, before the server listens, and kept open, so the first burst after a start or a quiet night opens none (13 §7.4). The first must open or the start fails; any the database refuses beyond it are opened later, with a warning. Every 10 minutes the pool retires idle connections older than 10 minutes and opens back up to this number in the background; a request that finds none idle opens one. Size it within the database's `max_connections`, counting a second process during a rolling restart: a 1 vCPU node beside a small managed PostgreSQL does well with 4 |
@@ -1197,6 +1216,8 @@ Admin key and workspaces:
 | `CAVEA_NODE_ID` | hostname | This node's name in `events.owner_node`; nodes on one database must differ |
 | `CAVEA_LEASE_SECS` | 15 | How long ownership of an event lasts unless renewed |
 | `CAVEA_HEARTBEAT_SECS` | 5 | How long an idle actor waits before renewing its lease; less than the lease |
+
+**Insecure settings** (12 §4, SEC-006). Once at start, before connecting to the database, the server logs one `warn` record, `insecure setting`, for each of these, with `setting` naming the variable and `why` saying what it exposes, never the value: `CAVEA_PUBLIC_URL` not HTTPS (unless on `localhost` or a loopback address, which browsers treat as secure); `CAVEA_CONSOLE_COOKIE_SECURE=false`; `CAVEA_ADMIN_KEY` unset (the workspace endpoints and `/metrics` refuse every request); `CAVEA_RATE_LIMIT_HOLDS`, `CAVEA_RATE_LIMIT_READS` or `CAVEA_RATE_LIMIT_SIGN_IN` at 0; `CAVEA_TRUSTED_PROXIES` naming every IPv4 or IPv6 address (`0.0.0.0/0`, `::/0`), which lets any client choose the address its limits count against. A production set-up with an admin key warns about nothing, and neither do the development defaults (no public URL, or one on `localhost`). The server refuses to start only where a setting cannot be used: a malformed value, or an admin key shorter than 32 characters (§11). Not checked, by choice: `CAVEA_CORS_ORIGINS=*`, the default, since the publishable routes can do only what an anonymous buyer can (12 §3 T3), and a publishable key without `allowed_origins`, which is per key in the database and a documented choice; the database connection's TLS, which a container network commonly leaves off.
 
 ## 14. Deployment
 
@@ -1251,7 +1272,7 @@ actor {event_id}                   one per loaded event: its load, actor and lea
 realtime {request_id, transport, workspace, event}   one per realtime connection
 ```
 
-- `route` is the matched template (`/v1/events/{event_key}`), or `<unmatched>`; the raw path is never logged because it carries customer keys. Query strings, headers and bodies are never logged.
+- `route` is the matched template (`/v1/events/{event_key}`), or `<unmatched>`; the raw path is never logged because it carries customer keys. Query strings, headers and bodies are never logged. Secrets in typed request and response bodies (passwords, setup, invitation and hold tokens, new keys, invitation links) are held as `http::extract::Secret`, whose `Debug` prints `Secret(..)`, so a body logged with `?body` cannot carry one. The proof is `secrets_never_reach_the_logs` (SEC-009): every route driven as it succeeds and again with recognisable wrong secrets in every header, query string, identifier path and body field that can hold one, everything captured at `trace` from every crate, and none of those values, nor any key, token, link or session the routes handed out, nor an email, password or order reference, in the output.
 - Each request logs one `request completed` record when it finishes: `info`, or `debug` for a successful `/healthz`, `/readyz` or `/metrics`.
 - A batch serves many requests, so `commit` is not a child of any one of them. Its `follows_from` links lead to each `apply` span and through it to the request id, for trace export. In logs, the engine records the batch's `event_id` and `seq` (as `commit_seq`) on the span that submitted each command (the request span, when the handler submits from it), so a record inside `commit {event_id: E, seq: 42}` and the `request completed` records with `event_id: E, commit_seq: 42` belong together. `seq` alone is per event and does not identify a commit. `event_id` is the event's UUID as 32 hex digits; `event` is the customer's event key.
 - A JSON record lists every enclosing span with its fields under `spans`, outermost first, so a record inside `apply` carries the request id.

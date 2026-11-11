@@ -214,6 +214,45 @@ fn query_rejection(rejection: &QueryRejection) -> ApiError {
         .with_detail("reason", "query")
 }
 
+/// A secret in a request or response body: a password, a setup, invitation
+/// or hold token, a new key, a link holding a token. Its `Debug` shows
+/// nothing, so a body logged with `?body` cannot carry one (12 §4, SEC-009);
+/// on the wire it is the plain string.
+#[derive(Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(transparent)]
+pub struct Secret(String);
+
+impl Secret {
+    #[must_use]
+    pub fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    #[must_use]
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl std::ops::Deref for Secret {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret(..)")
+    }
+}
+
 /// `?limit=&after=` of a list endpoint (08 §6.1).
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -226,6 +265,12 @@ pub struct Page {
 impl Page {
     pub const DEFAULT_LIMIT: u32 = 100;
     pub const MAX_LIMIT: u32 = 100;
+
+    /// A page from a list's own query, which has more parameters.
+    #[must_use]
+    pub fn new(limit: Option<u32>, after: Option<String>) -> Self {
+        Self { limit, after }
+    }
 
     /// The page size, 1 to [`Self::MAX_LIMIT`].
     pub fn limit(&self) -> Result<u32, ApiError> {

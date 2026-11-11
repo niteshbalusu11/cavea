@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tracing::Instrument as _;
 
 use super::auth::{KeyId, KeyKind, NewKey, normalise_origin};
-use super::extract::{Json, Page, Path, Query, check_text, invalid_field};
+use super::extract::{Json, Page, Path, Query, Secret, check_text, invalid_field};
 use super::openapi::{Needs, Op, Routes};
 use super::staff::Staff;
 use super::{ApiError, AppState, Code, List};
@@ -93,7 +93,7 @@ pub(super) struct KeyView {
     last_used_at: Option<String>,
     revoked_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    key: Option<String>,
+    key: Option<Secret>,
 }
 
 impl KeyView {
@@ -108,7 +108,7 @@ impl KeyView {
             created_at,
             last_used_at,
             revoked_at,
-            key,
+            key: key.map(Secret::new),
         })
     }
 }

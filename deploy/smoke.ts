@@ -252,6 +252,29 @@ async function main(): Promise<void> {
   }
   step("console served: index.html, a hashed script, the designer's WASM");
 
+  // Security headers by route family (08 §6.5): the console's policy, the
+  // API's, and the public files open to other origins.
+  const csp = index.headers.get("content-security-policy") ?? "";
+  check(
+    csp.includes("script-src 'self' 'wasm-unsafe-eval';") && csp.includes("frame-ancestors 'none'"),
+    `console policy: ${csp}`,
+  );
+  const health = await fetch(`${base}/healthz`);
+  check(
+    health.headers.get("content-security-policy") === "default-src 'none'; frame-ancestors 'none'",
+    "API policy",
+  );
+  const file = await fetch(`${base}${at(event, "version", "url")}`, {
+    headers: { origin: "https://tickets.example" },
+  });
+  check(
+    file.status === 200 &&
+      file.headers.get("access-control-allow-origin") === "*" &&
+      file.headers.get("cross-origin-resource-policy") === "cross-origin",
+    "public chart file open to other origins",
+  );
+  step("security headers per route family");
+
   const verify = sh([
     ...compose,
     "exec",

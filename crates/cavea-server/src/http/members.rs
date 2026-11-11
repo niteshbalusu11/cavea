@@ -30,7 +30,7 @@ use tracing::Instrument as _;
 
 use super::auth::{Auth, ClientIp};
 use super::console::{budget, busy, me_json, new_session, signed_in};
-use super::extract::{Json, Page, Path, Query, check_text, invalid_field};
+use super::extract::{Json, Page, Path, Query, Secret, check_text, invalid_field};
 use super::openapi::{Needs, Op, Routes};
 use super::staff::{Member, cookie_session, session_cookie};
 use super::{ApiError, AppState, Code, List};
@@ -434,7 +434,7 @@ SELECT ",
 pub(super) struct InvitationCreated {
     invitation: InvitationView,
     /// The one-time link, shown only here.
-    link: String,
+    link: Secret,
 }
 
 impl InvitationCreated {
@@ -492,7 +492,10 @@ pub(super) async fn create_invitation(
     audit::record(tx, entry).await?;
     let base = state.config.public_url.as_ref().map_or("", |u| u.as_str());
     let link = format!("{}{INVITE_PATH}#token={token}", base.trim_end_matches('/'));
-    Ok(InvitationCreated { invitation, link })
+    Ok(InvitationCreated {
+        invitation,
+        link: Secret::new(link),
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -609,9 +612,9 @@ async fn revoke_invitation(
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Accept {
-    token: String,
+    token: Secret,
     #[serde(default)]
-    password: Option<String>,
+    password: Option<Secret>,
 }
 
 fn invitation_refused() -> ApiError {
@@ -685,7 +688,9 @@ async fn accept(
     if !live.is_some_and(|stored| bool::from(hash.ct_eq(stored.as_slice()))) {
         return Err(invitation_refused());
     }
-    let password_hash = password::hash_bounded(password).await.map_err(busy)?;
+    let password_hash = password::hash_bounded(password.into_inner())
+        .await
+        .map_err(busy)?;
     let id = new_session()?;
     let work = async {
         let mut tx = state.db.begin().await?;
