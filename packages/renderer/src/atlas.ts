@@ -15,8 +15,9 @@ export type GlyphAtlasSource = string | URL;
  */
 export async function loadGlyphAtlas(
   source: GlyphAtlasSource = new URL("../assets/glyphs.png", import.meta.url),
+  integrity?: string,
 ): Promise<Uint8Array> {
-  const response = await fetch(source);
+  const response = await fetch(source, integrity === undefined ? {} : { integrity });
   if (!response.ok) {
     throw httpError("glyph atlas", response.status);
   }
