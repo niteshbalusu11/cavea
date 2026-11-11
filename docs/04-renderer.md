@@ -1,0 +1,452 @@
+# 04 · Renderer
+
+**Status:** Draft v0.1 · 2026-11-10
+
+The renderer draws a chart and its live seat state, handles pan, zoom and selection, and reports what the buyer did. It is one Rust engine with a small host layer per platform.
+
+Budgets are in `01-architecture.md` §5. The public JavaScript API is in `05-web-sdk.md`.
+
+## 1. Goals
+
+1. First interactive frame as early as the network allows.
+2. 60 fps on the reference Android phone at 100,000 seats; 120 fps on capable displays.
+3. Zero work when nothing changes.
+4. The same engine on web, iOS and Android, and inside the designer.
+5. A buyer can always complete a purchase, whatever their device supports.
+
+Not goals: 3D, arbitrary vector graphics, effects.
+
+## 2. Layering
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Host (per platform)                                     │
+│  surface / GL context · input events · clock · frame    │
+│  scheduling · text rasteriser · image decoding · a11y   │
+└───────────────▲───────────────────────┬─────────────────┘
+        events  │                       │ commands
+┌───────────────┴───────────────────────▼─────────────────┐
+│ cavea-render: Engine                                    │
+│  scene · camera · gestures · LOD · selection · draw list│
+└───────────────┬─────────────────────────────────────────┘
+                │ GpuBackend trait
+      ┌─────────┴─────────┬──────────────────┐
+      │ glow (WebGL2,     │ wgpu (Metal,     │ Canvas 2D (web
+      │ GLES3)            │ Vulkan, GLES)    │ fallback, in TS)
+      └───────────────────┴──────────────────┘
+```
+
+The host supplies five services through traits: `Clock`, `FrameScheduler`, `TextRasteriser`, `ImageSource`, `GpuBackend`. The engine performs no I/O itself.
+
+## 3. Engine protocol
+
+The engine is driven only by commands and emits only events. Both are plain data, so the engine can later run in a worker or behind FFI unchanged (`DECISIONS.md` D-21).
+
+**Commands**
+
+| Command | Payload |
+|---|---|
+| `LoadChart` | CCF bytes |
+| `SetSnapshot` | `seq`, state bytes |
+| `ApplyDelta` | `from_seq`, `to_seq`, changes |
+| `SetPrivateHolds` | List of `idx`, expiry |
+| `Resize` | Width, height, device pixel ratio |
+| `Pointer` | Kind (down, move, up, cancel), pointer id, type, position, time |
+| `Wheel` | Delta, position, modifier flags |
+| `Key` | Key, modifiers |
+| `SetCamera` / `FlyTo` | Target bounds, object or section; duration |
+| `Select` / `Deselect` / `ClearSelection` | Labels or `idx` |
+| `HoldResult` | Request id, success or per-object failures |
+| `SetPricing` | Category keys with display prices |
+| `SetFilter` | Categories, price range, accessible only |
+| `SetTheme` | Token values |
+| `SetMode` | `picker`, `static`, `spotlight`, `manager` |
+| `SetRules` | Maximum, minimum, validators, group size |
+| `SetFloor` | Floor id |
+| `Tick` | Frame time |
+| `ContextLost` / `ContextRestored` | — |
+
+**Events**
+
+| Event | Payload |
+|---|---|
+| `Ready` | Chart metadata: floors, sections, categories, counts |
+| `NeedFrame` | — |
+| `HoldRequest` / `ReleaseRequest` | Request id, labels |
+| `SelectionChanged` | Selected objects with label, category, section, row, seat, flags |
+| `SelectionInvalid` / `SelectionValid` | Rule and offending objects |
+| `ObjectHover` / `ObjectFocus` | Object details, anchor position in screen space |
+| `SectionEnter` | Section |
+| `ObjectUnavailable` | A selected object was taken by someone else |
+| `CameraChanged` | Centre, zoom, level of detail |
+| `Announce` | Text for assistive technology |
+| `Metrics` | Timing marks and frame statistics |
+| `Error` | Code, message |
+
+## 4. Load sequence
+
+```
+t0  init()  ─┬─ fetch WASM (streaming compile)
+             ├─ fetch chart .ccf
+             ├─ fetch state snapshot
+             └─ fetch font atlas
+    WASM ready ─ create GL context, compile 5 shader programs
+    chart arrives ─ decode → SoA arrays → upload static buffers
+    FIRST FRAME (layout visible, all seats neutral)        ← "chart visible"
+    snapshot arrives ─ fill dynamic buffer
+    INTERACTIVE FRAME                                       ← "chart-ready"
+    open realtime connection
+    load background images, build label buffers lazily
+```
+
+Rules:
+
+- The four fetches start together, before any of them completes.
+- The first frame does not wait for the snapshot or the font atlas.
+- If the snapshot arrives before the chart, it is kept and applied on decode.
+- Shader programs are compiled before the chart arrives, where the browser allows parallel compilation.
+- Nothing on this path allocates per seat or crosses the JavaScript boundary per seat.
+
+## 5. Scene data (CPU)
+
+Decoded from CCF into structure-of-arrays, indexed by `idx`:
+
+| Array | Type | Use |
+|---|---|---|
+| `pos` | `[f32; 2]` per seat | Hit testing, upload |
+| `cat` | u16 | Palette row, filters |
+| `flags` | u8 | Accessibility filter, rules |
+| `row` | u32 | Adjacency, labels |
+| `status` | u8 | Public or manager status code |
+| `visual` | u8 | Derived visual state (§9) |
+| `fx` | u8 | Dim, highlight, pulse bits |
+
+Plus per-row, per-segment, per-section, per-chunk and per-floor tables as in the CCF.
+
+Derived at load:
+
+- Per-section and per-category availability counters, updated incrementally with every status change.
+- A neighbour table is not needed: seats within a row are stored in physical order, and `RSEG` marks the breaks.
+
+## 6. GPU resources
+
+| Resource | Size | Updated |
+|---|---|---|
+| Seat static buffer | 12 bytes × seats | Once |
+| Seat dynamic buffer | 4 bytes × seats | Sub-ranges on state change |
+| Decoration mesh (vertices, indices) | From `MESH` | Once |
+| Table and booth instance buffer | 24 bytes × objects | Once; dynamic part on state change |
+| Palette texture | 16 × categories, RGBA8 | On theme or pricing change |
+| MSDF glyph atlas | 256 × 256, RGB8 | Once |
+| Dynamic text atlas | Up to 2048 × 2048, R8 | When new strings or zoom buckets are needed |
+| Label glyph buffers | Per chunk, built lazily, LRU of 64 chunks | On first need |
+| Icon atlas | 256 × 256, RGB8 | Once |
+| Background image textures | As shipped, capped at 4096 px | After first frame |
+
+Seat instance layout:
+
+```
+Static, 12 bytes                    Dynamic, 4 bytes
+  pos    : f32 × 2                    cat    : u16
+  half   : u16  (half size, ¼ cu)     visual : u8
+  angle  : u8   (360° / 256)          fx     : u8
+  shape  : u8
+```
+
+## 7. Pipelines
+
+Five shader programs. Draw order, back to front:
+
+| # | Pass | Program | Primitive | Drawn when |
+|---|---|---|---|---|
+| 1 | Clear | — | — | Always |
+| 2 | Background images | `image` | Quad | Loaded and enabled |
+| 3 | Decoration, lower layer | `mesh` | Indexed triangles | Always |
+| 4 | Section fills | `mesh` | Indexed triangles | Overview and cross-fade (§10) |
+| 5 | Area fills | `mesh` | Indexed triangles | Always |
+| 6 | Tables and booths | `shape` | Instanced quad | Seats and detail levels |
+| 7 | Seats | `shape` | Instanced quad, one or more ranges | Seats and detail levels |
+| 8 | Seat icons (accessible, selected tick, unavailable cross) | `glyph` | Instanced quad | Detail level |
+| 9 | Seat labels | `glyph` | Instanced quad | Detail level |
+| 10 | Row labels, section labels, text objects, area labels | `glyph` or `text` | Instanced quad | By size |
+| 11 | Decoration, upper layer and icons | `mesh`, `glyph` | — | Always |
+| 12 | Overlays: hover ring, focus ring, selection box | `shape` | Instanced quad | When present |
+
+Programs:
+
+| Program | Vertex inputs | Fragment work |
+|---|---|---|
+| `shape` | Corner from vertex id; per-instance position, size, angle, shape, category, visual, fx | Signed-distance shape, fill, stroke, anti-aliasing |
+| `mesh` | Position, colour | Flat colour × layer alpha |
+| `glyph` | Corner; per-instance position, size, atlas rectangle, colour index | MSDF median, anti-aliased edge |
+| `text` | Same as `glyph` | Alpha from R8 bitmap atlas |
+| `image` | Corner; rectangle | Texture × opacity |
+
+## 8. Seat shader
+
+- Each seat is a quad built from `gl_VertexID` (triangle strip of 4), scaled by `half`, rotated by `angle`, translated by `pos`, transformed by the camera matrix.
+- The vertex shader fetches fill and ink colours from the palette with `texelFetch(palette, ivec2(visual × 2 + k, cat), 0)` and passes them flat.
+- The fragment shader evaluates a signed distance for the shape:
+
+| Shape id | Distance function |
+|---|---|
+| 0 circle | `length(uv) − 1` |
+| 1 rounded square | Rounded box, radius 0.3 |
+| 2 chair | Rounded box with a thicker edge on the back side |
+| 3 diamond | `abs(uv.x) + abs(uv.y) − 1` |
+
+- Anti-aliasing uses the on-screen pixel size passed as a uniform: `alpha = clamp(0.5 − d × half_px, 0, 1)`.
+- Stroke is drawn where `−stroke_px < d × half_px < 0`. Below 5 px on screen the stroke is skipped.
+- `fx` bit 0 (dim) multiplies alpha by the theme's dim factor. Bit 2 (pulse) blends a short highlight driven by a time uniform.
+- Blending is premultiplied alpha. No depth buffer, no stencil.
+
+## 9. Visual states and palette
+
+The engine maps status, selection and mode to one visual state per object:
+
+| Code | Visual state | Picker mode | Manager mode |
+|---|---|---|---|
+| 0 | Available | Free and passes filters | Free |
+| 1 | Unavailable | Anything not available | — |
+| 2 | Selected, pending | Tapped, hold in flight | Selected by the operator |
+| 3 | Selected, held | Hold confirmed | — |
+| 4 | Blocked | — | Blocked |
+| 5 | Booked | — | Booked |
+| 6 | Held by another | — | Held |
+| 7 | Custom | — | Custom status (colour from the status table) |
+
+The palette texture has one row per category and one extra row for states whose colour does not depend on category. Changing a theme or a category colour rewrites the texture and touches no instance data.
+
+States must differ by more than colour (`11-accessibility.md` §6): unavailable seats are drawn hollow or with a cross at detail level, selected seats carry a tick.
+
+## 10. Level of detail
+
+Let `s` be the seat size in CSS pixels at the current zoom.
+
+| Level | Condition | Drawn |
+|---|---|---|
+| **Overview** | `s < 2.5` and the chart has sections | Section fills tinted by availability, section labels, "from" price; no seats |
+| **Cross-fade** | `2.5 ≤ s < 5` | Section fills fade out while seats fade in |
+| **Seats** | `5 ≤ s < 14` | Flat seats, no stroke, no seat labels; row labels from `s ≥ 8` |
+| **Detail** | `s ≥ 14` | Stroke, seat labels, icons |
+
+- A chart without sections skips overview and draws seats as dots at any size.
+- Thresholds have 10% hysteresis so that the level does not flicker at a boundary.
+- Section tint: the section's dominant category colour, desaturated in proportion to the share of unavailable seats; a sold-out section is neutral grey with a "sold out" label.
+- Tapping a section in overview flies the camera to that section.
+
+## 11. Culling and draw calls
+
+- Chunks hold at most 4,096 seats and have a bounding box. A chunk is drawn if its box intersects the view.
+- Visible chunks that are adjacent in `idx` order are merged into one instance range.
+- At overview and when the whole chart is visible, all seats are one range and one draw call.
+- Target: at most 64 seat draw calls in any frame.
+- WebGL2 has no base-instance draw, so the `glow` backend rebinds attribute offsets per range. The `wgpu` backend passes instance ranges directly.
+
+## 12. Text
+
+| Text | Source | Notes |
+|---|---|---|
+| Seat labels | MSDF atlas | Generated from row rules; upright; ink colour chosen per palette entry for contrast |
+| Row labels | MSDF atlas, or dynamic atlas if non-Latin | At row ends per chart setting; hidden when they collide |
+| Section labels | Dynamic atlas | Anchor and maximum size precomputed by the compiler |
+| Text objects | Dynamic atlas | As authored |
+| Prices in overview | MSDF atlas | From `SetPricing` |
+
+- **MSDF atlas:** digits, A–Z, a–z and common punctuation of one open-licensed typeface, baked at build time.
+- **Dynamic atlas:** the host's `TextRasteriser` draws whole strings at a requested pixel size (browser canvas `fillText`, CoreText, Android canvas). The platform does shaping and font fallback. Sizes are bucketed by powers of √2 and re-rasterised when the zoom crosses a bucket.
+- **Collision:** row labels and text objects are placed greedily by priority on a coarse screen grid. Seat labels never collide by construction.
+- **Label buffers:** built per chunk on first need and kept in an LRU of 64 chunks. Building 4,096 seats' labels takes well under a millisecond.
+
+## 13. Camera
+
+- State: centre in world space, zoom in CSS pixels per cu. Rotation is fixed at zero in v1; the matrix supports it.
+- `fit`: the zoom at which the active floor fills the viewport with 24 px padding.
+- Limits: minimum `0.8 × fit`; maximum where a default seat is 64 px.
+- The centre is clamped so that at least a third of the viewport shows the chart.
+- `FlyTo` interpolates the centre linearly and the zoom in log space, with an ease-out curve, for 250–600 ms depending on distance.
+- With reduced motion requested, all camera changes are instant.
+
+## 14. Input and gestures
+
+| Input | Action |
+|---|---|
+| One-finger or mouse drag | Pan, with inertia on release |
+| Two-finger pinch | Zoom about the midpoint; simultaneous pan |
+| Mouse wheel | Zoom about the cursor |
+| Trackpad two-finger scroll | Pan |
+| Trackpad pinch (wheel with ctrl) | Zoom about the cursor |
+| Double tap or double click | Zoom in one step about the point |
+| Two-finger tap | Zoom out one step |
+| Tap or click | Select, or zoom if the target is too small (§15) |
+| Long press (touch) | Show the tooltip |
+| Hover (mouse) | Hover ring and tooltip |
+| Keyboard | See `11-accessibility.md` §3 |
+
+- Pointer events are the single input source on the web. Each active pointer is tracked by id.
+- A press becomes a drag after 8 px of movement (touch) or 4 px (mouse).
+- Inertia: velocity decays exponentially with a 325 ms time constant and stops below 10 px/s.
+- `gestureHandling`: `greedy` (default; the map takes all gestures), `cooperative` (page scrolls on one finger or plain wheel; two fingers or ctrl+wheel move the map), `none`.
+- `touch-action` is set on the canvas to match the mode.
+
+## 15. Hit testing
+
+1. Convert the screen point to world space.
+2. Find sections whose bounding box, grown by the tolerance, contains the point (a short linear scan; sections are few).
+3. Within those, find rows whose bounding box contains the point.
+4. Within those rows, find the seat with the nearest centre.
+5. Accept it if the distance is within the tolerance.
+
+- Tolerance: the larger of the seat's half size and 12 CSS px (touch) or 4 CSS px (mouse).
+- Tables, booths and areas are tested against their shapes after seats.
+- **Zoom-to-select:** on touch, if `s < 18` the tap does not select. It flies the camera to make seats 32 px, centred on the tap. With a mouse, selection works from `s ≥ 5`.
+- Target: under 20 µs per hit test at 100,000 seats.
+
+## 16. Selection engine
+
+```
+tap → hit test → rules check ──fail──▶ SelectionInvalid (no state change)
+                     │ pass
+                     ▼
+        visual = selected-pending, SelectionChanged, HoldRequest
+                     │
+        ┌────────────┴────────────┐
+   HoldResult ok             HoldResult failed
+   visual = selected-held    revert, ObjectUnavailable or SelectionInvalid
+```
+
+- Rules run locally first (`02-domain-model.md` §12) using the same code the server uses.
+- Hold requests for one token are sent in order, one in flight at a time; taps made meanwhile are coalesced into the next request.
+- **Group selection:** with a group size *n*, one tap selects the *n* seats in the tapped seat's segment that contain it and create the fewest orphans, preferring the window centred on the tap.
+- `session: "manual"` skips hold requests; the host holds at checkout.
+- If a delta makes a selected object unavailable, it is removed from the selection and `ObjectUnavailable` fires.
+- Deselecting sends a release.
+
+## 17. Applying state
+
+- **Snapshot:** one pass computes `visual` for every object and uploads the dynamic buffer once.
+- **Delta:** changed objects update `status`, `visual`, the section counters and a dirty range. Dirty ranges are merged and uploaded once per frame.
+- **Private holds:** objects held under the buyer's own token are restored as selected-held after a reload (`restoreHold`).
+- **Pulse:** objects that just became unavailable set the pulse bit for 400 ms, unless reduced motion is requested.
+- Sequence gaps trigger a resync through the adapter; the engine never guesses.
+
+## 18. Frame scheduling
+
+- The engine draws only when a dirty flag is set (camera, state, selection, theme, size, text) or an animation is running.
+- It asks the host for a frame with `NeedFrame`; the host calls `Tick` from `requestAnimationFrame` or the platform's display link.
+- Input received between frames is applied at the start of the next `Tick`, so pointer-to-photon latency is one frame.
+- Resizes are observed, coalesced, and applied at the next frame.
+
+## 19. Theming
+
+Tokens (the full list with CSS names is in `05-web-sdk.md` §8):
+
+- Background, text, muted text.
+- Per visual state: fill, stroke, ink, with or without category colour.
+- Selection ring, hover ring, focus ring.
+- Section tint strength, dim factor.
+- Font family for dynamic text.
+
+Built-in themes: `light`, `dark`, `high-contrast`, and a `colorblind` modifier that switches to a tested palette and stronger shape cues. Category colours come from the chart and can be overridden by the host.
+
+## 20. Backends
+
+### 20.1 Trait
+
+```rust
+pub trait GpuBackend {
+    fn caps(&self) -> Caps;
+    fn create_buffer(&mut self, desc: BufferDesc, data: &[u8]) -> BufferId;
+    fn update_buffer(&mut self, id: BufferId, offset: u32, data: &[u8]);
+    fn create_texture(&mut self, desc: TextureDesc, data: Option<&[u8]>) -> TextureId;
+    fn update_texture(&mut self, id: TextureId, region: Rect, data: &[u8]);
+    fn begin_frame(&mut self, target: Target, clear: [f32; 4]);
+    fn draw(&mut self, call: &DrawCall);   // fixed pipeline enum, uniforms, buffers, ranges
+    fn end_frame(&mut self);
+    fn destroy(&mut self, id: ResourceId);
+}
+```
+
+Pipelines are a fixed enum. Backends compile them at start; nothing creates pipelines at run time.
+
+### 20.2 `glow` (web, WebGL2)
+
+- Context attributes: `antialias: false` (edges are anti-aliased in the shader), `alpha: false`, `depth: false`, `stencil: false`, `powerPreference: "high-performance"`, `desynchronized: true` where supported.
+- GLSL ES 3.00 shaders generated at build time.
+- Handles `webglcontextlost` and `webglcontextrestored`: all buffers are re-uploaded from the CPU arrays, which the engine keeps.
+
+### 20.3 `wgpu` (native)
+
+- Metal on iOS, Vulkan on Android with GLES as fallback.
+- Surface from `CAMetalLayer` or `ANativeWindow`.
+- Present mode: FIFO (vsync).
+
+### 20.4 Canvas 2D fallback (web)
+
+- Written in TypeScript, driven by the engine's draw list for the visible chunks only.
+- Seats are batched into one path per colour.
+- No cross-fades or pulses.
+
+### 20.5 Capability ladder
+
+| Step | Condition | Result |
+|---|---|---|
+| 1 | WebGL2 context created and a test frame renders | Full renderer |
+| 2 | WebGL2 unavailable or the context fails twice | Canvas 2D fallback |
+| 3 | Canvas unavailable, or WASM blocked | Accessible list view (`11-accessibility.md` §4) |
+
+The chosen step is reported in `Ready` and in metrics.
+
+## 21. Resolution and power
+
+- The backing store is `min(devicePixelRatio, maxDpr)` × CSS size. `maxDpr` defaults to 2 on touch devices and 3 otherwise.
+- The backing store is capped at 4,096 px on its long side.
+- **Dynamic resolution:** if the 95th-percentile frame time exceeds the budget for 30 consecutive frames during a gesture, the engine renders at a lower ratio until the gesture ends, then redraws at full resolution.
+- When the page is hidden, animations stop and the realtime adapter may pause (host's choice).
+
+## 22. Memory
+
+At 100,000 seats:
+
+| Item | Size |
+|---|---|
+| CPU scene arrays | ~2.5 MB |
+| GPU seat buffers | 1.6 MB |
+| Label buffers (64 chunks) | ≤ 6 MB |
+| Text and glyph atlases | ≤ 5 MB |
+| Meshes | ≤ 2 MB |
+| WASM code and heap overhead | ≤ 4 MB |
+
+This leaves wide margin under the 40 MB budget. Background images are the only large variable; they are capped and optional.
+
+## 23. Worker mode (P2)
+
+- The engine and the `glow` backend run in a web worker on an `OffscreenCanvas`.
+- The main thread forwards input and receives events.
+- Dynamic text is rasterised in the worker with an `OffscreenCanvas` 2D context.
+- The accessibility layer stays on the main thread and is fed by events.
+- Enabled by option; falls back to the main thread where unsupported.
+
+## 24. Instrumentation
+
+Timing marks (also emitted as `performance.mark` on the web):
+
+`init_start`, `wasm_ready`, `chart_fetched`, `chart_decoded`, `gpu_ready`, `first_frame`, `state_ready`, `interactive`.
+
+Frame statistics over a rolling 120-frame window: median, 95th percentile and maximum frame time, draw calls, visible seats, level of detail, backend, resolution ratio.
+
+Delivered through the `Metrics` event at most once a second.
+
+## 25. Designer extensions
+
+The designer uses the same engine with three additions:
+
+- **Live scene.** A mutable `SceneSource` in which each node is a chunk. Edits re-expand only the changed node.
+- **Chunk transforms.** While a selection is dragged, its chunks are drawn with a per-chunk matrix; positions are baked on release.
+- **Overlay batcher.** An immediate-mode layer for selection outlines, handles, guides, rulers and measurement labels, drawn in screen space.
+
+## 26. Testing hooks
+
+- A headless mode renders a given chart, state and camera to a pixel buffer for golden-image tests.
+- A scripted input trace (recorded gestures with timestamps) drives benchmarks deterministically.
+- Every level-of-detail threshold and gesture constant is a named constant in one module.

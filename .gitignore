@@ -1,0 +1,22 @@
+# local, never published
+/.private/
+
+# Rust
+/target/
+**/target/
+
+# JavaScript
+node_modules/
+dist/
+*.tsbuildinfo
+
+# WebAssembly build output
+/packages/*/wasm/
+
+# environment and editor
+.env
+.env.*
+!.env.example
+.DS_Store
+.idea/
+.vscode/

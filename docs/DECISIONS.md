@@ -1,0 +1,136 @@
+# Decisions
+
+**Status:** Draft v0.1 · 2026-11-10
+
+Each entry records what was decided, what was rejected and what would make us reopen it. Add a new entry rather than editing an old one; mark superseded entries.
+
+---
+
+## D-01 · Self-hosted, flat-price licence first
+
+- **Decision:** Ship software the customer runs. No managed cloud until there are paying customers.
+- **Why:** It is the open slot in the market, and it removes on-call duty from a one-person company.
+- **Rejected:** A hosted per-seat service (competes head-on with three vendors and puts us on the critical path of every sale).
+- **Cost:** Customers must run PostgreSQL and a container. Piracy is possible.
+- **Revisit if:** Prospects repeatedly say they would buy only a hosted version.
+
+## D-02 · One Rust core shared by browser, server and mobile
+
+- **Decision:** Format decoding, hit testing, selection rules and best-available live in `cavea-core` and `cavea-format`, compiled to WASM, native server and mobile libraries.
+- **Why:** The client and the server must agree exactly on orphan rules and seat adjacency. One implementation removes a class of bugs. It also gives predictable performance without garbage-collection pauses.
+- **Rejected:** A TypeScript core (cannot be reused natively); separate implementations per platform.
+- **Cost:** A WASM boundary to design carefully, and slower iteration on the web.
+
+## D-03 · Web rendering on WebGL2 through `glow`, not `wgpu`
+
+- **Decision:** The web backend calls WebGL2 directly from Rust through `glow`.
+- **Why:** WebGL2 is available almost everywhere; WebGPU covered about 84% of page views in August 2026. For this workload (instanced quads) WebGPU brings no speed advantage. One published measurement put `wgpu` with its WebGL fallback at 561 KB brotli against 37 KB without it, and payload size is our main startup cost.
+- **Rejected:** `wgpu` on the web; WebGPU only; Canvas 2D as the primary renderer; a general-purpose 2D library.
+- **Cost:** Two GPU backends to keep in visual parity (see D-04, D-05).
+- **Revisit if:** A measured `wgpu` web build with WebGL2 fits inside the payload budget.
+
+## D-04 · Native mobile rendering through `wgpu`; WebView wrappers ship first
+
+- **Decision:** Phase A wraps the web renderer in a WebView on each mobile platform, matching what every competitor offers. Phase B adds a native renderer using `wgpu`.
+- **Why:** Customers need a mobile answer on day one. A native renderer is a genuine differentiator but is not needed to win the first customers.
+- **Rejected:** Native first (delays everything); GLES on iOS (deprecated by Apple).
+- **Revisit if:** Early customers do not care about native mobile; then Phase B drops in priority.
+
+## D-05 · One WGSL shader source; GLSL generated at build time
+
+- **Decision:** Shaders are written once in WGSL. `build.rs` uses `naga` to emit GLSL ES 3.00 for the `glow` backend. No shader translator ships to the browser.
+- **Why:** Single source of truth without the size cost.
+- **Risk:** Not yet proven for our shaders. Spike task `REN-002` confirms it.
+- **Fallback:** Maintain the five GLSL shaders by hand, with golden-image tests guarding parity.
+
+## D-06 · A compiled binary chart format separate from the JSON source
+
+- **Decision:** The designer edits a JSON chart document. Publishing compiles it to CCF, a chunked binary file that the renderer decodes in a single linear pass.
+- **Why:** Buyers' phones should not parse megabytes of JSON, tessellate shapes or compute labels. Compilation moves that work to publish time.
+- **Rejected:** Shipping JSON; a general serialisation format (larger, and we want delta and run-length encodings tuned to rows of seats).
+- **Cost:** A format to version and fuzz.
+
+## D-07 · Parametric source model
+
+- **Decision:** The chart document stores row blocks as parameters (rows, seats per row, pitch, curve, numbering scheme), not as individual seats. Seats are generated at compile time and in the editor's live scene.
+- **Why:** It makes editing fast ("change the spacing of this block"), keeps documents small and diff-friendly, and is how venues think.
+- **Cost:** Per-seat overrides need a stable identity (D-08).
+
+## D-08 · Three identifiers per object: `oid`, `idx`, `label`
+
+- **Decision:** A stable numeric `oid` for storage, a dense per-version `idx` for arrays and wire deltas, and a human `label` for the API.
+- **Why:** Each job has a different best representation. Labels alone break when someone renames a row; indices alone break when a chart changes.
+- **Rejected:** Labels as the only identifier (the leader's approach).
+
+## D-09 · Single-writer event actor with PostgreSQL group commit
+
+- **Decision:** Each live event's seat state is held in memory by one actor that processes commands sequentially, batches them, and commits each batch to PostgreSQL in one transaction before acknowledging.
+- **Why:** Check-and-claim becomes a memory operation taking microseconds. Best-available and orphan rules need the whole event's state at once, which is awkward and slow in SQL. Sequence numbers and deltas become trivially ordered.
+- **Rejected:** Row-level `INSERT … ON CONFLICT` claims (simple, but best-available needs a cached copy and retries, and a per-event sequence needs a lock anyway); Redis Lua scripts (a second required system, weaker durability).
+- **Cost:** Ownership and fencing for failover; more testing effort. Mitigated by simulation testing.
+- **Revisit if:** The actor's correctness cost proves higher than expected during M2. The fallback is the SQL-claims design behind the same `SeatStore` trait.
+
+## D-10 · PostgreSQL is the only required dependency
+
+- **Decision:** No Redis, message broker or object store is required. Compiled charts and small assets are stored in PostgreSQL; S3-compatible storage is optional.
+- **Why:** Every extra system is a reason for a prospect's operations team to say no.
+
+## D-11 · Events pin an immutable chart version
+
+- **Decision:** Publishing creates a new version and never mutates an old one. Events move to a new version only by an explicit, validated upgrade.
+- **Why:** State arrays are indexed by `idx`; immutability makes that safe and makes chart files cacheable forever.
+- **Rejected:** Publish-in-place (the leader's approach, which their docs call irreversible).
+
+## D-12 · The public sees only "available" or "unavailable"
+
+- **Decision:** Public snapshots and deltas do not distinguish held from booked or blocked.
+- **Why:** It leaks less commercial information and gives scalpers less signal.
+- **Cost:** Manager views need a separate authenticated stream.
+
+## D-13 · Commands over HTTP, state over WebSocket or SSE
+
+- **Decision:** Holds and releases are plain HTTPS requests. Realtime connections only carry state downstream.
+- **Why:** HTTP gives retries, idempotency keys, status codes and standard tooling. The realtime channel stays simple and can be replaced by SSE or polling where WebSockets are blocked.
+
+## D-14 · Hold on select, with optimistic UI
+
+- **Decision:** By default a tap marks the seat selected immediately and sends a hold; a failure reverts it with a message.
+- **Why:** It is what buyers expect and what the incumbents do. The optimistic step keeps the tap response within one frame.
+- **Alternative supported:** `session: "manual"`, where the host holds at checkout.
+
+## D-15 · SolidJS for interface chrome
+
+- **Decision:** The console and the designer's panels use SolidJS. All canvas drawing goes through the Rust renderer.
+- **Why:** Small runtime and fine-grained updates. The chrome is not performance-critical, but the designer's inspector updates on every drag.
+- **Rejected:** React (larger; acceptable, and the fallback if component availability hurts); a Rust UI framework.
+
+## D-16 · Accessibility is a first-class feature
+
+- **Decision:** The renderer ships a keyboard model, a live DOM proxy for the focused seat, and a full accessible list view as an alternative to the map.
+- **Why:** It is a real sales argument: no competitor documents it, and customers selling in the EU have obligations for their checkout.
+- **Cost:** A parallel interaction model to design and test with real screen readers.
+
+## D-17 · No 3D
+
+- **Decision:** No 3D venue or view-from-seat rendering.
+- **Why:** Large effort, weak link to our wedge. View-from-seat photos (an image per section or seat) cover most of the value at P2.
+
+## D-18 · Text: baked MSDF atlas plus platform rasteriser
+
+- **Decision:** Digits and Latin letters come from a signed-distance-field atlas baked at build time. Any other text is rasterised by the platform (browser canvas, CoreText, Android canvas) into a dynamic atlas.
+- **Why:** Seat numbers are the bulk of the text and must be sharp at every zoom at no runtime cost. Other scripts must work without shipping a shaping engine.
+
+## D-19 · AI import is optional and always reviewed by a person
+
+- **Decision:** PDF or image import produces a draft that the user corrects in the designer. It runs as an optional service; the core product works offline.
+- **Why:** Detection will not be perfect. The promise is "most of the drawing done in a minute", not "no drawing".
+
+## D-20 · Licence enforcement never blocks a sale
+
+- **Decision:** An expired or missing licence shows a watermark and makes the console read-only. Holding and booking continue.
+- **Why:** Breaking a customer's checkout over a billing lapse would be fatal to trust.
+
+## D-21 · Main-thread rendering first, behind a command and event protocol
+
+- **Decision:** The engine is driven only by serialisable commands and emits serialisable events. v1 runs on the main thread; a worker with `OffscreenCanvas` comes later without changing the engine.
+- **Why:** A worker protects frame rate from a busy host page, but it complicates text rasterisation and the accessibility layer. The protocol keeps the option open at no cost.
