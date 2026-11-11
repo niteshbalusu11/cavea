@@ -1,6 +1,7 @@
 //! `cavea-server`: read configuration, start logging, migrate the database,
 //! serve until Ctrl-C or SIGTERM, then stop within 20 seconds (08 §14,
-//! `cavea_server::serve`).
+//! `cavea_server::serve`). `cavea-server verify …` runs the reconciler
+//! instead (13 §3.3, `cavea_server::verify`).
 
 use std::sync::Arc;
 
@@ -15,6 +16,14 @@ use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("verify") {
+        let url = std::env::var("CAVEA_DATABASE_URL").ok();
+        let (mut out, mut err) = (std::io::stdout(), std::io::stderr());
+        let code = cavea_server::verify::run(&args[1..], url.as_deref(), &mut out, &mut err).await;
+        let _ = std::io::Write::flush(&mut out);
+        std::process::exit(i32::from(code));
+    }
     let config = Config::from_env()?;
     cavea_telemetry::init(&config.log, config.log_format).context("CAVEA_LOG is invalid")?;
 

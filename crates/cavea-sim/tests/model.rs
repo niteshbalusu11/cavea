@@ -31,8 +31,8 @@ fn saved_cases_replay() {
 /// not being booked (02 §6): the reconciler must not accept such a log.
 #[test]
 fn replay_refuses_malformed_booking_details() {
+    use cavea_engine::Replay;
     use cavea_engine::{LogDetail, LogRecord, Op};
-    use cavea_sim::model::Replay;
     let book = |details: Vec<LogDetail>| LogRecord {
         seq: 1,
         op: Op::Book,
@@ -40,6 +40,7 @@ fn replay_refuses_malformed_booking_details() {
         hold_id: None,
         oids: vec![cavea_sim::oid(0)],
         expires_at: None,
+        max_objects: None,
         order_ref: Some("o".into()),
         status: None,
         details,
