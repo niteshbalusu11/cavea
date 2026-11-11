@@ -211,7 +211,7 @@ pub struct Snapshot<'a> {
     pub objects: u32,
     pub encoding: Encoding,
     state: &'a [u8],
-    areas: Areas<'a>,
+    areas: List<'a>,
 }
 
 impl<'a> Snapshot<'a> {
@@ -233,7 +233,9 @@ impl<'a> Snapshot<'a> {
     /// object count.
     pub fn write_into(&self, out: &mut [u8]) -> Result<(), WireError> {
         let objects = u32::try_from(out.len()).map_err(|_| WireError::CountMismatch)?;
-        let runs = self.runs(objects)?;
+        if objects != self.objects {
+            return Err(WireError::CountMismatch);
+        }
         match self.encoding {
             Encoding::Raw => {
                 // Decoding checked that the state is one byte per object.
@@ -249,10 +251,13 @@ impl<'a> Snapshot<'a> {
                 }
             }
             Encoding::Runs => {
-                for (range, code) in runs {
-                    if let Some(dst) = out.get_mut(range.start as usize..range.end as usize) {
+                let (mut r, mut at) = (Reader(self.state), 0usize);
+                while let (Ok(code), Ok(run)) = (r.u8(), r.u32()) {
+                    let end = at.saturating_add(run as usize);
+                    if let Some(dst) = out.get_mut(at..end) {
                         dst.fill(code);
                     }
+                    at = end;
                 }
             }
         }
@@ -260,7 +265,7 @@ impl<'a> Snapshot<'a> {
     }
 
     pub fn areas(&self, objects: u32) -> Result<Areas<'a>, WireError> {
-        self.areas.within(objects)
+        Ok(Areas(self.areas.items(objects)?))
     }
 }
 
@@ -271,18 +276,18 @@ pub struct Delta<'a> {
     pub from_seq: u64,
     /// The `seq` the receiver has after applying it.
     pub to_seq: u64,
-    changes: Idxs<'a, true>,
-    areas: Areas<'a>,
+    changes: List<'a>,
+    areas: List<'a>,
 }
 
 impl<'a> Delta<'a> {
     /// The changes in ascending `idx`, for a receiver with `objects` objects.
     pub fn changes(&self, objects: u32) -> Result<Changes<'a>, WireError> {
-        Ok(Changes(self.changes.walk(objects)?))
+        Ok(Changes(self.changes.items(objects)?))
     }
 
     pub fn areas(&self, objects: u32) -> Result<Areas<'a>, WireError> {
-        self.areas.within(objects)
+        Ok(Areas(self.areas.items(objects)?))
     }
 }
 
@@ -291,20 +296,20 @@ impl<'a> Delta<'a> {
 pub struct Private<'a> {
     /// Unix time in milliseconds.
     pub expires_at_ms: u64,
-    objects: Idxs<'a, false>,
-    areas: Areas<'a>,
+    objects: List<'a>,
+    areas: List<'a>,
 }
 
 impl<'a> Private<'a> {
     /// The held objects in ascending `idx`, for a receiver with `objects`
     /// objects.
     pub fn objects(&self, objects: u32) -> Result<IdxIter<'a>, WireError> {
-        Ok(IdxIter(self.objects.walk(objects)?))
+        Ok(IdxIter(self.objects.items(objects)?))
     }
 
     /// Quantities held in each area.
     pub fn areas(&self, objects: u32) -> Result<Areas<'a>, WireError> {
-        self.areas.within(objects)
+        Ok(Areas(self.areas.items(objects)?))
     }
 }
 
@@ -335,14 +340,14 @@ pub fn decode_server(frame: &[u8], view: View) -> Result<ServerFrame<'_>, WireEr
             ServerFrame::Delta(Delta {
                 from_seq,
                 to_seq,
-                changes: Idxs::read(&mut r, view.max_code())?,
-                areas: Areas::read(&mut r)?,
+                changes: List::read(&mut r, Item::Code(view.max_code()))?,
+                areas: List::read(&mut r, Item::Value)?,
             })
         }
         types::PRIVATE => ServerFrame::Private(Private {
             expires_at_ms: r.varint()?,
-            objects: Idxs::read(&mut r, 0)?,
-            areas: Areas::read(&mut r)?,
+            objects: List::read(&mut r, Item::Bare)?,
+            areas: List::read(&mut r, Item::Value)?,
         }),
         types::RESYNC => ServerFrame::Resync,
         types::PING => ServerFrame::Ping(r.varint()?),
@@ -436,7 +441,8 @@ fn snapshot<'a>(r: &mut Reader<'a>, view: View) -> Result<Snapshot<'a>, WireErro
             }
         }
     }
-    let areas = Areas::read(r)?.within(objects)?;
+    let areas = List::read(r, Item::Value)?;
+    areas.items(objects)?;
     Ok(Snapshot {
         seq,
         objects,
@@ -467,18 +473,18 @@ impl<'a> Reader<'a> {
     }
 
     fn take(&mut self, n: usize) -> Result<&'a [u8], WireError> {
-        if n > self.0.len() {
-            return Err(WireError::Truncated);
-        }
-        let (head, rest) = self.0.split_at(n);
+        let (head, rest) = self.0.split_at_checked(n).ok_or(WireError::Truncated)?;
         self.0 = rest;
         Ok(head)
     }
 
-    /// Unsigned LEB128 of at most 10 bytes that fits in a `u64`.
+    /// Unsigned LEB128 of at most 10 bytes that fits in a `u64`. Not inlined:
+    /// one copy serves every field, which keeps the browser build small.
+    #[inline(never)]
     fn varint(&mut self) -> Result<u64, WireError> {
         let mut value = 0u64;
-        for shift in (0..64).step_by(7) {
+        let mut shift = 0;
+        loop {
             let b = self.u8()?;
             // The tenth byte carries the top bit and must end the value.
             if shift == 63 && b > 1 {
@@ -488,8 +494,8 @@ impl<'a> Reader<'a> {
             if b & 0x80 == 0 {
                 return Ok(value);
             }
+            shift += 7;
         }
-        Err(WireError::BadVarint)
     }
 
     fn u32(&mut self) -> Result<u32, WireError> {
@@ -541,19 +547,32 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// A validated list of strictly increasing `idx`, each the difference from the
-/// previous (the first from 0), followed by a code byte when `CODED`.
+/// What follows each `idx` in a [`List`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Idxs<'a, const CODED: bool> {
+enum Item {
+    /// Nothing: PRIVATE objects.
+    Bare,
+    /// A code byte up to the given maximum: DELTA changes.
+    Code(u8),
+    /// A varint: areas.
+    Value,
+}
+
+/// A validated list: a count, then per item its `idx` as the difference from
+/// the previous item's (the first from 0), strictly increasing, then the
+/// item's [`Item`] field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct List<'a> {
     bytes: &'a [u8],
     count: u32,
+    item: Item,
     /// One past the highest `idx` (0 when empty).
     end: u32,
 }
 
-impl<'a, const CODED: bool> Idxs<'a, CODED> {
-    fn read(r: &mut Reader<'a>, max_code: u8) -> Result<Self, WireError> {
-        let count = r.count(1 + usize::from(CODED))?;
+impl<'a> List<'a> {
+    fn read(r: &mut Reader<'a>, item: Item) -> Result<Self, WireError> {
+        let count = r.count(if item == Item::Bare { 1 } else { 2 })?;
         let start = r.0;
         let mut end = 0u32;
         for i in 0..count {
@@ -561,71 +580,91 @@ impl<'a, const CODED: bool> Idxs<'a, CODED> {
             if diff == 0 && i > 0 {
                 return Err(WireError::NotIncreasing);
             }
-            // `end` is the previous `idx` + 1, and the first is from 0.
+            // `end` is the previous `idx` + 1; the first `idx` is from 0.
             let idx = u64::from(end.saturating_sub(1)) + u64::from(diff);
             if idx >= u64::from(MAX_OBJECTS) {
                 return Err(WireError::OutOfRange);
             }
             end = idx as u32 + 1;
-            if CODED && r.u8()? > max_code {
-                return Err(WireError::BadValue);
+            match item {
+                Item::Bare => {}
+                Item::Code(max) => {
+                    if r.u8()? > max {
+                        return Err(WireError::BadValue);
+                    }
+                }
+                Item::Value => {
+                    r.u32()?;
+                }
             }
         }
         let used = start.len() - r.0.len();
         Ok(Self {
             bytes: start.get(..used).unwrap_or_default(),
             count,
+            item,
             end,
         })
     }
 
-    fn walk(self, objects: u32) -> Result<Walk<'a, CODED>, WireError> {
+    fn items(self, objects: u32) -> Result<Items<'a>, WireError> {
         if self.end > objects {
             return Err(WireError::OutOfRange);
         }
-        Ok(Walk {
+        Ok(Items {
             r: Reader(self.bytes),
             left: self.count,
+            item: self.item,
             prev: None,
         })
     }
 }
 
+/// The items of a [`List`] as (`idx`, field), the field 0 when bare.
 #[derive(Clone, Debug)]
-struct Walk<'a, const CODED: bool> {
+struct Items<'a> {
     r: Reader<'a>,
     left: u32,
+    item: Item,
     prev: Option<u32>,
 }
 
-impl<const CODED: bool> Iterator for Walk<'_, CODED> {
-    type Item = (u32, u8);
+impl Iterator for Items<'_> {
+    type Item = (u32, u32);
 
-    fn next(&mut self) -> Option<(u32, u8)> {
+    fn next(&mut self) -> Option<(u32, u32)> {
         self.left = self.left.checked_sub(1)?;
         let diff = self.r.u32().ok()?;
-        let code = if CODED { self.r.u8().ok()? } else { 0 };
+        let field = match self.item {
+            Item::Bare => 0,
+            Item::Code(_) => u32::from(self.r.u8().ok()?),
+            Item::Value => self.r.u32().ok()?,
+        };
         let idx = self.prev.map_or(Some(diff), |p| p.checked_add(diff))?;
         self.prev = Some(idx);
-        Some((idx, code))
+        Some((idx, field))
     }
 }
 
 /// The changes of a [`Delta`], in ascending `idx`.
 #[derive(Clone, Debug)]
-pub struct Changes<'a>(Walk<'a, true>);
+pub struct Changes<'a>(Items<'a>);
 
 impl Iterator for Changes<'_> {
     type Item = Change;
 
     fn next(&mut self) -> Option<Change> {
-        self.0.next().map(|(idx, code)| Change { idx, code })
+        let (idx, code) = self.0.next()?;
+        Some(Change {
+            idx,
+            code: code as u8,
+        })
     }
 }
 
 /// The `idx` list of a [`Private`], ascending.
 #[derive(Clone, Debug)]
-pub struct IdxIter<'a>(Walk<'a, false>);
+pub struct IdxIter<'a>(Items<'a>);
 
 impl Iterator for IdxIter<'_> {
     type Item = u32;
@@ -635,54 +674,15 @@ impl Iterator for IdxIter<'_> {
     }
 }
 
-/// A validated area list: count, then (`idx`, value) varint pairs with `idx`
-/// strictly increasing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Areas<'a> {
-    bytes: &'a [u8],
-    /// One past the highest `idx` (0 when empty).
-    end: u32,
-}
-
-impl<'a> Areas<'a> {
-    fn read(r: &mut Reader<'a>) -> Result<Self, WireError> {
-        let count = r.count(2)?;
-        let start = r.0;
-        let mut end = 0u32;
-        for _ in 0..count {
-            let idx = r.u32()?;
-            if idx >= MAX_OBJECTS {
-                return Err(WireError::OutOfRange);
-            }
-            if idx < end {
-                return Err(WireError::NotIncreasing);
-            }
-            end = idx + 1;
-            r.u32()?;
-        }
-        let used = start.len() - r.0.len();
-        Ok(Self {
-            bytes: start.get(..used).unwrap_or_default(),
-            end,
-        })
-    }
-
-    fn within(self, objects: u32) -> Result<Self, WireError> {
-        if self.end > objects {
-            return Err(WireError::OutOfRange);
-        }
-        Ok(self)
-    }
-}
+/// The areas of a frame, in ascending `idx`.
+#[derive(Clone, Debug)]
+pub struct Areas<'a>(Items<'a>);
 
 impl Iterator for Areas<'_> {
     type Item = Area;
 
     fn next(&mut self) -> Option<Area> {
-        let mut r = Reader(self.bytes);
-        let idx = r.u32().ok()?;
-        let value = r.u32().ok()?;
-        self.bytes = r.0;
+        let (idx, value) = self.0.next()?;
         Some(Area { idx, value })
     }
 }
@@ -720,18 +720,9 @@ impl Iterator for Runs<'_> {
             Encoding::Bits => {
                 let bit = |i: u32| self.state.get(i as usize / 8).map(|&b| (b >> (i % 8)) & 1);
                 let code = bit(start)?;
-                let fill = if code == 1 { 0xFF } else { 0 };
                 let mut i = start + 1;
                 while i < self.objects && bit(i) == Some(code) {
-                    // Whole bytes of the same bit at once.
-                    if i.is_multiple_of(8)
-                        && i + 8 <= self.objects
-                        && self.state.get(i as usize / 8) == Some(&fill)
-                    {
-                        i += 8;
-                    } else {
-                        i += 1;
-                    }
+                    i += 1;
                 }
                 (i - start, code)
             }
@@ -772,16 +763,9 @@ fn object_count(n: usize) -> Result<u32, WireError> {
 
 fn put_areas(out: &mut Vec<u8>, areas: &[Area], objects: u32) -> Result<(), WireError> {
     put_varint(out, u64::from(object_count(areas.len())?));
-    let mut end = 0;
+    let mut prev = None;
     for a in areas {
-        if a.idx < end {
-            return Err(WireError::NotIncreasing);
-        }
-        if a.idx >= objects {
-            return Err(WireError::OutOfRange);
-        }
-        end = a.idx + 1;
-        put_varint(out, u64::from(a.idx));
+        put_varint(out, step(&mut prev, a.idx, objects)?);
         put_varint(out, u64::from(a.value));
     }
     Ok(())

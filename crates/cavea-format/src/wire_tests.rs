@@ -684,7 +684,7 @@ fn hostile_frames_give_typed_errors() {
         ),
         (
             "snapshot areas repeat",
-            snap(3, 0, &[0, 0, 0], &[2, 1, 0, 1, 0]),
+            snap(3, 0, &[0, 0, 0], &[2, 1, 0, 0, 0]),
             Public,
             NotIncreasing,
         ),
