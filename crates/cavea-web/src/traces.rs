@@ -357,18 +357,25 @@ fn traces_produce_their_events() {
             continue;
         };
         if expected != actual {
-            let (n, (want, got)) = expected
-                .lines()
-                .chain(std::iter::repeat("(nothing)"))
-                .zip(actual.lines().chain(std::iter::repeat("(nothing)")))
-                .enumerate()
-                .find(|(_, (a, b))| a != b)
-                .unwrap_or((0, ("", "")));
-            failures.push(format!(
-                "{name}: first difference at line {}\n  expected {want}\n  actual   {got}\n  guards: {}",
-                n + 1,
-                guards
-            ));
+            // Bounded by the longer file; a difference `lines` hides (line
+            // endings, the last newline) is still reported.
+            let (want, got): (Vec<&str>, Vec<&str>) =
+                (expected.lines().collect(), actual.lines().collect());
+            fn line<'a>(v: &[&'a str], i: usize) -> &'a str {
+                v.get(i).copied().unwrap_or("(nothing)")
+            }
+            let found = (0..want.len().max(got.len())).find(|&i| line(&want, i) != line(&got, i));
+            failures.push(match found {
+                Some(i) => format!(
+                    "{name}: first difference at line {}\n  expected {}\n  actual   {}\n  guards: {guards}",
+                    i + 1,
+                    line(&want, i),
+                    line(&got, i),
+                ),
+                None => format!(
+                    "{name}: differs only in line endings or the final newline; bless it again\n  guards: {guards}"
+                ),
+            });
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

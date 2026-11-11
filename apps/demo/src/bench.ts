@@ -420,7 +420,7 @@ async function replay(
     last = now;
     each?.(now - start);
     for (; next < steps.length && (steps[next]?.[0] ?? 0) <= now - start; next++) {
-      const [, op, id, type, px, py] = steps[next] ?? [];
+      const [t, op, id, type, px, py] = steps[next] ?? [];
       const kind = {
         down: "pointerdown",
         move: "pointermove",
@@ -428,19 +428,22 @@ async function replay(
         cancel: "pointercancel",
       }[String(op)];
       if (kind !== undefined) {
-        canvas.dispatchEvent(
-          new PointerEvent(kind, {
-            pointerId: Number(id),
-            pointerType: String(type),
-            isPrimary: Number(id) === 1,
-            clientX: rect.left + Number(px) * sx,
-            clientY: rect.top + Number(py) * sy,
-            button: kind === "pointermove" ? -1 : 0,
-            buttons: kind === "pointerdown" || kind === "pointermove" ? 1 : 0,
-            bubbles: true,
-            cancelable: true,
-          }),
-        );
+        const event = new PointerEvent(kind, {
+          pointerId: Number(id),
+          pointerType: String(type),
+          isPrimary: Number(id) === 1,
+          clientX: rect.left + Number(px) * sx,
+          clientY: rect.top + Number(py) * sy,
+          button: kind === "pointermove" ? -1 : 0,
+          buttons: kind === "pointerdown" || kind === "pointermove" ? 1 : 0,
+          bubbles: true,
+          cancelable: true,
+        });
+        // The step's own time on the page's clock, not the time it was
+        // dispatched: a slow frame must not bunch the steps it held back,
+        // which would change the release velocity and so the inertia.
+        Object.defineProperty(event, "timeStamp", { value: start + Number(t) });
+        canvas.dispatchEvent(event);
       }
     }
   }
