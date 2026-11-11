@@ -97,15 +97,17 @@ pub struct KeepAlive(Arc<Control>);
 
 impl Clone for KeepAlive {
     fn clone(&self) -> Self {
-        self.0.keep.fetch_add(1, Ordering::Relaxed);
+        self.0.keep.fetch_add(1, Ordering::SeqCst);
         Self(self.0.clone())
     }
 }
 
 impl Drop for KeepAlive {
     fn drop(&mut self) {
-        self.0.keep.fetch_sub(1, Ordering::Relaxed);
-        self.0.released.fetch_add(1, Ordering::Relaxed);
+        // Counted as released before it stops counting as held: an idle
+        // check that sees the guard gone also sees it released (below).
+        self.0.released.fetch_add(1, Ordering::SeqCst);
+        self.0.keep.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -177,7 +179,7 @@ impl ActorHandle {
     /// Keep the actor from being evicted while the guard lives.
     #[must_use]
     pub fn keep_alive(&self) -> KeepAlive {
-        self.control.keep.fetch_add(1, Ordering::Relaxed);
+        self.control.keep.fetch_add(1, Ordering::SeqCst);
         KeepAlive(self.control.clone())
     }
 
@@ -371,13 +373,17 @@ async fn run<S: SeatStore, C: Clock>(
                 let now = clock.now();
                 if now >= idle_at {
                     // A guard dropped since the last check started a new
-                    // idle period. A heartbeat is not activity.
+                    // idle period. `keep` is read before `released`, the
+                    // reverse of `KeepAlive::drop`: a drop that has made
+                    // `keep` zero has already counted itself in `released`.
+                    // A heartbeat is not activity.
+                    let held = control.keep.load(Ordering::SeqCst) > 0;
                     let last =
-                        std::mem::replace(&mut released, control.released.load(Ordering::Relaxed));
+                        std::mem::replace(&mut released, control.released.load(Ordering::SeqCst));
                     let idle = (in_flight.is_none() || renewing)
                         && pending.is_empty()
                         && state.next_expiry().is_none()
-                        && control.keep.load(Ordering::Relaxed) == 0
+                        && !held
                         && released == last;
                     if idle && stop_signal.take().is_some() {
                         info!("actor idle; evicting");
