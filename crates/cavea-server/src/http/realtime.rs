@@ -302,9 +302,13 @@ async fn websocket_session(state: AppState, auth: Auth, mut link: WsLink) {
     let started = Instant::now();
     let mut stats = Stats::default();
     let handshake = state.realtime.timing().handshake;
-    let first = timeout(handshake, first_subscribe(&mut link.0))
-        .await
-        .unwrap_or(Err((None, "handshake_timeout")));
+    let first = tokio::select! {
+        biased;
+        () = state.realtime.stopping() => Err((Some(CloseReason::SHUTTING_DOWN), "shutdown")),
+        first = timeout(handshake, first_subscribe(&mut link.0)) => {
+            first.unwrap_or(Err((None, "handshake_timeout")))
+        }
+    };
     let ended = match first {
         Ok(subscribe) => follow(&state, &auth, &mut link, subscribe, &mut stats).await,
         Err(refusal) => Err(refusal),

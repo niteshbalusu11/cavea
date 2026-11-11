@@ -203,7 +203,7 @@ impl Realtime {
     }
 
     /// Resolves once shutdown has begun.
-    async fn stopping(&self) {
+    pub async fn stopping(&self) {
         let mut stop = self.inner.stop.subscribe();
         if stop.wait_for(|&s| s).await.is_err() {
             std::future::pending::<()>().await;
@@ -329,13 +329,21 @@ pub async fn close<L: Link>(link: &mut L, reason: CloseReason) {
     .await;
 }
 
+/// Write one frame. A write blocked by a client that does not read ends at
+/// the stall limit, or at once on shutdown, without a CLOSE: it could not be
+/// written either.
 async fn put<L: Link>(
+    realtime: &Realtime,
     link: &mut L,
     out: Out,
-    stall: Duration,
     stats: &mut Stats,
 ) -> Result<(), Ending> {
-    match timeout(stall, link.send(out)).await {
+    let sent = tokio::select! {
+        biased;
+        () = realtime.stopping() => return Err(Ending::Shutdown),
+        sent = timeout(realtime.timing().stall, link.send(out)) => sent,
+    };
+    match sent {
         Ok(Ok(())) => {
             stats.frames += 1;
             Ok(())
@@ -389,15 +397,14 @@ where
     C: Clock + Clone,
 {
     let timing = realtime.timing();
-    let stall = timing.stall;
     // Only an object count over the format's limit fails, which no chart has.
     let Ok(hello) = wire::encode_hello(&sub.hello) else {
         close(link, CloseReason::SHUTTING_DOWN).await;
         return Err(Ending::Unavailable);
     };
-    put(link, Out::Bytes(hello), stall, stats).await?;
+    put(realtime, link, Out::Bytes(hello), stats).await?;
     for frame in std::mem::take(&mut sub.first) {
-        put(link, Out::Frame(frame), stall, stats).await?;
+        put(realtime, link, Out::Frame(frame), stats).await?;
     }
     let mut heard = Instant::now();
     let mut next_ping = heard + timing.ping;
@@ -424,16 +431,31 @@ where
                 }
                 timer.as_mut().reset(deadline(heard, next_ping));
             }
+            // Before the feed: a feed that is always ready must not hold
+            // back PING or the silence deadline.
+            () = &mut timer => {
+                let now = Instant::now();
+                if now >= heard + timing.idle {
+                    return Err(Ending::Idle);
+                }
+                if now >= next_ping {
+                    put(realtime, link, Out::Ping(nonce), stats).await?;
+                    nonce += 1;
+                    messages = 0;
+                    next_ping = now + timing.ping;
+                }
+                timer.as_mut().reset(deadline(heard, next_ping));
+            }
             received = sub.next() => {
                 let frames = match received {
                     Received::Frame(frame) => {
-                        put(link, Out::Frame(frame), stall, stats).await?;
+                        put(realtime, link, Out::Frame(frame), stats).await?;
                         continue;
                     }
                     Received::Lagged => {
                         stats.resyncs += 1;
                         realtime.inner.resyncs.fetch_add(1, Ordering::Relaxed);
-                        put(link, Out::Bytes(wire::encode_resync()), stall, stats).await?;
+                        put(realtime, link, Out::Bytes(wire::encode_resync()), stats).await?;
                         sub.resync()
                     }
                     Received::Ended(_) => Err(cavea_engine::End::Failed),
@@ -453,21 +475,8 @@ where
                     }
                 };
                 for frame in frames {
-                    put(link, Out::Frame(frame), stall, stats).await?;
+                    put(realtime, link, Out::Frame(frame), stats).await?;
                 }
-            }
-            () = &mut timer => {
-                let now = Instant::now();
-                if now >= heard + timing.idle {
-                    return Err(Ending::Idle);
-                }
-                if now >= next_ping {
-                    put(link, Out::Ping(nonce), stall, stats).await?;
-                    nonce += 1;
-                    messages = 0;
-                    next_ping = now + timing.ping;
-                }
-                timer.as_mut().reset(deadline(heard, next_ping));
             }
         }
     }
@@ -589,10 +598,15 @@ pub(crate) mod tests {
     struct Mock {
         out: mpsc::Sender<Vec<u8>>,
         inbound: mpsc::UnboundedReceiver<Inbound>,
+        /// How long each write takes.
+        delay: Duration,
     }
 
     impl Link for Mock {
         async fn send(&mut self, out: Out) -> Result<(), Gone> {
+            if !self.delay.is_zero() {
+                tokio::time::sleep(self.delay).await;
+            }
             let bytes = match out {
                 Out::Frame(f) => f.bytes().to_vec(),
                 Out::Bytes(b) => b,
@@ -617,7 +631,16 @@ pub(crate) mod tests {
     ) {
         let (out, frames) = mpsc::channel(room);
         let (say, inbound) = mpsc::unbounded_channel();
-        (Mock { out, inbound }, frames, say)
+        let delay = Duration::ZERO;
+        (
+            Mock {
+                out,
+                inbound,
+                delay,
+            },
+            frames,
+            say,
+        )
     }
 
     fn feed(reg: &Reg) -> Feed<'_, MemoryStore, MemoryCharts, ManualClock> {
@@ -830,5 +853,83 @@ pub(crate) mod tests {
         assert_eq!(client.codes, public(&store));
         realtime.shutdown();
         assert_eq!(session.await.unwrap(), Ending::Shutdown);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_blocked_write_ends_at_shutdown() {
+        let _serial = crate::http::tests::serial();
+        let (_store, reg) = setup();
+        let realtime = Realtime::new(10, 10, Timing::default());
+        let (mut link, _frames, _say) = mock(1);
+        let stop = realtime.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            stop.shutdown();
+        });
+        let sub = reg.subscribe(EV, 0, None).await.unwrap();
+        let started = Instant::now();
+        let ending = run(
+            &realtime,
+            &mut link,
+            &feed(&reg),
+            sub,
+            &mut Stats::default(),
+        )
+        .await;
+        assert_eq!(ending, Ending::Shutdown);
+        assert_eq!(started.elapsed(), Duration::from_secs(5));
+    }
+
+    /// Publications every 100 ms to a client whose writes take 150 ms: the
+    /// feed is always ready, and still the client is pinged and, silent, is
+    /// closed at 60 s, give or take the writes in flight (RESYNC and SNAPSHOT
+    /// at most).
+    #[tokio::test(start_paused = true)]
+    async fn a_busy_feed_does_not_hold_back_ping_or_silence() {
+        let _serial = crate::http::tests::serial();
+        let (store, reg) = setup();
+        let realtime = Realtime::new(10, 10, timing(Duration::from_secs(3600)));
+        let (mut link, mut frames, _say) = mock(64);
+        link.delay = Duration::from_millis(150);
+        let pings = tokio::spawn(async move {
+            let mut pings = 0;
+            while let Some(frame) = frames.recv().await {
+                pings += usize::from(frame[0] == wire::types::PING);
+            }
+            pings
+        });
+        let busy = {
+            let reg = reg.clone();
+            tokio::spawn(async move {
+                for i in 0..2_000 {
+                    let status = if i % 2 == 0 {
+                        Status::BLOCKED
+                    } else {
+                        Status::FREE
+                    };
+                    commit(&store, &reg, 0, status).await;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            })
+        };
+        let sub = reg.subscribe(EV, 0, None).await.unwrap();
+        let started = Instant::now();
+        let ending = run(
+            &realtime,
+            &mut link,
+            &feed(&reg),
+            sub,
+            &mut Stats::default(),
+        )
+        .await;
+        assert_eq!(ending, Ending::Idle);
+        assert!(
+            started.elapsed() <= Duration::from_millis(60_500),
+            "{:?}",
+            started.elapsed()
+        );
+        busy.abort();
+        drop(link);
+        assert_eq!(pings.await.unwrap(), 2);
     }
 }
