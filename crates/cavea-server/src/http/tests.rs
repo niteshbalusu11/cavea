@@ -16,9 +16,10 @@ use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderValue, Request, Response, StatusCode, header};
 use axum::routing::{get, post};
 use cavea_engine::{
-    ActorConfig, Authority, Batch, ChartView, Command, EventId, EventState, Failure, InvalidReason,
-    LoadedEvent, ManualClock, MemoryStore, Missing, ObjectFailure, ObjectReason, ObjectRef,
-    Outcome, Request as EngineRequest, SeatStore, StoreError, Timestamp, TokenHash,
+    Acquired, ActorConfig, Authority, Batch, ChartVersionId, ChartView, Command, EventId,
+    EventState, Failure, InvalidReason, LoadedEvent, ManualClock, MemoryStore, Missing,
+    ObjectFailure, ObjectReason, ObjectRef, Outcome, Request as EngineRequest, SeatStore,
+    StoreError, Timestamp, TokenHash,
 };
 use cavea_telemetry::{LogFormat, REQUEST_ID_HEADER, span};
 use serde_json::{Value, json};
@@ -44,6 +45,9 @@ fn state() -> AppState {
             log_format: LogFormat::Json,
             database_url: "postgres://localhost/unused".parse().unwrap(),
             db_pool: std::num::NonZeroU32::MIN,
+            node_id: "test".to_owned(),
+            lease_secs: std::num::NonZeroU32::MIN.saturating_add(14),
+            heartbeat_secs: std::num::NonZeroU32::MIN.saturating_add(4),
         }),
         // Never connects: no route under test reaches the database.
         db: sqlx::postgres::PgPoolOptions::new().connect_lazy_with(Default::default()),
@@ -368,6 +372,10 @@ async fn axum_rejections_are_problem_json() {
 struct LoggingStore(MemoryStore);
 
 impl SeatStore for LoggingStore {
+    async fn acquire(&self, event: EventId) -> Result<Acquired, StoreError> {
+        self.0.acquire(event).await
+    }
+
     async fn load_event(&self, event: EventId) -> Result<LoadedEvent, StoreError> {
         self.0.load_event(event).await
     }
@@ -375,6 +383,14 @@ impl SeatStore for LoggingStore {
     async fn commit_batch(&self, batch: Batch) -> Result<(), StoreError> {
         tracing::info!("committing");
         self.0.commit_batch(batch).await
+    }
+
+    async fn heartbeat(&self, event: EventId, epoch: u64) -> Result<(), StoreError> {
+        self.0.heartbeat(event, epoch).await
+    }
+
+    async fn release(&self, event: EventId, epoch: u64) -> Result<(), StoreError> {
+        self.0.release(event, epoch).await
     }
 }
 
@@ -394,7 +410,7 @@ fn hold_route(
         idempotency: vec![],
     };
     let store = MemoryStore::new();
-    store.create_event(event, 1);
+    store.create_event(event, 1, ChartVersionId(1));
     let (handle, run) = cavea_engine::actor(
         EventState::restore(event, chart, loaded).unwrap(),
         Arc::new(LoggingStore(store)),

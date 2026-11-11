@@ -177,11 +177,11 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **ENG-009** Idempotency: in-memory window plus stored records (08 §6.1)
 - [ ] **ENG-010** Public snapshot re-encoding and lock-free publication (08 §4.5)
 - [ ] **ENG-011** Delta coalescing and the 60-second ring buffer (08 §8.3)
-- [ ] **ENG-012** Ownership: acquire, epoch, lease renewal, fencing in commit (08 §4.7, §4.8)
-- [ ] **ENG-013** Load from storage, including overdue expiries; idle eviction (08 §4.7)
-- [ ] **ENG-014** Poison and reload on commit failure or panic (08 §4.6)
+- [x] **ENG-012** Ownership: acquire, epoch, lease renewal, fencing in commit (08 §4.7, §4.8)
+- [x] **ENG-013** Load from storage, including overdue expiries; idle eviction (08 §4.7)
+- [x] **ENG-014** Poison and reload on commit failure or panic (08 §4.6)
 - [x] **ENG-015** Mailbox bounds and overload replies (08 §4.3)
-- [ ] **ENG-016** Actor registry with concurrent load de-duplication (08 §3)
+- [x] **ENG-016** Actor registry with concurrent load de-duplication (08 §3)
 
 ### Server
 

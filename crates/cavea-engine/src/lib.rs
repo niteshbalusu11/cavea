@@ -12,21 +12,26 @@
 //!   [`MemoryStore`] implements it with scriptable [`Fault`]s.
 //! - [`actor`]: the loop that feeds a bounded mailbox through `EventState` and
 //!   commits batches, releasing replies only after their commit.
+//! - [`Registry`]: finds or loads the actor for an event, under ownership
+//!   taken from the store; drops it when it fails, evicts it when idle, and
+//!   stops every actor at shutdown.
 
 mod actor;
 mod chart;
 mod idempotency;
 mod memory;
+mod registry;
 mod state;
 mod store;
 mod types;
 
-pub use actor::{ActorConfig, ActorError, ActorHandle, PendingReply, actor};
+pub use actor::{ActorConfig, ActorError, ActorHandle, KeepAlive, PendingReply, actor};
 pub use chart::{ChartError, ChartView};
-pub use memory::{Fault, MemoryStore};
+pub use memory::{Fault, MEMORY_LEASE_MS, MemoryCharts, MemoryStore};
+pub use registry::{OpenError, Registry, RegistryConfig};
 pub use state::{EventState, HoldView, InvariantViolation, LoadError};
 pub use store::{
-    Batch, Booking, HoldRow, IdempotencyRecord, LoadedEvent, LogDetail, LogRecord, ObjectRow,
-    SeatStore, StoreError,
+    Acquired, Batch, Booking, ChartProvider, HoldRow, IdempotencyRecord, LoadedEvent, LogDetail,
+    LogRecord, ObjectRow, SeatStore, StoreError,
 };
 pub use types::*;

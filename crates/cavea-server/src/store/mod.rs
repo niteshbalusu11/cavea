@@ -10,12 +10,13 @@ mod migrations;
 mod reply;
 
 use std::fmt::Write as _;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
 use cavea_engine::{
-    Batch, Booking, EventId, HoldId, HoldRow, IdempotencyRecord, LoadedEvent, LogRecord, ObjectRow,
-    SeatStore, Status, StoreError, Timestamp, TokenHash,
+    Acquired, Batch, Booking, ChartVersionId, EventId, HoldId, HoldRow, IdempotencyRecord,
+    LoadedEvent, LogRecord, ObjectRow, SeatStore, Status, StoreError, Timestamp, TokenHash,
 };
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use tracing::Instrument as _;
@@ -38,20 +39,35 @@ pub async fn connect(options: PgConnectOptions, size: u32) -> Result<PgPool, sql
         .await
 }
 
-/// [`SeatStore`] on PostgreSQL. Cheap to clone.
+/// [`SeatStore`] on PostgreSQL, speaking for one node. Cheap to clone.
 #[derive(Debug, Clone)]
 pub struct PgStore {
     pool: PgPool,
+    /// `events.owner_node` for events this store acquires.
+    node: Arc<str>,
+    /// Lease length in milliseconds, added to the database's `now()`.
+    lease_ms: i64,
 }
 
 impl PgStore {
+    /// A store for node `node` granting leases of `lease` (08 §4.8).
     #[must_use]
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new(pool: PgPool, node: &str, lease: Duration) -> Self {
+        Self {
+            pool,
+            node: node.into(),
+            lease_ms: i64::try_from(lease.as_millis()).unwrap_or(i64::MAX),
+        }
     }
 }
 
 impl SeatStore for PgStore {
+    async fn acquire(&self, event: EventId) -> Result<Acquired, StoreError> {
+        let acquire = acquire(&self.pool, event, &self.node, self.lease_ms)
+            .instrument(cavea_telemetry::db_span("acquire"));
+        timed(acquire).await
+    }
+
     async fn load_event(&self, event: EventId) -> Result<LoadedEvent, StoreError> {
         load(&self.pool, event)
             .instrument(cavea_telemetry::db_span("load_event"))
@@ -60,18 +76,112 @@ impl SeatStore for PgStore {
 
     async fn commit_batch(&self, batch: Batch) -> Result<(), StoreError> {
         let params = Params::new(&batch)?;
-        let commit = commit(&self.pool, &params).instrument(cavea_telemetry::db_span("commit"));
+        let commit = commit(&self.pool, &params, self.lease_ms)
+            .instrument(cavea_telemetry::db_span("commit"));
         // On a timeout the statement may still commit on the server. The
-        // actor stops and the event is reloaded (08 §4.6); a batch landing
-        // after that reload fails nothing, because the reloaded actor's next
-        // commit then fails its `seq` check and reloads again.
-        tokio::time::timeout(COMMIT_TIMEOUT, commit)
+        // actor stops and the event is reloaded (08 §4.6), which raises the
+        // epoch: a batch landing after the reload fails its fence.
+        timed(commit).await
+    }
+
+    async fn heartbeat(&self, event: EventId, epoch: u64) -> Result<(), StoreError> {
+        let renew = owned(&self.pool, RENEW, event, epoch, Some(self.lease_ms))
+            .instrument(cavea_telemetry::db_span("heartbeat"));
+        timed(renew).await
+    }
+
+    async fn release(&self, event: EventId, epoch: u64) -> Result<(), StoreError> {
+        let release = owned(&self.pool, RELEASE, event, epoch, None)
+            .instrument(cavea_telemetry::db_span("release"));
+        timed(release).await
+    }
+}
+
+/// Fail a statement that takes longer than [`COMMIT_TIMEOUT`] as `unavailable`:
+/// whether it was written is then unknown.
+async fn timed<T>(f: impl Future<Output = Result<T, StoreError>>) -> Result<T, StoreError> {
+    tokio::time::timeout(COMMIT_TIMEOUT, f)
+        .await
+        .unwrap_or_else(|_| {
+            Err(StoreError::Unavailable(
+                "statement timed out; whether it was written is unknown".into(),
+            ))
+        })
+}
+
+/// 08 §4.7 step 1. The lease is judged by the database clock only.
+const ACQUIRE: &str = "
+UPDATE events
+   SET owner_node = $2, owner_epoch = owner_epoch + 1,
+       lease_until = now() + $3 * interval '1 millisecond'
+ WHERE id = $1::uuid AND (owner_node = $2 OR lease_until IS NULL OR lease_until < now())
+RETURNING owner_epoch, replace(chart_version_id::text, '-', '')";
+
+const EXISTS: &str = "SELECT EXISTS (SELECT FROM events WHERE id = $1::uuid)";
+
+/// Renew the lease held at an epoch (the idle heartbeat of 08 §4.8).
+const RENEW: &str = "
+UPDATE events SET lease_until = now() + $3 * interval '1 millisecond'
+ WHERE id = $1::uuid AND owner_epoch = $2";
+
+/// End the lease held at an epoch: any node may then acquire the event.
+const RELEASE: &str = "
+UPDATE events SET lease_until = NULL WHERE id = $1::uuid AND owner_epoch = $2";
+
+async fn acquire(
+    pool: &PgPool,
+    event: EventId,
+    node: &str,
+    lease_ms: i64,
+) -> Result<Acquired, StoreError> {
+    let id = format!("{:032x}", event.0);
+    let row: Option<(i64, String)> = sqlx::query_as(ACQUIRE)
+        .bind(&id)
+        .bind(node)
+        .bind(lease_ms)
+        .fetch_optional(pool)
+        .await
+        .map_err(store_error)?;
+    let Some((epoch, chart_version)) = row else {
+        let exists: bool = sqlx::query_scalar(EXISTS)
+            .bind(&id)
+            .fetch_one(pool)
             .await
-            .unwrap_or_else(|_| {
-                Err(StoreError::Unavailable(
-                    "commit timed out; whether it was written is unknown".into(),
-                ))
-            })
+            .map_err(store_error)?;
+        return Err(if exists {
+            StoreError::Leased
+        } else {
+            StoreError::UnknownEvent
+        });
+    };
+    Ok(Acquired {
+        epoch: unsigned(epoch)?,
+        chart_version: ChartVersionId(
+            u128::from_str_radix(&chart_version, 16).map_err(|_| corrupt("chart_version_id"))?,
+        ),
+    })
+}
+
+/// Run [`RENEW`] or [`RELEASE`]: `Fenced` when the event is no longer owned at
+/// `epoch`.
+async fn owned(
+    pool: &PgPool,
+    sql: &'static str,
+    event: EventId,
+    epoch: u64,
+    lease_ms: Option<i64>,
+) -> Result<(), StoreError> {
+    let mut query = sqlx::query(sql)
+        .bind(format!("{:032x}", event.0))
+        .bind(int(epoch)?);
+    if let Some(lease_ms) = lease_ms {
+        query = query.bind(lease_ms);
+    }
+    let done = query.execute(pool).await.map_err(store_error)?;
+    if done.rows_affected() == 1 {
+        Ok(())
+    } else {
+        Err(StoreError::Fenced)
     }
 }
 
@@ -79,10 +189,11 @@ impl SeatStore for PgStore {
 /// transaction. Every write is gated on the fence (statement 1): if the event
 /// is owned at another epoch, its `seq` is not the one the batch continues, or
 /// a hold the batch extends or deletes is missing, nothing is written and the
-/// statement returns 0. Any error aborts the whole statement.
+/// statement returns 0. Any error aborts the whole statement. The fence also
+/// renews the lease, by the database clock.
 const COMMIT: &str = "
 WITH fence AS (                                                 -- 1
-  UPDATE events SET seq = $4
+  UPDATE events SET seq = $4, lease_until = now() + $34 * interval '1 millisecond'
    WHERE id = $1::uuid AND owner_epoch = $2 AND seq = $3
      AND (SELECT count(*) FROM holds
            WHERE event_id = $1::uuid AND id = ANY($9::int8[] || $11::int8[]))
@@ -145,7 +256,7 @@ SELECT count(*) FROM fence";
 const DIAGNOSE: &str = "
 SELECT owner_epoch, seq FROM events WHERE id = $1::uuid";
 
-async fn commit(pool: &PgPool, p: &Params) -> Result<(), StoreError> {
+async fn commit(pool: &PgPool, p: &Params, lease_ms: i64) -> Result<(), StoreError> {
     let written: i64 = sqlx::query_scalar(COMMIT)
         .bind(&p.event)
         .bind(p.epoch)
@@ -180,6 +291,7 @@ async fn commit(pool: &PgPool, p: &Params) -> Result<(), StoreError> {
         .bind(&p.key_status)
         .bind(&p.key_response)
         .bind(&p.key_created)
+        .bind(lease_ms)
         .fetch_one(pool)
         .await
         .map_err(store_error)?;
@@ -347,8 +459,8 @@ fn detail(r: &LogRecord) -> Option<String> {
     (!fields.is_empty()).then(|| format!("{{{}}}", fields.join(",")))
 }
 
-/// Read the event's stored state from one snapshot (08 §4.7 step 3). Taking
-/// ownership (step 1) is not done here yet: the epoch is read as stored.
+/// Read the event's stored state from one snapshot (08 §4.7 step 3). Ownership
+/// (step 1) is taken before, by [`acquire`]; the epoch is read as stored.
 async fn load(pool: &PgPool, event: EventId) -> Result<LoadedEvent, StoreError> {
     let id = format!("{:032x}", event.0);
     let mut tx = pool

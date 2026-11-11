@@ -9,10 +9,10 @@
 use std::sync::Arc;
 
 use cavea_engine::{
-    ActorConfig, ActorError, Authority, Batch, BookDetail, Booking, ChartView, Command, EventId,
-    EventState, Failure, Fault, HoldId, Idempotency, Idx, InvalidReason, LoadedEvent, ManualClock,
-    MemoryStore, Missing, ObjectFailure, ObjectReason, ObjectRef, Op, Outcome, Request, SeatStore,
-    Status, StoreError, Timestamp, TokenHash, actor, limits,
+    ActorConfig, ActorError, Authority, Batch, BookDetail, Booking, ChartVersionId, ChartView,
+    Command, EventId, EventState, Failure, Fault, HoldId, Idempotency, Idx, InvalidReason,
+    LoadedEvent, ManualClock, MemoryStore, Missing, ObjectFailure, ObjectReason, ObjectRef, Op,
+    Outcome, Request, SeatStore, Status, StoreError, Timestamp, TokenHash, actor, limits,
 };
 use tokio::sync::oneshot;
 
@@ -746,7 +746,7 @@ async fn random_command_sequences_keep_invariants() {
     for seed in 1..=150u64 {
         let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
         let store = MemoryStore::new();
-        store.create_event(EVENT, 1);
+        store.create_event(EVENT, 1, ChartVersionId(1));
         let mut s = empty_state(SEATS);
         let mut now = T0;
         let mut keys = std::collections::HashMap::new();
@@ -948,7 +948,7 @@ struct Rig {
 
 fn rig(config: ActorConfig) -> Rig {
     let store = Arc::new(MemoryStore::new());
-    store.create_event(EVENT, 1);
+    store.create_event(EVENT, 1, ChartVersionId(1));
     start(empty_state(20), store, T0, config)
 }
 
@@ -1012,6 +1012,7 @@ async fn commands_during_a_slow_commit_form_the_next_batches_in_order() {
     let r = rig(ActorConfig {
         mailbox: 100,
         max_batch: 3,
+        ..ActorConfig::default()
     });
     let (open1, open2) = (gate(&r.store), gate(&r.store));
     let mut replies = vec![r.handle.submit(req(create(0, None))).unwrap()];
@@ -1043,6 +1044,7 @@ async fn failed_commit_fails_that_batch_and_everything_after_it() {
     let r = rig(ActorConfig {
         mailbox: 10,
         max_batch: 1,
+        ..ActorConfig::default()
     });
     let open = gate(&r.store);
     let first = r.handle.submit(req(create(1, None))).unwrap();
@@ -1118,6 +1120,7 @@ async fn a_full_mailbox_is_refused_as_overloaded() {
     let r = rig(ActorConfig {
         mailbox: 1,
         max_batch: 1,
+        ..ActorConfig::default()
     });
     let open = gate(&r.store);
     let mut accepted = vec![];
@@ -1139,7 +1142,7 @@ async fn a_full_mailbox_is_refused_as_overloaded() {
 #[tokio::test]
 async fn a_rejected_commit_leaves_the_store_untouched() {
     let store = MemoryStore::new();
-    store.create_event(EVENT, 1);
+    store.create_event(EVENT, 1, ChartVersionId(1));
     let mut s = empty_state(4);
     run(&mut s, create(1, None), T0).unwrap();
     let mut batch = s.take_batch().unwrap().unwrap();
@@ -1187,7 +1190,7 @@ async fn the_actor_expires_holds_when_its_clock_reaches_them() {
 #[tokio::test]
 async fn overdue_holds_expire_promptly_after_a_reload() {
     let store = Arc::new(MemoryStore::new());
-    store.create_event(EVENT, 1);
+    store.create_event(EVENT, 1, ChartVersionId(1));
     let mut s = empty_state(20);
     run(&mut s, create(1, None), T0).unwrap();
     run(&mut s, hold(1, &[3]), T0).unwrap();
