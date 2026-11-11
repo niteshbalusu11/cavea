@@ -579,3 +579,281 @@ fn idle_frames_cost_nothing() {
     let rec = p.engine().backend();
     assert_eq!((rec.frames, rec.uploaded), (0, 0));
 }
+
+/// Designer targets (01 §5), measured natively with the recording backend:
+/// `cargo test --release -p cavea-designer measure_canvas -- --ignored
+/// --nocapture`. The engine's CPU time and what it uploads and draws; no GPU.
+#[test]
+#[ignore]
+fn measure_canvas() {
+    use std::time::Instant;
+    let ms = |t: Instant| t.elapsed().as_secs_f64() * 1000.0;
+    let doc = preset("stadium-100k");
+    let mut s = Session::load(doc).expect("load");
+    let size = s.document().settings().seat_size;
+    let fit = s.fit().expect("fit");
+    let centre = [
+        (fit.min[0] + fit.max[0]) / 2.0,
+        (fit.min[1] + fit.max[1]) / 2.0,
+    ];
+    let base = View {
+        centre,
+        zoom: (1920.0 - 48.0) / (fit.max[0] - fit.min[0]),
+        width: 1920.0,
+        height: 1080.0,
+        dpr: 1.0,
+    };
+    let mut p = painter(base);
+    let t0 = Instant::now();
+    p.draw(&s, 0.0);
+    println!(
+        "first draw of stadium-100k from the opened draft: {:.1} ms ({} pieces, {} seats compiled, {} KB uploaded)",
+        ms(t0),
+        p.sync().compiled,
+        p.sync().compiled_seats,
+        p.engine().backend().uploaded / 1024
+    );
+    settle(&mut p, &s);
+
+    // Draw calls at overview, seats and detail, without and with a selection.
+    let sec = s.document().children(None)[0];
+    let b = s.index().bounds(sec).expect("bounds");
+    let at = [(b.min[0] + b.max[0]) / 2.0, (b.min[1] + b.max[1]) / 2.0];
+    for (name, px) in [("overview", 0.0), ("seats", 8.0), ("detail", 24.0)] {
+        let view = if px == 0.0 {
+            base
+        } else {
+            View {
+                centre: at,
+                zoom: px / size,
+                ..base
+            }
+        };
+        let mut counts = Vec::new();
+        for selected in [false, true] {
+            if selected {
+                s.select_all();
+            } else {
+                s.select(Level::Top, []);
+            }
+            p.set_view(view);
+            settle(&mut p, &s);
+            p.engine_mut().backend_mut().clear();
+            p.set_view(View {
+                centre: [view.centre[0] + 1.0, view.centre[1]],
+                ..view
+            });
+            p.draw(&s, 1.0);
+            counts.push(p.engine().backend().draw_calls());
+        }
+        println!(
+            "draw calls at {name}: {} without a selection, {} with everything selected",
+            counts[0], counts[1]
+        );
+    }
+    s.select(Level::Top, []);
+    p.set_view(base);
+    settle(&mut p, &s);
+
+    // A frame that changes nothing.
+    p.engine_mut().backend_mut().clear();
+    let t0 = Instant::now();
+    let again = p.draw(&s, 2.0);
+    println!(
+        "a frame that changes nothing: {:.4} ms, {} draws, {} bytes uploaded (again: {again})",
+        ms(t0),
+        p.engine().backend().draws.len(),
+        p.engine().backend().uploaded
+    );
+
+    // A 5,000-seat block: its seat pitch changed; dragged.
+    let draft = cavea_edit::Draft::RowBlock {
+        origin: [fit.max[0] + 2000.0, fit.min[1]],
+        rows: 50,
+        seats: 100,
+        seat_pitch: 50.0,
+        row_pitch: 90.0,
+    };
+    let block = s.insert(None, &draft).expect("block");
+    settle(&mut p, &s);
+    s.select(Level::Top, [block]);
+    let (c0, u0) = (p.sync().compiled_seats, p.engine().backend().uploaded);
+    p.engine_mut().backend_mut().clear();
+    let t0 = Instant::now();
+    s.set_field(&cavea_edit::Field::SeatPitch(52.0))
+        .expect("pitch");
+    let edit = ms(t0);
+    let t0 = Instant::now();
+    p.draw(&s, 3.0);
+    let rec = p.engine().backend();
+    println!(
+        "seat pitch of a 5,000-seat block: edit {edit:.2} ms, then draw {:.2} ms: {} seats compiled, {} KB uploaded in {} writes",
+        ms(t0),
+        p.sync().compiled_seats - c0,
+        (rec.uploaded - 0) / 1024,
+        rec.writes.len()
+    );
+    let _ = u0;
+    for (what, ids) in [
+        ("one 5,000-seat block", vec![block]),
+        (
+            "everything (191 top-level nodes)",
+            s.document().children(None).to_vec(),
+        ),
+    ] {
+        settle(&mut p, &s);
+        s.select(Level::Top, ids.iter().copied());
+        // Press on a seat of the first node and drag.
+        let first = ids[0];
+        let holder = s
+            .document()
+            .children(Some(first))
+            .first()
+            .copied()
+            .unwrap_or(first);
+        let seat = s
+            .index()
+            .seats(holder)
+            .iter()
+            .find(|x| !x.removed)
+            .expect("seat")
+            .pos;
+        let from = s.index().to_world(holder, seat).expect("world");
+        let zoom = base.zoom;
+        let ptr = |w: [f64; 2], t: f64| Pointer {
+            world: w,
+            screen: [w[0] * zoom, w[1] * zoom],
+            zoom,
+            button: Button::Primary,
+            kind: PointerKind::Mouse,
+            mods: Modifiers::default(),
+            time: t,
+        };
+        s.input(Input::PointerDown(ptr(from, 1e6)));
+        s.input(Input::PointerMove(ptr(
+            [from[0] + 400.0, from[1]],
+            1e6 + 16.0,
+        )));
+        p.draw(&s, 4.0);
+        let compiled = p.sync().compiled;
+        p.engine_mut().backend_mut().clear();
+        let steps = 20;
+        let (mut input, mut draw) = (0.0, 0.0);
+        for k in 1..=steps {
+            let w = [
+                from[0] + 400.0 + f64::from(k) * 37.0,
+                from[1] + f64::from(k) * 11.0,
+            ];
+            let t0 = Instant::now();
+            s.input(Input::PointerMove(ptr(w, 1e6 + 16.0 * f64::from(k + 1))));
+            input += ms(t0);
+            let t0 = Instant::now();
+            p.draw(&s, 5.0 + f64::from(k));
+            draw += ms(t0);
+        }
+        let rec = p.engine().backend();
+        println!(
+            "drag step of {what}: input {:.3} ms, draw {:.3} ms (engine CPU), {} compiled, {} B uploaded over {steps} steps, {} draws a frame",
+            input / f64::from(steps),
+            draw / f64::from(steps),
+            p.sync().compiled - compiled,
+            rec.uploaded,
+            rec.draw_calls() / steps as usize
+        );
+        let end = [from[0] + 400.0 + 20.0 * 37.0, from[1] + 220.0];
+        s.input(Input::PointerUp(ptr(end, 2e6)));
+        let t0 = Instant::now();
+        let mut frames = 0;
+        let mut worst = 0.0f64;
+        loop {
+            let t1 = Instant::now();
+            p.draw(&s, 100.0 + f64::from(frames));
+            worst = worst.max(ms(t1));
+            frames += 1;
+            if !p.sync().pending() || frames > 100 {
+                break;
+            }
+        }
+        println!(
+            "  baked on release over {frames} frames, {:.1} ms in all, the longest {worst:.1} ms",
+            ms(t0)
+        );
+    }
+
+    // The overlay batcher's build with the worst overlay: everything selected
+    // (191 outlines, 180 dashed section outlines, handles) with a user guide
+    // per 100 cu, at overview, rebuilt for a new view.
+    s.select_all();
+    for i in 0..60 {
+        let _ = s.add_guide(cavea_edit::UserGuide {
+            axis: if i % 2 == 0 {
+                cavea_edit::GuideAxis::Vertical
+            } else {
+                cavea_edit::GuideAxis::Horizontal
+            },
+            at: f64::from(i) * 100.0,
+        });
+    }
+    settle(&mut p, &s);
+    let overlay = s.overlay();
+    let shapes = crate::paint::shapes(&overlay, &crate::paint::LIGHT);
+    let t0 = Instant::now();
+    let mut batch = cavea_render::overlay::Batch::default();
+    batch.set(shapes.clone());
+    let mut rec = Recorder::default();
+    let mut atlas = cavea_render::text::atlas::TextAtlas::default();
+    let mut events = Vec::new();
+    let camera = cavea_render::camera::Camera {
+        centre,
+        zoom: base.zoom,
+        rotation: [1.0, 0.0],
+    };
+    let size = cavea_render::camera::Size {
+        width: 1920.0,
+        height: 1080.0,
+    };
+    batch
+        .prepare(&mut rec, &mut atlas, "sans", camera, size, 1.0, &mut events)
+        .expect("batch");
+    let st = batch.stats();
+    println!(
+        "overlay batch of everything selected ({} shapes): {:.2} ms, {} triangles, {} vertices",
+        shapes.len(),
+        ms(t0),
+        st.indices / 3,
+        st.vertices
+    );
+    use cavea_render::overlay::Shape as S;
+    if let Some(S::Line { points, .. }) = shapes
+        .iter()
+        .find(|s| matches!(s, S::Line { dash: Some(_), .. }))
+    {
+        let px: f64 = points
+            .windows(2)
+            .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
+            .sum::<f64>()
+            * base.zoom;
+        println!(
+            "  a section outline: {} points, {px:.0} px around",
+            points.len()
+        );
+    }
+    let kinds: [(&str, fn(&S) -> bool); 4] = [
+        ("lines", |s| matches!(s, S::Line { dash: None, .. })),
+        ("dashed", |s| matches!(s, S::Line { dash: Some(_), .. })),
+        ("handles", |s| matches!(s, S::Handle { .. })),
+        ("guides", |s| matches!(s, S::Guide { .. })),
+    ];
+    for (kind, pick) in kinds {
+        let part: Vec<S> = shapes.iter().filter(|s| pick(s)).cloned().collect();
+        let mut b = cavea_render::overlay::Batch::default();
+        let n = part.len();
+        b.set(part);
+        b.prepare(&mut rec, &mut atlas, "sans", camera, size, 1.0, &mut events)
+            .expect("batch");
+        println!("  {kind}: {n} shapes, {} triangles", b.stats().indices / 3);
+    }
+    let t0 = Instant::now();
+    let _ = s.overlay();
+    println!("overlay() with everything selected: {:.3} ms", ms(t0));
+}
