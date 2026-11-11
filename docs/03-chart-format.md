@@ -55,7 +55,7 @@ Every node has these fields:
 | `id` | u32 | From the `nextOid` counter. Unique in the chart |
 | `type` | string | One of the types below |
 | `name` | string, optional | Shown in the layers panel |
-| `floor` | u32 | Floor id. Children inherit from their section |
+| `floor` | u32, optional | Floor id. Children inherit from their section and may not name another floor. A node outside a section without one is on the first floor listed; a document that lists no floors has one implicit floor (empty name, level 0, no focal point) |
 | `origin` | `[x, y]` | Position in the parent's space |
 | `rotation` | number | Degrees |
 | `locked`, `hidden` | bool, optional | Editor state. Hidden nodes are not compiled |
@@ -234,6 +234,19 @@ A `row` places position *k* at `k × seatPitch` from its first point, measured a
 
 The compiler is deterministic: the same document always produces the same bytes.
 
+#### 3.1.1 Pipeline rules
+
+- **Schema and structure (1–2).** Only the current schema compiles (E010). Hidden nodes and their children are not compiled. `table`, `booth` and `area` nodes, and a section inside a section, are not compiled yet: each is reported as `Unsupported` and blocks the compile, so a bookable object is never left out. Decoration nodes are skipped until step 12 handles them.
+- **Transform (4).** A node's points are rotated about its own origin by `rotation`, then moved by `origin`, into its parent's space; a section does the same into world space. Rotation uses the compiler's own sine and cosine, like expansion.
+- **Segments (5).** Within a row, a segment continues from one seat to the next while their positions are consecutive (no removed position between) and the distance between them, in node space after nudges, is at most 1.5 × the seat pitch; a larger gap starts a new segment. A row whose positions are all removed holds no seats and is not compiled.
+- **Labels (6–7).** A seat's label is its override or its row's rule. The full label is the chart's `labelTemplate` with `{section}`, `{row}` and `{seat}` replaced in one pass by the section label, the row label and the seat label; any other text, braces included, is copied as is. `{section}` is empty for a row outside any section or in a section without a label. Full labels of compiled seats (removed positions are not objects) are unique in the chart (E001) and at most 64 bytes (E006).
+- **Compiled labels.** Each row stores its label whole and the index of its seat rule; each distinct rule is stored once in `LBLR`, with its custom list only for the `custom` scheme and an empty prefix or suffix as `NONE`. `serpentine` resolves to `ltr` on rows whose numbering order is even and `rtl` on odd, and `continuous` to `ordinal_base`. Every seat with a label override is listed in `LBLX`, whether or not its text matches the rule.
+- **`idx` order (9).** Floors in the order the document lists them. On each floor, its sections in document order, then the rows outside any section in document order. Within a section, its children in document order; a block's rows front to back; a row's seats left to right, removed positions skipped. `SECT` lists sections in this order, `FLRS` floors in document order, and a row outside any section has section `NONE`.
+- **Chunks (10).** Whole rows are packed into render chunks in `idx` order: a new chunk starts when the section changes (for rows outside sections, the floor) or when the next row would take the chunk past 4,096 seats. A row has at most 4,095 seats, so it always fits.
+- **Outline (11–12).** Until outlines are computed, a section's outline range is empty, its label anchor (0, 0) and its maximum label size 0.
+- **Quantise (13).** A coordinate *x* in chart units becomes the integer nearest 4*x*, ties to even. A position with |4*x*| above 2³¹ − 1 (about ±536,870,911 cu) is an error (E005). Bounds are taken over the quantised seat positions; an empty floor, section or chart has the box (0, 0, 0, 0). A row's label anchors lie one step beyond its end seats: `2a − b` for end seat `a` and its neighbour `b` (the seat itself in a one-seat row).
+- **Emit (14–15).** `META` names the compiler and its version. The content hash of each artefact is the first 16 bytes of BLAKE3 over the file after its 32-byte header.
+
 ### 3.2 Validation
 
 Errors block publishing. Warnings do not, unless the workspace promotes them.
@@ -261,13 +274,18 @@ Errors block publishing. Warnings do not, unless the workspace promotes them.
 | W109 | Warning | Section without a label |
 | W110 | Warning | Chart extent above 200,000 cu (precision) |
 
-Each finding carries the node id, so the designer can select the offender.
+Each finding carries the node id, so the designer can select the offender. Findings about settings, categories and floors carry no node id.
+
+- E005 also covers any other invalid value: a non-finite origin or rotation, a colour that is not `#RRGGBB`, a section priority that is not finite and positive, a seat size outside 0.25 to 16,383.75 cu, and a world position outside the quantised range (§3.1.1).
+- E007 also covers a floor id listed twice and a section child that names a floor other than its section's.
+- E009 covers `id`, `rid` and `oid` together, since one counter allocates them, over the nodes that are compiled, and `oids` runs that do not cover their row.
+- A finding the pipeline meets once per seat (no category, a full label too long, a position out of range) is reported once per node. A compile lists at most 1,000 findings.
 
 ### 3.3 Seat rank
 
 Rank drives best-available. Lower is better. Stored as u16 in the full CCF only.
 
-For a seat at position `p` on a floor with focal point `F` and forward axis `a` (the unit vector from `F` to the centroid of the floor's seats):
+For a seat at position `p` on a floor with focal point `F` and forward axis `a` (the unit vector from `F` to the centroid of the floor's seats; +y if the centroid is `F`):
 
 ```
 d      = |p − F|
@@ -278,6 +296,13 @@ rank   = dense rank of raw, scaled to 0…65535
 ```
 
 The constant 0.6 and the formula are versioned in the CCF (`rank_algo = 1`) so they can change without breaking old charts.
+
+Rules for `rank_algo = 1`:
+
+- Positions and focal points are the quantised ones, so the rank follows from the compiled chart. A seat at `F` has `cosθ = 1`.
+- `floor_order` is the dense rank of the floor's `level` (floors on one level share it). Adding `floor_order × D` is done exactly, as an ordering by the pair (`floor_order`, `raw`), so every seat on a lower level ranks before every seat on a higher one.
+- A floor without a focal point (W102) ranks by row order: `raw` is the row's place in `idx` order, so the seats of a row tie and earlier rows rank first. Section priority does not apply there.
+- The dense rank is over the whole chart: keys that are equal get the same rank *r*, from 0 to *K* − 1 for *K* distinct keys. The stored rank is ⌊*r* × 65,535 / (*K* − 1)⌋, or 0 when *K* = 1. Keys are compared exactly, so the result needs no tie-break and is the same on every platform.
 
 ## 4. Compiled Chart Format (CCF v1)
 
@@ -428,6 +453,7 @@ Fields are listed in byte order. Record sizes are in brackets.
 - **Segments** split each row's seats, in `idx` order, into runs of at least one seat. A segment's *position* is its first seat's position in the row, counting removed positions; positions increase and stay below the row's *positions*. A row without seats has no segments.
 - **Floors** and **render chunks** each partition the seats in `idx` order. A chunk holds at most 4,096 seats.
 - **Seat labels** are generated, not stored. A seat at position *p* in a row has ordinal `ordinal_base + seat_ordinal(order, positions, p)` (`cavea-core::label`), and the row's label rule turns that into text. The compiler resolves `serpentine` into `ltr` or `rtl` per row and `continuous` into `ordinal_base`, so neither is stored. `ordinal_base + positions` fits in a u32, and with a `custom` rule it is at most the number of custom labels, so every position has one. A seat listed in `LBLX` uses that string instead, and a row whose rule is `NONE` labels only its listed seats. Row labels, object labels, `LBLX` labels and rule prefixes and suffixes are at most 64 bytes (`02-domain-model.md` §14); a generated label longer than that is an error when it is generated. `LBLX` is sorted by `idx`, at most one entry per seat. Row labels are stored whole, as strings.
+- **Full labels.** An object's full label is `META`'s label template filled with its section's label (empty for a row with section `NONE` or a section without a label), its row's label and its seat label, by the rule in §3.1.1. Every artefact carries all four, so a consumer holding only a decoded chart can produce every label, for example to resolve an API label to an `idx`.
 - **Ranges into `MESH`** (section outlines, object meshes, draw ranges) are ranges of indices. Every index is below the vertex count.
 
 ### 4.3 Why these encodings
