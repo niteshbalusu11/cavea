@@ -1,0 +1,393 @@
+{
+  "charts": {
+    "theatre": {
+      "preset": "theatre"
+    },
+    "theatre-rounded": {
+      "preset": "theatre",
+      "seatShape": "rounded"
+    },
+    "theatre-chair": {
+      "preset": "theatre",
+      "seatShape": "chair"
+    },
+    "theatre-scripts": {
+      "preset": "theatre",
+      "sections": [
+        "ملعب",
+        "גלריה",
+        "Ζώνη Γ",
+        "Партер"
+      ],
+      "text": "المسرح · במה",
+      "rowPrefix": "Ряд ",
+      "seatScheme": "alpha-lower"
+    }
+  },
+  "cases": [
+    {
+      "name": "levels",
+      "guards": "each level of detail (04 §10): overview with section tints, a sold-out section in grey with its second line, and the stage text; the cross-fade with section labels over faded seats; seats with strokes, hollow unavailable seats and row labels; detail with seat numbers from the baked atlas",
+      "panels": [
+        {
+          "chart": "theatre",
+          "size": [
+            240,
+            180
+          ],
+          "camera": [
+            -3000,
+            -600,
+            6000,
+            4500
+          ],
+          "unavailable": [
+            [
+              0,
+              150
+            ],
+            [
+              935,
+              465
+            ]
+          ]
+        },
+        {
+          "chart": "theatre",
+          "size": [
+            240,
+            180
+          ],
+          "camera": [
+            -1100,
+            300,
+            2200,
+            1650
+          ],
+          "unavailable": [
+            [
+              0,
+              150
+            ],
+            [
+              935,
+              465
+            ]
+          ]
+        },
+        {
+          "chart": "theatre",
+          "size": [
+            240,
+            180
+          ],
+          "camera": [
+            -350,
+            380,
+            704,
+            528
+          ],
+          "unavailable": [
+            [
+              0,
+              150
+            ],
+            [
+              935,
+              465
+            ]
+          ]
+        },
+        {
+          "chart": "theatre",
+          "size": [
+            240,
+            180
+          ],
+          "camera": [
+            -190,
+            1000,
+            387,
+            290
+          ],
+          "unavailable": [
+            [
+              0,
+              150
+            ],
+            [
+              935,
+              465
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "states",
+      "guards": "each visual state at the detail level in each built-in theme (04 §9): available in category colours, unavailable hollow with a cross, selected and held with a tick, selected with its hold in flight, accessible seats with their mark, the hover ring and the keyboard focus ring; row labels",
+      "panels": [
+        {
+          "chart": "theatre",
+          "size": [
+            320,
+            240
+          ],
+          "camera": [
+            -620,
+            380,
+            580,
+            440
+          ],
+          "unavailable": [
+            [
+              485,
+              3
+            ],
+            [
+              30,
+              4
+            ]
+          ],
+          "held": [
+            "Stalls Centre-A-103",
+            "Stalls Centre-A-104"
+          ],
+          "pending": [
+            "Stalls Centre-C-106"
+          ],
+          "hover": [
+            160,
+            182
+          ],
+          "keys": [
+            "ArrowRight"
+          ]
+        },
+        {
+          "chart": "theatre",
+          "size": [
+            320,
+            240
+          ],
+          "theme": "dark",
+          "camera": [
+            -620,
+            380,
+            580,
+            440
+          ],
+          "unavailable": [
+            [
+              485,
+              3
+            ],
+            [
+              30,
+              4
+            ]
+          ],
+          "held": [
+            "Stalls Centre-A-103",
+            "Stalls Centre-A-104"
+          ],
+          "pending": [
+            "Stalls Centre-C-106"
+          ],
+          "hover": [
+            160,
+            182
+          ],
+          "keys": [
+            "ArrowRight"
+          ]
+        },
+        {
+          "chart": "theatre",
+          "size": [
+            320,
+            240
+          ],
+          "theme": "high-contrast",
+          "camera": [
+            -620,
+            380,
+            580,
+            440
+          ],
+          "unavailable": [
+            [
+              485,
+              3
+            ],
+            [
+              30,
+              4
+            ]
+          ],
+          "held": [
+            "Stalls Centre-A-103",
+            "Stalls Centre-A-104"
+          ],
+          "pending": [
+            "Stalls Centre-C-106"
+          ],
+          "hover": [
+            160,
+            182
+          ],
+          "keys": [
+            "ArrowRight"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "shapes",
+      "guards": "the rounded and chair seat shapes (the circle is in every other case): their fill, stroke, hollow unavailable outline, icons and labels at the detail level, and the chair's outline at the seats level",
+      "panels": [
+        {
+          "chart": "theatre-rounded",
+          "size": [
+            240,
+            180
+          ],
+          "camera": [
+            -300,
+            380,
+            435,
+            330
+          ],
+          "unavailable": [
+            [
+              485,
+              3
+            ]
+          ],
+          "held": [
+            "Stalls Centre-A-103"
+          ]
+        },
+        {
+          "chart": "theatre-chair",
+          "size": [
+            240,
+            180
+          ],
+          "camera": [
+            -300,
+            380,
+            435,
+            330
+          ],
+          "unavailable": [
+            [
+              485,
+              3
+            ]
+          ],
+          "held": [
+            "Stalls Centre-A-103"
+          ]
+        },
+        {
+          "chart": "theatre-chair",
+          "size": [
+            240,
+            180
+          ],
+          "camera": [
+            -600,
+            380,
+            1200,
+            900
+          ],
+          "unavailable": [
+            [
+              485,
+              3
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "scripts",
+      "guards": "text from the dynamic atlas in other scripts (04 §12): section labels in Arabic and Hebrew (right to left) and Greek, a text object mixing Arabic and Hebrew; row labels in Cyrillic; lower-case seat labels the baked atlas lacks",
+      "panels": [
+        {
+          "chart": "theatre-scripts",
+          "size": [
+            320,
+            240
+          ],
+          "camera": [
+            -2000,
+            -700,
+            4000,
+            3000
+          ]
+        },
+        {
+          "chart": "theatre-scripts",
+          "size": [
+            320,
+            240
+          ],
+          "camera": [
+            -660,
+            380,
+            375,
+            281
+          ]
+        },
+        {
+          "chart": "theatre-scripts",
+          "size": [
+            320,
+            240
+          ],
+          "camera": [
+            -290,
+            380,
+            580,
+            440
+          ]
+        }
+      ]
+    },
+    {
+      "name": "ratio",
+      "guards": "a device pixel ratio of 2 (04 §21): the backing store, strokes and anti-aliased edges in device pixels, and seat labels from the distance field at twice the size",
+      "panels": [
+        {
+          "chart": "theatre",
+          "size": [
+            200,
+            150
+          ],
+          "dpr": 2,
+          "camera": [
+            -620,
+            380,
+            300,
+            225
+          ],
+          "unavailable": [
+            [
+              485,
+              3
+            ],
+            [
+              30,
+              4
+            ]
+          ],
+          "held": [
+            "Stalls Centre-A-103"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -116,7 +116,10 @@ for (const name of used) {
         (block["rowLabels"] as Record<string, unknown>)["prefix"] = spec.rowPrefix;
       }
       if (i === 1 && spec.seatScheme !== undefined) {
-        (block["seatLabels"] as Record<string, unknown>)["scheme"] = spec.seatScheme;
+        const labels = block["seatLabels"] as Record<string, unknown>;
+        labels["scheme"] = spec.seatScheme;
+        // A numeric start (101) would make the letters run from "cw".
+        delete labels["start"];
       }
     }
   });
