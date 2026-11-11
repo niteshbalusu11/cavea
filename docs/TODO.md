@@ -105,7 +105,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **REN-025** Seat labels from row rules, built per chunk with an LRU of 64 (04 §12)
 - [x] **REN-026** Dynamic text atlas, size buckets, `text` program, browser rasteriser (04 §12)
 - [x] **REN-027** Row labels, section labels, text objects with greedy collision (04 §12)
-- [x] **REN-028** Icon atlas and seat icons: accessible, tick, cross (04 §7). Signed-distance strokes in the `shape` program instead of an atlas (D-40)
+- [x] **REN-028** Icon atlas and seat icons: accessible, tick, cross (04 §7). Signed-distance strokes in the `shape` program instead of an atlas (D-42)
 - [x] **REN-029** Camera: fit, limits, clamping, `FlyTo` in log-zoom space (04 §13)
 - [x] **REN-030** Gesture recogniser: drag, pinch, wheel, trackpad, double tap, two-finger tap, long press, inertia (04 §14)
 - [x] **REN-031** Gesture handling modes and `touch-action` (04 §14)
