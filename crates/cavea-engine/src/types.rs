@@ -395,7 +395,9 @@ pub enum InvalidReason {
     TtlOutOfRange,
     ZeroObjectLimit,
     TokenAlreadyExists,
+    /// Empty, too long, or containing U+0000.
     OrderRefLength,
+    /// Empty, too long, or containing U+0000.
     TicketTypeLength,
     ExtraTooLarge,
     /// A booking detail names an object that is not being booked, or one
@@ -403,6 +405,7 @@ pub enum InvalidReason {
     DetailMismatch,
     /// Change-status may only set free, blocked or a custom status.
     BadStatus,
+    /// Empty, too long, or containing U+0000.
     IdempotencyKeyLength,
 }
 

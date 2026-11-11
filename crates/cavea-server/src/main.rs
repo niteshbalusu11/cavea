@@ -1,11 +1,12 @@
-//! `cavea-server`: read configuration, start logging, serve until Ctrl-C or
-//! SIGTERM.
+//! `cavea-server`: read configuration, start logging, migrate the database,
+//! serve until Ctrl-C or SIGTERM.
 
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use cavea_server::config::Config;
 use cavea_server::http::{self, AppState};
+use cavea_server::store;
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -13,12 +14,20 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     cavea_telemetry::init(&config.log, config.log_format).context("CAVEA_LOG is invalid")?;
 
+    // Never print the URL: it carries the password.
+    let options = config.database_url.options();
+    store::migrate(&options).await?;
+    let db = store::connect(options, config.db_pool.get())
+        .await
+        .context("cannot connect to PostgreSQL (CAVEA_DATABASE_URL)")?;
+
     let listener = TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("cannot bind {}", config.listen))?;
     tracing::info!(addr = %listener.local_addr()?, version = env!("CARGO_PKG_VERSION"), "listening");
     let state = AppState {
         config: Arc::new(config),
+        db,
     };
     axum::serve(listener, http::router(state))
         .with_graceful_shutdown(shutdown_signal())

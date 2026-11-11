@@ -14,7 +14,16 @@ cavea-telemetry.workspace = true
 # The bound on the JSON extractor; already in the tree through serde_json.
 serde = { version = "1", default-features = false }
 serde_json.workspace = true
-tokio.workspace = true
+# Runtime queries only (no `macros`: they need a database or offline data at
+# build time); `migrate` adds no crates; one TLS backend for managed PostgreSQL.
+sqlx = { workspace = true, features = [
+  "runtime-tokio",
+  "postgres",
+  "migrate",
+  "tls-rustls-ring-webpki",
+] }
+# `time` for the commit timeout.
+tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true
 
 [dev-dependencies]

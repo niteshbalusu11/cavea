@@ -42,7 +42,11 @@ fn state() -> AppState {
             listen: ([127, 0, 0, 1], 0).into(),
             log: "info".to_owned(),
             log_format: LogFormat::Json,
+            database_url: "postgres://localhost/unused".parse().unwrap(),
+            db_pool: std::num::NonZeroU32::MIN,
         }),
+        // Never connects: no route under test reaches the database.
+        db: sqlx::postgres::PgPoolOptions::new().connect_lazy_with(Default::default()),
     }
 }
 
