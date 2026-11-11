@@ -620,6 +620,25 @@ fn row_edits_keep_seats_in_place() {
             assert_eq!(now.len(), 5);
             assert_eq!(now[3], rows[1]);
             assert_eq!(now[2].rid, rows[0].rid);
+            // Many rows at once cost time in proportion, not its square.
+            let (before, kept) = (state(&editor), block(&editor, 1).rows);
+            editor
+                .apply(Command::AddRows {
+                    id: 1,
+                    index: 2,
+                    count: 200_000,
+                    seats: 1,
+                })
+                .expect("many");
+            let rids: Vec<u32> = block(&editor, 1).rows.iter().map(|r| r.rid).collect();
+            let many: Vec<u32> = rids.iter().skip(2).take(200_000).copied().collect();
+            editor
+                .apply(Command::RemoveRows { id: 1, rids: many })
+                .expect("remove many");
+            assert_eq!(block(&editor, 1).rows, kept);
+            editor.undo().expect("undo");
+            editor.undo().expect("undo");
+            assert_eq!(state(&editor), before);
             let rids: Vec<u32> = now.iter().map(|r| r.rid).collect();
             assert_eq!(
                 editor.apply(Command::RemoveRows { id: 1, rids }),

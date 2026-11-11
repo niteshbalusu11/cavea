@@ -10,7 +10,7 @@ use cavea_compiler::document::Node;
 use crate::command::{Command, NodeTransform};
 use crate::document::each_node;
 use crate::index::{P, Rect, Select};
-use crate::selection::{self, Level, View, pickable};
+use crate::selection::{self, Level, Selection, View, pickable};
 
 #[derive(Debug, Default)]
 pub(crate) struct SelectTool {
@@ -31,16 +31,17 @@ enum State {
     Pressed {
         down: Pointer,
         target: Option<(u32, bool)>,
-        before: BTreeSet<u32>,
+        before: Selection,
     },
-    /// Drawing a selection box from `start`; with `add` (Shift at the press)
-    /// what it selects is added to `before`.
+    /// Drawing a selection box from `start`, selecting on top of `base`: the
+    /// items selected before the press, with Shift and at the same level.
+    /// `before` is the selection before the press.
     Marquee {
         start: P,
         end: P,
         touch: bool,
-        add: bool,
-        before: BTreeSet<u32>,
+        base: BTreeSet<u32>,
+        before: Selection,
     },
     /// Dragging nodes inside a gesture: each node's origin and rotation at
     /// the start, and the section they are in.
@@ -73,7 +74,7 @@ impl Tool for SelectTool {
                 let _ = cx.editor.cancel_gesture();
             }
             State::Pressed { before, .. } | State::Marquee { before, .. } => {
-                *cx.selection.items_mut() = before;
+                *cx.selection = before;
                 cx.selection.reconcile(cx.editor.document());
             }
             State::Idle | State::Swallow => {}
@@ -113,6 +114,7 @@ impl SelectTool {
                 && near <= tuning::DOUBLE_CLICK_PX
         });
         let (view, sel) = cx.split(p.tolerance());
+        let before = sel.clone();
         let (level, item) = locate(&view, sel.level(), p.world);
         if level != sel.level() {
             sel.set(view.doc, level, []);
@@ -124,7 +126,6 @@ impl SelectTool {
             self.state = State::Swallow;
             return;
         }
-        let before = sel.items().clone();
         let target = item.map(|id| {
             let was = sel.items().contains(&id);
             if !was {
@@ -167,14 +168,16 @@ impl SelectTool {
                 self.state = match (target, parent) {
                     (Some(_), Some(parent)) => start_move(cx, down.world, parent),
                     _ => {
-                        if !down.mods.shift {
-                            cx.selection.items_mut().clear();
-                        }
+                        let same = before.level() == cx.selection.level();
+                        let base = match down.mods.shift && same {
+                            true => before.items().clone(),
+                            false => BTreeSet::new(),
+                        };
                         State::Marquee {
                             start: down.world,
                             end: down.world,
                             touch: false,
-                            add: down.mods.shift,
+                            base,
                             before,
                         }
                     }
@@ -185,8 +188,8 @@ impl SelectTool {
                 start,
                 end,
                 touch,
-                add,
-                before,
+                base,
+                ..
             } => {
                 (*end, *touch) = (p.world, p.mods.alt);
                 let mode = if *touch {
@@ -196,12 +199,7 @@ impl SelectTool {
                 };
                 let (view, sel) = cx.split(0.0);
                 let hits = view.select(sel.level(), Rect::new(*start, *end), mode);
-                let base = if *add {
-                    before.clone()
-                } else {
-                    BTreeSet::new()
-                };
-                *sel.items_mut() = base.into_iter().chain(hits).collect();
+                *sel.items_mut() = base.iter().copied().chain(hits).collect();
             }
             State::Moving {
                 start,
@@ -226,6 +224,10 @@ impl SelectTool {
     }
 
     fn up(&mut self, cx: &mut Context<'_>, p: Pointer) {
+        // The release is the drag's last position.
+        if !matches!(self.state, State::Idle | State::Swallow) {
+            self.drag(cx, p);
+        }
         match take(&mut self.state) {
             State::Pressed { down, target, .. } => {
                 let items = cx.selection.items_mut();

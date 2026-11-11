@@ -349,10 +349,10 @@ impl SpatialIndex {
         let Some(item) = self.items.get(&id) else {
             return false;
         };
-        if !item
-            .bounds
-            .is_some_and(|b| b.grow(item.reach + tol).contains_point(point))
-        {
+        // A section's children test their own bounds, grown by their reach.
+        let kids = doc.children(Some(id));
+        let near = |b: Rect| b.grow(item.reach + tol).contains_point(point);
+        if kids.is_empty() && !item.bounds.is_some_and(near) {
             return false;
         }
         let p = item.world.invert(point);
@@ -364,10 +364,7 @@ impl SpatialIndex {
                 .any(|s| !s.removed && dist2(s.pos, p) <= r2);
         }
         let own = item.own.is_some_and(|r| r.grow(tol).contains_point(p));
-        own || doc
-            .children(Some(id))
-            .iter()
-            .any(|&c| self.on_node(doc, c, point, tol))
+        own || kids.iter().any(|&c| self.on_node(doc, c, point, tol))
     }
 
     /// The topmost node among `scope`'s children (the top level for `None`)

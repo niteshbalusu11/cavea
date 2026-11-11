@@ -7,7 +7,7 @@
 //! it was. New ids (nodes, rows, seats) are allocated here, never taken from
 //! the command, so a command from outside cannot hand out an id twice.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::mem::replace;
 
@@ -505,50 +505,53 @@ impl Document {
                     return Err(CommandError::Limit("objects"));
                 }
                 let ids = total + u64::from(count);
+                let mut list = rows.to_vec();
                 let mut next = self.allocate(ids).ok_or(CommandError::IdsExhausted)?;
-                for i in 0..count {
-                    let row = BlockRow {
-                        rid: next,
+                let new = (0..count).map(|_| {
+                    let rid = next;
+                    next = next.saturating_add(1).saturating_add(seats);
+                    BlockRow {
+                        rid,
                         seats,
                         offset: 0.0,
-                        oids: vec![[next.saturating_add(1), seats]],
+                        oids: vec![[rid.saturating_add(1), seats]],
                         label: None,
                         removed: Vec::new(),
-                    };
-                    next = next.saturating_add(1).saturating_add(seats);
-                    let index = index as usize + i as usize;
-                    run(self, Op::InsertRow { id, index, row })?;
-                }
+                    }
+                });
+                list.splice(index as usize..index as usize, new);
+                run(self, Op::Rows { id, rows: list })?;
                 self.raise_next_oid(next, run)
             }
             Command::RemoveRows { id, mut rids } => {
                 rids.sort_unstable();
                 rids.dedup();
+                let Some(Node::RowBlock(b)) = self.node(id) else {
+                    return self.rows(id).and(Err(CommandError::Internal));
+                };
+                let present: BTreeSet<u32> = b.rows.iter().map(|r| r.rid).collect();
+                if let Some(&rid) = rids.iter().find(|r| !present.contains(r)) {
+                    return Err(CommandError::MissingRow { id, rid });
+                }
+                let gone = |rid: u32| rids.binary_search(&rid).is_ok();
+                let (removed, kept): (Vec<&BlockRow>, Vec<&BlockRow>) =
+                    b.rows.iter().partition(|r| gone(r.rid));
                 // A block keeps a row: deleting it is `deleteNodes`.
-                if rids.len() >= self.rows(id)?.len() {
+                if kept.is_empty() {
                     return Err(CommandError::Limit("rows removed"));
                 }
-                for rid in rids {
-                    let (row, overrides) = self.row(id, rid)?;
-                    let gone: Vec<u32> = row
-                        .oids
-                        .iter()
-                        .flat_map(|r| overrides.range(r[0]..r[0].saturating_add(r[1])))
-                        .map(|(&oid, _)| oid)
-                        .collect();
-                    for oid in gone {
-                        run(
-                            self,
-                            Op::Override {
-                                id,
-                                oid,
-                                value: None,
-                            },
-                        )?;
-                    }
-                    run(self, Op::RemoveRow { id, rid })?;
+                let overrides: Vec<u32> = removed
+                    .iter()
+                    .flat_map(|r| &r.oids)
+                    .flat_map(|r| b.seat_overrides.range(r[0]..r[0].saturating_add(r[1])))
+                    .map(|(&oid, _)| oid)
+                    .collect();
+                let rows: Vec<BlockRow> = kept.into_iter().cloned().collect();
+                for oid in overrides {
+                    let value = None;
+                    run(self, Op::Override { id, oid, value })?;
                 }
-                Ok(())
+                run(self, Op::Rows { id, rows })
             }
             Command::AddSeats {
                 id,

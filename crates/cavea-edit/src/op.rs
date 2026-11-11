@@ -46,14 +46,11 @@ pub(crate) enum Op {
     Categories(Vec<Category>),
     Floors(Vec<Floor>),
     NextOid(u32),
-    InsertRow {
+    /// Replaces a row block's rows: adding and removing rows, in one step
+    /// whatever their number.
+    Rows {
         id: u32,
-        index: usize,
-        row: BlockRow,
-    },
-    RemoveRow {
-        id: u32,
-        rid: u32,
+        rows: Vec<BlockRow>,
     },
     /// Replaces the row with the same `rid`.
     SetRow {
@@ -86,7 +83,9 @@ impl Op {
     pub(crate) fn key(&self) -> Option<Key> {
         Some(match self {
             Op::Insert { .. } | Op::Remove { .. } | Op::Place { .. } => return None,
-            Op::InsertRow { .. } | Op::RemoveRow { .. } => return None,
+            // Kept always: a row's own inverse (`SetRow`) may be recorded
+            // after it, so undo must replay every row list in turn.
+            Op::Rows { .. } => return None,
             Op::Transform { id, .. } => Key::Transform(*id),
             Op::Set { id, property } => Key::Set(*id, discriminant(property)),
             Op::Chart(p) => Key::Chart(discriminant(p)),
@@ -239,34 +238,14 @@ impl Document {
                 self.chart_stamp = rev;
                 Ok(Op::NextOid(replace(&mut self.next_oid, v)))
             }
-            Op::InsertRow { id, index, row } => {
-                let rid = row.rid;
-                match self.block_rows(id) {
-                    Ok(rows) if index <= rows.len() && rows.iter().all(|r| r.rid != rid) => {
-                        rows.insert(index, row);
-                    }
-                    Ok(_) => {
-                        let e = CommandError::IndexOutOfRange;
-                        return fail(Op::InsertRow { id, index, row }, e);
-                    }
-                    Err(e) => return fail(Op::InsertRow { id, index, row }, e),
+            Op::Rows { id, rows } => match self.block_rows(id) {
+                Ok(list) => {
+                    let old = replace(list, rows);
+                    self.touch_content(id);
+                    Ok(Op::Rows { id, rows: old })
                 }
-                self.touch_content(id);
-                Ok(Op::RemoveRow { id, rid })
-            }
-            Op::RemoveRow { id, rid } => {
-                let found = self.block_rows(id).and_then(|rows| {
-                    let i = row_index(rows, id, rid)?;
-                    Ok(rows.remove(i)).map(|row| (i, row))
-                });
-                match found {
-                    Ok((index, row)) => {
-                        self.touch_content(id);
-                        Ok(Op::InsertRow { id, index, row })
-                    }
-                    Err(e) => fail(Op::RemoveRow { id, rid }, e),
-                }
-            }
+                Err(e) => fail(Op::Rows { id, rows }, e),
+            },
             Op::SetRow { id, row } => {
                 let found = self.block_rows(id).and_then(|rows| {
                     let i = row_index(rows, id, row.rid)?;

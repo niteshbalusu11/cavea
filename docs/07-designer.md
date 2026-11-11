@@ -75,7 +75,7 @@ A command is plain data, serialised as JSON tagged by `op` (camelCase field name
 
 Commands are refused, with a typed error, for: a missing node; a `count` or `seats` of 0; a parent that is not a section, is the node or is inside it; a placement that breaks the structure rule; an index out of range; a field the node does not have; a number that is not finite (the saved document must parse again); a node over the limits of `02-domain-model.md` §14 (4,095 seats in a row; 1,000,000 bookable objects in the chart, counting seat positions, booths, areas and tables booked whole, the chart's existing ones included), checked before any id is allocated; a duplicate category key; an unknown category or floor named by a category or floor command. References to unknown categories or floors in node fields are validation findings (E007), not refusals: users make mistakes mid-edit.
 
-Each command is translated into small internal operations (insert or remove a subtree, place a node, set a transform, swap a property value, replace the category or floor list, set a seat override, set `nextOid`), each of which returns the operation that restores the previous state exactly. Operations carry ids, so they are never accepted from outside.
+Each command is translated into small internal operations (insert or remove a subtree, place a node, set a transform, swap a property value, replace the category or floor list, replace a row block's rows or one row, set a seat override, set `nextOid`), each of which returns the operation that restores the previous state exactly. Operations carry ids, so they are never accepted from outside.
 
 ### 2.3 Tools and the session
 

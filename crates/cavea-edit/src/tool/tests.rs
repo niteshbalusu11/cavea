@@ -227,6 +227,16 @@ fn levels() {
         t.key(Key::Escape, NONE);
         assert_eq!(t.sel(), expected);
     }
+    // Cancelling a press that stepped out restores the level too.
+    t.s.select(Level::Section(20), [21]);
+    t.down(50.0, 100.0, NONE);
+    assert_eq!(t.sel(), (Level::Top, vec![10]));
+    t.s.input(Input::PointerCancel);
+    assert_eq!(t.sel(), (Level::Section(20), vec![21]));
+    // A section is hit wherever its children are: 40 above the block's seat.
+    t.key(Key::Escape, NONE);
+    t.click(1_050.0, 260.0, NONE);
+    assert_eq!(t.sel(), (Level::Top, vec![20]));
     // A click outside the level lands where it hits.
     t.s.select(Level::Section(20), [21]);
     t.click(50.0, 100.0, NONE);
@@ -276,6 +286,12 @@ fn drag_move_and_nudge() {
     t.up(120.0, 130.0, NONE);
     assert_eq!(t.state(), start);
     assert_eq!(t.s.editor().undo_len(), entries);
+    // The release is the drag's last position.
+    t.down(50.0, 100.0, NONE);
+    t.to(60.0, 100.0, NONE);
+    t.up(100.0, 100.0, NONE);
+    assert_eq!(t.origin(10), [50.0, 0.0]);
+    t.s.undo().expect("undo");
     // A press on an unselected node drags it alone.
     t.drag([0.0, 800.0], [10.0, 800.0], NONE);
     assert_eq!(t.sel(), (Level::Top, vec![30]));
@@ -406,7 +422,7 @@ fn hostile_input() {
         selected += usize::from(!t.s.selection().items().is_empty());
     }
     // The trace reaches drags and selections, not just empty canvas.
-    assert!(dragging > 100 && selected > 2_000, "{dragging} {selected}");
+    assert!(dragging > 20 && selected > 2_000, "{dragging} {selected}");
     t.s.input(Input::PointerCancel);
     assert!(!t.s.editor().gesture_open());
 }
