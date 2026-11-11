@@ -1,18 +1,20 @@
-//! Hold tokens and seat operations (08 §6.2, §7) with secret keys, and
-//! `Idempotency-Key` handling (08 §6.1). Each handler maps its request onto an
-//! engine command, sends it through the registry, and renders the reply with
-//! each object's `label` and `oid`.
+//! Hold tokens and seat operations (08 §6.2, §7): the secret-key routes with
+//! `Idempotency-Key` handling (08 §6.1), and the buyer's public routes with a
+//! publishable key. Each handler maps its request onto an engine command,
+//! sends it through the registry, and renders the reply with each object's
+//! `label` and `oid`.
 //!
 //! A hold token is a bearer secret: it is minted here, returned once, and only
-//! its SHA-256 is stored or given to the engine. Routes that carry it in the
-//! path log only their route template.
+//! its SHA-256 is stored or given to the engine. Secret-key routes that carry
+//! it in the path log only their route template; public routes take it in the
+//! body or the `Cavea-Hold-Token` header, never in the URL.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use cavea_engine::{
@@ -25,7 +27,7 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use tracing::Instrument as _;
 
-use super::auth::{Auth, SecretKey, has_hex_tail, push_hex, sha256};
+use super::auth::{Auth, PublishableKey, SecretKey, has_hex_tail, push_hex, sha256};
 use super::events::{Settings, archived};
 use super::extract::{Json, Path, check_object_count, invalid, invalid_field};
 use super::{ApiError, AppState, Code};
@@ -45,6 +47,15 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/events/{event}/release", post(release))
         .route("/v1/events/{event}/book", post(book))
         .route("/v1/events/{event}/change-status", post(change_status))
+}
+
+/// The buyer's seat routes (08 §6.2 "Public"); `http::public` adds CORS.
+pub(super) fn public_routes() -> Router<AppState> {
+    Router::new()
+        .route("/v1/public/hold-tokens", post(public_create_token))
+        .route("/v1/public/hold-tokens/current", get(public_read_token))
+        .route("/v1/public/events/{event}/hold", post(public_hold))
+        .route("/v1/public/events/{event}/release", post(public_release))
 }
 
 /// Random bytes in a hold token: 256 bits from the operating system.
@@ -81,12 +92,12 @@ fn rfc3339(t: Timestamp) -> String {
 /// An event, as a seat request needs it.
 pub(super) struct Target {
     id: EventId,
-    key: String,
+    pub(super) key: String,
     version: ChartVersionId,
     /// The pinned version's public hash.
-    hash: String,
+    pub(super) hash: String,
     archived: bool,
-    settings: Settings,
+    pub(super) settings: Settings,
 }
 
 type TargetRow = (String, String, String, String, bool, String);
@@ -104,7 +115,7 @@ macro_rules! target_query {
 }
 
 /// How a request names its event.
-enum Find<'a> {
+pub(super) enum Find<'a> {
     Key(&'a str),
     /// The event of a hold token, by the token's hash. The lookup is one index
     /// probe on the unique `holds.token_hash`, scoped to the key's workspace:
@@ -113,7 +124,11 @@ enum Find<'a> {
     Id(EventId),
 }
 
-async fn target(state: &AppState, auth: &Auth, find: Find<'_>) -> Result<Target, ApiError> {
+pub(super) async fn target(
+    state: &AppState,
+    auth: &Auth,
+    find: Find<'_>,
+) -> Result<Target, ApiError> {
     let query = match &find {
         Find::Key(key) => sqlx::query_as(target_query!("e.key = $1")).bind(*key),
         Find::Token(hash) => sqlx::query_as(target_query!(
@@ -161,9 +176,10 @@ pub(super) async fn chart(
 // ---- idempotency (08 §6.1) ----
 
 /// An `Idempotency-Key` and the request's fingerprint: SHA-256 over the
-/// method, the route template, the path parameter (event key or hold token)
-/// and the body as parsed and serialised again (fields in a fixed order,
-/// without whitespace; `extra` objects as sent).
+/// method and route template, the path parameter (event key or hold token)
+/// and the body as parsed and serialised again, each part prefixed with its
+/// length. The body goes through `serde_json::Value`, whose objects are sorted
+/// maps, so key order and whitespace do not matter, inside `extra` too.
 struct Key {
     key: Arc<str>,
     fingerprint: [u8; 32],
@@ -188,15 +204,17 @@ fn idempotency_key(
         })
         .ok_or_else(|| {
             invalid(
-                "idempotency_key_length",
-                "`Idempotency-Key` must be 1 to 255 visible ASCII characters.",
+                "idempotency_key",
+                "`Idempotency-Key` must be 1 to 255 printable ASCII characters.",
             )
         })?;
-    let body = serde_json::to_vec(body).map_err(ApiError::internal)?;
+    let body = serde_json::to_value(body)
+        .and_then(|v| serde_json::to_vec(&v))
+        .map_err(ApiError::internal)?;
     let mut hash = Sha256::new();
     for part in [route.as_bytes(), param.as_bytes(), &body] {
+        hash.update((part.len() as u64).to_be_bytes());
         hash.update(part);
-        hash.update([0]);
     }
     Ok(Some(Key {
         key: key.into(),
@@ -239,8 +257,6 @@ struct Done {
     target: Target,
     chart: Arc<Chart>,
     reply: Reply,
-    /// From the store's idempotency record, not applied now.
-    replayed: bool,
 }
 
 /// Replay a stored reply for the key, or find the event, refuse an archived
@@ -263,7 +279,6 @@ async fn submit(
             target,
             chart,
             reply,
-            replayed: true,
         });
     }
     let target = target(state, auth, find).await?;
@@ -291,7 +306,6 @@ async fn submit(
         target,
         chart,
         reply,
-        replayed: false,
     })
 }
 
@@ -416,7 +430,7 @@ fn optional_refs(objects: Option<&Objects>, target: &Target) -> Result<Vec<Objec
 
 // ---- hold tokens ----
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CreateToken {
     /// The event's key.
@@ -429,69 +443,96 @@ struct CreateToken {
     max_objects: Option<u32>,
 }
 
-const ROUTE_TOKENS: &str = "POST /v1/hold-tokens";
-
 /// Mint a hold token, register its hash with the event, and return the token,
-/// once. A replay of an `Idempotency-Key` returns the original status and
-/// fields with `hold_token: null`: the token was never stored, and the token
-/// whose reply was lost holds nothing and expires.
-async fn create_token(
-    SecretKey(auth): SecretKey,
-    headers: HeaderMap,
-    State(state): State<AppState>,
-    Json(body): Json<CreateToken>,
+/// once. `limits` gives the lifetime and object limit for the event.
+///
+/// Not idempotent, so an `Idempotency-Key` is ignored (08 §6.1): the token is
+/// never stored, so a replay could not return it, and a retry costs nothing
+/// but an empty token that expires.
+async fn new_token(
+    state: &AppState,
+    auth: &Auth,
+    event: &str,
+    limits: impl FnOnce(&Target) -> Result<(u32, Option<u32>), ApiError>,
 ) -> Result<Response, ApiError> {
-    let key = idempotency_key(&headers, ROUTE_TOKENS, "", &body)?;
-    let keyed = key.is_some();
     let mut bytes = [0; TOKEN_BYTES];
     getrandom::fill(&mut bytes).map_err(|e| ApiError::internal(e.to_string()))?;
     let mut token = String::from("ht_");
     push_hex(&mut token, &bytes);
     let hash = token_hash(&token);
+    let mut max_objects = None;
+    let done = submit(state, auth, Find::Key(event), None, |target| {
+        let (ttl_secs, max) = limits(target)?;
+        max_objects = max;
+        Ok(Command::CreateHold {
+            token: hash,
+            ttl_secs,
+            max_objects: max,
+        })
+    })
+    .await?;
+    let (seq, expires_at) = match done.reply {
+        Ok(Outcome::HoldCreated {
+            seq, expires_at, ..
+        }) => (seq, expires_at),
+        Ok(_) => return Err(ApiError::internal("unexpected reply to create_hold")),
+        Err(f) => return Err(failure(&done.chart, f)),
+    };
+    let body = json!({
+        "hold_token": token,
+        "event": done.target.key,
+        "seq": seq,
+        "expires_at": rfc3339(expires_at),
+        "max_objects": max_objects,
+    });
+    Ok((StatusCode::CREATED, axum::Json(body)).into_response())
+}
+
+/// Any lifetime the engine allows; unlimited unless `max_objects` is given.
+async fn create_token(
+    SecretKey(auth): SecretKey,
+    State(state): State<AppState>,
+    Json(body): Json<CreateToken>,
+) -> Result<Response, ApiError> {
     // Stored as `int`; no chart has more objects than this anyway.
     if body.max_objects.is_some_and(|m| m > MAX_OBJECTS) {
         return Err(invalid_field("max_objects", "must be at most 1,000,000"));
     }
-    let done = submit(&state, &auth, Find::Key(&body.event), key, |target| {
-        Ok(Command::CreateHold {
-            token: hash,
-            ttl_secs: body.ttl_seconds.unwrap_or(target.settings.hold_ttl()),
-            max_objects: body.max_objects,
-        })
+    new_token(&state, &auth, &body.event, |target| {
+        let ttl = body.ttl_seconds.unwrap_or(target.settings.hold_ttl());
+        Ok((ttl, body.max_objects))
     })
-    .await?;
-    let (seq, hold, expires_at) = match done.reply {
-        Ok(Outcome::HoldCreated {
-            seq,
-            hold,
-            expires_at,
-        }) => (seq, hold, expires_at),
-        Ok(_) => return Err(ApiError::internal("unexpected reply to create_hold")),
-        Err(f) => return Err(failure(&done.chart, f)),
-    };
-    // The actor's window may have answered a concurrent request with the same
-    // key: then this token was never registered.
-    let mine = !done.replayed
-        && (!keyed || {
-            sqlx::query_scalar(
-                "SELECT EXISTS (SELECT FROM holds
-                  WHERE event_id = $1::uuid AND id = $2 AND token_hash = $3)",
-            )
-            .bind(format!("{:032x}", done.target.id.0))
-            .bind(i64::try_from(hold.0).map_err(ApiError::internal)?)
-            .bind(hash.0.as_slice())
-            .fetch_one(&state.db)
-            .instrument(cavea_telemetry::db_span("hold_is_mine"))
-            .await?
-        });
-    let body = json!({
-        "hold_token": mine.then_some(token),
-        "event": done.target.key,
-        "seq": seq,
-        "expires_at": rfc3339(expires_at),
-        "max_objects": body.max_objects,
-    });
-    Ok((StatusCode::CREATED, axum::Json(body)).into_response())
+    .await
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PublicCreateToken {
+    event: String,
+    /// The event's `max_objects` by default, and at most that.
+    #[serde(default)]
+    max_objects: Option<u32>,
+}
+
+/// A buyer's token: the event's hold lifetime, and an object limit no higher
+/// than the event's `max_objects` (02 §5).
+async fn public_create_token(
+    PublishableKey(auth): PublishableKey,
+    State(state): State<AppState>,
+    Json(body): Json<PublicCreateToken>,
+) -> Result<Response, ApiError> {
+    new_token(&state, &auth, &body.event, |target| {
+        let limit = target.settings.max_objects();
+        let max = body.max_objects.unwrap_or(limit);
+        if max == 0 || max > limit {
+            return Err(invalid_field(
+                "max_objects",
+                "must be 1 to the event's max_objects",
+            ));
+        }
+        Ok((target.settings.hold_ttl(), Some(max)))
+    })
+    .await
 }
 
 fn no_token() -> ApiError {
@@ -518,13 +559,41 @@ const READ_TOKEN: &str = "SELECT e.key, replace(e.chart_version_id::text, '-', '
 
 type TokenRow = (String, String, i64, Option<i32>, Vec<i32>);
 
-/// The token's event, expiry, limit and held objects, as committed.
 async fn read_token(
     SecretKey(auth): SecretKey,
     Path(token): Path<String>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<Value>, ApiError> {
-    let hash = path_token(&token)?;
+    read_hold(&state, &auth, &path_token(&token)?).await
+}
+
+/// The buyer's token, from `Cavea-Hold-Token`: a header, not the path, so
+/// that the token stays out of URLs and the logs of proxies on the way.
+async fn public_read_token(
+    PublishableKey(auth): PublishableKey,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Response, ApiError> {
+    let token = headers
+        .get("cavea-hold-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let mut response = read_hold(&state, &auth, &path_token(token)?)
+        .await?
+        .into_response();
+    // The answer depends on a header no cache keys on.
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+/// The token's event, expiry, limit and held objects, as committed.
+async fn read_hold(
+    state: &AppState,
+    auth: &Auth,
+    hash: &TokenHash,
+) -> Result<axum::Json<Value>, ApiError> {
     let row: Option<TokenRow> = sqlx::query_as(READ_TOKEN)
         .bind(hash.0.as_slice())
         .bind(auth.workspace().uuid())
@@ -534,7 +603,7 @@ async fn read_token(
     let (event, version, expires_ms, max_objects, oids) = row.ok_or_else(no_token)?;
     cavea_telemetry::record_event(&event);
     let version = event_id(&version).ok_or_else(|| ApiError::internal("unreadable version id"))?;
-    let chart = chart(&state, ChartVersionId(version.0)).await?;
+    let chart = chart(state, ChartVersionId(version.0)).await?;
     // `oid` is a u32 stored bit for bit (08 §5).
     let mut idxs = oids
         .into_iter()
@@ -619,7 +688,27 @@ async fn hold(
     Json(body): Json<HoldBody>,
 ) -> Result<Response, ApiError> {
     let key = idempotency_key(&headers, "POST /v1/events/{event}/hold", &event, &body)?;
-    let done = submit(&state, &auth, Find::Key(&event), key, |target| {
+    hold_objects(&state, &auth, &event, key, &body).await
+}
+
+/// The engine applies the token's object limit, set when it was created.
+async fn public_hold(
+    PublishableKey(auth): PublishableKey,
+    Path(event): Path<String>,
+    State(state): State<AppState>,
+    Json(body): Json<HoldBody>,
+) -> Result<Response, ApiError> {
+    hold_objects(&state, &auth, &event, None, &body).await
+}
+
+async fn hold_objects(
+    state: &AppState,
+    auth: &Auth,
+    event: &str,
+    key: Option<Key>,
+    body: &HoldBody,
+) -> Result<Response, ApiError> {
+    let done = submit(state, auth, Find::Key(event), key, |target| {
         Ok(Command::Hold {
             token: token_hash(&body.hold_token),
             objects: body.objects.refs(target)?,
@@ -648,7 +737,39 @@ async fn release(
     Json(body): Json<ReleaseBody>,
 ) -> Result<Response, ApiError> {
     let key = idempotency_key(&headers, "POST /v1/events/{event}/release", &event, &body)?;
-    let done = submit(&state, &auth, Find::Key(&event), key, |target| {
+    release_objects(&state, &auth, &event, key, &body).await
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PublicReleaseBody {
+    hold_token: String,
+    #[serde(default)]
+    objects: Option<Objects>,
+}
+
+/// Only with a token: the buyer releases held objects, never booked ones.
+async fn public_release(
+    PublishableKey(auth): PublishableKey,
+    Path(event): Path<String>,
+    State(state): State<AppState>,
+    Json(body): Json<PublicReleaseBody>,
+) -> Result<Response, ApiError> {
+    let body = ReleaseBody {
+        hold_token: Some(body.hold_token),
+        objects: body.objects,
+    };
+    release_objects(&state, &auth, &event, None, &body).await
+}
+
+async fn release_objects(
+    state: &AppState,
+    auth: &Auth,
+    event: &str,
+    key: Option<Key>,
+    body: &ReleaseBody,
+) -> Result<Response, ApiError> {
+    let done = submit(state, auth, Find::Key(event), key, |target| {
         Ok(match &body.hold_token {
             // An empty list releases nothing; leaving it out releases all.
             Some(_) if body.objects.as_ref().is_some_and(Objects::is_empty) => {
@@ -707,6 +828,13 @@ async fn book(
         return Err(invalid_field("extra", "values must be JSON objects"));
     }
     check_object_count(body.ticket_types.len().max(body.extra.len()))?;
+    // As for release: an empty list is not "all of the token's".
+    if body.objects.as_ref().is_some_and(Objects::is_empty) {
+        return Err(invalid_field(
+            "objects",
+            "must not be empty; leave it out to book all of the token's",
+        ));
+    }
     let key = idempotency_key(&headers, "POST /v1/events/{event}/book", &event, &body)?;
     let done = submit(&state, &auth, Find::Key(&event), key, |target| {
         let mut details: BTreeMap<&str, BookDetail> = BTreeMap::new();
@@ -735,7 +863,8 @@ async fn book(
     respond(done)
 }
 
-/// `free`, `held`, `booked` or `blocked`, or a custom status code, 4 to 15.
+/// `free`, `blocked` (or `held` and `booked`, for the engine to refuse), or a
+/// custom status code, 4 to 15.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum StatusWire {
@@ -765,7 +894,8 @@ async fn change_status(
             "blocked" => Some(Status::BLOCKED),
             _ => None,
         },
-        StatusWire::Code(code) => Status::from_code(*code),
+        StatusWire::Code(code @ 4..=15) => Status::from_code(*code),
+        StatusWire::Code(_) => None,
     }
     .ok_or_else(|| {
         invalid_field(

@@ -10,6 +10,7 @@ use std::str::FromStr;
 use cavea_telemetry::LogFormat;
 
 use crate::http::AdminKey;
+use crate::http::auth::normalise_origin;
 use sqlx::ConnectOptions as _;
 use sqlx::postgres::PgConnectOptions;
 
@@ -38,6 +39,9 @@ pub struct Config {
     /// to 512 printable ASCII characters. There is no default: unset, those
     /// endpoints refuse every request.
     pub admin_key: Option<AdminKey>,
+    /// `CAVEA_CORS_ORIGINS`: the browser origins the public endpoints answer
+    /// (08 §11): `*` (the default) or a comma-separated list.
+    pub cors_origins: CorsOrigins,
 }
 
 impl Config {
@@ -64,6 +68,7 @@ impl Config {
             lease_secs: setting("CAVEA_LEASE_SECS", || NonZeroU32::MIN.saturating_add(14))?,
             heartbeat_secs: setting("CAVEA_HEARTBEAT_SECS", || NonZeroU32::MIN.saturating_add(4))?,
             admin_key: optional("CAVEA_ADMIN_KEY")?,
+            cors_origins: setting("CAVEA_CORS_ORIGINS", || CorsOrigins::Any)?,
         }
         .checked()
     }
@@ -92,6 +97,32 @@ fn hostname() -> Option<String> {
         .or_else(|| std::fs::read_to_string("/proc/sys/kernel/hostname").ok())?;
     let name = name.trim();
     (!name.is_empty()).then(|| name.to_owned())
+}
+
+/// Which browser origins may read the public endpoints' responses (08 §11).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CorsOrigins {
+    /// `*`: every origin.
+    Any,
+    /// These origins only, lowercased, as a browser sends them in `Origin`.
+    List(Vec<String>),
+}
+
+impl FromStr for CorsOrigins {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.trim() == "*" {
+            return Ok(Self::Any);
+        }
+        let list = s
+            .split(',')
+            .map(|o| normalise_origin(o.trim()))
+            .collect::<Option<Vec<_>>>()
+            .filter(|l| !l.is_empty())
+            .ok_or("must be * or a comma-separated list of origins such as https://tickets.example.com")?;
+        Ok(Self::List(list))
+    }
 }
 
 /// A parsed PostgreSQL connection URL. It holds the password, so neither it

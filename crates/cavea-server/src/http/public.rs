@@ -1,34 +1,136 @@
-//! Public endpoints (08 §6.2): so far, compiled charts.
+//! Public endpoints (08 §6.2): what a buyer's browser calls, and their CORS
+//! policy (08 §11).
 //!
 //! `GET /v1/public/charts/{hash}.ccf` serves a published chart's public
 //! artefact by its content hash, to anyone: it takes no credential, so the URL
 //! alone is the cache key of browsers and CDNs, and it is the same for every
 //! workspace that publishes the same bytes. The full artefact is never served.
+//!
+//! The other public routes take a publishable key. `GET /v1/public/events/{event}`
+//! is here; the seat routes are in `http::seats`. [`cors`] answers preflights
+//! and adds the CORS headers to every response under `/v1/public/`, errors
+//! included, so that the renderer can read them.
 
 use axum::Router;
-use axum::extract::State;
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
-use axum::middleware::map_response;
+use axum::extract::{Request, State};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::middleware::{Next, map_response};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use serde_json::json;
 use tracing::Instrument as _;
 
+use super::auth::PublishableKey;
 use super::extract::Path;
+use super::seats::{Find, target};
 use super::{ApiError, AppState, Code};
+use crate::config::CorsOrigins;
 
 pub(super) fn routes() -> Router<AppState> {
-    Router::new().route(
-        "/v1/public/charts/{file}",
-        get(chart).layer(map_response(cors_open)),
-    )
+    Router::new()
+        .route(
+            "/v1/public/charts/{file}",
+            get(chart).layer(map_response(cors_open)),
+        )
+        .route("/v1/public/events/{event}", get(event))
+        .merge(super::seats::public_routes())
+}
+
+/// Browsers may cache a preflight this long (Chromium's cap).
+const PREFLIGHT_MAX_AGE: &str = "7200";
+const ALLOW_METHODS: &str = "GET, POST";
+const ALLOW_HEADERS: &str = "Authorization, Content-Type, Cavea-Hold-Token, Cavea-Request-Id";
+const EXPOSE_HEADERS: &str = "Cavea-Request-Id, Retry-After";
+
+/// CORS for the publishable-key routes, as a layer on the whole router (08
+/// §11). Only paths under `/v1/public/` are touched, so a secret-key route
+/// never carries a CORS header (12 §4), and the chart files keep their own
+/// open policy. `OPTIONS` there is a preflight: it carries no credential, so
+/// it is answered from `CAVEA_CORS_ORIGINS` alone; the key's own allow-list is
+/// checked on the request itself (`403`, with these headers). Credentials mode
+/// stays off: no `Access-Control-Allow-Credentials`, no cookies.
+pub(super) async fn cors(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    let path = request.uri().path();
+    if !path.starts_with("/v1/public/") || path.starts_with("/v1/public/charts/") {
+        return next.run(request).await;
+    }
+    let allow = match &state.config.cors_origins {
+        CorsOrigins::Any => Some(HeaderValue::from_static("*")),
+        CorsOrigins::List(list) => request
+            .headers()
+            .get(header::ORIGIN)
+            .filter(|o| {
+                o.to_str()
+                    .is_ok_and(|o| list.iter().any(|a| a.eq_ignore_ascii_case(o)))
+            })
+            .cloned(),
+    };
+    let preflight = request.method() == Method::OPTIONS;
+    let mut response = if preflight {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        next.run(request).await
+    };
+    let headers = response.headers_mut();
+    if matches!(state.config.cors_origins, CorsOrigins::List(_)) {
+        headers.append(header::VARY, HeaderValue::from_static("Origin"));
+    }
+    let Some(allow) = allow else {
+        return response;
+    };
+    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, allow);
+    if preflight {
+        let pairs = [
+            (header::ACCESS_CONTROL_ALLOW_METHODS, ALLOW_METHODS),
+            (header::ACCESS_CONTROL_ALLOW_HEADERS, ALLOW_HEADERS),
+            (header::ACCESS_CONTROL_MAX_AGE, PREFLIGHT_MAX_AGE),
+        ];
+        for (name, value) in pairs {
+            headers.insert(name, HeaderValue::from_static(value));
+        }
+    } else {
+        headers.insert(
+            header::ACCESS_CONTROL_EXPOSE_HEADERS,
+            HeaderValue::from_static(EXPOSE_HEADERS),
+        );
+    }
+    response
+}
+
+/// What the renderer needs to start (05 §4): the compiled chart of the pinned
+/// version, the hold lifetime and the selection limit of a buyer's token.
+/// Browsers may keep it briefly; shared caches may not, since the answer
+/// depends on the credential.
+async fn event(
+    PublishableKey(auth): PublishableKey,
+    Path(event): Path<String>,
+    State(state): State<AppState>,
+) -> Result<Response, ApiError> {
+    let target = target(&state, &auth, Find::Key(&event)).await?;
+    let body = json!({
+        "event": target.key,
+        "chart": {
+            "hash": target.hash,
+            "url": format!("/v1/public/charts/{}.ccf", target.hash),
+        },
+        "hold_ttl_seconds": target.settings.hold_ttl(),
+        "max_objects": target.settings.max_objects(),
+    });
+    let mut response = axum::Json(body).into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=30"),
+    );
+    Ok(response)
 }
 
 const CCF_TYPE: &str = "application/vnd.cavea.ccf";
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 
-/// CORS open (03 §4.6): any page may read the response. A GET without custom
-/// headers needs no preflight. SRV-015 replaces this with the configured
-/// policy of the public endpoints.
+/// CORS open (03 §4.6): any page may read the response, whatever
+/// `CAVEA_CORS_ORIGINS` says: the file is public, and one answer for every
+/// origin keeps it one cache entry at a CDN. A GET without custom headers
+/// needs no preflight.
 async fn cors_open(mut response: Response) -> Response {
     response.headers_mut().insert(
         header::ACCESS_CONTROL_ALLOW_ORIGIN,

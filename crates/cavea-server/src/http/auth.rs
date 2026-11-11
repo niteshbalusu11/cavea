@@ -397,7 +397,7 @@ fn check_origin(parts: &Parts, allowed: Option<&[String]>) -> Result<(), ApiErro
 
 /// Check and normalise an origin allow-list entry: `http` or `https`, a host
 /// and an optional port, as a browser sends it in `Origin`. Lowercased.
-pub(super) fn normalise_origin(origin: &str) -> Option<String> {
+pub fn normalise_origin(origin: &str) -> Option<String> {
     let lower = origin.to_ascii_lowercase();
     let rest = lower
         .strip_prefix("https://")

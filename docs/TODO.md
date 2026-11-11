@@ -200,7 +200,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **SRV-012** Hold-token endpoints (08 §6.2)
 - [x] **SRV-013** Seat operation endpoints: hold, release, book, change status (08 §6.2)
 - [ ] **SRV-014** Objects query endpoint (08 §6.2)
-- [ ] **SRV-015** Public endpoints with CORS and origin allow-list (08 §6.2, §11)
+- [x] **SRV-015** Public endpoints with CORS and origin allow-list (08 §6.2, §11). Done for the event, hold-token, hold and release routes; `state`, `stream`, `rt`, `best-available`, `sections`, `rows` and `assets` come with realtime (RT), best-available, the list view and asset upload
 - [ ] **SRV-016** Session token verification and `require_session` (08 §11)
 - [x] **SRV-017** Idempotency-Key handling and mismatch detection (08 §6.1)
 - [ ] **SRV-018** Rate limiting per key and IP with trusted-proxy handling (08 §12)
