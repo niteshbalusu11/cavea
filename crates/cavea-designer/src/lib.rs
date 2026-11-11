@@ -19,6 +19,7 @@ pub mod calls;
 #[cfg(target_arch = "wasm32")]
 pub mod canvas;
 pub mod paint;
+pub mod preview;
 pub mod scene;
 #[cfg(test)]
 mod tests;
@@ -57,6 +58,25 @@ impl Designer {
             None => error(&Failure::NoChart),
         }
     }
+
+    /// The open chart compiled for the buyer's renderer (07 §11): its
+    /// public artefact, or empty when no chart is open or it does not
+    /// compile. Bytes, not a JSON reply: the preview hands them on as they
+    /// are.
+    pub fn preview(&self) -> Vec<u8> {
+        self.session
+            .as_ref()
+            .and_then(preview::chart)
+            .unwrap_or_default()
+    }
+}
+
+/// A sample seat state for the preview (07 §11): a SNAPSHOT frame for
+/// `chart`, a public artefact, with about `sold` (0 to 1) of its objects
+/// unavailable; empty for bytes that are not a compiled chart.
+#[wasm_bindgen(js_name = sampleState)]
+pub fn sample_state(chart: &[u8], sold: f64, seq: u32) -> Vec<u8> {
+    preview::state(chart, sold, seq).unwrap_or_default()
 }
 
 /// Why a call returned no value. In JSON tagged by `kind`.

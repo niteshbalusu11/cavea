@@ -14,6 +14,7 @@ import { Settings } from "./console/Settings.tsx";
 import { Setup } from "./console/Setup.tsx";
 import { takeSetupToken } from "./console/setupToken.ts";
 import { SignIn } from "./console/SignIn.tsx";
+import { ChartRoute } from "./designer/ChartRoute.tsx";
 import { DesignerPage } from "./designer/Designer.tsx";
 import { localSource } from "./designer/source.ts";
 import { loadSession, watchSession } from "./session.ts";
@@ -33,8 +34,8 @@ if (root === null) {
 }
 
 // Two kinds of layout: the console frame, and full-window tools (the
-// designer, the event page with its manager). A server-backed chart is another
-// route with another `ChartSource` for the same designer (DSN-035).
+// designer, the event page with its manager). A server chart is the same
+// designer on its draft (`ChartRoute.tsx`, DSN-035).
 // Routes are under `BASE`, Vite's `base` (CON-015). The server logs the
 // setup link as `/console/setup`: under the root in development, that path
 // is the setup page too.
@@ -59,6 +60,7 @@ render(
         <Route path={INVITE_PATHS} component={Invite} />
         <Route path="/designer/local" component={() => <DesignerPage source={localSource} />} />
         <Route path={["/events/:event", "/events/:event/settings"]} component={EventPage} />
+        <Route path="/designer/:workspace/:chart" component={ChartRoute} />
         <Route path="/" component={Frame}>
           <Route
             path="/charts"

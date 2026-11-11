@@ -56,6 +56,12 @@ export interface Designer {
    * failure when it cannot be opened.
    */
   open(text: string): Session;
+  /**
+   * A sample seat state for a preview (07 §11): a realtime SNAPSHOT frame
+   * for `chart` (from `Session.preview`) with about `sold` (0 to 1) of its
+   * objects unavailable, at `seq`; `null` for bytes that are not a chart.
+   */
+  sampleState(chart: Uint8Array, sold: number, seq: number): Uint8Array | null;
 }
 
 export interface LoadOptions {
@@ -104,6 +110,10 @@ export async function loadDesigner(options: LoadOptions = {}): Promise<Designer>
       }
       return new Session(module, made.handle);
     },
+    sampleState(chart, sold, seq) {
+      const frame = bytes(module, () => bindings.sampleState(chart, sold, seq));
+      return frame.length === 0 ? null : frame;
+    },
   };
 }
 
@@ -147,6 +157,20 @@ function settle(module: Module, run: () => string, onPanic: () => void = () => {
     throw new DesignerError(reply.err);
   }
   return reply.ok;
+}
+
+/** Bytes from the module, or a `panic` for what it threw (as `settle`). */
+function bytes(module: Module, run: () => Uint8Array, onPanic: () => void = () => {}): Uint8Array {
+  if (module.broken !== null) {
+    throw new DesignerError({ kind: "panic", message: module.broken });
+  }
+  try {
+    return run();
+  } catch (error) {
+    module.broken = error instanceof Error ? error.message : String(error);
+    onPanic();
+    throw new DesignerError({ kind: "panic", message: module.broken });
+  }
 }
 
 /** The module and handle behind a session: for the package's `Canvas` only. */
@@ -204,6 +228,30 @@ export class Session extends Calls {
         this.#handle = null;
       },
     ) as CallTable[M]["returns"];
+  }
+
+  /**
+   * The chart compiled as the buyer's renderer loads it (07 §11): its
+   * public artefact, for `createSeatMap`'s `chart: {bytes}`; `null` when it
+   * does not compile (the validation view says why). Compiling takes about
+   * as long as validation's full pass.
+   */
+  preview(): Uint8Array | null {
+    const handle = this.#handle;
+    if (this.#module.broken !== null) {
+      throw new DesignerError({ kind: "panic", message: this.#module.broken });
+    }
+    if (handle === null) {
+      throw new DesignerError({ kind: "disposed" });
+    }
+    const chart = bytes(
+      this.#module,
+      () => handle.preview(),
+      () => {
+        this.#handle = null;
+      },
+    );
+    return chart.length === 0 ? null : chart;
   }
 
   /** Frees the session. Idempotent. */

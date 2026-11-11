@@ -3,7 +3,7 @@
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Tooltip } from "@kobalte/core/tooltip";
 import { useNavigate } from "@solidjs/router";
-import { For, Show } from "solid-js";
+import { For, Show, type JSX } from "solid-js";
 import { formatTime, historyName, msg } from "../i18n/messages.ts";
 import { setThemeChoice, themeChoice, type ThemeChoice } from "../theme.ts";
 import { buttonClass, IconButton, Tip } from "../ui/controls.tsx";
@@ -14,12 +14,21 @@ import { keyOf } from "./shortcuts.ts";
 
 export function TopBar(props: {
   editor: Editor;
-  onNew: () => void;
-  onOpen: () => void;
-  onSave: () => void;
+  /** New chart and Open file, where they apply (not on a server chart's
+   * new, not read-only). */
+  onNew?: (() => void) | undefined;
+  onOpen?: (() => void) | undefined;
+  /** Downloads the chart document. */
+  onExport: () => void;
   onInsert: () => void;
   onPalette: () => void;
   onHelp: () => void;
+  /** The server draft's save state, instead of the export time. */
+  status?: (() => JSX.Element) | undefined;
+  readOnly?: boolean;
+  onPreview: () => void;
+  /** Publish: the action, or why it cannot be taken. */
+  publish: { reason: string | null; run: () => void };
 }) {
   const views = props.editor.views;
   const navigate = useNavigate();
@@ -29,11 +38,7 @@ export function TopBar(props: {
     const at = props.editor.saved().at;
     return at === null ? "" : msg("topbar.saved", { time: formatTime(at) });
   };
-  const publishReason = () => {
-    const v = views.validation;
-    if (!v.complete) return msg("topbar.publishChecking");
-    return v.publishable ? msg("topbar.publishPending") : msg("topbar.publishBlocked");
-  };
+  const previewReason = () => (views.validation.errors > 0 ? msg("topbar.previewErrors") : null);
   const shown = () => views.floors.floors.find((f) => f.id === views.floors.shown);
 
   return (
@@ -44,18 +49,28 @@ export function TopBar(props: {
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content class={menuContent}>
-            <DropdownMenu.Item class={menuItem} onSelect={afterMenu(props.onNew)}>
-              <Icon name="plus" />
-              {msg("menu.new")}
-            </DropdownMenu.Item>
-            <DropdownMenu.Item class={menuItem} onSelect={afterMenu(props.onOpen)}>
-              <Icon name="file" />
-              {msg("menu.open")}
-            </DropdownMenu.Item>
-            <DropdownMenu.Item class={menuItem} onSelect={props.onSave}>
+            <Show when={props.onNew}>
+              {(onNew) => (
+                <DropdownMenu.Item class={menuItem} onSelect={afterMenu(onNew())}>
+                  <Icon name="plus" />
+                  {msg("menu.new")}
+                </DropdownMenu.Item>
+              )}
+            </Show>
+            <Show when={props.onOpen}>
+              {(onOpen) => (
+                <DropdownMenu.Item class={menuItem} onSelect={afterMenu(onOpen())}>
+                  <Icon name="file" />
+                  {msg("menu.open")}
+                </DropdownMenu.Item>
+              )}
+            </Show>
+            <DropdownMenu.Item class={menuItem} onSelect={props.onExport}>
               <Icon name="download" />
               {msg("menu.export")}
-              <span class={menuKeys}>{keyOf("save")}</span>
+              <Show when={props.status === undefined}>
+                <span class={menuKeys}>{keyOf("save")}</span>
+              </Show>
             </DropdownMenu.Item>
             <DropdownMenu.Separator class={menuSeparator} />
             <DropdownMenu.Item class={menuItem} onSelect={afterMenu(props.onInsert)}>
@@ -112,6 +127,7 @@ export function TopBar(props: {
 
       <input
         aria-label={msg("topbar.chartName")}
+        readOnly={props.readOnly === true}
         class="h-7 w-64 min-w-0 truncate rounded-md border border-transparent bg-transparent px-1.5 text-base font-semibold text-fg hover:border-line-strong focus:border-control-line focus:bg-control"
         value={views.title}
         onKeyDown={(e) => {
@@ -154,8 +170,8 @@ export function TopBar(props: {
           onClick={() => props.editor.run((s) => s.redo())}
         />
       </div>
-      <span class="ml-2 min-w-28 text-sm text-faint" aria-live="polite">
-        {saveState()}
+      <span class="ml-2 flex min-w-28 items-center text-sm text-faint" aria-live="polite">
+        {props.status === undefined ? saveState() : props.status()}
       </span>
 
       <div class="ml-auto flex items-center gap-2">
@@ -194,25 +210,47 @@ export function TopBar(props: {
           </DropdownMenu>
         </Show>
         <div class="mx-1 h-5 w-px bg-line" />
-        <Pending label={msg("topbar.preview")} reason={msg("topbar.previewPending")} />
-        <Pending label={msg("topbar.publish")} reason={publishReason()} primary />
+        <Action label={msg("topbar.preview")} reason={previewReason()} run={props.onPreview} />
+        <Action
+          label={msg("topbar.publish")}
+          reason={props.publish.reason}
+          run={props.publish.run}
+          primary
+        />
       </div>
     </header>
   );
 }
 
-/** A button that cannot act yet, focusable so its tooltip says why. */
-function Pending(props: { label: string; reason: string; primary?: boolean }) {
+/** A button, or, while it cannot act, one focusable so its tooltip says why. */
+function Action(props: {
+  label: string;
+  reason: string | null;
+  run: () => void;
+  primary?: boolean;
+}) {
+  const variant = () => (props.primary === true ? "primary" : "secondary");
   return (
-    <Tip label={props.reason}>
-      <Tooltip.Trigger
-        as="button"
-        type="button"
-        aria-disabled="true"
-        class={buttonClass(props.primary === true ? "primary" : "secondary")}
-      >
-        {props.label}
-      </Tooltip.Trigger>
-    </Tip>
+    <Show
+      when={props.reason}
+      fallback={
+        <button type="button" class={buttonClass(variant())} onClick={() => props.run()}>
+          {props.label}
+        </button>
+      }
+    >
+      {(reason) => (
+        <Tip label={reason()}>
+          <Tooltip.Trigger
+            as="button"
+            type="button"
+            aria-disabled="true"
+            class={buttonClass(variant())}
+          >
+            {props.label}
+          </Tooltip.Trigger>
+        </Tip>
+      )}
+    </Show>
   );
 }

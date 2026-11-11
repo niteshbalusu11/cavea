@@ -1,0 +1,136 @@
+// A chart's draft on the server (08 §6.2) as the designer uses it: opened
+// with its etag, saved with `If-Match`, published with it. Every request
+// names the chart's workspace itself, so a workspace chosen elsewhere
+// meanwhile never redirects a save (09 §10).
+import { ApiError, call, callWithHeaders } from "../api/client.ts";
+import type { Chart, ChartDocument, Finding, Version } from "../api/generated.ts";
+import { asApiError } from "../api/query.ts";
+import { describe } from "../console/errors.ts";
+import type { SaveReply } from "./autosave.ts";
+
+/** Where a server chart lives. */
+export interface ChartRef {
+  /** `ws_…` */
+  workspace: string;
+  key: string;
+}
+
+export interface OpenedChart {
+  chart: Chart;
+  /** The draft as chart document JSON. */
+  draft: string;
+  /** The draft's etag: sent back as it came. */
+  etag: string;
+}
+
+/** The chart and its draft. The etag is the draft answer's own `ETag`, so
+ * it names exactly the draft read. */
+export async function openChart(ref: ChartRef, signal: AbortSignal): Promise<OpenedChart> {
+  const options = { workspace: ref.workspace };
+  const chart = await call("getChart", { path: { chart: ref.key } }, signal, options);
+  const got = await callWithHeaders("getDraft", { path: { chart: ref.key } }, signal, options);
+  const etag = got.headers.get("ETag");
+  if (etag === null || typeof got.reply !== "object" || got.reply === null) {
+    throw new ApiError(got.status, "unexpected", null, {}, null, null, "No draft etag.");
+  }
+  return { chart, draft: JSON.stringify(got.reply), etag };
+}
+
+/** The draft's etag now (to overwrite after a conflict that did not say). */
+export async function currentEtag(ref: ChartRef, signal: AbortSignal): Promise<string> {
+  const chart = await call("getChart", { path: { chart: ref.key } }, signal, {
+    workspace: ref.workspace,
+  });
+  return chart.draft_etag;
+}
+
+/** Statuses a proxy answers for a server that is down or restarting. */
+const UNREACHABLE = new Set([502, 503, 504]);
+
+/** A failed save as what the autosave does next. */
+export function saveReplyOf(e: unknown): SaveReply {
+  const error = asApiError(e);
+  if (error.status === 401) return { kind: "signedOut" };
+  if (error.code === "version_conflict") {
+    const etag = error.details["draft_etag"];
+    return { kind: "conflict", etag: typeof etag === "string" ? etag : null };
+  }
+  if (
+    error.code === "network" ||
+    error.code === "timeout" ||
+    error.code === "rate_limited" ||
+    error.code === "overloaded" ||
+    error.code === "unavailable" ||
+    error.code === "internal_error" ||
+    (error.code === "unexpected" && UNREACHABLE.has(error.status))
+  ) {
+    return {
+      kind: "offline",
+      retryAfterMs: error.retryAfter === null ? null : error.retryAfter * 1000,
+    };
+  }
+  return { kind: "refused", message: describe(error) };
+}
+
+/** Saves `draft` (chart document JSON from the session) over the draft
+ * whose etag is `etag`. Never rejects. */
+export async function saveDraft(ref: ChartRef, draft: string, etag: string): Promise<SaveReply> {
+  try {
+    // The export is sent as it is: parsing and serialising it again would
+    // cost the main thread twice for nothing.
+    const body = new Blob([draft], { type: "application/json" }) as unknown as ChartDocument;
+    const chart = await call(
+      "saveDraft",
+      { path: { chart: ref.key }, headers: { "If-Match": etag }, body },
+      // Never cancelled from here: a save on its way is answered or fails.
+      new AbortController().signal,
+      { workspace: ref.workspace },
+    );
+    return { kind: "saved", etag: chart.draft_etag };
+  } catch (e) {
+    return saveReplyOf(e);
+  }
+}
+
+export type Published =
+  | { kind: "published"; version: Version; created: boolean }
+  /** The compile found errors (`422 chart_invalid`). */
+  | { kind: "invalid"; findings: Finding[] }
+  | { kind: "conflict" }
+  | { kind: "failed"; error: ApiError };
+
+/** Publishes the draft whose etag is `etag` (08 §6.2): what is compiled is
+ * what the person saw saved. */
+export async function publish(
+  ref: ChartRef,
+  etag: string,
+  signal: AbortSignal,
+): Promise<Published> {
+  try {
+    const got = await callWithHeaders(
+      "publishChart",
+      { path: { chart: ref.key }, headers: { "If-Match": etag } },
+      signal,
+      { workspace: ref.workspace },
+    );
+    return { kind: "published", version: got.reply, created: got.status === 201 };
+  } catch (e) {
+    const error = asApiError(e);
+    if (error.code === "version_conflict") return { kind: "conflict" };
+    const findings = error.details["findings"];
+    if (error.code === "chart_invalid" && Array.isArray(findings)) {
+      return { kind: "invalid", findings: findings.filter(isFinding) };
+    }
+    return { kind: "failed", error };
+  }
+}
+
+function isFinding(v: unknown): v is Finding {
+  if (typeof v !== "object" || v === null) return false;
+  const f = v as Record<string, unknown>;
+  return (
+    typeof f["code"] === "string" &&
+    typeof f["message"] === "string" &&
+    (f["severity"] === "error" || f["severity"] === "warning")
+  );
+}

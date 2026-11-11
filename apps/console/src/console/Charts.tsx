@@ -18,6 +18,7 @@ import { Field, fieldInputClass, FormError } from "../ui/form.tsx";
 import { Icon } from "../ui/Icon.tsx";
 import { afterMenu, Confirm, Dialog, menuContent, menuItem, notify } from "../ui/overlays.tsx";
 import { describe, reference, report } from "./errors.ts";
+import { designerPath } from "../designer/ChartRoute.tsx";
 
 /** The largest draft the server takes (08 §6.2). */
 const MAX_DOCUMENT_BYTES = 16 * 1024 * 1024;
@@ -374,6 +375,7 @@ function ChartCard(props: {
   onArchive: () => void;
 }) {
   const version = () => props.chart.published_version;
+  const navigate = useNavigate();
   const canArchive = () => allows(workspace(), "archiveChart") && props.chart.archived_at === null;
   return (
     <li class="flex flex-col overflow-hidden rounded-lg border border-line bg-surface">
@@ -419,6 +421,13 @@ function ChartCard(props: {
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content class={menuContent}>
+              <DropdownMenu.Item
+                class={menuItem}
+                onSelect={() => navigate(designerPath(workspace()?.key ?? "", props.chart.key))}
+              >
+                <Icon name="chart" />
+                {msg("charts.open")}
+              </DropdownMenu.Item>
               <DropdownMenu.Item class={menuItem} onSelect={props.onExport}>
                 <Icon name="download" />
                 {msg("charts.export")}
