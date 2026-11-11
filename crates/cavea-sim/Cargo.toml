@@ -1,0 +1,18 @@
+[package]
+name = "cavea-sim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The seat engine's reference model and model-based tests
+# (docs/13-testing-benchmarks.md §3.1). A crate of its own so that the engine's
+# own test builds do not compile it, and so that later test tools (the
+# simulation, the reconciler, the load generator) can reuse the model and its
+# log replay.
+[dependencies]
+cavea-engine.workspace = true
+
+[lints]
+workspace = true

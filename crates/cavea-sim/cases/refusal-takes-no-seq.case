@@ -1,0 +1,3 @@
+# A refused command takes no seq (08 §4.3).
+objects 6
+s create t2 ttl=59 max=2

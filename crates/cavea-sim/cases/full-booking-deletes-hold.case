@@ -1,0 +1,5 @@
+# Booking a token's last objects deletes the token (02 §5).
+objects 8
+s create t4 ttl=900
+s hold t4 S-3
+s book t4 order=o2
