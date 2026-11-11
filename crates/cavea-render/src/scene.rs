@@ -50,13 +50,25 @@ pub struct Scene {
 impl Scene {
     pub fn decode(ccf: &[u8]) -> Result<Self, cavea_format::Error> {
         let mut chart = cavea_format::decode(ccf, Artefact::Public)?;
-        let seats = chart.seat_pos.len();
         // The element types have the same size and alignment, so the standard
         // library collects in place into the decoded array's buffer.
         let pos: Vec<[f32; 2]> = std::mem::take(&mut chart.seat_pos)
             .into_iter()
             .map(|[x, y]| [x as f32 * 0.25, y as f32 * 0.25])
             .collect();
+        Ok(Self::assemble(chart, pos))
+    }
+
+    /// A scene of a chart whose positions are already in `pos` (its own
+    /// `seat_pos` empty): the designer's live scene (04 §25). The chart must
+    /// pass [`Chart::check`] with `pos` as its positions.
+    #[cfg(feature = "designer")]
+    pub fn from_chart(chart: Chart, pos: Vec<[f32; 2]>) -> Self {
+        Self::assemble(chart, pos)
+    }
+
+    fn assemble(chart: Chart, pos: Vec<[f32; 2]>) -> Self {
+        let seats = pos.len();
         let mut row = Vec::with_capacity(seats);
         for (r, record) in (0u32..).zip(&chart.rows) {
             row.extend(std::iter::repeat_n(r, usize::from(record.seat_count)));
@@ -82,7 +94,7 @@ impl Scene {
             width: x1 - x0 + 2.0 * max_half,
             height: y1 - y0 + 2.0 * max_half,
         };
-        Ok(Self {
+        Self {
             chart,
             pos,
             row,
@@ -95,7 +107,7 @@ impl Scene {
             bounds,
             max_half,
             seat_size,
-        })
+        }
     }
 
     /// The static instance buffer (04 §6) for every seat: position, half size
@@ -107,6 +119,28 @@ impl Scene {
         for segment in &self.chart.segments {
             let first = segment.seat_first;
             for i in first..first + u32::from(segment.seat_count) {
+                if let Some(seat) = self.in_segment(segment, i) {
+                    out.extend_from_slice(&seat.encode());
+                }
+            }
+        }
+        out
+    }
+
+    /// The static instance bytes of seats `range`, as [`Self::encode_static`]
+    /// writes them: a live scene's piece uploaded alone (04 §25).
+    #[cfg(feature = "designer")]
+    pub fn encode_static_range(&self, range: Range<u32>) -> Vec<u8> {
+        let mut out = Vec::with_capacity(range.len() * seat::STATIC_STRIDE);
+        let segments = &self.chart.segments;
+        let first =
+            segments.partition_point(|s| s.seat_first + u32::from(s.seat_count) <= range.start);
+        for segment in segments.get(first..).unwrap_or_default() {
+            if segment.seat_first >= range.end {
+                break;
+            }
+            let end = segment.seat_first + u32::from(segment.seat_count);
+            for i in segment.seat_first.max(range.start)..end.min(range.end) {
                 if let Some(seat) = self.in_segment(segment, i) {
                     out.extend_from_slice(&seat.encode());
                 }

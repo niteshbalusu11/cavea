@@ -3,6 +3,9 @@
 //! computes it. Nodes keep their place on the canvas because `placeNode`
 //! rewrites their transforms (§2.2); each of these is one undo entry.
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+
 use cavea_compiler::document::{Node, Outline, Points, Section};
 use cavea_compiler::{DEFAULT_PADDING, auto_outline};
 use cavea_core::limits::MAX_SECTIONS;
@@ -194,6 +197,51 @@ pub(crate) fn outline(doc: &Document, index: &SpatialIndex, id: u32) -> Option<V
         seats.extend(present.map(|s| place.apply(s.pos)));
     }
     auto_outline(&seats, pitch.map_or(DEFAULT_PADDING, |p| p / 2.0))
+}
+
+/// What a section's automatic outline is computed from: each child's id
+/// and the revision of its last change of any kind (content, transform,
+/// place), in child order. Outlines are in the section's own space, so the
+/// section's own transform is not part of it.
+type OutlineKey = Vec<(u32, u64)>;
+
+/// A cached outline and what it was computed from.
+type Cached = (OutlineKey, Option<Vec<P>>);
+
+/// Automatic outlines cached per section (07 §14), so that the overlay and
+/// the live scene compute one again only when a child of its section
+/// changed, not on every call: with all 180 sections of `stadium-100k`
+/// selected, recomputing them took 44 ms per `overlay()`.
+#[derive(Debug, Default)]
+pub(crate) struct Outlines(RefCell<BTreeMap<u32, Cached>>);
+
+impl Outlines {
+    /// Section `id`'s automatic outline, as [`outline`] computes it, from
+    /// the cache when no child changed since it was computed.
+    pub(crate) fn get(&self, doc: &Document, index: &SpatialIndex, id: u32) -> Option<Vec<P>> {
+        let Node::Section(_) = doc.node(id)? else {
+            return None;
+        };
+        let key: OutlineKey = doc
+            .children(Some(id))
+            .iter()
+            .filter_map(|&c| doc.stamps(c).map(|(stamp, _)| (c, stamp)))
+            .collect();
+        let mut cache = self.0.borrow_mut();
+        if let Some((k, points)) = cache.get(&id)
+            && *k == key
+        {
+            return points.clone();
+        }
+        let points = outline(doc, index, id);
+        cache.insert(id, (key, points.clone()));
+        points
+    }
+
+    /// Forgets the sections the document no longer holds.
+    pub(crate) fn prune(&mut self, doc: &Document) {
+        self.0.get_mut().retain(|&id, _| doc.node(id).is_some());
+    }
 }
 
 fn centre(r: &Rect) -> P {

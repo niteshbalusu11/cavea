@@ -385,6 +385,17 @@ impl TextAtlas {
     }
 }
 
+#[cfg(feature = "designer")]
+impl TextAtlas {
+    /// Whether it holds a seat's label: keyed by `idx`, which a new live
+    /// scene may give to another seat (04 §25).
+    pub fn has_seat_labels(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|e| matches!(e.key.source, Source::Seat(_)))
+    }
+}
+
 #[cfg(test)]
 impl TextAtlas {
     /// Every ready raster's rectangle, and the texture's side.

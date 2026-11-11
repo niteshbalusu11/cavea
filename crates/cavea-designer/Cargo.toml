@@ -12,9 +12,28 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 cavea-edit.workspace = true
 cavea-compiler.workspace = true
+cavea-format.workspace = true
+# The canvas (04 §25): the renderer's engine with the designer's additions.
+cavea-render = { workspace = true, features = ["designer"] }
 serde.workspace = true
 serde_json.workspace = true
 wasm-bindgen.workspace = true
+
+[dev-dependencies]
+# The edit core's seeded edits, for the live scene's property test.
+cavea-edit = { workspace = true, features = ["random"] }
+cavea-testkit.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+cavea-render = { workspace = true, features = ["designer", "glow"] }
+glow.workspace = true
+js-sys.workspace = true
+web-sys = { workspace = true, features = [
+  "HtmlCanvasElement",
+  "WebGl2RenderingContext",
+  "WebGlContextAttributes",
+  "WebGlPowerPreference",
+] }
 
 [lints]
 workspace = true

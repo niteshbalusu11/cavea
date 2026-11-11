@@ -50,7 +50,7 @@ pub fn ranges(
 /// others unchanged, so this is the same as repeatedly merging the two ranges
 /// separated by the fewest seats, but linear: the threshold gap is found by
 /// binary search over gap sizes, then the ranges are compacted in one pass.
-fn merge_smallest_gaps(ranges: &mut Vec<Range<u32>>, max: usize) {
+pub(crate) fn merge_smallest_gaps(ranges: &mut Vec<Range<u32>>, max: usize) {
     let Some(merges) = ranges.len().checked_sub(max).filter(|&m| m > 0) else {
         return;
     };
