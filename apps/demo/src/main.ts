@@ -29,6 +29,10 @@ const canvas = element("seats", HTMLCanvasElement);
 const lines: string[] = [];
 function report(line: string): void {
   lines.push(line);
+  // Keep the first lines (load results) and the most recent frame.
+  if (lines.length > 8) {
+    lines.splice(4, lines.length - 8);
+  }
   status.textContent = lines.join("\n");
   console.log(`[cavea-demo] ${line}`);
 }

@@ -149,7 +149,7 @@ All figures are **targets** until `13-testing-benchmarks.md` reports measurement
 | Compiled chart size, 100,000 seats, brotli | ≤ 300 KB |
 | Idle CPU | Zero: no frames are drawn when nothing changes |
 
-Renderer payload measured locally, 2026-11-10 (REN-003), not a device result: the minimal renderer (WebGL2 context, `glow` backend, `shape` program, engine skeleton; no text, font atlas, gestures or chart decoding yet) is **37,280 B brotli**: 5,906 B of JavaScript glue and 31,374 B of WASM after `wasm-opt -Oz`, as `cargo xtask build-web` reports. Without `wasm-opt` the WASM is 40,402 B. The `wasm-release` profile uses `opt-level = 3`, which beat `"s"` (32,463 B) and `"z"` (32,663 B) after `wasm-opt`. The default allocator is kept: `lol_alloc` saved 0.9 KB, which does not justify a dependency and an `unsafe` global allocator.
+Renderer payload measured locally, 2026-11-10 (REN-003), not a device result: the minimal renderer (WebGL2 context, `glow` backend, `shape` program, engine skeleton; no text, font atlas, gestures or chart decoding yet) is **37,298 B brotli**: 5,944 B of JavaScript glue and 31,354 B of WASM after `wasm-opt -Oz` (binaryen 132), as `cargo xtask build-web` reports. Without `wasm-opt` the WASM is 40,221 B. The `wasm-release` profile uses `opt-level = 3`, which beat `"s"` (32,846 B) and `"z"` (32,604 B) after `wasm-opt`. The default allocator is kept: `lol_alloc` saved 0.9 KB, which does not justify a dependency and an `unsafe` global allocator.
 
 "Chart-ready" means the first frame in which the buyer can select a seat, measured from the start of renderer initialisation with a cold cache, excluding the host page.
 

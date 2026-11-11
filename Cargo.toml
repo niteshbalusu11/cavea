@@ -55,8 +55,8 @@ debug = false
 
 # Profile for the browser WASM (cavea-web, later cavea-edit), built by
 # `cargo xtask build-web`. opt-level 3 is both the fastest and, after
-# `wasm-opt -Oz` and brotli, the smallest: 31,374 B against 32,463 B for "s"
-# and 32,663 B for "z" on the first real renderer (docs/01-architecture.md §5).
+# `wasm-opt -Oz` and brotli, the smallest: 31,354 B against 32,846 B for "s"
+# and 32,604 B for "z" on the first real renderer (docs/01-architecture.md §5).
 [profile.wasm-release]
 inherits = "release"
 opt-level = 3

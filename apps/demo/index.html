@@ -13,15 +13,22 @@
           14px system-ui,
           sans-serif;
       }
+      /* The canvas fills the window; the status sits on top of it, so text
+         changes never resize the canvas. */
       canvas {
-        display: block;
+        position: fixed;
+        inset: 0;
         width: 100%;
-        height: calc(100% - 2.5em);
+        height: 100%;
       }
       output {
-        display: block;
+        position: fixed;
+        top: 0;
+        left: 0;
         padding: 0.5em;
         white-space: pre;
+        background: rgb(255 255 255 / 0.85);
+        z-index: 1;
       }
     </style>
   </head>
