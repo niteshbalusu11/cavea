@@ -661,7 +661,7 @@ If-Match: "2"
 { "id": "cv_7d1e0c4b9a8f4e3d2c1b0a9f8e7d6c5b", "number": 1,
   "hash": "9f2c4e1a7b3d5f6e8a0c2b4d6f8e0a1c",
   "url": "/v1/public/charts/9f2c4e1a7b3d5f6e8a0c2b4d6f8e0a1c.ccf",
-  "stats": { "seats": 2000, "rows": 96, "segments": 96, "sections": 24, "floors": 1,
+  "stats": { "seats": 2000, "rows": 144, "segments": 144, "sections": 24, "floors": 1,
              "public_bytes": 28209, "public_br_bytes": 9752, "full_bytes": 32653 },
   "created_at": "2027-01-10T09:05:00Z" }
 ```
