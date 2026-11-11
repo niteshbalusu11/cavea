@@ -637,6 +637,11 @@ The compiled chart route takes no credential and ignores any sent. A chart file 
 | `DELETE /console/api/session` | Sign out: the session ends on the server, the cookie is cleared; `204` |
 | `GET /console/api/me` | The user, their workspaces with role and permissions, the CSRF token, the session's ends |
 | `POST /console/api/password` | Change one's password: every session of the user ends, a new one starts |
+| `GET /console/api/members` | The workspace's members: `{user: {id, email}, role}`, by user id, paginated. Owner and admin |
+| `PATCH /console/api/members/{user}` | Change a member's role (`{role}`); making or unmaking an owner needs `ownership`; the last owner cannot be changed (`400` `last_owner`) |
+| `DELETE /console/api/members/{user}` | Remove a member; `204`. The same owner rules |
+
+The members routes take the console session only (no API key), name the workspace in `Cavea-Workspace` like `/v1`, and need `settings`. Changes to one workspace's members are serialised on its row, so a workspace always keeps an owner whatever runs at once; a change applies to the member's next request and ends nothing else of theirs (sessions, other workspaces). A user removed from every workspace can still sign in and sees none.
 
 **System**
 
@@ -1073,20 +1078,25 @@ Console sessions (09 §2, §10; `DECISIONS.md` D-50). Not the buyer's session to
 - **Lifetimes.** A session ends 12 hours after its last use ("renewed on activity": a request with it moves the end, at most every five minutes, so a busy console writes once per session per five minutes) and 7 days after sign-in however used. Both are checked by the lookup, on the database's clock. A disabled user's sessions stop at once.
 - **Rotation and revocation.** Sign-in always starts a new session and ends one presented with it; setup starts the owner's first. A password change ends every session of the user and starts a new one. Sign-out ends the session on the server. A role change takes effect on the next request, since the role is read with each; there is no elevated mode to rotate into yet (TOTP).
 - **CSRF.** Every non-safe method (anything but `GET`, `HEAD`, `OPTIONS`) authenticated by the cookie, on `/console/api` and on `/v1`, must send `Cavea-Csrf-Token`: the session's token, which `GET /console/api/me` and the sign-in reply give, the SHA-256 of a fixed label and the session identifier (nothing stored; another site can neither read the cookie nor derive it). Without it, or wrong: `403`, `reason: "csrf"`. Such a request must also come from the server's own origin: `Sec-Fetch-Site` `same-origin` (or `none`), or without it an `Origin` whose host is the request's `Host`; else `403`, `reason: "origin"`. Sign-in and setup, which have no session yet, take the origin check too, and like every JSON route need `Content-Type: application/json`, which another site cannot send without a preflight nobody answers. No `GET` changes anything. A request with `Authorization` is read as an API key and never for a cookie, so neither check applies to keys.
-- **On `/v1`.** Every route that takes a secret key takes a console session instead when `Authorization` is absent. The request names its workspace in `Cavea-Workspace` (`ws_…`, from `me`): missing, `400` `reason: "workspace"`; a workspace the user is not a member of, existing or not, `403` `reason: "workspace"`. The workspace is then the credential's, as a key's would be: every query is scoped by it, and another workspace's identifiers are `404`. The member's role must grant the permission the route declares (`403` `reason: "role"`, with `details.permission`). The engine sees secret-key authority, and the event log's `actor` is `usr_` and the user's id (never the email); drafts and versions record the user. Admin-key routes (`/v1/workspaces`, `/metrics`) and the public routes take no console session.
-- **Permissions** (09 §2). Each route in the route table declares one (`openapi::Needs::Staff`), shown in the OpenAPI document as `x-cavea-permission`, with `x-cavea-roles`:
+- **On `/v1`.** Every route that takes a secret key takes a console session instead when `Authorization` is absent. The request names its workspace in `Cavea-Workspace` (`ws_…`, from `me`): missing, `400` `reason: "workspace"`; a workspace the user is not a member of, existing or not, `403` `reason: "workspace"`. The workspace is then the credential's, as a key's would be: every query is scoped by it, and another workspace's identifiers are `404`. The member's role must grant the permission the route declares (`403` `reason: "role"`, with `details.permission`). The engine sees secret-key authority, and the event log's `actor` is `usr_` and the user's id (never the email); drafts and versions record the user. Admin-key routes (`/v1/workspaces`, `/metrics`) and the public routes, realtime included, take no console session: they read only their own credential, so a cookie sent along changes nothing. The role is read with the session on every request, in the session lookup's own query, so a role lowered or a membership removed applies to the member's next request; nothing caches it. Measured locally (`measure_session_lookup`: 2,000 sequential `GET /v1/events/{event}` through the router, release build; AMD Ryzen 9 7900X shared with two other builders, load average 3.4 to 4, the shared PostgreSQL in Docker; four runs): a session costs 0.06 ms more than a secret key at the median (0.43 to 0.44 ms against 0.37 to 0.38 ms). Its p99 ranged from 0.54 to 1.39 ms against the key's 0.49 to 0.59 ms: the lookup is one heavier statement (a join, the membership subquery and the conditional renewal, a data-modifying CTE) where the key's is a primary-key probe, so it is more exposed to a busy database; for a console sending a few requests a second it does not matter. The hold path with a key does not change (`measure_hold_with_a_key`, 1,600 holds: p50 1.91 to 2.00 ms on this branch, 1.87 to 2.19 ms before it, same conditions).
+- **Permissions** (09 §2, D-52). Each route in the route table declares one (`openapi::Needs::Staff` for the `/v1` routes, `Needs::Member` for the console's workspace routes), shown in the OpenAPI document as `x-cavea-permission`, with `x-cavea-roles`. One permission per cell of 09 §2's table, so each route maps to exactly one; those without a route yet keep room for theirs, and `me` lists them all:
 
   | Permission | Routes | Roles |
   |---|---|---|
   | `charts.read` | `GET` charts, drafts, versions | all five |
-  | `charts.write` | create, save the draft, validate, publish, archive charts; upload images | owner, admin, editor |
+  | `charts.write` | create, save the draft, validate, publish; upload images | owner, admin, editor |
+  | `charts.archive` | archive a chart | owner, admin |
   | `events.read` | `GET` events, objects, hold tokens | all five |
-  | `events.write` | create, change, archive events | owner, admin |
-  | `seats.write` | hold tokens (create, extend, release), hold, release, book, change status | owner, admin, operator |
-  | `developers` | API keys | owner, admin |
-  | `settings` | workspace settings and members (none built yet) | owner, admin |
+  | `events.write` | create, change, archive events (and their channel lists, when built) | owner, admin |
+  | `seats.hold` | create and extend hold tokens, hold (and best-available, when built) | owner, admin |
+  | `seats.write` | change status (block), release (a token's too), book | owner, admin, operator |
+  | `channels.assign` | put objects in a channel (not built) | owner, admin, operator |
+  | `reports.read` | reports and exports (not built) | owner, admin, viewer |
+  | `developers` | API keys (webhooks, embed tokens when built) | owner, admin |
+  | `settings` | members (`/console/api/members`); workspace settings when built | owner, admin |
+  | `ownership` | making or unmaking an owner, checked by the members routes besides `settings` | owner |
 
-  Validate is `charts.write`: it compiles, which only those who can publish need. Ownership transfer, owner-only in 09 §2, waits for members (CON-012).
+  Read cell by cell: the editor's charts are "create, edit, publish", so archiving is not theirs; the operator's seats are "block, release, book, assign channels", so holding is not theirs (a box-office sale books directly, 09 §4.2), while viewing the events they act on is; the viewer's "View, reports" gives reports to the viewer and not, as written, to the editor or the operator. Validate is `charts.write`: it compiles, which only those who can publish need. A test lists every route's permission by hand (`every_route_declares_its_permission`) and another the role table bit by bit (`the_role_table_is_09s`).
 - **Cross-origin.** No route answers another origin with credentials: CORS is only on `/v1/public/`, never with `Access-Control-Allow-Credentials`, and those routes take no cookie. In development the console's dev server proxies `/console/api` and `/v1` to the server (09 §9), so everything is one origin.
 
 Session tokens (`DECISIONS.md` D-34):

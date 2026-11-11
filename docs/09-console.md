@@ -51,11 +51,12 @@ The workspace switcher sits under the logo. Users with one workspace do not see 
 
 As built (server side; CON-002 to CON-004, SEC-003): the screens come later.
 
-- **First run.** While no user exists, each start logs one `info` record holding the setup link, `{CAVEA_PUBLIC_URL}/console/setup#token=<64 hex digits>` (the path alone when `CAVEA_PUBLIC_URL` is unset). The token is in the fragment, which never reaches a server or a `Referer`. It works once, for an hour; a restart makes a new one and the old stops working. The console's `/console/setup` page reads the fragment and posts it with an email and a password to `POST /console/api/setup`. The owner becomes **owner of every workspace that exists** (made earlier with the admin key); with none, the request's `workspace` (`{key, name}`, default `main`, `Main`) is created. Workspaces the admin key creates after setup have no members until members management exists (CON-012). Once a user exists, nothing is logged or stored, and setup answers `401` (`setup_token`) as it does to a wrong token. Of two setups at once, one creates the owner.
+- **First run.** While no user exists, each start logs one `info` record holding the setup link, `{CAVEA_PUBLIC_URL}/console/setup#token=<64 hex digits>` (the path alone when `CAVEA_PUBLIC_URL` is unset). The token is in the fragment, which never reaches a server or a `Referer`. It works once, for an hour; a restart makes a new one and the old stops working. The console's `/console/setup` page reads the fragment and posts it with an email and a password to `POST /console/api/setup`. The owner becomes **owner of every workspace that exists** (made earlier with the admin key); with none, the request's `workspace` (`{key, name}`, default `main`, `Main`) is created. Workspaces the admin key creates after setup have no members until invitations exist (CON-012). Once a user exists, nothing is logged or stored, and setup answers `401` (`setup_token`) as it does to a wrong token. Of two setups at once, one creates the owner.
 - **Passwords:** 15 to 128 characters, no other rule (NIST SP 800-63B rev. 4 for a single factor); argon2id with m = 19 MiB, t = 2, p = 1 (12 §3 T9). Emails are trimmed and lowercased; nothing is sent to them.
 - **Sessions:** the cookie `__Host-cavea_console` (`HttpOnly`, `SameSite=Lax`, `Secure`, `Path=/`), ending 12 hours after the last request and 7 days after sign-in in any case (08 §11). Sign-in always starts a new session; a password change ends all of the user's.
-- **Roles** are enforced on every `/v1` route by the permission it declares (08 §11's table, `x-cavea-permission` in the OpenAPI document); `GET /console/api/me` lists each workspace's role and its permissions, for the interface to hide what the role cannot do.
-- **Not built:** TOTP (the tree has SHA-1 through the WebSocket crate, so it needs no new crate; CON-003), members and invitations (CON-012), password reset, single sign-on.
+- **Roles** are enforced on every `/v1` route and every members route by the permission it declares: one permission per cell of the table above (08 §11, D-52; `x-cavea-permission` and `x-cavea-roles` in the OpenAPI document). `GET /console/api/me` lists each workspace's role and its permissions, for the interface to hide what the role cannot do. The role is read on every request: a change applies to the next one.
+- **Members** (§7): owners and admins list the workspace's members, change a role and remove a member. Only an owner makes or unmakes an owner ("all except ownership transfer"); a workspace always keeps one owner.
+- **Not built:** TOTP (the tree has SHA-1 through the WebSocket crate, so it needs no new crate; CON-003), invitations (CON-012), password reset, single sign-on.
 
 ## 3. Charts
 
@@ -197,7 +198,7 @@ Under `/console/api`, cookie-authenticated:
 | `POST /console/api/session` , `DELETE` | Sign in, sign out |
 | `GET /console/api/me` | User, workspaces, roles |
 | `POST /console/api/setup` | First-run owner creation with the one-time token |
-| `GET/POST/PATCH/DELETE /console/api/members` | Membership management (not built: CON-012) |
+| `GET/POST/PATCH/DELETE /console/api/members` | Membership management: list, change a role, remove (`POST`, invitations, not built: CON-012) |
 | `POST /console/api/totp` | Enrol and verify (not built: CON-003) |
 | `POST /console/api/password` | Change one's password; every session of the user ends and a new one starts |
 
@@ -211,4 +212,5 @@ As built, for the console's screens (the shapes are `ConsoleSetup`, `ConsoleSign
 - `GET /console/api/me` → `ConsoleMe`: `{user: {id: "usr_…", email}, workspaces: [{id: "ws_…", key, name, role, permissions: ["charts.read", …]}], csrf_token, session: {expires_at, absolute_expires_at}}`. A `401` with `reason: "console_session"` anywhere means: sign in again.
 - `POST /console/api/password` `{current_password, new_password}` → `200` `ConsoleMe` and a new cookie; `403` `credentials` for a wrong current password.
 - **Every non-safe request** with the cookie sends `Cavea-Csrf-Token: <csrf_token>` (from `me` or the sign-in reply); `403` `csrf` without it, `403` `origin` from another site.
-- **Every `/v1` request** with the cookie sends `Cavea-Workspace: ws_…` (one of `me.workspaces`); `400` `workspace` without it, `403` `workspace` for one the user is not in, `403` `role` (with `details.permission`) for what the role does not allow.
+- **Every `/v1` request** with the cookie sends `Cavea-Workspace: ws_…` (one of `me.workspaces`); `400` `workspace` without it, `403` `workspace` for one the user is not in, `403` `role` (with `details.permission`) for what the role does not allow. Each operation's `x-cavea-permission` and `x-cavea-roles` in the document say who may call it; compare with the workspace's `permissions` in `me`.
+- **Members** (`WorkspaceMember`, `MemberList`, `ChangeRole`), with the cookie, `Cavea-Workspace` and, when not `GET`, `Cavea-Csrf-Token`; owner and admin (`settings`): `GET /console/api/members?limit=&after=` → `{data: [{user: {id: "usr_…", email}, role}], next}`; `PATCH /console/api/members/{usr_…}` `{role}` → `200` the member; `DELETE /console/api/members/{usr_…}` → `204`. `403` `role` with `details.permission: "ownership"` when an admin makes or unmakes an owner; `400` `last_owner`; `404` (`missing: "member"`) for someone who is not a member of the workspace.

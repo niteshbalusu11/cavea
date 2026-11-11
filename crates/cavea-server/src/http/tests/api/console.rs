@@ -642,3 +642,45 @@ async fn measure_session_lookup() {
     })
     .await;
 }
+
+/// The hold path with a secret key: 1,800 holds of one seat each on the
+/// tenant's token, through the router (no network); the first 200 warm up.
+/// Run with `--release -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore = "a measurement: needs CAVEA_TEST_DATABASE_URL and --release"]
+async fn measure_hold_with_a_key() {
+    let _serial = serial();
+    with_db(async move |pool| {
+        let app = api(&pool, Some(ADMIN));
+        let a = Tenant::create(&app, "a").await;
+        let uri = format!("/v1/events/{}/hold", a.event);
+        let key = [(header::AUTHORIZATION, format!("Bearer {}", a.secret))];
+        let mut times = Vec::new();
+        for i in 0..1_800 {
+            let body =
+                json!({ "hold_token": a.token, "objects": { "version": a.hash, "idx": [i] } });
+            let request = request(
+                Method::POST,
+                &uri,
+                None,
+                &refs(&key),
+                Some(body.to_string()),
+            );
+            let started = std::time::Instant::now();
+            let response = app.clone().oneshot(request).await.unwrap();
+            let elapsed = started.elapsed();
+            assert_eq!(response.status(), 200);
+            if i >= 200 {
+                times.push(elapsed.as_secs_f64() * 1e3);
+            }
+        }
+        times.sort_by(f64::total_cmp);
+        let at = |q: f64| times[((times.len() - 1) as f64 * q) as usize];
+        println!(
+            "hold with a secret key: p50 {:.3} ms, p99 {:.3} ms",
+            at(0.5),
+            at(0.99)
+        );
+    })
+    .await;
+}
