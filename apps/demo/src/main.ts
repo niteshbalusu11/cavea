@@ -6,8 +6,9 @@
 // Query parameters. Chart: `seats` (default 100000), `seed` (default 1),
 // `preset` (a `cavea-testkit` preset such as `arena` instead of the stadium),
 // `shape` (0 circle, 1 rounded, 2 chair), `script=1` (section labels and text
-// objects in other scripts, right-to-left ones among them), all compiled in
-// the browser; or
+// objects in other scripts, right-to-left ones among them; some sections'
+// rows prefixed "Ряд " and seats numbered a, b, c: labels the baked atlas
+// lacks), all compiled in the browser; or
 // `chart=url` to fetch a compiled chart, which the map then fetches in
 // parallel with the WASM, the atlas and the fake host's state. Map: `theme`
 // (light, dark, high-contrast, auto; default auto), `gestures=greedy|

@@ -21,7 +21,7 @@ use crate::{
     backend::{
         BackendError, BufferDesc, BufferId, BufferKind, BufferUsage, DrawCall, GpuBackend,
         Pipeline, Rect as TexRect, ResourceId, Sampling, Target, TextureDesc, TextureFormat,
-        TextureId, Uniforms,
+        TextureId, Uniforms, mode,
     },
     camera::{self, Camera, Limits, Rect, Size},
     cull,
@@ -120,7 +120,7 @@ pub struct LabelStats {
     /// Chunks whose label buffers are kept.
     pub cached: u32,
     /// Label draw calls in the last frame drawn: seat labels from the baked
-    /// atlas, then every draw of the dynamic atlas.
+    /// atlas, then every draw of the dynamic atlas and of row labels.
     pub draws: u32,
     pub text_draws: u32,
     /// The dynamic atlas: bytes of texture, strings rasterised since load.
@@ -564,6 +564,8 @@ impl<B: GpuBackend> Engine<B> {
             )
             .map(|b| [a, b])
         });
+        let mut map_labels = MapLabels::default();
+        map_labels.load_icons(&scene);
         let mut sections = Sections::new(&scene.chart, scene.floor, &scene.visual, &self.theme);
         sections.write_tints(&mut scene.chart, &self.theme);
         let mesh = &scene.chart.mesh;
@@ -621,7 +623,7 @@ impl<B: GpuBackend> Engine<B> {
             sections,
             seat_labels: Labels::default(),
             text_atlas,
-            map_labels: MapLabels::default(),
+            map_labels,
             palette_bytes,
         });
         self.flush_selection();
@@ -645,10 +647,11 @@ impl<B: GpuBackend> Engine<B> {
                 .into_iter()
                 .chain(loaded.mesh.into_iter().flatten())
                 .chain(loaded.seat_labels.buffer())
-                .chain(loaded.map_labels.text_buffer())
             {
                 self.backend.destroy(ResourceId::Buffer(id));
             }
+            let mut labels = loaded.map_labels;
+            labels.release(&mut self.backend);
             let mut atlas = loaded.text_atlas;
             atlas.reset(&mut self.backend);
         }
@@ -1137,6 +1140,7 @@ impl<B: GpuBackend> Engine<B> {
             dim: self.theme.dim,
             time,
             alpha,
+            mode: mode::PLAIN,
         };
         // Extreme but finite bounds (a huge offset, a tiny size) can still overflow.
         if !uniforms.view.iter().flatten().all(|v| v.is_finite()) || !uniforms.px_per_cu.is_finite()
@@ -1192,12 +1196,13 @@ impl<B: GpuBackend> Engine<B> {
         }
         self.draw_labels(camera, viewport, time)?;
         self.draw_text(camera, viewport, time)?;
-        draw_mesh(self, above, 1.0)
+        draw_mesh(self, above, 1.0)?;
+        self.draw_icons(camera, viewport, time)
     }
 
     /// Seat labels from the dynamic atlas (with pass 9's), then pass 10
-    /// (04 §7, §12): section labels, faded with the fills, and text objects;
-    /// rebuilt only when what they show changes.
+    /// (04 §7, §12): row labels, section labels (faded with the fills) and
+    /// text objects; rebuilt only when what they show changes.
     fn draw_text(
         &mut self,
         camera: Camera,
@@ -1205,6 +1210,7 @@ impl<B: GpuBackend> Engine<B> {
         time: f32,
     ) -> Result<(), (ErrorCode, String)> {
         let seat_alpha = self.seat_alpha();
+        let seat_px = self.seat_px().unwrap_or(0.0);
         let uniforms = self.world_uniforms(camera, viewport, time, 1.0)?;
         let Some(loaded) = &mut self.scene else {
             return Ok(());
@@ -1217,6 +1223,7 @@ impl<B: GpuBackend> Engine<B> {
             px_per_cu: uniforms.px_per_cu,
             ratio: viewport.ratio,
             sections: seat_alpha < 1.0 && loaded.sections.any(),
+            rows: seat_alpha > 0.0 && seat_px >= label::ROW_LABEL_SEAT_PX,
             seats: self.lod == Some(Lod::Detail),
             chunks: if seat_alpha > 0.0 { &self.visible } else { &[] },
             theme_gen: self.theme_gen,
@@ -1263,6 +1270,24 @@ impl<B: GpuBackend> Engine<B> {
             submit(backend, engine, &call)
         };
         draw_text(&mut self.draws, &mut self.backend, seats, 1.0)?;
+        if let (Some([rows, entries]), Some(glyphs)) = (labels.row_buffers(), &self.atlas)
+            && labels.rows > 0
+        {
+            let range = 0..labels.rows;
+            let call = DrawCall {
+                pipeline: Pipeline::Glyph,
+                buffers: [Some(rows), Some(entries)],
+                textures: [Some(glyphs.texture), Some(loaded.palette)],
+                uniforms: Uniforms {
+                    stroke_min_px: LABEL_MIN_EM_PX * viewport.ratio,
+                    ..uniforms
+                },
+                ranges: std::slice::from_ref(&range),
+                bases: &[0],
+            };
+            submit(&mut self.backend, &mut self.draws, &call)?;
+            self.draws[1] += 1;
+        }
         draw_text(
             &mut self.draws,
             &mut self.backend,
@@ -1277,8 +1302,39 @@ impl<B: GpuBackend> Engine<B> {
         Ok(())
     }
 
+    /// Pass 11's icons (04 §7): the active floor's decoration icons, drawn
+    /// by the `shape` program at every level.
+    fn draw_icons(
+        &mut self,
+        camera: Camera,
+        viewport: Viewport,
+        time: f32,
+    ) -> Result<(), (ErrorCode, String)> {
+        let uniforms = self.world_uniforms(camera, viewport, time, 1.0)?;
+        let Some(loaded) = &mut self.scene else {
+            return Ok(());
+        };
+        let icons = loaded.map_labels.icons(&mut self.backend);
+        let Some((buffers, n)) = icons.map_err(|e| (ErrorCode::Gpu, e.to_string()))? else {
+            return Ok(());
+        };
+        let range = 0..n;
+        let call = DrawCall {
+            pipeline: Pipeline::Shape,
+            buffers: buffers.map(Some),
+            textures: [Some(loaded.palette), None],
+            uniforms: Uniforms {
+                mode: mode::DECORATION_ICONS,
+                ..uniforms
+            },
+            ranges: std::slice::from_ref(&range),
+            bases: &[],
+        };
+        submit(&mut self.backend, &mut self.draws, &call)
+    }
+
     /// Draws the active floor's seats in the render chunks the view meets
-    /// (04 §11).
+    /// (04 §11), with their icons at the detail level (pass 8).
     fn draw_seats(
         &mut self,
         camera: Camera,
@@ -1322,7 +1378,14 @@ impl<B: GpuBackend> Engine<B> {
             pipeline: Pipeline::Shape,
             buffers: [Some(loaded.static_buf), Some(loaded.dynamic_buf)],
             textures: [Some(loaded.palette), None],
-            uniforms,
+            uniforms: Uniforms {
+                mode: if self.lod == Some(Lod::Detail) {
+                    mode::SEAT_ICONS
+                } else {
+                    mode::PLAIN
+                },
+                ..uniforms
+            },
             ranges: &self.ranges,
             bases: &[],
         };
@@ -1369,6 +1432,8 @@ impl<B: GpuBackend> Engine<B> {
         }
         let mut uniforms = self.world_uniforms(camera, viewport, time, 1.0)?;
         uniforms.stroke_min_px = LABEL_MIN_EM_PX * viewport.ratio;
+        // A seat showing a state icon shows no number.
+        uniforms.mode = mode::SEAT_ICONS;
         let call = DrawCall {
             pipeline: Pipeline::Glyph,
             buffers: [Some(buffer), Some(dynamic)],
@@ -1412,7 +1477,7 @@ impl<B: GpuBackend> Engine<B> {
             };
             let [x, y] = camera.to_screen(seat.pos.map(f64::from), viewport.css);
             let half = f64::from(seat.half) * 0.25 * camera.zoom;
-            let shape = match seat.shape {
+            let shape = match seat.shape & !seat::shape::ACCESSIBLE {
                 seat::shape::CHAIR => seat::shape::ROUNDED_SQUARE,
                 other => other,
             };
@@ -1470,6 +1535,7 @@ impl<B: GpuBackend> Engine<B> {
             dim: self.theme.dim,
             time,
             alpha: 1.0,
+            mode: mode::PLAIN,
         };
         let range = 0..n as u32;
         let call = DrawCall {
@@ -1496,7 +1562,7 @@ impl<B: GpuBackend> Drop for Engine<B> {
 }
 
 /// Draws `call`, counting its GPU draw calls (one per range): all, and those
-/// of the dynamic atlas.
+/// of the dynamic atlas (row labels are counted by their caller).
 fn submit(
     backend: &mut impl GpuBackend,
     counts: &mut [u32; 2],

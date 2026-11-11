@@ -324,7 +324,12 @@ impl Labels {
                 .and_then(|&r| chart.rows.get(r as usize))
                 .map_or(scene.seat_size, |r| f32::from(r.seat_size) * 0.25);
             let pos = scene.pos.get(idx as usize).copied().unwrap_or_default();
-            let label = seat_label(chart, idx).ok();
+            // An accessible seat shows its mark instead (04 §7 pass 8).
+            let accessible = chart
+                .seat_flags
+                .get(idx as usize)
+                .is_some_and(|f| f & 1 != 0);
+            let label = seat_label(chart, idx).ok().filter(|_| !accessible);
             let instance = label.and_then(|label| {
                 let instance = label_instance(label.seat.as_str(), pos, seat_cu);
                 if instance.is_none() && !label.seat.as_str().is_empty() {

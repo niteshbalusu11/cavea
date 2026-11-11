@@ -500,7 +500,9 @@ impl View {
     /// rounded, 2 chair. A translucent band across the floor is added above
     /// the seats, to see the upper mesh layer. With `script` 1 the section
     /// labels and text objects are replaced by strings in other scripts,
-    /// right-to-left ones among them, to see the platform shape them.
+    /// right-to-left ones among them, to see the platform shape them, and
+    /// some sections' seats numbered in lower-case letters and rows prefixed
+    /// "Ряд ", which the baked atlas cannot draw.
     /// Returns public CCF bytes for `loadChart`.
     #[cfg(feature = "demo")]
     #[wasm_bindgen(js_name = demoChart)]
@@ -512,7 +514,7 @@ impl View {
         script: u8,
     ) -> Result<Vec<u8>, JsError> {
         use cavea_compiler::document::{
-            ChartDocument, Layer, Node, SeatShape, Shape, ShapeKind, Style,
+            ChartDocument, LabelScheme, Layer, Node, SeatShape, Shape, ShapeKind, Style,
         };
         let compile = |doc: &ChartDocument| {
             cavea_compiler::compile(doc)
@@ -581,6 +583,17 @@ impl View {
                             let word = WORDS.get(n % WORDS.len()).copied().unwrap_or_default();
                             n += 1;
                             section.label = Some(format!("{word} {n}"));
+                            // Row and seat labels the baked atlas lacks.
+                            for child in &mut section.children {
+                                if let Node::RowBlock(block) = child {
+                                    if n % 2 == 1 {
+                                        block.seat_labels.scheme = LabelScheme::AlphaLower;
+                                    }
+                                    if n % 3 == 1 {
+                                        "Ряд ".clone_into(&mut block.row_labels.prefix);
+                                    }
+                                }
+                            }
                         }
                         Node::Text(text) => "المسرح · במה".clone_into(&mut text.text),
                         _ => {}

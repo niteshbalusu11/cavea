@@ -16,6 +16,9 @@ struct Globals {
     dim: f32,
     time: f32,
     alpha: f32,
+    // 1 for seat labels: a seat showing a state icon (selected, unavailable)
+    // shows it instead of its label (04 §7 pass 8).
+    mode: f32,
 }
 
 // Constant glyph metrics (src/text.rs `font_block`), uploaded once.
@@ -69,7 +72,9 @@ fn vs_main(label: LabelIn) -> LabelOut {
     let slot = label.vertex / 6u;
     let code = label.codes[slot];
     let em_px = label.em * globals.px_per_cu;
-    if code == 0u || em_px < globals.stroke_min_px {
+    let visual = label.visual_fx.x;
+    let icon = globals.mode == 1.0 && visual >= 1u && visual <= 3u;
+    if code == 0u || em_px < globals.stroke_min_px || icon {
         return out;
     }
     // Corners 0, 1, 2, 2, 1, 3 of the glyph's quad, two bits each.
