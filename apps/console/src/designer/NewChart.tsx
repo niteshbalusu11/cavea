@@ -1,7 +1,7 @@
 // The new-chart screen (07 §16): draw from scratch, start from a template
 // (theatre, arena bowl, banquet), or place a reference image, and open a
-// chart file. It is the designer's empty state, the charts screen's, and a
-// dialog from the designer's menu.
+// chart file. It is the designer's empty state and a dialog from the
+// designer's menu.
 import { For, type JSX } from "solid-js";
 import { formatNumber, msg, type MessageId } from "../i18n/messages.ts";
 import { Tip } from "../ui/controls.tsx";

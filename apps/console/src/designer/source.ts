@@ -40,21 +40,10 @@ export function fileName(name: string): string {
   return `${base === "" ? "chart" : base}.json`;
 }
 
-/** A chart the console chose before opening the designer (a template, a
- * file, an empty chart from the charts screen), for the local source. */
-let handed: string | null = null;
-export function handOff(text: string): void {
-  handed = text;
-}
-
-/** The local source: what the console handed over, else nothing (the
- * new-chart screen); saving downloads the chart document. */
+/** The local source: nothing to open at first (the new-chart screen), and
+ * saving downloads the chart document. */
 export const localSource: ChartSource = {
-  open() {
-    const text = handed;
-    handed = null;
-    return Promise.resolve(text);
-  },
+  open: () => Promise.resolve(null),
   save(draft, name) {
     const url = URL.createObjectURL(new Blob([draft], { type: "application/json" }));
     const a = document.createElement("a");
