@@ -1,7 +1,7 @@
 //! The engine: takes [`Command`]s, emits [`Event`]s, draws through a
 //! [`GpuBackend`]. Implemented so far: `LoadChart`, `SetSnapshot`,
 //! `ApplyDelta`, `SetPrivateHolds`, `SetTheme`, `Resize`, `Pointer`, `Wheel`,
-//! `SetCamera` and `FlyTo` with bounds, `SetGestureHandling`,
+//! `SetCamera` and `FlyTo` (bounds, section, seat), `SetGestureHandling`,
 //! `SetReducedMotion`, `Select`, `Deselect`, `ClearSelection`, `HoldResult`,
 //! `SetRules`, `SetSessionMode`, `SetGlyphAtlas`, `Tick` and `ContextLost`;
 //! every other command
@@ -28,7 +28,7 @@ use crate::{
     gesture::{Action, Intent, Recogniser},
     overview::{self, Sections},
     protocol::{
-        Bounds, BuiltinTheme, CameraTarget, Command, ErrorCode, Event, Lod, PointerKind,
+        Bounds, BuiltinTheme, CameraTarget, Command, ErrorCode, Event, Lod, ObjectRef, PointerKind,
         PointerType, ThemeToken,
     },
     scene::Scene,
@@ -37,7 +37,8 @@ use crate::{
     theme::{PALETTE_WIDTH, Selection, Theme, TokenError, picker_visual, status, visual},
     tuning::{
         INERTIA_STOP_PX_PER_S, INERTIA_TIME_CONSTANT_MS, MAX_BACKING_PX, MAX_DPR_OTHER,
-        MAX_QUEUED_INPUT, MAX_SEAT_DRAW_CALLS, RING_WIDTH_PX, STROKE_MIN_SEAT_PX,
+        MAX_QUEUED_INPUT, MAX_SEAT_DRAW_CALLS, OBJECT_VIEW_SEATS, RING_WIDTH_PX,
+        STROKE_MIN_SEAT_PX,
     },
 };
 
@@ -314,13 +315,11 @@ impl<B: GpuBackend> Engine<B> {
                     });
                 }
             }
-            Command::SetCamera {
-                target: CameraTarget::Bounds(target),
-            } => self.enqueue_camera(target, false, None),
+            Command::SetCamera { target } => self.camera_to(&target, false, None),
             Command::FlyTo {
-                target: CameraTarget::Bounds(target),
+                target,
                 duration_ms,
-            } => self.enqueue_camera(target, true, duration_ms),
+            } => self.camera_to(&target, true, duration_ms),
             Command::SetGestureHandling(mode) => self.recogniser.mode = mode,
             Command::SetReducedMotion(on) => {
                 self.reduced_motion = on;
@@ -388,6 +387,53 @@ impl<B: GpuBackend> Engine<B> {
         }
         self.queue.push(queued);
         self.want_frame();
+    }
+
+    /// Resolves a camera target on the floor shown (04 §13): bounds as given,
+    /// a section's box, or a box `OBJECT_VIEW_SEATS` seat sizes wide centred
+    /// on a seat. Anything else is an `InvalidInput` error.
+    fn camera_to(&mut self, target: &CameraTarget, fly: bool, duration_ms: Option<u32>) {
+        let bounds = match target {
+            CameraTarget::Bounds(bounds) => Some(*bounds),
+            CameraTarget::Section(label) => self.scene.as_ref().and_then(|l| {
+                let chart = &l.scene.chart;
+                let section = chart.sections.iter().find(|s| {
+                    s.floor == l.scene.floor && chart.strings.get(s.label) == Some(label.as_str())
+                })?;
+                let [x0, y0, x1, y1] = section.bounds.map(|v| v as f32 * 0.25);
+                let pad = l.scene.max_half;
+                Some(Bounds {
+                    x: x0 - pad,
+                    y: y0 - pad,
+                    width: x1 - x0 + 2.0 * pad,
+                    height: y1 - y0 + 2.0 * pad,
+                })
+            }),
+            CameraTarget::Object(object) => {
+                let idx = match object {
+                    ObjectRef::Label(label) => self.idx_of(label),
+                    ObjectRef::Idx(idx) => Some(*idx),
+                };
+                self.scene.as_ref().and_then(|l| {
+                    let idx = idx.filter(|i| l.scene.active.contains(i))?;
+                    let [x, y] = *l.scene.pos.get(idx as usize)?;
+                    let size = l.scene.seat_size * OBJECT_VIEW_SEATS;
+                    Some(Bounds {
+                        x: x - size / 2.0,
+                        y: y - size / 2.0,
+                        width: size,
+                        height: size,
+                    })
+                })
+            }
+        };
+        match bounds {
+            Some(bounds) => self.enqueue_camera(bounds, fly, duration_ms),
+            None => self.error(
+                ErrorCode::InvalidInput,
+                "camera target is not on the floor shown",
+            ),
+        }
     }
 
     fn enqueue_camera(&mut self, target: Bounds, fly: bool, duration_ms: Option<u32>) {

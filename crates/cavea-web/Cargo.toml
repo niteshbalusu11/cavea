@@ -24,6 +24,10 @@ cavea-compiler = { workspace = true, optional = true }
 cavea-format = { workspace = true, optional = true }
 cavea-testkit = { workspace = true, optional = true }
 
+[dev-dependencies]
+# The wire codecs the TypeScript fixture is checked against (`wire_fixture`).
+cavea-format.workspace = true
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 cavea-render = { workspace = true, features = ["glow"] }
 glow.workspace = true

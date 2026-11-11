@@ -12,6 +12,14 @@ export type Theme =
   | "auto"
   | { base?: ThemeName | "auto"; tokens: Record<string, string | number> };
 
+/** A rectangle in chart units. */
+export interface Bounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 /** One object, as callbacks and methods report it (05 §5). */
 export interface SeatObject {
   /** Full label, for example `"Orchestra-C-12"`. */
@@ -32,7 +40,7 @@ export interface Selection {
   holdToken: string | null;
   /** The selection meets `selection.min`. */
   valid: boolean;
-  /** When the buyer's holds expire, Unix ms, if known. */
+  /** When the buyer's holds expire, if known: Unix ms on this page's clock (`Date.now()`), corrected for the server's. */
   expiresAt: number | null;
 }
 
@@ -58,6 +66,8 @@ export interface SeatMapOptions {
   mode?: "picker";
   /** Default `greedy`. */
   gestureHandling?: GestureHandling;
+  /** `fit` (default), a section label, or bounds. */
+  initialView?: "fit" | string | Bounds;
   /** Default 2 on touch devices, 3 otherwise. */
   maxDpr?: number;
   /** Default `auto`: follow `prefers-reduced-motion`. */
@@ -82,6 +92,10 @@ export interface SeatMapOptions {
   onHoldFailed?: (failed: Array<{ object: SeatObject; reason: string }>) => void;
   /** The buyer's hold on these selected objects is gone (expired, released elsewhere). */
   onHoldLost?: (objects: SeatObject[]) => void;
+  /** 60 s before the buyer's holds expire (or at once, if nearer), with the seconds left. */
+  onHoldExpiring?: (secondsLeft: number) => void;
+  /** The buyer's holds expired; they have left the selection (after `onHoldLost`). */
+  onHoldExpired?: () => void;
   onObjectUnavailable?: (object: SeatObject) => void;
   /** `at`: the object's centre in CSS pixels on the map. */
   onObjectHover?: (object: SeatObject | null, at: [number, number] | null) => void;
@@ -93,14 +107,15 @@ export interface SeatMapOptions {
 /** Options of 05 §3 and callbacks of §5 not built yet: ignored, with a development warning. */
 const LATER = new Set(
   (
-    "pricing formatPrice floor spotlight zoomToSelect sectionDrillDown initialView ui colorblind locale " +
-    "messages dir fallback worker onSectionEnter onFloorChange onHoldExpiring onHoldExpired onMetrics"
+    "pricing formatPrice floor spotlight zoomToSelect sectionDrillDown ui colorblind locale " +
+    "messages dir fallback worker onSectionEnter onFloorChange onMetrics"
   ).split(" "),
 );
 const SELECTION_LATER = new Set("groupSize validators categories selectable restore".split(" "));
 const CALLBACKS =
   "onReady onSelectionChange onObjectSelect onObjectDeselect onSelectionInvalid onSelectionValid " +
-  "onHoldPending onHoldSettled onHoldFailed onHoldLost onObjectUnavailable onObjectHover onObjectFocus " +
+  "onHoldPending onHoldSettled onHoldFailed onHoldLost onHoldExpiring onHoldExpired " +
+  "onObjectUnavailable onObjectHover onObjectFocus " +
   "onCameraChange onError";
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
@@ -109,6 +124,14 @@ const isBytes = (v: unknown): boolean => v instanceof ArrayBuffer || v instanceo
 const isInt = (v: unknown, min: number, max: number): boolean =>
   Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
 const finite = (v: unknown): boolean => typeof v === "number" && Number.isFinite(v);
+export const isBounds = (v: unknown): v is Bounds =>
+  isObject(v) &&
+  finite(v["x"]) &&
+  finite(v["y"]) &&
+  (v["width"] as number) > 0 &&
+  (v["height"] as number) > 0 &&
+  finite(v["width"]) &&
+  finite(v["height"]);
 const THEMES = ["light", "dark", "high-contrast", "auto"];
 export const isTheme = (v: unknown): v is Theme =>
   THEMES.includes(v as string) ||
@@ -129,6 +152,7 @@ const CHECKS: Record<string, (v: unknown) => boolean> = {
   selection: isObject,
   mode: (v) => typeof v === "string",
   gestureHandling: (v) => ["greedy", "cooperative", "none"].includes(v as string),
+  initialView: (v) => typeof v === "string" || isBounds(v),
   maxDpr: (v) => finite(v) && (v as number) > 0,
   reducedMotion: (v) => v === "auto" || typeof v === "boolean",
   theme: isTheme,

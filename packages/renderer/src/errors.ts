@@ -18,6 +18,8 @@ export type CaveaErrorCode =
   | "state_connect_failed"
   /** The adapter reported an error, or sent state the engine refused. */
   | "state_failed"
+  /** The realtime connection dropped (it reconnects) or stopped (`caveaServer`). */
+  | "state_disconnected"
   /** The adapter's `hold` rejected or timed out; the hold was reverted. */
   | "hold_failed"
   /** The adapter's `release` rejected or timed out. */

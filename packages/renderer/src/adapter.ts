@@ -51,6 +51,12 @@ export interface AdapterContext {
   setMine(labels: string[], expiresAt?: number): void;
   /** The hold token, reported in `getSelection()` and `onSelectionChange`. */
   setHoldToken(token: string | null): void;
+  /**
+   * The server's clock minus this page's (`Date.now()`), in ms, once known.
+   * Expiries the adapter reports (`expiresAt`, PRIVATE frames) are on the
+   * server's clock; the map converts them with this.
+   */
+  setClockOffset(ms: number): void;
   /** Reports a recoverable problem through `onError`. */
   reportError(error: unknown): void;
 }

@@ -16,7 +16,7 @@ The public JavaScript surface of the renderer. Everything here is semver-stable 
 
 A script-tag build (`cavea.min.js` plus `cavea.wasm`) is published for sites without a bundler (not built yet: WEB-013).
 
-**Built today** (WEB-001 to WEB-005): `createSeatMap`, `staticState`, `customState`, `CaveaError` and their types, from `@cavea/renderer`, which has no runtime dependencies. Features this document describes but that are not built yet are marked "not yet" with the task that builds them. Options and callbacks that are not built are left out of the TypeScript types, so a typed build fails on them; passed anyway, they are ignored with a development warning (§3.6). `loadRenderer()` loads the shared WASM and reports its `version()`; nothing else below the public API is exported.
+**Built today** (WEB-001 to WEB-005, WEB-020 to WEB-025): `createSeatMap`, `staticState`, `customState`, `caveaServer`, `CaveaError` and their types, from `@cavea/renderer`, which has no runtime dependencies. Features this document describes but that are not built yet are marked "not yet" with the task that builds them. Options and callbacks that are not built are left out of the TypeScript types, so a typed build fails on them; passed anyway, they are ignored with a development warning (§3.6). `loadRenderer()` loads the shared WASM and reports its `version()`; nothing else below the public API is exported.
 
 ## 2. Quick start
 
@@ -43,7 +43,7 @@ const map = await createSeatMap(document.getElementById('map')!, {
 
 Shorter form when the server knows the chart: omit `chart`; the adapter reads the event's pinned version.
 
-Not yet: `caveaServer` (WEB-020), `pricing` and `formatPrice` (WEB-009) and `selection.validators`. Without a server, `customState` (§14) works today.
+Not yet: `pricing` and `formatPrice` (WEB-009) and `selection.validators`. Without a server, `customState` (§14) works.
 
 ## 3. Options
 
@@ -68,7 +68,7 @@ Not yet: `caveaServer` (WEB-020), `pricing` and `formatPrice` (WEB-009) and `sel
 | `selection.validators.consecutive` | boolean | false | Not yet |
 | `selection.categories` | string[] | all | Only these categories are selectable. Not yet |
 | `selection.selectable` | `(obj) => boolean` | none | Extra host rule; called on tap only. Not yet |
-| `selection.restore` | boolean | true | Restore the buyer's holds after a reload. Not yet as an option (WEB-023): the engine always restores the holds an adapter reports as the buyer's (`mine`, or a PRIVATE frame) |
+| `selection.restore` | boolean | true | Restore the buyer's holds after a reload. Not yet as an option: the engine always restores the holds an adapter reports as the buyer's (`mine`, or a PRIVATE frame), and `caveaServer` always reports them (§4.1) |
 
 ### 3.3 Behaviour
 
@@ -79,7 +79,7 @@ Not yet: `caveaServer` (WEB-020), `pricing` and `formatPrice` (WEB-009) and `sel
 | `gestureHandling` | `'greedy'`, `'cooperative'`, `'none'` | `'greedy'` | Built |
 | `zoomToSelect` | boolean | true on touch | Not yet as an option: the engine always zooms a seat too small to pick (under 18 px on touch, 5 px with a mouse) |
 | `sectionDrillDown` | boolean | true when the chart has sections | Not yet |
-| `initialView` | `'fit'`, section label, or bounds | `'fit'` | Not yet (the rest of WEB-005); the map fits the chart |
+| `initialView` | `'fit'`, section label, or bounds | `'fit'` | Built; a section on the floor shown. An unknown section is reported through `onError` (`invalid_input`) and the chart is fitted |
 | `maxDpr` | number | 2 touch, 3 otherwise | Built |
 | `reducedMotion` | `'auto'`, `true`, `false` | `'auto'` | Built; `'auto'` follows `prefers-reduced-motion` |
 
@@ -92,7 +92,7 @@ Not yet: `caveaServer` (WEB-020), `pricing` and `formatPrice` (WEB-009) and `sel
 | `ui.legend` | boolean | true | Not yet (WEB-006) |
 | `ui.filters` | `{ categories?, price?, accessible? }` or false | false | Not yet (WEB-030) |
 | `ui.tooltip` | boolean or `(obj) => HTMLElement \| string` | true | Not yet (WEB-007) |
-| `ui.holdTimer` | boolean | false | Not yet (WEB-024) |
+| `ui.holdTimer` | boolean | false | Not yet (WEB-006): the countdown is the built-in interface's. Its data exists: `getSelection().expiresAt` is on the page's clock, so the seconds left are `(expiresAt - Date.now()) / 1000`; `onHoldExpiring` and `onHoldExpired` fire (§5) |
 | `ui.listViewToggle` | boolean | true | Not yet |
 | `theme` | `'light'`, `'dark'`, `'high-contrast'`, `'auto'`, or `{ base?, tokens }` | `'auto'` | Built. `'auto'` is light or dark following `prefers-color-scheme`, and its changes. `tokens` maps §8 names (with or without `--cavea-`) to values over `base` (default `'light'`; `'auto'` allowed); an unknown token or bad value is reported through `onError` (`invalid_input`) and the theme is unchanged |
 | `colorblind` | boolean | false | Not yet |
@@ -154,6 +154,7 @@ interface AdapterContext {
   applyDelta(d: { unavailable?: string[]; available?: string[] }): void;  // labels
   setMine(labels: string[], expiresAt?: number): void; // the buyer's own holds, by label
   setHoldToken(token: string | null): void;           // reported in getSelection() and onSelectionChange
+  setClockOffset(ms: number): void;                   // the server's clock minus Date.now()
   reportError(error: unknown): void;                  // to onError, not fatal
 }
 ```
@@ -161,52 +162,104 @@ interface AdapterContext {
 How it works:
 
 - **Two forms of state.** An adapter speaks either the server's wire format (`binary` snapshots and `applyFrame`, handed to the engine byte for byte; HELLO, RESYNC, PING and CLOSE frames are the adapter's own business) or labels (`map` snapshots, `applyDelta`, `setMine`). Label state is converted to the engine's per-object codes inside the WASM in one call per update (`View.setSnapshotLabels`, `applyDeltaLabels`, `setPrivateLabels`), never one call per seat. Label deltas are numbered by the SDK, so they never trip a resync; an adapter does not mix the two forms. Unknown labels are skipped and reported through `onError` (`state_failed`).
-- **`mine` and `expiresAt`.** Labels the buyer's hold token holds; the engine keeps them selected, selects them after a reload, and reports `expiresAt` in `onSelectionChange`. A `map` snapshot without `mine` leaves the buyer's set as it was.
+- **`mine` and `expiresAt`.** Labels the buyer's hold token holds; the engine keeps them selected, selects them after a reload, and reports `expiresAt` in `onSelectionChange`. A `map` snapshot without `mine` leaves the buyer's set as it was. A held seat that leaves the set leaves the selection (`onHoldLost`); an adapter drops the buyer's seats at their expiry this way, and that is when `onHoldExpired` fires (§5).
+- **Clocks.** Expiries an adapter reports (`expiresAt`, PRIVATE frames) are on the server's clock. `setClockOffset` tells the map the server's clock minus the page's `Date.now()`; the map then reports `expiresAt` on the page's clock and times `onHoldExpiring` by the server's. Without it the two clocks are taken to agree.
 - **Order.** Calls on the context made before the first snapshot is applied (before the chart is loaded, or before `connect` resolves) are kept and applied after it, in order. A snapshot that arrives before the chart is applied once the chart is decoded.
-- **Holds.** With `hold` and `release`, each engine `HoldRequest` and `ReleaseRequest` (04 §16) is passed to the adapter. `hold` and `release` are called one at a time, in the order the engine emits them, each after the previous call's promise has settled; the engine already coalesces taps into at most one hold in flight. `{ ok: true }` holds every label of the request. A refusal is all or nothing (02 §4.3): `failed` names the objects at fault with their reasons (the server's per-object `reason`, such as `object_not_free`), and `code` the request's (such as `hold_limit_exceeded`, `rate_limited`, or `not_found` for a hold token that is gone, which drops the whole selection); objects `failed` does not name are requested again with the next hold. A rejected or thrown `hold`, or one without an answer in 20 seconds, is reported as `hold_failed` through `onError` and fails the request with code `hold_failed`. A failing `release` is reported as `release_failed`. A result after `destroy` is ignored. Retrying a request is the adapter's choice (`caveaServer` retries once, WEB-021).
+- **Holds.** With `hold` and `release`, each engine `HoldRequest` and `ReleaseRequest` (04 §16) is passed to the adapter. `hold` and `release` are called one at a time, in the order the engine emits them, each after the previous call's promise has settled; the engine already coalesces taps into at most one hold in flight. `{ ok: true }` holds every label of the request. A refusal is all or nothing (02 §4.3): `failed` names the objects at fault with their reasons (the server's per-object `reason`, such as `object_not_free`), and `code` the request's (such as `hold_limit_exceeded`, `rate_limited`, or `not_found` for a hold token that is gone, which drops the whole selection); objects `failed` does not name are requested again with the next hold. A rejected or thrown `hold`, or one without an answer in 20 seconds, is reported as `hold_failed` through `onError` and fails the request with code `hold_failed`. A failing `release` is reported as `release_failed`. A result after `destroy` is ignored. Retrying a request is the adapter's choice (`caveaServer` retries once, §4.1).
 - **Manual session.** An adapter without `hold` and `release` puts the engine in `manual` session mode: taps select at once and nothing is held (D-14).
 - **Lifetime.** `chart` and `connect` are called once, at start. `disconnect` is called once, last, on `destroy` or when loading fails; no other method is called after it, and the context's calls do nothing.
 - **Errors.** A rejected `connect`, or a first state the engine refuses (a malformed frame, a snapshot of the wrong length), rejects `createSeatMap` (`state_connect_failed`): a picker without state would offer seats it cannot know are free. Unknown labels in it are only reported. Every later adapter error goes to `onError` and never reaches the page as an exception or an unhandled rejection.
-
-What `caveaServer` (WEB-020 to WEB-025) uses: `chart` returns the event info's `chart.url` (fetched with the snapshot in parallel with the WASM); `connect` creates or restores the hold token (`setHoldToken`), fetches the binary snapshot and resolves with it, then subscribes with the snapshot's `seq` and passes SNAPSHOT, DELTA and PRIVATE frames to `applyFrame`; `hold` and `release` send the token in the JSON body and map a problem response to `{ ok: false, code, failed }` from the failing objects' `label` and `reason`; `resync` fetches a fresh snapshot for `applySnapshot`; `pause` and `resume` drop and restore the realtime connection; `disconnect` closes it; `signal` cancels its fetches.
 
 Built-in adapters:
 
 | Adapter | Use |
 |---|---|
-| `caveaServer(options)` | Talks to `cavea-server`: binary snapshot over HTTP, deltas over WebSocket with SSE and polling fallback, holds over HTTPS. Not yet (WEB-020) |
+| `caveaServer(options)` | Talks to `cavea-server`: binary snapshot over HTTP, deltas over WebSocket with SSE and polling fallback, holds over HTTPS (§4.1) |
 | `staticState({ unavailable })` | Fixed state by label, no holds, for static and spotlight modes or demos |
 | `customState(impl)` | The host's own backend. Implement `connect`, and `hold` and `release` if you want hold-on-select |
 
-`caveaServer` options:
+### 4.1 `caveaServer`
+
+```ts
+state: caveaServer({ baseUrl: 'https://tickets.example.com/cavea', publishableKey: 'pk_live_…', event: 'hamlet-2027-03-14' })
+```
 
 | Option | Type | Default | Notes |
 |---|---|---|---|
-| `baseUrl` | string | — | |
+| `baseUrl` | string | — | Where `cavea-server` answers; relative to the page if relative |
 | `publishableKey` | string | — | |
 | `event` | string | — | Event key |
-| `session` | `'start'`, `'continue'`, `'manual'`, `'none'` | `'start'` | `start` creates a hold token; `continue` reuses one |
-| `holdToken` | string | — | For `continue` |
-| `sessionToken` | string or `() => Promise<string>` | — | Signed by the customer's backend (`08-server.md` §11); carries the buyer's `sub`, limits and channels. Sent as `Cavea-Session` on hold-token creation, hold and release, and in SUBSCRIBE. Required before the first hold when the event info says `require_session` |
-| `transport` | `'auto'`, `'ws'`, `'sse'`, `'poll'` | `'auto'` | |
-| `pauseWhenHidden` | boolean | true | Drops the realtime connection in background tabs and resyncs on return |
+| `session` | `'start'`, `'continue'`, `'manual'`, `'none'` | `'start'` | Below |
+| `holdToken` | string | — | Required for `continue`, refused otherwise |
+| `sessionToken` | string or `() => Promise<string>` | — | Signed by the customer's backend (`08-server.md` §11). Sent as `Cavea-Session` on hold-token creation, hold and release, and in SUBSCRIBE once known. A function is called at the first hold, and once more (with the request repeated) when the server answers `401` with `details.session` `expired` |
+| `transport` | `'auto'`, `'ws'`, `'sse'`, `'poll'` | `'auto'` | Below |
+| `pauseWhenHidden` | boolean | true | Below |
 
-The hold token is persisted in `sessionStorage` under a key derived from the event, so a reload keeps the buyer's seats.
+An invalid option throws a fatal `CaveaError` (`invalid_option`, `option` such as `state.event`) from `caveaServer` itself.
+
+**Start.** `chart` (when the host gives no chart) and `connect` start together, alongside the WASM: the event info (`GET /v1/public/events/{event}`, key in `Authorization`), the snapshot (`GET …/state?key=`, a simple request) and, if there is a hold token to restore, `GET /v1/public/hold-tokens/current`. The chart is the event info's `chart.url` under `baseUrl`. `connect` resolves with the binary snapshot; a failed info or snapshot request rejects it, so `createSeatMap` rejects with `state_connect_failed`. So does an event whose info says `require_session` when `session` is `start` or `continue` and no `sessionToken` is given. The realtime connection opens after the snapshot, from its `seq`.
+
+**Transports.** SNAPSHOT, DELTA and PRIVATE frames go to the engine byte for byte; the adapter reads only a frame's type and `seq`, HELLO, PING and CLOSE. A DELTA advances the adapter's `seq` only if it starts at it; the engine refuses one that does not and asks for a resync.
+
+| Transport | How | The buyer's own holds |
+|---|---|---|
+| WebSocket | `GET /v1/public/rt?key=`; SUBSCRIBE (version 1, event, `seq`, the hold token and session token if any); every PING answered with PONG; 60 s without any frame (the server pings every 25 s) counts as a dropped connection | PRIVATE frames, when SUBSCRIBE carried the hold token. A token created after the connection opened is followed by reconnecting with it at once |
+| SSE | `GET …/stream?key=&last_seq=`; each event's `data` is a base64 frame. The adapter closes the `EventSource` on every error and reconnects itself, from its `seq`, with the backoff below, rather than leaving dropped connections to `EventSource`'s fixed delay | No PRIVATE frames (a hold token never goes in a URL): read from `hold-tokens/current` (`setMine`) after each hold and release, at every (re)connection, at the expiry, every 60 s while any hold is live, and 5 s after a read that failed. A read that a later hold or release overtakes is dropped |
+| Polling | `GET …/state?key=&after_seq=` every 2 s: `200` with a DELTA or SNAPSHOT, `204` when current | As SSE |
+
+- **Auto.** WebSocket first. A transport that fails twice in a row without ever delivering a HELLO on this page (a poll answer counts as one) is given up for the next: SSE, then polling. One that has delivered a HELLO is kept for the page's life and reconnected however often it drops (a server restart is not a reason to fall back), and a fallback that works stays: the better transport is not tried again until the page reloads. A forced transport is the only one tried. A transport the browser lacks is skipped.
+- **Reconnection.** After a dropped connection, a failed one, CLOSE 3 or 6 or an unknown reason: `min(30 s, 500 ms × 2^(n−1))` for the n-th consecutive failure, times a random factor from 0.5 to 1, and never sooner than a polling `429`'s `Retry-After`. A HELLO resets the count. The connection resumes from the adapter's `seq` (the server sends the DELTAs since, or a SNAPSHOT). The first drop of a live connection is reported (`state_disconnected`, recoverable); the map stays usable meanwhile and holds still go over HTTPS.
+- **CLOSE.** 1 (archived), 2 (chart upgraded: reloading the chart in place is a later task), 4 (protocol version) and 5 (unknown event for this key) stop realtime for the page, reported as `state_disconnected`. CLOSE 5 after a SUBSCRIBE that carried the hold token means the token may not be followed: its session has ended (as below) and the adapter subscribes again at once without it.
+- **HELLO** sets the clock offset (its server time minus `Date.now()`). A chart hash other than the event info's means the event moved to another chart version since the page loaded: reported (`state_failed`, "reload the page"); state keeps flowing to the loaded chart until then.
+- **Resync.** When the engine reports a gap, or the host calls `map.resync()`, the adapter reconnects the stream with `seq` 0 (the next poll asks from 0), so the SNAPSHOT arrives on the stream itself, in order with the deltas after it. A snapshot fetched over HTTP could be older than the stream's position and never line up.
+- **Pause.** With `pauseWhenHidden`, a page hidden for 10 s drops its connection (the poll loop stops); shown again, it reconnects at once from its `seq`, so the server sends the deltas it missed if its 60 s buffer still has them, else a SNAPSHOT. Holds are not released by hiding.
+- **Malformed frames** (a text message, bad base64, a HELLO or `seq` that does not decode) are reported (`state_failed`) and the connection is dropped and resumed.
+
+**Sessions.**
+
+| `session` | Hold token | Selecting |
+|---|---|---|
+| `start` | Created (`POST /v1/public/hold-tokens`) at the buyer's first tap, not on load: an eager token would cost a request (from the holds budget, `08-server.md` §12), a hold record on the server and, with `require_session`, one of the buyer's `max_tokens_per_sub`, for every visitor who never taps. The first tap waits one more round trip | Hold on select |
+| `continue` | `holdToken`, created by the host's backend; checked with `hold-tokens/current` at start and never stored | Hold on select. Once the token has ended, taps fail with `session_ended` and `state_failed` is reported once |
+| `manual` | None | Taps select without holding; the host holds at checkout from `getSelection()` |
+| `none` | None | As `manual` today: hiding the selection needs `mode: 'static'` (§12), which is not built |
+
+**Holds.** `hold` posts `{hold_token, objects: labels}` to `…/events/{event}/hold`; `release` posts to `…/release`. A token ends when the server answers `404` with `details.missing` `hold_token`, or `hold-tokens/current` answers `404`, or CLOSE 5 follows a SUBSCRIBE with it: the adapter forgets it (`setHoldToken(null)`, removed from storage) and sets the buyer's holds to none. In `start` mode the next tap creates a new token.
+
+| Server answer to a hold | `HoldResult` | Reported |
+|---|---|---|
+| `200` | `{ ok: true }` | — |
+| `409 object_not_free` and other refusals naming objects | `{ ok: false, code, failed }`, `failed` the objects' `label` and `reason` (`not_free`: the seat leaves with `onObjectUnavailable`) | — |
+| `422 hold_limit_exceeded` | `{ ok: false, code }` (`onSelectionInvalid` with that rule) | — |
+| `404`, `missing: hold_token` | `{ ok: false, code: 'not_found' }`: the engine drops the selection (`onHoldLost`) | — |
+| `404` for objects | `code: 'unknown_object'` | `hold_failed` |
+| `401` `expired`, with a `sessionToken` function | Called again; the request repeated once | — |
+| `429`, `503` | Repeated once after `Retry-After` if that is at most 2 s; otherwise, or failing again, `{ ok: false, code }` (`rate_limited`, `overloaded`, `unavailable`) | `hold_failed` |
+| A network failure | Repeated once after 500 ms; failing again, `hold` rejects: the map fails the request with `hold_failed` | `hold_failed` |
+| Any other status | `{ ok: false, code }` with the problem's `code` | `hold_failed` |
+
+Each request is cancelled after 8 s, its body included. A hold gives up 18 s after it started, token creation, a session-token refresh and retries included, so the map's own 20 s limit is never reached and holds stay one at a time; a retry that would end past that is not made. Hold-token creation follows the same table. A release is repeated the same way; a release whose token has ended succeeds; any other refusal rejects (`release_failed`).
+
+**Persistence.** In `start` mode the token is kept in `sessionStorage` under `cavea:hold:<baseUrl>|<publishableKey>|<event>` (the base URL resolved and without a trailing slash), so it is per tab, per server, per workspace (the key names it) and per event. On load a stored token is checked with `hold-tokens/current`: known, its holds come back selected and held with one `onSelectionChange`, which carries the token; unknown (expired), it is removed silently and the session starts afresh at the next tap. Where `sessionStorage` cannot be used (private modes, sandboxed frames, a full quota) the token is kept in memory for the page's life. `getSelection().holdToken` and `onSelectionChange` give it to the host for booking.
+
+**Clock.** The buyer's clock can be minutes off. The adapter sets the offset from each HELLO; before any HELLO, from hold-token creation (the token's `expires_at`, plus half a second for its truncation, less the event's `hold_ttl_seconds`, against the middle of the request); on polling, from a readable `Date` header (a same-origin server only: `Date` is not exposed across origins). Without any of these (polling across origins with a restored token) the page's clock is trusted.
+
+**Measured locally** (2026-11-11; AMD Ryzen 9 7900X, Linux; `cavea-server` release build and PostgreSQL 18 on the same machine over loopback; two headless Chromium 157 instances with software WebGL2 (SwiftShader) on `apps/demo` in server mode, one driven by touch, one by mouse, over the DevTools protocol). Hold to visible, from browser A's hold response arriving (its `fetch` resolving) to browser B's engine reporting the seat unavailable (`findObject`, sampled every millisecond in B), both on the machine's one clock, over 34 taps on the WebSocket: median 1 ms, 95th percentile 3 ms, maximum 4 ms; release to visible the same. The taps were about a second apart, so each delta was the first publication after a quiet interval and went out at once (D-27); a change within 100 ms of the previous publication waits for the interval (one such tap: 98 ms). Over SSE 2 ms; over polling up to the 2 s interval (561 ms seen). This is a loopback measurement, not a network or device result; the 250 ms criterion (`ROADMAP.md` M2, `01-architecture.md` §5) held with that margin here.
 
 ## 5. Callbacks
 
 | Callback | Fires when | Payload | Today |
 |---|---|---|---|
 | `onReady` | Chart-ready | `{ chart: { name, seats, objects }, backend: 'webgl2', marks }`: timing marks in ms since `createSeatMap` (04 §24: `init_start`, `wasm_ready`, `chart_fetched`, `chart_decoded`, `first_frame`, `state_ready`; also `performance.mark('cavea:<name>')`) | Built; fires just before the promise resolves. `first_frame` is missing while the container is hidden |
-| `onSelectionChange` | The selection changes | `{ objects, holdToken, valid, expiresAt }` | Built; `valid`: at least `selection.min` objects |
+| `onSelectionChange` | The selection changes | `{ objects, holdToken, valid, expiresAt }` | Built; `valid`: at least `selection.min` objects; `expiresAt` in Unix ms on the page's clock (`Date.now()`), corrected for the server's (§4) |
 | `onObjectSelect` / `onObjectDeselect` | One object is added or removed | Object | Built |
 | `onSelectionInvalid` / `onSelectionValid` | Rule state changes | `(rule, objects)` / — | Built: rule `min` (objects: the selection) or a refusal (`max`, `not_free`, a hold code: objects refused) |
 | `onHoldPending` / `onHoldSettled` | Hold requests start and finish | — (use to disable the checkout button) | Built: pending when the first of a run of holds starts, settled when the last is answered |
 | `onHoldFailed` | A hold was refused | `[{ object, reason }]` | Built |
 | `onHoldLost` | The buyer's hold on selected objects is gone (expired, released elsewhere, token gone) | Objects; they also leave the selection | Built (new) |
 | `onObjectUnavailable` | A selected object was taken | Object | Built |
-| `onHoldExpiring` | 60 s before expiry | Seconds left | Not yet (WEB-024) |
-| `onHoldExpired` | The hold token expired | — | Not yet (WEB-024) |
+| `onHoldExpiring` | 60 s before expiry | Seconds left | Built: once per expiry the adapter reports, timed by the server's clock (§4); at once with the seconds left if the expiry is nearer than 60 s when it becomes known (after a reload, say). One timer, recomputed when it fires and when the page is shown again, since hidden pages run timers late; none after `destroy` |
+| `onHoldExpired` | The hold token expired | — | Built: when the buyer's held seats leave the selection (after `onHoldLost`) within 5 s of their expiry or after it, by the server's clock. A hold given up earlier (released elsewhere, deselected) fires no expiry |
 | `onObjectHover` / `onObjectFocus` | Pointer or keyboard focus | `(object or null, at)`: `at` the object's centre in CSS pixels | Built; focus waits for keyboard navigation (A11Y-001) |
 | `onSectionEnter` | The camera drills into a section | Section | Not yet |
 | `onFloorChange` | The floor changes | Floor | Not yet |
@@ -242,13 +295,13 @@ Today `kind` is always `'seat'` (tables, booths and areas are not compiled yet),
 | `map.selectBestAvailable({ quantity, categories?, accessible? })` | Uses the adapter's `bestAvailable` | Not yet |
 | `map.setPricing(p)`, `map.setFilter(f)`, `map.setTheme(t)`, `map.setLocale(l)` | Live updates | `setTheme` built (§3.4 values); the others not yet (WEB-009, WEB-030, WEB-011) |
 | `map.setMode(m)`, `map.setSpotlight(labels)` | | Not yet |
-| `map.zoomTo(target, opts?)` | Section label, object label, floor, bounds, or `'fit'` | Not yet (the rest of WEB-005) |
-| `map.zoomIn()`, `map.zoomOut()` | | Not yet (the rest of WEB-005) |
+| `map.zoomTo(target, opts?)` | Section label, object label, floor, bounds, or `'fit'` | Built for `'fit'`, bounds, a section label and a seat label on the floor shown (a string names a section if one has that label, else a seat); floors not yet. Animated unless `{ animate: false }`. The camera stays within the chart, so a seat near its edge may not be centred |
+| `map.zoomIn()`, `map.zoomOut()` | | Built: twice or half the zoom about the centre |
 | `map.setFloor(id)` | | Not yet |
-| `map.findObject(label)` | Details and current status | Not yet (the rest of WEB-005) |
-| `map.listSections()`, `map.listCategories()` | With availability counts | Not yet (the rest of WEB-005) |
+| `map.findObject(label)` | Details and current status | Built: the `SeatObject` and `status` (`'available'`, `'unavailable'` or `'selected'`), or `null` for an unknown label |
+| `map.listSections()`, `map.listCategories()` | With availability counts | Built. Sections: `{ label, floor, seats, available }`, `available` counting seats not drawn unavailable (free, or selected by this buyer). Categories: `{ key, label, color, objects }` (`color` `#rrggbbaa`, `objects` bookable objects); per-category availability not yet (the engine keeps no per-category counters) |
 | `map.showListView(bool)` | Switch between map and accessible list | Not yet |
-| `map.resync()` | Force a fresh snapshot | Not yet (the rest of WEB-005); the engine's own resync requests reach the adapter's `resync` |
+| `map.resync()` | Force a fresh snapshot | Built: calls the adapter's `resync` |
 | `map.toImage({ width, height })` | PNG blob of the current view (thumbnails, confirmation pages) | Not yet |
 | `map.destroy()` | Releases the GL context, sockets and listeners. Does not release holds | Built: disconnects the adapter, aborts its `signal`, removes every listener, observer and pending frame and timer, frees the WASM view and removes the canvas. Later calls do nothing (a development warning); a second `destroy` does nothing |
 
@@ -308,7 +361,7 @@ class CaveaError extends Error {
 }
 ```
 
-Codes: `invalid_option`, `not_browser`, `wasm_unavailable`, `webgl_unavailable`, `chart_fetch_failed`, `bad_chart` and `state_connect_failed` (fatal, at start); `state_failed` (an adapter error, refused or unknown state), `hold_failed`, `release_failed`, `callback_failed`, `glyph_atlas_failed` (seats are drawn without labels), `invalid_input` (a method's input refused) and `engine_failed` (a frame or input call failed). `state_disconnected` comes with `caveaServer` (WEB-020).
+Codes: `invalid_option`, `not_browser`, `wasm_unavailable`, `webgl_unavailable`, `chart_fetch_failed`, `bad_chart` and `state_connect_failed` (fatal, at start); `state_failed` (an adapter error, refused or unknown state), `state_disconnected` (`caveaServer`'s realtime connection dropped and is reconnecting, or stopped for good, §4.1), `hold_failed`, `release_failed`, `callback_failed`, `glyph_atlas_failed` (seats are drawn without labels), `invalid_input` (a method's input refused) and `engine_failed` (a frame or input call failed).
 
 | Situation | Behaviour |
 |---|---|
@@ -317,9 +370,9 @@ Codes: `invalid_option`, `not_browser`, `wasm_unavailable`, `webgl_unavailable`,
 | WebGL2 unavailable | Canvas 2D fallback. Today: fatal, `webgl_unavailable` |
 | Glyph atlas fails | The map works without seat labels; `onError` with `glyph_atlas_failed` |
 | GL context lost | Pause, restore, re-upload; no user-visible error if restored within 5 s |
-| Realtime connection drops | Keep the map usable, show a discreet "reconnecting" indicator, resync on return; holds still go over HTTPS |
+| Realtime connection drops | Keep the map usable, show a discreet "reconnecting" indicator, resync on return; holds still go over HTTPS. Today: `onError` with `state_disconnected` at the first drop, reconnection with backoff from `seq` (§4.1); the indicator waits for WEB-006 |
 | Sequence gap | Automatic resync |
-| Hold request fails for network reasons | Retry once, then revert the selection and report `onHoldFailed`. The retry is the adapter's (WEB-021); the SDK reverts and reports a rejected `hold` |
+| Hold request fails for network reasons | Retry once, then revert the selection and report `onHoldFailed`. The retry is the adapter's (`caveaServer`: §4.1); the SDK reverts and reports a rejected `hold` |
 | Unknown option | Console warning in development builds only (§3.6) |
 
 After `onReady`, the renderer never throws into host code: methods, callbacks, input and frames report through `onError`.

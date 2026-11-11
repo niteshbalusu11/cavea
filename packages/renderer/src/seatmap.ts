@@ -13,8 +13,10 @@ import { CaveaError, isDevelopment, warner, type CaveaErrorCode } from "./errors
 import type { ChartInfo, ObjectInfo, RendererEvent } from "./events.ts";
 import type { AttachOptions, Attached } from "./host.ts";
 import {
+  isBounds,
   isTheme,
   validateOptions,
+  type Bounds,
   type SeatMapOptions,
   type SeatObject,
   type Selection,
@@ -30,13 +32,19 @@ export interface Env {
   /** The glyph atlas's pixels. */
   atlas(assets: SeatMapOptions["assets"]): Promise<Uint8Array>;
   /** A canvas in a shadow root of `element`. */
-  mount(element: HTMLElement): { canvas: HTMLCanvasElement; remove(): void };
+  mount(element: HTMLElement): {
+    canvas: HTMLCanvasElement;
+    size(): [number, number];
+    remove(): void;
+  };
   attach(view: EngineView, canvas: HTMLCanvasElement, options: AttachOptions): Attached;
   /** Calls `listener` with whether the system prefers dark, now and on change; returns the unsubscribe. */
   darkScheme(listener: (dark: boolean) => void): () => void;
   /** After this long without an answer, a hold or release counts as failed. */
   holdTimeoutMs: number;
 }
+
+export type ObjectStatus = "available" | "unavailable" | "selected";
 
 /** The map `createSeatMap` resolves with (05 §6). Methods never throw; after `destroy` they do nothing. */
 export interface SeatMap {
@@ -46,14 +54,24 @@ export interface SeatMap {
   deselect(labels: string[]): void;
   clearSelection(): void;
   setTheme(theme: Theme): void;
+  /** `fit`, a section label, a seat label, or bounds. Animated unless `animate` is false. */
+  zoomTo(target: "fit" | string | Bounds, options?: { animate?: boolean }): void;
+  zoomIn(): void;
+  zoomOut(): void;
+  findObject(label: string): (SeatObject & { status: ObjectStatus }) | null;
+  /** `available`: seats not drawn unavailable (free, or selected by this buyer). */
+  listSections(): Array<{ label: string; floor: string; seats: number; available: number }>;
+  /** `color`: `#rrggbbaa`; `objects`: bookable objects in the category. No availability counts yet. */
+  listCategories(): Array<{ key: string; label: string; color: string; objects: number }>;
+  /** Asks the adapter for a fresh snapshot. */
+  resync(): void;
   /** Releases the GL context, the adapter's connection and listeners. Does not release holds. */
   destroy(): void;
 }
 
-/** 05 §6 methods not built yet: they warn in development and do nothing. */
+/** 05 §6 methods whose feature is not built: they warn in development and do nothing. */
 const LATER_METHODS =
-  "setPricing setFilter setLocale setMode setSpotlight setFloor selectBestAvailable showListView " +
-  "toImage zoomTo zoomIn zoomOut findObject listSections listCategories resync";
+  "setPricing setFilter setLocale setMode setSpotlight setFloor selectBestAvailable showListView toImage";
 
 type Callbacks = {
   [K in keyof SeatMapOptions as K extends `on${string}` ? K : never]-?: NonNullable<
@@ -79,6 +97,11 @@ const fatal = <T>(promise: Promise<T>, code: CaveaErrorCode): Promise<T> =>
   promise.catch((error: unknown) => {
     throw new CaveaError(code, String(error), true, error);
   });
+
+/** `onHoldExpiring` fires this long before the buyer's holds expire (05 §5). */
+const EXPIRING_MS = 60_000;
+/** Holds lost this close to their expiry, or after it, expired (`onHoldExpired`). */
+const EXPIRED_SLACK_MS = 5_000;
 
 const bytesOf = (b: ArrayBuffer | Uint8Array): Uint8Array =>
   b instanceof Uint8Array ? b : new Uint8Array(b);
@@ -113,7 +136,15 @@ export async function createMap(
   let seq = 0;
   let holdToken: string | null = null;
   let selected = new Map<string, SeatObject>();
+  /** When the buyer's holds expire, on the server's clock (Unix ms). */
   let expiresAt: number | null = null;
+  /** The server's clock minus this page's, from the adapter. */
+  let offset = 0;
+  /** The expiry `onHoldExpiring` and `onHoldExpired` watch (server ms), and whether the first fired for it. */
+  let deadline: number | null = null;
+  let warned = false;
+  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  let camera: { centre: [number, number]; zoom: number } | undefined;
   let unwatchTheme: (() => void) | undefined;
   let outstanding = 0;
   let queue: Promise<void> = Promise.resolve();
@@ -218,6 +249,12 @@ export async function createMap(
     setHoldToken: (token) => {
       holdToken = token;
     },
+    setClockOffset: (ms) => {
+      if (Number.isFinite(ms)) {
+        offset = ms;
+        watchExpiry();
+      }
+    },
     reportError: (error) => report(failure("state_failed", error)),
   };
 
@@ -266,8 +303,31 @@ export async function createMap(
     objects: [...selected.values()],
     holdToken,
     valid: selected.size >= min,
-    expiresAt,
+    expiresAt: expiresAt === null ? null : expiresAt - offset,
   });
+
+  const serverNow = (): number => Date.now() + offset;
+
+  /**
+   * Fires `onHoldExpiring` once per expiry, `EXPIRING_MS` before it (at once,
+   * with the seconds left, if it is nearer). One timer, recomputed when it
+   * fires and when the page is shown again, as hidden pages run timers late.
+   */
+  function watchExpiry(): void {
+    clearTimeout(expiryTimer);
+    timers.delete(expiryTimer as ReturnType<typeof setTimeout>);
+    const left = deadline === null ? 0 : deadline - serverNow();
+    if (warned || destroyed || left <= 0) {
+      return;
+    }
+    if (left <= EXPIRING_MS) {
+      warned = true;
+      call("onHoldExpiring", Math.ceil(left / 1000));
+      return;
+    }
+    expiryTimer = setTimeout(watchExpiry, left - EXPIRING_MS);
+    timers.add(expiryTimer);
+  }
 
   /** Runs adapter calls one at a time, in order; each fails after `holdTimeoutMs`. */
   function enqueue(task: () => Promise<void>): void {
@@ -379,6 +439,14 @@ export async function createMap(
         selected = new Map(event.selected.map((o) => [o.label, toSeat(o)]));
         // A set of own holds without an expiry reports 0.
         expiresAt = event.expiresAt || null;
+        if (expiresAt !== null && expiresAt !== deadline) {
+          deadline = expiresAt;
+          warned = false;
+        } else if (expiresAt === null && serverNow() < (deadline ?? 0) - EXPIRED_SLACK_MS) {
+          // Given up before the expiry: nothing is left to expire.
+          deadline = null;
+        }
+        watchExpiry();
         for (const [label, object] of before) {
           if (!selected.has(label)) {
             call("onObjectDeselect", object);
@@ -421,6 +489,10 @@ export async function createMap(
         break;
       case "holdLost":
         call("onHoldLost", event.labels.map(lookup));
+        if (deadline !== null && serverNow() >= deadline - EXPIRED_SLACK_MS) {
+          deadline = null;
+          call("onHoldExpired");
+        }
         break;
       case "resync":
         if (adapter.resync === undefined) {
@@ -432,6 +504,7 @@ export async function createMap(
         }
         break;
       case "cameraChanged":
+        camera = { centre: event.centre, zoom: event.zoom };
         call("onCameraChange", { centre: event.centre, zoom: event.zoom, level: event.lod });
         break;
       case "error":
@@ -463,6 +536,25 @@ export async function createMap(
       apply(base);
     }
   }
+
+  function fly(
+    rect: Bounds | undefined,
+    label: string | undefined,
+    section: boolean,
+    animate: boolean,
+  ): void {
+    const r = rect && Float32Array.of(rect.x, rect.y, rect.width, rect.height);
+    engine(() => view?.flyTo(r, label, section, !animate), "invalid_input");
+    host?.update();
+  }
+  /** Moves to `label`: a section on the floor shown if one has it, else a seat. */
+  const flyToLabel = (label: string, animate: boolean): void =>
+    fly(
+      undefined,
+      label,
+      chart?.sections.some((s) => s.label === label && s.floor === 0) ?? false,
+      animate,
+    );
 
   function teardown(): void {
     destroyed = true;
@@ -531,8 +623,12 @@ export async function createMap(
           mark("first_frame");
         }
       },
-      onVisibility: (visible) =>
-        engine(() => (visible ? adapter.resume?.() : adapter.pause?.()), "state_failed"),
+      onVisibility: (visible) => {
+        engine(() => (visible ? adapter.resume?.() : adapter.pause?.()), "state_failed");
+        if (visible) {
+          watchExpiry();
+        }
+      },
     };
     if (options.maxDpr !== undefined) {
       attachOptions.maxDpr = options.maxDpr;
@@ -552,6 +648,13 @@ export async function createMap(
     }
     host.update();
     mark("chart_decoded");
+    const initial = options.initialView;
+    if (isBounds(initial)) {
+      fly(initial, undefined, false, false);
+    } else if (initial !== undefined && initial !== "fit") {
+      flyToLabel(initial, false);
+    }
+
     const first = await step(fatal(state, "state_connect_failed"));
     applySnapshot(v, first, true);
     for (const apply of pending ?? []) {
@@ -595,12 +698,81 @@ export async function createMap(
         report(new CaveaError("invalid_input", `invalid theme: ${String(theme)}`));
       }
     },
+    zoomTo(target, { animate = true } = {}) {
+      if (live() === undefined) {
+        return;
+      }
+      if (target === "fit") {
+        fly(undefined, undefined, false, animate);
+      } else if (typeof target === "string") {
+        flyToLabel(target, animate);
+      } else if (isBounds(target)) {
+        fly(target, undefined, false, animate);
+      } else {
+        report(new CaveaError("invalid_input", `invalid zoom target: ${String(target)}`));
+      }
+    },
+    zoomIn: () => zoomBy(2),
+    zoomOut: () => zoomBy(0.5),
+    findObject(label) {
+      const info = live() && details(label);
+      if (info === undefined) {
+        return null;
+      }
+      const status: ObjectStatus = selected.has(label)
+        ? "selected"
+        : info.status === 0
+          ? "available"
+          : "unavailable";
+      return { ...toSeat(info), status };
+    },
+    listSections() {
+      const open = live()?.sectionsOpen();
+      if (open === undefined) {
+        return [];
+      }
+      return (chart?.sections ?? []).map((s, i) => ({
+        label: s.label,
+        floor: chart?.floors[s.floor]?.name ?? "",
+        seats: s.seats,
+        available: open[i] ?? 0,
+      }));
+    },
+    listCategories: () =>
+      (live() &&
+        chart?.categories.map((c) => ({
+          ...c,
+          color: `#${c.color.map((v) => v.toString(16).padStart(2, "0")).join("")}`,
+        }))) ??
+      [],
+    resync() {
+      if (live() === undefined) {
+        return;
+      }
+      if (adapter.resync === undefined) {
+        warn("the state adapter has no resync()");
+      } else {
+        engine(() => adapter.resync?.(), "state_failed");
+      }
+    },
     destroy() {
       if (!destroyed) {
         teardown();
       }
     },
   };
+  function zoomBy(factor: number): void {
+    const size = mounted?.size();
+    if (live() === undefined || camera === undefined || size === undefined) {
+      return;
+    }
+    const scale = camera.zoom * factor;
+    // The engine fits bounds inside a margin of `FIT_PADDING_PX` (24) on each side.
+    const room = (px: number): number => Math.max(px - 48, 1) / scale;
+    const [width, height] = [room(size[0]), room(size[1])];
+    const [x, y] = camera.centre;
+    fly({ x: x - width / 2, y: y - height / 2, width, height }, undefined, false, true);
+  }
   for (const name of LATER_METHODS.split(" ")) {
     (map as unknown as Record<string, () => void>)[name] = () =>
       warn(`${name}() is not supported yet`);

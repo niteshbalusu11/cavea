@@ -1,7 +1,13 @@
 // The SDK against a recording fake of the WASM view and a fake platform: no
 // browser, no WebGL. What is tested is the SDK's logic, not the fake.
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { customState, staticState, type HoldResult, type StateAdapter } from "./adapter.ts";
+import {
+  customState,
+  staticState,
+  type AdapterContext,
+  type HoldResult,
+  type StateAdapter,
+} from "./adapter.ts";
 import { CaveaError, warner } from "./errors.ts";
 import type { ObjectInfo, RendererEvent } from "./events.ts";
 import type { AttachOptions } from "./host.ts";
@@ -55,6 +61,7 @@ function fakeView() {
         throw new Error("InvalidInput: 1 unknown objects");
       }
     },
+    sectionsOpen: () => Uint32Array.of(2),
     object: (label: string) =>
       label.startsWith("A-") ? JSON.stringify({ ...seat(label), status: 1 }) : undefined,
     takeEvents: () => {
@@ -69,7 +76,10 @@ function fakeView() {
         ? undefined
         : (...args: never[]) => {
             if (name !== "takeEvents" && name !== "object") {
-              calls.push([name, ...args]);
+              calls.push([
+                name,
+                ...args.map((a: unknown) => (a instanceof Float32Array ? [...a] : a)),
+              ]);
             }
             return answers[name]?.(...args) ?? (name.endsWith("Labels") ? [] : undefined);
           },
@@ -113,6 +123,7 @@ function fakeEnv() {
     },
     mount: () => ({
       canvas: {} as HTMLCanvasElement,
+      size: () => [800, 600],
       remove: () => {
         state.removed = true;
       },
@@ -194,6 +205,7 @@ describe("options", () => {
       ["selection.max", { selection: { max: 1.5 } }],
       ["selection.min", { selection: { max: 2, min: 3 } }],
       ["gestureHandling", { gestureHandling: "sideways" }],
+      ["initialView", { initialView: { x: 0, y: 0, width: 0, height: 1 } }],
       ["maxDpr", { maxDpr: -1 }],
       ["reducedMotion", { reducedMotion: "sometimes" }],
       ["theme", { theme: "blue" }],
@@ -622,29 +634,104 @@ describe("callbacks", () => {
   });
 });
 
+describe("hold expiry", () => {
+  test("onHoldExpiring 60 s before and onHoldExpired with the holds lost, on the server's clock", async () => {
+    let ctx: AdapterContext | undefined;
+    const calls: unknown[] = [];
+    const { map, drain } = await loaded({
+      state: customState({
+        connect(c) {
+          ctx = c;
+          return Promise.resolve({ kind: "map", unavailable: [] });
+        },
+        disconnect() {},
+      }),
+      onHoldExpiring: (seconds) => calls.push(`expiring ${seconds}`),
+      onHoldExpired: () => calls.push("expired"),
+      onHoldLost: () => calls.push("lost"),
+    });
+    // This page's clock is ten minutes ahead of the server's.
+    const offset = -600_000;
+    ctx?.setClockOffset(offset);
+    const expiry = Date.now() + offset + 60_040;
+    drain({ type: "selectionChanged", expiresAt: expiry, selected: [seat("A-1-1")] });
+    expect(map.getSelection().expiresAt).toBe(expiry - offset);
+    await sleep(20);
+    expect(calls).toEqual([]);
+    await sleep(40);
+    // Lost a minute before the expiry (released elsewhere): not an expiry.
+    drain({ type: "holdLost", labels: ["A-1-1"] });
+    expect(calls).toEqual(["expiring 60", "lost"]);
+
+    drain({
+      type: "selectionChanged",
+      expiresAt: Date.now() + offset + 2_000,
+      selected: [seat("A-1-2")],
+    });
+    drain(
+      { type: "holdLost", labels: ["A-1-2"] },
+      { type: "selectionChanged", expiresAt: 0, selected: [] },
+    );
+    expect(calls).toEqual(["expiring 60", "lost", "expiring 2", "lost", "expired"]);
+    expect(map.getSelection().expiresAt).toBeNull();
+  });
+
+  test("destroy stops the expiry timer", async () => {
+    const calls: unknown[] = [];
+    const { map, drain } = await loaded({ onHoldExpiring: () => calls.push("expiring") });
+    drain({ type: "selectionChanged", expiresAt: Date.now() + 60_020, selected: [seat("A-1-1")] });
+    map.destroy();
+    await sleep(40);
+    expect(calls).toEqual([]);
+  });
+});
+
 describe("methods", () => {
   test("call through to the view and report refused input", async () => {
     const errors: string[] = [];
-    const { map, view, setDark, state } = await loaded({ onError: (e) => errors.push(e.code) });
+    let resynced = 0;
+    const { map, view, drain, setDark, state } = await loaded({
+      state: { ...staticState(), resync: () => (resynced += 1) },
+      onError: (e) => errors.push(e.code),
+    });
     view.calls.length = 0;
     map.select(["A-1-1"]);
     map.select(["nope"]);
     map.deselect(["A-1-1"]);
     map.clearSelection();
+    map.zoomTo("fit");
+    map.zoomTo("A", { animate: false });
+    map.zoomTo("A-1-2");
+    map.zoomTo({ x: 1, y: 2, width: 3, height: 4 });
+    drain({ type: "cameraChanged", centre: [100, 50], zoom: 2, lod: "seats" });
+    map.zoomIn();
     setDark(true);
     map.setTheme({ base: "dark", tokens: { bg: "#000", dim: 0.5 } });
     setDark(false);
     expect(state.schemeListeners).toBe(0);
     map.setTheme("sepia" as "dark");
-    expect(view.calls).toEqual([
+    map.resync();
+    expect(view.calls.filter((c) => c[0] !== "select" || (c[1] as string[]).length > 0)).toEqual([
       ["select", ["A-1-1"]],
       ["select", ["nope"]],
       ["deselect", ["A-1-1"]],
       ["clearSelection"],
+      ["flyTo", undefined, undefined, false, false],
+      ["flyTo", undefined, "A", true, true],
+      ["flyTo", undefined, "A-1-2", false, false],
+      ["flyTo", [1, 2, 3, 4], undefined, false, false],
+      ["flyTo", [6, -19, 188, 138], undefined, false, false],
       ["setTheme", "dark", []],
       ["setTheme", "dark", ["bg", "#000", "dim", "0.5"]],
     ]);
     expect(errors).toEqual(["invalid_input", "invalid_input"]);
+    expect(resynced).toBe(1);
+    expect(map.findObject("A-1-2")).toMatchObject({ label: "A-1-2", status: "unavailable" });
+    expect(map.findObject("Z")).toBeNull();
+    expect(map.listSections()).toEqual([{ label: "A", floor: "Ground", seats: 3, available: 2 }]);
+    expect(map.listCategories()).toEqual([
+      { key: "vip", label: "VIP", color: "#010203ff", objects: 3 },
+    ]);
   });
 
   test("destroy releases everything once; methods after it do nothing", async () => {
@@ -672,7 +759,10 @@ describe("methods", () => {
     expect(view.names().filter((n) => n === "free")).toHaveLength(1);
     const before = view.calls.length;
     map.select(["A-1-1"]);
+    map.zoomIn();
     map.setTheme("dark");
+    expect(map.findObject("A-1-1")).toBeNull();
+    expect(map.listSections()).toEqual([]);
     expect(view.calls.length).toBe(before);
     (map as unknown as { setPricing(): void }).setPricing();
     expect(warn.mock.calls.map((c) => c[0])).toEqual([

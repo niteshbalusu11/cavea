@@ -10,7 +10,8 @@
 // parallel with the WASM, the atlas and the fake host's state. Map: `theme`
 // (light, dark, high-contrast, auto; default auto), `gestures=greedy|
 // cooperative|none` (cooperative puts the map in a scrolling page),
-// `reducedMotion=1|0`, `max` and `min` (selection rules, default 4 and 0).
+// `reducedMotion=1|0`, `camera=x:y:width:height` (initial view in chart
+// units), `max` and `min` (selection rules, default 4 and 0).
 //
 // Fake host: `sold` (fraction of seats unavailable at start, in runs; default
 // 0.3) or `mark=start:count` (exactly that `idx` range); `stateDelay=ms`
@@ -21,11 +22,16 @@
 // as many every `ms` ms; `snipe=1` also takes a selected seat the buyer does
 // not hold yet, so it is knocked out.
 //
-// `window.caveaDemo` has the map (`map.select([...])`, `map.setTheme(...)`,
-// `map.destroy()` from the console), the seat `labels`, the callback log in
-// `events`, and `take(label)`, `crowd(on)`, `resnapshot()` and
-// `second(hidden)` (a second map on the page, sharing the WASM).
+// Real server instead of the fake host: `server=<baseUrl>&key=<pk_…>&event=<key>`,
+// with `transport=auto|ws|sse|poll` and `session=start|manual|none` (05 §4);
+// the chart is the event's. Needs no `--demo` build.
+//
+// `window.caveaDemo` has the map (`map.select([...])`, `map.zoomTo(...)`,
+// `map.destroy()` from the console), the seat `labels`, the callback log in `events`, and
+// `take(label)`, `crowd(on)`, `resnapshot()` and `second(hidden)` (a second map
+// on the same page, sharing the WASM).
 import {
+  caveaServer,
   createSeatMap,
   customState,
   loadRenderer,
@@ -72,6 +78,7 @@ const chartUrl = params.get("chart");
 const preset = params.get("preset") ?? "";
 const sold = num("sold", 0.3);
 const mark = params.get("mark")?.split(":").map(Number);
+const camera = params.get("camera")?.split(":").map(Number);
 const themeParam = params.get("theme") ?? "auto";
 const theme = (
   ["light", "dark", "high-contrast"].includes(themeParam) ? themeParam : "auto"
@@ -88,6 +95,7 @@ const stateDelay = num("stateDelay", 0);
 const crowdMs = num("crowd", 0);
 const crowdSize = num("crowdSize", 20);
 const snipe = params.get("snipe") === "1";
+const server = params.get("server");
 document.body.dataset["theme"] = theme as string;
 if (gestures === "cooperative") {
   document.body.classList.add("scrolling");
@@ -238,7 +246,7 @@ function showSelection(): void {
   const expires = at === null ? "none" : new Date(at).toLocaleTimeString();
   selectionLine.textContent =
     `selected ${selection?.objects.length ?? 0}/${max}: ${selection?.objects.map((o) => o.label).join(" ") ?? ""}\n` +
-    `held: ${held.size}, expire ${expires}; checkout ${selection?.valid === false ? "not ready" : "ready"}; ` +
+    `held: ${server === null ? held.size : selection?.holdToken ? "by token" : "none"}, expire ${expires}; checkout ${selection?.valid === false ? "not ready" : "ready"}; ` +
     `hover: ${hover || "none"}\n${lastNote}`;
 }
 
@@ -253,9 +261,12 @@ const options: SeatMapOptions = {
     crowd(true);
   },
   onSelectionChange(selection) {
+    // Whether there is a hold token, never the token.
     log("selectionChange")(
       selection.objects.map((o) => o.label),
       selection.valid,
+      selection.holdToken !== null,
+      selection.expiresAt,
     );
     note(`selection: ${selection.objects.map((o) => o.label).join(", ") || "empty"}`);
   },
@@ -276,6 +287,14 @@ const options: SeatMapOptions = {
     note(`hold failed: ${failed.map((f) => `${f.object.label} (${f.reason})`).join(", ")}`);
   },
   onHoldLost: (objects) => note(`hold lost: ${objects.map((o) => o.label).join(", ")}`),
+  onHoldExpiring(seconds) {
+    log("holdExpiring")(seconds);
+    note(`hold expires in ${seconds} s`);
+  },
+  onHoldExpired() {
+    log("holdExpired")();
+    note("hold expired");
+  },
   onObjectUnavailable(object) {
     log("objectUnavailable")(object.label);
     note(`${object.label} was taken`);
@@ -293,6 +312,10 @@ const options: SeatMapOptions = {
 if (params.has("reducedMotion")) {
   options.reducedMotion = params.get("reducedMotion") === "1";
 }
+if (camera !== undefined && camera.length === 4) {
+  const [x = 0, y = 0, width = 1, height = 1] = camera;
+  options.initialView = { x, y, width, height };
+}
 
 /** Another map on the page with fixed state, sharing the loaded WASM; `hidden` creates it in a hidden box. */
 async function second(hidden = false): Promise<SeatMap> {
@@ -305,7 +328,19 @@ async function second(hidden = false): Promise<SeatMap> {
 }
 
 try {
-  if (chartUrl === null) {
+  if (server !== null) {
+    const pick = <T extends string>(name: string, values: T[]): T | undefined =>
+      values.find((v) => v === params.get(name));
+    const transport = pick("transport", ["auto", "ws", "sse", "poll"]);
+    const session = pick("session", ["start", "manual", "none"]);
+    options.state = caveaServer({
+      baseUrl: server,
+      publishableKey: params.get("key") ?? "",
+      event: params.get("event") ?? "",
+      ...(transport === undefined ? {} : { transport }),
+      ...(session === undefined ? {} : { session }),
+    });
+  } else if (chartUrl === null) {
     const chart = await generated();
     labels = chart.labels;
     options.chart = { bytes: chart.ccf };

@@ -74,6 +74,7 @@ export function browserEnv(): Env {
       root.append(style, canvas);
       return {
         canvas,
+        size: () => [canvas.clientWidth, canvas.clientHeight],
         remove() {
           style.remove();
           canvas.remove();

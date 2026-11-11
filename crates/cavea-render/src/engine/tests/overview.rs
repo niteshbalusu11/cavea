@@ -444,3 +444,50 @@ fn a_seat_taken_again_pulses_its_full_time_and_nothing_pulses_before_a_frame() {
     delta(&mut e, 1, &[(0, 1)]);
     assert!(e.state.pulses.is_empty());
 }
+
+#[test]
+fn camera_targets_a_section_or_a_seat_on_the_floor_shown() {
+    let mut e = venue();
+    let centre = |e: &E| e.camera.map(|c| c.centre.map(|v| v as f32));
+    // Section A's box, padded by half a seat, centred.
+    let b = e.scene.as_ref().unwrap().scene.chart.sections[0].bounds;
+    let mid = [(b[0] + b[2]) as f32 * 0.125, (b[1] + b[3]) as f32 * 0.125];
+    e.handle(Command::SetCamera {
+        target: CameraTarget::Section("A".into()),
+    });
+    tick(&mut e, 10.0);
+    assert_eq!(centre(&e), Some(mid));
+
+    // A seat, by `idx` or label, centred.
+    let seat = e.scene.as_ref().unwrap().scene.pos[5];
+    for object in [ObjectRef::Idx(5), ObjectRef::Label(e.info(5).label)] {
+        e.handle(Command::SetCamera {
+            target: CameraTarget::Object(object),
+        });
+        tick(&mut e, 20.0);
+        assert_eq!(centre(&e), Some(seat));
+    }
+
+    // Section C and its seats are on the upper floor, which is not shown.
+    for target in [
+        CameraTarget::Section("C".into()),
+        CameraTarget::Object(ObjectRef::Idx(12)),
+        CameraTarget::Section("Z".into()),
+    ] {
+        e.drain_events().for_each(drop);
+        e.handle(Command::FlyTo {
+            target,
+            duration_ms: None,
+        });
+        let errors = e.drain_events().filter(|ev| {
+            matches!(
+                ev,
+                Event::Error {
+                    code: ErrorCode::InvalidInput,
+                    ..
+                }
+            )
+        });
+        assert_eq!(errors.count(), 1);
+    }
+}
