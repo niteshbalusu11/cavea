@@ -437,6 +437,20 @@ async fn idempotency() {
             assert_problem(&response, &p, Code::IdempotencyMismatch);
         }
         assert_eq!(books().await, 1);
+        // Numbers in `extra` are compared as written, never rounded; an
+        // object that repeats a key is refused.
+        let big = |n: &str| format!(r#"{{"objects":{{"version":"{}","idx":[21]}},"order_ref":"R-6","extra":{{"{seat}":{{"n":{n}}}}}}}"#, t.hash);
+        let (response, p) = raw(&ev("book"), "k-5", big("18446744073709551616")).await;
+        assert_problem(&response, &p, Code::InvalidRequest);
+        assert_eq!(p["details"]["reason"], "detail_mismatch");
+        let (response, p) = raw(&ev("book"), "k-5", big("18446744073709551617")).await;
+        assert_problem(&response, &p, Code::IdempotencyMismatch);
+        let (response, p) = raw(&ev("book"), "k-6", big("1e400")).await;
+        assert_problem(&response, &p, Code::InvalidRequest);
+        let dup = format!(r#"{{"objects":["{seat}"],"order_ref":"R-7","extra":{{"{seat}":{{"a":1,"a":2}}}}}}"#);
+        let (response, p) = raw(&ev("book"), "k-7", dup).await;
+        assert_problem(&response, &p, Code::InvalidRequest);
+        assert_eq!(p["details"]["field"], "extra");
 
         // A refusal is replayed as it was, though the request would now succeed.
         let direct = format!(r#"{{"objects":["{seat}"],"order_ref":"R-3"}}"#);
@@ -467,6 +481,9 @@ async fn idempotency() {
             assert_problem(&response, &p, Code::InvalidRequest);
             assert_eq!(p["details"]["reason"], "idempotency_key");
         }
+        let (response, p) = raw(&ev("book"), "a\tb", body.clone()).await;
+        assert_problem(&response, &p, Code::InvalidRequest);
+        assert_eq!(p["details"]["reason"], "idempotency_key");
         let request = Request::post(ev("book"))
             .header(header::CONTENT_TYPE, "application/json")
             .header(header::AUTHORIZATION, format!("Bearer {sk}"))
