@@ -1,5 +1,5 @@
 //! The engine: takes [`Command`]s, emits [`Event`]s, draws through a
-//! [`GpuBackend`]. Implemented so far: `LoadChart`, `Resize`,
+//! [`GpuBackend`]. Implemented so far: `LoadChart`, `SetTheme`, `Resize`,
 //! `Pointer`, `Wheel`, `SetCamera` and `FlyTo` with bounds,
 //! `SetGestureHandling`, `SetReducedMotion`, `Tick` and `ContextLost`; every
 //! other command is answered with an `Unsupported` error event.
@@ -14,17 +14,22 @@ use std::ops::Range;
 use crate::{
     backend::{
         BackendError, BufferDesc, BufferId, BufferKind, BufferUsage, DrawCall, GpuBackend,
-        Pipeline, ResourceId, Sampling, Target, TextureDesc, TextureFormat, TextureId, Uniforms,
+        Pipeline, Rect as TexRect, ResourceId, Sampling, Target, TextureDesc, TextureFormat,
+        TextureId, Uniforms,
     },
     camera::{self, Camera, Limits, Rect, Size},
+    cull,
     gesture::{Action, Intent, Recogniser},
-    protocol::{Bounds, CameraTarget, Command, ErrorCode, Event, Lod, PointerKind, PointerType},
+    protocol::{
+        Bounds, BuiltinTheme, CameraTarget, Command, ErrorCode, Event, Lod, PointerKind,
+        PointerType, ThemeToken,
+    },
     scene::Scene,
     seat,
-    theme::{PALETTE_WIDTH, Selection, Theme, picker_visual},
+    theme::{PALETTE_WIDTH, Selection, Theme, TokenError, picker_visual},
     tuning::{
         INERTIA_STOP_PX_PER_S, INERTIA_TIME_CONSTANT_MS, LOD_DETAIL_SEAT_PX, MAX_BACKING_PX,
-        MAX_DPR_OTHER, MAX_QUEUED_INPUT,
+        MAX_DPR_OTHER, MAX_QUEUED_INPUT, MAX_SEAT_DRAW_CALLS,
     },
 };
 
@@ -44,7 +49,7 @@ pub fn backing_size(width: f32, height: f32, dpr: f32, max_dpr: f32) -> (u32, u3
     (px(width), px(height), ratio)
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct Viewport {
     width: u32,
     height: u32,
@@ -121,9 +126,12 @@ pub struct Engine<B: GpuBackend> {
     /// The camera last reported with `CameraChanged`.
     reported: Option<Camera>,
     scene: Option<Loaded>,
-    /// Colours of the palette and the clear colour; `SetTheme` (REN-041)
-    /// will replace it.
     theme: Theme,
+    /// The seat ranges to draw (04 §11), kept so frames do not allocate.
+    ranges: Vec<Range<u32>>,
+    /// The camera and viewport `ranges` were computed for; `None` after a
+    /// chart load. Frames drawn for state or theme changes reuse the ranges.
+    culled: Option<(Camera, Viewport)>,
     queue: Vec<Queued>,
     actions: Vec<Action>,
     recogniser: Recogniser,
@@ -136,6 +144,9 @@ pub struct Engine<B: GpuBackend> {
     /// Intents seen, for tests, until hit testing consumes them.
     #[cfg(test)]
     intents: Vec<Intent>,
+    /// How many times the visible ranges were computed, for tests.
+    #[cfg(test)]
+    culls: u32,
 }
 
 impl<B: GpuBackend> Engine<B> {
@@ -148,7 +159,9 @@ impl<B: GpuBackend> Engine<B> {
             camera: None,
             reported: None,
             scene: None,
-            theme: Theme::light(),
+            theme: Theme::builtin(BuiltinTheme::Light),
+            ranges: Vec::new(),
+            culled: None,
             queue: Vec::new(),
             actions: Vec::new(),
             recogniser: Recogniser::default(),
@@ -160,6 +173,8 @@ impl<B: GpuBackend> Engine<B> {
             start_ms: None,
             #[cfg(test)]
             intents: Vec::new(),
+            #[cfg(test)]
+            culls: 0,
         }
     }
 
@@ -175,6 +190,7 @@ impl<B: GpuBackend> Engine<B> {
                     self.error(code, message);
                 }
             }
+            Command::SetTheme { base, tokens } => self.set_theme(base, &tokens),
             Command::Resize {
                 width,
                 height,
@@ -356,7 +372,9 @@ impl<B: GpuBackend> Engine<B> {
             ));
         }
         let gpu = |error: BackendError| (ErrorCode::Gpu, error.to_string());
-        let palette = self.theme.palette(&scene.chart.categories);
+        let mut palette = Vec::new();
+        self.theme
+            .palette(&scene.chart.categories, &scene.chart.strings, &mut palette);
         let seats = scene.pos.len();
         let dynamic = seat::encode_dynamic(
             &scene.chart.seat_category,
@@ -408,6 +426,7 @@ impl<B: GpuBackend> Engine<B> {
         });
         // The next frame fits the new chart.
         self.camera = None;
+        self.culled = None;
         self.animations.clear();
         self.redraw();
         Ok(())
@@ -419,6 +438,40 @@ impl<B: GpuBackend> Engine<B> {
             self.backend.destroy(ResourceId::Buffer(loaded.dynamic_buf));
             self.backend.destroy(ResourceId::Texture(loaded.palette));
         }
+    }
+
+    /// Replaces the theme and rewrites the palette texture and clear colour;
+    /// instance data is untouched. An invalid token changes nothing.
+    fn set_theme(&mut self, base: BuiltinTheme, tokens: &[ThemeToken]) {
+        let theme = match Theme::with_tokens(base, tokens) {
+            Ok(theme) => theme,
+            Err(TokenError::UnknownToken) => {
+                return self.error(ErrorCode::InvalidInput, "unknown theme token");
+            }
+            Err(TokenError::BadValue) => {
+                return self.error(ErrorCode::InvalidInput, "invalid theme token value");
+            }
+        };
+        self.theme = theme;
+        if let Some(loaded) = &self.scene {
+            let chart = &loaded.scene.chart;
+            let mut palette = Vec::new();
+            self.theme
+                .palette(&chart.categories, &chart.strings, &mut palette);
+            let region = TexRect {
+                x: 0,
+                y: 0,
+                width: PALETTE_WIDTH,
+                height: u32::try_from(chart.categories.len() + 1).unwrap_or(u32::MAX),
+            };
+            if let Err(error) = self
+                .backend
+                .update_texture(loaded.palette, region, &palette)
+            {
+                self.error(ErrorCode::Gpu, error.to_string());
+            }
+        }
+        self.redraw();
     }
 
     /// One `Tick` (04 §18): apply the coalesced resize, then queued input in
@@ -699,7 +752,7 @@ impl<B: GpuBackend> Engine<B> {
     }
 
     /// Uploads the dynamic buffer's dirty range, then draws the active
-    /// floor's seats.
+    /// floor's seats in the render chunks the view meets (04 §11).
     fn draw_seats(&mut self, viewport: Viewport, time: f32) -> Result<(), (ErrorCode, String)> {
         let gpu = |error: BackendError| (ErrorCode::Gpu, error.to_string());
         let Some(loaded) = &mut self.scene else {
@@ -722,12 +775,36 @@ impl<B: GpuBackend> Engine<B> {
         let Some(camera) = self.camera else {
             return Ok(());
         };
-        if scene.active.is_empty() {
+        let px_per_cu = (camera.zoom * f64::from(viewport.ratio)) as f32;
+        if self.culled != Some((camera, viewport)) {
+            self.culled = Some((camera, viewport));
+            #[cfg(test)]
+            {
+                self.culls += 1;
+            }
+            let size = viewport.css;
+            let [x0, y0] = camera.to_world([0.0, 0.0], size);
+            let [x1, y1] = camera.to_world([size.width, size.height], size);
+            let view = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)].map(|v| v as f32);
+            // A seat's quad is its half size plus one device pixel for the
+            // anti-aliased edge (04 §8), rotated by its angle: its corners
+            // reach √2 times that from the centre.
+            let pad = std::f32::consts::SQRT_2 * (scene.max_half + 1.0 / px_per_cu);
+            cull::ranges(
+                &scene.chart.chunks,
+                &scene.active,
+                view,
+                pad,
+                MAX_SEAT_DRAW_CALLS,
+                &mut self.ranges,
+            );
+        }
+        if self.ranges.is_empty() {
             return Ok(());
         }
         let uniforms = Uniforms {
             view: camera.matrix(viewport.css),
-            px_per_cu: (camera.zoom * f64::from(viewport.ratio)) as f32,
+            px_per_cu,
             stroke_px: 1.5 * viewport.ratio,
             stroke_min_px: 5.0 * viewport.ratio,
             dim: self.theme.dim,
@@ -746,7 +823,7 @@ impl<B: GpuBackend> Engine<B> {
             buffers: [Some(loaded.static_buf), Some(loaded.dynamic_buf)],
             texture: Some(loaded.palette),
             uniforms,
-            instances: scene.active.clone(),
+            ranges: &self.ranges,
         };
         self.backend.draw(&call).map_err(gpu)
     }

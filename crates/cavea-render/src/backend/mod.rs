@@ -161,9 +161,10 @@ impl Uniforms {
     }
 }
 
-/// One draw: a fixed pipeline, its resources and the instance range to draw.
+/// One pipeline, its resources and the instance ranges to draw with them.
+/// Each range is one draw call on the GPU.
 #[derive(Debug, Clone, PartialEq)]
-pub struct DrawCall {
+pub struct DrawCall<'a> {
     pub pipeline: Pipeline,
     /// Vertex buffers in the order the pipeline defines. `Shape`: the 12-byte
     /// static and the 4-byte dynamic instance buffers (04 §6).
@@ -171,9 +172,9 @@ pub struct DrawCall {
     /// `Shape`: the palette texture.
     pub texture: Option<TextureId>,
     pub uniforms: Uniforms,
-    /// Instances to draw. WebGL2 has no base instance, so the GL backend
-    /// rebinds attribute offsets per range (04 §11).
-    pub instances: Range<u32>,
+    /// Instance ranges, in order. WebGL2 has no base instance, so the GL
+    /// backend rebinds attribute offsets per range (04 §11).
+    pub ranges: &'a [Range<u32>],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -223,7 +224,7 @@ pub trait GpuBackend {
         data: &[u8],
     ) -> Result<(), BackendError>;
     fn begin_frame(&mut self, target: Target, clear: [f32; 4]);
-    fn draw(&mut self, call: &DrawCall) -> Result<(), BackendError>;
+    fn draw(&mut self, call: &DrawCall<'_>) -> Result<(), BackendError>;
     fn end_frame(&mut self);
     fn destroy(&mut self, id: ResourceId);
 }

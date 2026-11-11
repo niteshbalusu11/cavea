@@ -64,7 +64,7 @@ The engine is driven only by commands and emits only events. Both are plain data
 | `HoldResult` | Request id, success or per-object failures |
 | `SetPricing` | Category keys with display prices |
 | `SetFilter` | Categories, price range, accessible only |
-| `SetTheme` | Token values |
+| `SetTheme` | A built-in theme (`light`, `dark`, `high-contrast`) and token values to apply over it (§19) |
 | `SetMode` | `picker`, `static`, `spotlight`, `manager` |
 | `SetRules` | Maximum, minimum, validators, group size |
 | `SetFloor` | Floor id |
@@ -235,7 +235,7 @@ The palette texture has one row per category and one extra, last row for objects
 
 | State | Fill | Stroke | Ink |
 |---|---|---|---|
-| Available, custom | Category colour | `seat-available-stroke` | Black or white, whichever contrasts more with the fill |
+| Available, custom | Category colour | `seat-available-stroke` | Black or white, whichever contrasts more with the fill as drawn over `bg` |
 | Unavailable, booked | `seat-unavailable-fill` | `seat-unavailable-stroke` | `fg-muted` |
 | Selected (pending, held) | `seat-selected-fill` | `seat-selected-fill` | `seat-selected-ink` |
 | Blocked | `fg-muted` | `fg` | `bg` |
@@ -264,7 +264,9 @@ Let `s` be the seat size in CSS pixels at the current zoom.
 - Chunks hold at most 4,096 seats and have a bounding box. A chunk is drawn if its box intersects the view.
 - Visible chunks that are adjacent in `idx` order are merged into one instance range.
 - At overview and when the whole chart is visible, all seats are one range and one draw call.
-- Target: at most 64 seat draw calls in any frame.
+- Target: at most 64 seat draw calls in any frame. While more ranges are visible, the two separated by the fewest seats are merged: the seats between them are drawn too, off screen, which costs some overdraw instead of draw calls.
+- Chunk boxes in `CHNK` bound seat centres, so they are grown before the test by the reach of the largest seat quad at any angle: √2 × (largest half size + one device pixel for the anti-aliased edge, §8). Only the active floor's seats are considered; a chunk is clipped to it.
+- The visible ranges are computed when the camera, the viewport or the chart changes, and kept otherwise: a frame drawn for a state or theme change reuses them.
 - WebGL2 has no base-instance draw, so the `glow` backend rebinds attribute offsets per range. The `wgpu` backend passes instance ranges directly.
 
 ## 12. Text
@@ -380,13 +382,17 @@ Tokens (the full list with CSS names is in `05-web-sdk.md` §8):
 
 - Background, text, muted text.
 - Per visual state: fill, stroke, ink, with or without category colour.
-- Selection ring, hover ring, focus ring.
+- Selection ring (`seat-selected-fill`, which is also the selected seats' stroke), hover ring, focus ring.
 - Section tint strength, dim factor.
 - Font family for dynamic text.
 
 Built-in themes: `light`, `dark`, `high-contrast`, and a `colorblind` modifier that switches to a tested palette and stronger shape cues. Category colours come from the chart and can be overridden by the host.
 
-- Until `SetTheme` is implemented (REN-041) the engine uses the light theme. It sets the palette (§9), the clear colour (`bg`) and the dim factor. Its unavailable seats are filled close to the background with a strong stroke, so they read as hollow and differ from solid available seats by more than hue (`11-accessibility.md` §6); the stroke has 4.6:1 contrast (WCAG) against the background, and below 5 px on screen, where there is no stroke, the difference is lightness. The synthetic charts' category colours have at least 4.5:1 against the background.
+- `SetTheme` names a built-in theme and token values applied over it, in order. Each `SetTheme` replaces the whole theme, which then outlives `LoadChart`. An unknown token or invalid value is refused with `InvalidInput` and changes nothing.
+- Token names are those of `05-web-sdk.md` §8, with or without the `--cavea-` prefix; `category-<key>` overrides one category. Colours are `#rgb`, `#rrggbb` or `#rrggbbaa`; `section-tint` and `dim` are decimals from 0 to 1. `font`, `radius` and `shadow` belong to the host.
+- The theme sets the palette (§9), the clear colour (`bg`) and the dim factor.
+- Built-in defaults: unavailable seats are filled close to the background (1.2:1 light, 1.15:1 dark, 1.27:1 high contrast) with a strong stroke, so they read as hollow and differ from solid available seats by more than hue (`11-accessibility.md` §6); below 5 px on screen there is no stroke and the difference is lightness.
+- WCAG contrast against the background, light / dark / high contrast, checked against the 3:1 non-text and 4.5:1 text requirements of `11-accessibility.md` §6: unavailable stroke 4.6 / 6.9 / 21; selected fill 16.7 / 16.7 / 19.6; focus ring 4.9 / 6.9 / 19.6; muted text 7.3 / 6.9 / 21. The synthetic charts' category colours keep at least 4.5 / 3.19 / 3.8. Ink on a fill is black or white by exact sRGB relative luminance: 4.7:1 or more on those category colours, 16.7:1 or more on the selected fill, 6:1 or more for unavailable seats.
 
 ## 20. Backends
 

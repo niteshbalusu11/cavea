@@ -68,83 +68,83 @@ impl GlowBackend {
         }
     }
 
-    fn draw_shape(&self, call: &DrawCall) -> Result<(), BackendError> {
+    fn draw_shape(&self, call: &DrawCall<'_>) -> Result<(), BackendError> {
         let [static_id, dynamic_id] = call.buffers;
         let (static_buf, static_len) = self.buffer(static_id)?;
         let (dynamic_buf, dynamic_len) = self.buffer(dynamic_id)?;
         let palette = self
             .texture(call.texture.ok_or(BackendError::UnknownResource)?)?
             .0;
-        let range = &call.instances;
-        if range.start > range.end
-            || u64::from(range.end) * seat::STATIC_STRIDE as u64 > u64::from(static_len)
-            || u64::from(range.end) * seat::DYNAMIC_STRIDE as u64 > u64::from(dynamic_len)
-        {
-            return Err(BackendError::InvalidData);
+        for range in call.ranges {
+            if range.start > range.end
+                || u64::from(range.end) * seat::STATIC_STRIDE as u64 > u64::from(static_len)
+                || u64::from(range.end) * seat::DYNAMIC_STRIDE as u64 > u64::from(dynamic_len)
+                || i32::try_from(u64::from(range.end) * seat::STATIC_STRIDE as u64).is_err()
+            {
+                return Err(BackendError::InvalidData);
+            }
         }
-        let count =
-            i32::try_from(range.end - range.start).map_err(|_| BackendError::InvalidData)?;
-        let base = |stride: usize| {
-            i32::try_from(u64::from(range.start) * stride as u64)
-                .map_err(|_| BackendError::InvalidData)
-        };
-        let static_base = base(seat::STATIC_STRIDE)?;
-        let dynamic_base = base(seat::DYNAMIC_STRIDE)?;
         let static_stride = seat::STATIC_STRIDE as i32;
         let dynamic_stride = seat::DYNAMIC_STRIDE as i32;
         let gl = &self.gl;
-        // SAFETY: see the module documentation; the ranges were checked above.
+        // SAFETY: see the module documentation; every range was checked above,
+        // so the offsets and counts below fit in i32 and inside the buffers.
         unsafe {
             gl.use_program(Some(self.shape.program));
             gl.bind_vertex_array(Some(self.shape.vao));
-            // WebGL2 has no base instance, so the range start becomes the
-            // attribute offset (04 §11).
-            gl.bind_buffer(glow::ARRAY_BUFFER, Some(static_buf));
-            gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, static_stride, static_base);
-            // Integer attributes at the byte offsets of `seat.rs`.
-            for (location, size, ty, buffer, stride, offset) in [
-                (
-                    1,
-                    1,
-                    glow::UNSIGNED_SHORT,
-                    static_buf,
-                    static_stride,
-                    static_base + 8,
-                ),
-                (
-                    2,
-                    2,
-                    glow::UNSIGNED_BYTE,
-                    static_buf,
-                    static_stride,
-                    static_base + 10,
-                ),
-                (
-                    3,
-                    1,
-                    glow::UNSIGNED_SHORT,
-                    dynamic_buf,
-                    dynamic_stride,
-                    dynamic_base,
-                ),
-                (
-                    4,
-                    2,
-                    glow::UNSIGNED_BYTE,
-                    dynamic_buf,
-                    dynamic_stride,
-                    dynamic_base + 2,
-                ),
-            ] {
-                gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
-                gl.vertex_attrib_pointer_i32(location, size, ty, stride, offset);
-            }
             gl.bind_buffer(glow::UNIFORM_BUFFER, Some(self.shape.globals));
             gl.buffer_sub_data_u8_slice(glow::UNIFORM_BUFFER, 0, &call.uniforms.to_std140());
             gl.bind_buffer_base(glow::UNIFORM_BUFFER, 0, Some(self.shape.globals));
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(palette));
-            gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, count);
+            for range in call.ranges {
+                // WebGL2 has no base instance, so the range start becomes the
+                // attribute offset (04 §11).
+                let static_base = (range.start as usize * seat::STATIC_STRIDE) as i32;
+                let dynamic_base = (range.start as usize * seat::DYNAMIC_STRIDE) as i32;
+                gl.bind_buffer(glow::ARRAY_BUFFER, Some(static_buf));
+                gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, static_stride, static_base);
+                // Integer attributes at the byte offsets of `seat.rs`.
+                for (location, size, ty, buffer, stride, offset) in [
+                    (
+                        1,
+                        1,
+                        glow::UNSIGNED_SHORT,
+                        static_buf,
+                        static_stride,
+                        static_base + 8,
+                    ),
+                    (
+                        2,
+                        2,
+                        glow::UNSIGNED_BYTE,
+                        static_buf,
+                        static_stride,
+                        static_base + 10,
+                    ),
+                    (
+                        3,
+                        1,
+                        glow::UNSIGNED_SHORT,
+                        dynamic_buf,
+                        dynamic_stride,
+                        dynamic_base,
+                    ),
+                    (
+                        4,
+                        2,
+                        glow::UNSIGNED_BYTE,
+                        dynamic_buf,
+                        dynamic_stride,
+                        dynamic_base + 2,
+                    ),
+                ] {
+                    gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
+                    gl.vertex_attrib_pointer_i32(location, size, ty, stride, offset);
+                }
+                let count = (range.end - range.start) as i32;
+                gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, count);
+            }
             gl.bind_vertex_array(None);
         }
         Ok(())
@@ -401,7 +401,7 @@ impl GpuBackend for GlowBackend {
         }
     }
 
-    fn draw(&mut self, call: &DrawCall) -> Result<(), BackendError> {
+    fn draw(&mut self, call: &DrawCall<'_>) -> Result<(), BackendError> {
         match call.pipeline {
             Pipeline::Shape => self.draw_shape(call),
             other => Err(BackendError::Unsupported(other)),

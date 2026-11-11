@@ -111,6 +111,17 @@ pub enum Mode {
     Manager,
 }
 
+/// The built-in themes (04 §19).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BuiltinTheme {
+    #[default]
+    Light,
+    Dark,
+    HighContrast,
+}
+
+/// One theme token: its 05 §8 name, with or without the `--cavea-` prefix,
+/// and its value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeToken {
     pub name: String,
@@ -199,7 +210,10 @@ pub enum Command {
         price: Option<PriceRange>,
         accessible_only: bool,
     },
+    /// A built-in theme with token overrides (05 §8). Each `SetTheme`
+    /// replaces the whole theme; it persists across `LoadChart`.
     SetTheme {
+        base: BuiltinTheme,
         tokens: Vec<ThemeToken>,
     },
     SetMode(Mode),
