@@ -10,6 +10,7 @@ use cavea_compiler::document::{Curve, Node};
 
 use super::{Context, Pointer, tuning};
 use crate::draft::normalise;
+use crate::guides::UserGuide;
 use crate::index::{P, Place, Rect};
 use crate::selection::shown;
 
@@ -26,6 +27,8 @@ pub struct SnapSettings {
     pub rows: bool,
     /// 15° steps, and a block facing the floor's focal point.
     pub angles: bool,
+    /// User guides on the floor shown, ranked with edges and centres.
+    pub guides: bool,
 }
 
 impl Default for SnapSettings {
@@ -37,6 +40,7 @@ impl Default for SnapSettings {
             spacing: true,
             rows: true,
             angles: true,
+            guides: true,
         }
     }
 }
@@ -86,6 +90,8 @@ pub(crate) struct Snap {
     /// block's y.
     row: Option<(u32, f64)>,
     pub(crate) guides: Vec<Guide>,
+    /// The user guides of the floor shown (07 §5.2).
+    pub(crate) user: Vec<UserGuide>,
 }
 
 /// The best candidate: the best kind; within it the one held, else the
@@ -133,7 +139,7 @@ impl Snap {
     /// Whether this event snaps at all, and the threshold in chart units.
     fn on(&self, p: &Pointer) -> Option<f64> {
         let s = &self.settings;
-        let any = s.grid || s.objects || s.spacing || s.rows || s.angles;
+        let any = s.grid || s.objects || s.spacing || s.rows || s.angles || s.guides;
         let thr = tuning::SNAP / p.zoom;
         (any && !p.mods.alt && thr.is_finite()).then_some(thr)
     }
@@ -150,6 +156,21 @@ impl Snap {
             for target in held.into_iter().chain([(v / step).round() * step]) {
                 if (target - v).abs() <= thr && target.is_finite() {
                     out.push(cand(Kind::Grid, target - v, target));
+                }
+            }
+        }
+    }
+
+    /// The user guides on axis `a` within `thr` of any of `values`: of the
+    /// same rank as edges and centres, so the nearer of the two wins.
+    fn user(&self, a: usize, values: &[f64], thr: f64, out: &mut Vec<Cand>) {
+        if !self.settings.guides {
+            return;
+        }
+        for g in self.user.iter().filter(|g| g.axis.index() == a) {
+            for &v in values {
+                if (g.at - v).abs() <= thr {
+                    out.push(cand(Kind::Object, g.at - v, g.at));
                 }
             }
         }
@@ -266,6 +287,9 @@ fn point_with(cx: &mut Context<'_>, p: &Pointer, (node, parent): Skip, grid: boo
             }
         }
     }
+    for (a, list) in cands.iter_mut().enumerate() {
+        cx.snap.user(a, &[at[a]], thr, list);
+    }
     for (a, list) in cands.iter_mut().enumerate().filter(|_| grid) {
         cx.snap.grid(a, at[a], thr, list);
     }
@@ -355,6 +379,7 @@ pub(crate) fn translation(cx: &mut Context<'_>, p: &Pointer, m: &Moving, delta: 
                 }
             }
         }
+        cx.snap.user(a, &stops(&moved, a), thr, list);
         if s.spacing {
             spacing(a, &moved, &siblings, thr, list);
         }

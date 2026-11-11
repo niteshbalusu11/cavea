@@ -223,6 +223,10 @@ pub struct Overlay {
     pub sections: Vec<Vec<P>>,
     /// The focal point of the floor shown.
     pub focal: Option<P>,
+    /// The user guides of the floor shown, drawn cyan (§5.2).
+    pub user_guides: Vec<crate::guides::UserGuide>,
+    /// Nodes on the floor shown with validation findings (§10).
+    pub markers: Vec<crate::validation::Marker>,
 }
 
 /// The numbers a gesture shows while it runs (07 §4). Lengths in chart

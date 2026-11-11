@@ -11,21 +11,26 @@
 //!   tool, driven by [`Input`] and drawing an [`Overlay`].
 
 mod arrange;
+mod categories;
 mod clipboard;
 mod command;
 mod document;
 mod draft;
 mod editor;
 mod flip;
+mod guides;
 mod index;
+mod numbering;
 mod op;
 mod rows;
 mod section;
 mod selection;
 mod session;
 mod tool;
+mod validation;
 
 pub use arrange::{AlignTo, ArrayStep, DUPLICATE_OFFSET, MAX_COPIES, MAX_NEW_NODES, Order};
+pub use categories::{CategoriesView, CategoryView, Contrast, contrast, too_similar};
 pub use clipboard::MAX_CLIPBOARD;
 pub use command::{
     Axis, ChartProperty, Command, CommandError, End, NodeTransform, Property, SeatEdit,
@@ -33,15 +38,23 @@ pub use command::{
 pub use document::{Changes, Document, LoadError};
 pub use draft::Draft;
 pub use editor::{Applied, Editor, MAX_UNDO};
+pub use guides::{FloorGuides, GuideAxis, MAX_GUIDES, UserGuide};
 pub use index::{Anchor, AnchorKind, CachedSeat, Quad, Rect, Select, SpatialIndex};
+pub use numbering::{
+    Facing, MAX_LIST, NumberedNode, Numbering, NumberingView, Preview, PreviewRow, PreviewSeat,
+    RowLabelsView, SeatLabelsView, Shared,
+};
 pub use selection::{Level, Selection};
 pub use session::Session;
 pub use tool::{
     Button, Corner, Cursor, Guide, Handle, HandleKind, Input, Key, Modifiers, Overlay, Pointer,
     PointerKind, Readout, Side, SnapSettings, TextField, ToolId, tuning,
 };
+pub use validation::{FindingView, Marker, Progress, ValidationView};
 
 #[cfg(test)]
 mod edit_tests;
+#[cfg(test)]
+mod panel_tests;
 #[cfg(test)]
 mod tests;

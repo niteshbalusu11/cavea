@@ -4,23 +4,28 @@
 //! selection are brought up to date after every change.
 
 use cavea_compiler::ChartDocument;
+use cavea_compiler::document::Category;
 
 use crate::arrange::{self, AlignTo, ArrayStep, Order};
+use crate::categories::{self, CategoriesView};
 use crate::clipboard;
 use crate::command::{Axis, Command, CommandError, End, Property, SeatEdit};
 use crate::document::{Document, LoadError};
 use crate::draft::Draft;
 use crate::editor::{Applied, Editor};
+use crate::guides::{FloorGuides, Guides, UserGuide};
 use crate::index::{Rect, SpatialIndex};
+use crate::numbering::{self, Numbering, NumberingView, Preview};
 use crate::rows;
 use crate::section;
-use crate::selection::{self, Level, Selection, View};
+use crate::selection::{self, Level, Selection, View, floor_of};
 use crate::tool::handles::targets;
 use crate::tool::snap::{Snap, SnapSettings};
 use crate::tool::{
     self, ArcTool, BlockTool, BrushTool, Context, Cursor, FocalTool, Input, Overlay, RowTool,
     SelectTool, ShapeKindTool, ShapeTool, TextTool, Tool, ToolId,
 };
+use crate::validation::{self, Progress, ValidationView, Validator};
 use cavea_compiler::document::{Node, Outline, Points};
 
 #[derive(Debug)]
@@ -34,6 +39,20 @@ pub struct Session {
     tool: Box<dyn Tool>,
     tool_id: ToolId,
     snap: Snap,
+    /// The numbering panel's proposal, while it is shown (07 §6).
+    preview: Option<Proposal>,
+    validator: Validator,
+    guides: Guides,
+}
+
+/// A numbering previewed: for the selection and document it was made on.
+#[derive(Debug)]
+struct Proposal {
+    selection: Selection,
+    revision: u64,
+    nodes: Vec<(u32, Node)>,
+    overflow: cavea_compiler::document::AlphaOverflow,
+    preview: Preview,
 }
 
 impl Session {
@@ -54,6 +73,9 @@ impl Session {
             tool: Box::new(SelectTool::default()),
             tool_id: ToolId::Select,
             snap: Snap::default(),
+            preview: None,
+            validator: Validator::default(),
+            guides: Guides::default(),
         };
         session.settle();
         Ok(session)
@@ -213,6 +235,13 @@ impl Session {
         self.edit(|v, s| Ok(f(v, s).map(|c| (c, ()))), |_, _, (), _| {})
     }
 
+    fn edit_with_result(
+        &mut self,
+        f: impl FnOnce(&View<'_>, &Selection) -> Result<Option<Command>, CommandError>,
+    ) -> Result<Applied, CommandError> {
+        self.edit(|v, s| Ok(f(v, s)?.map(|c| (c, ()))), |_, _, (), _| {})
+    }
+
     fn view(&self) -> View<'_> {
         View {
             doc: self.editor.document(),
@@ -328,6 +357,241 @@ impl Session {
             |v, s| clipboard::paste(v, s, text, at).map(Some),
             select_created,
         )
+    }
+
+    /// The numbering panel's view of the selection (07 §6).
+    pub fn numbering(&self) -> NumberingView {
+        numbering::view(&self.view(), &self.selection)
+    }
+
+    /// Shows what `numbering` would do to the selected blocks and rows,
+    /// changing nothing: the labels are [`Self::numbering_preview`] until
+    /// the document or the selection changes, or anything is applied.
+    /// Refused as [`Self::number`] would be.
+    pub fn preview_numbering(&mut self, numbering: &Numbering) -> Result<&Preview, CommandError> {
+        self.reset_tool();
+        let view = self.view();
+        let targets = numbering::targets(&view, &self.selection);
+        let nodes = numbering::renumbered(&view, &targets, numbering)?;
+        let overflow = numbering
+            .after_z
+            .unwrap_or(self.document().settings().alpha_overflow);
+        let preview = numbering::preview(&view, &nodes, overflow);
+        let proposal = self.preview.insert(Proposal {
+            selection: self.selection.clone(),
+            revision: self.document().revision(),
+            nodes,
+            overflow,
+            preview,
+        });
+        Ok(&proposal.preview)
+    }
+
+    /// The labels previewed, while the proposal still fits the document
+    /// and the selection.
+    pub fn numbering_preview(&self) -> Option<&Preview> {
+        self.proposal().map(|p| &p.preview)
+    }
+
+    fn proposal(&self) -> Option<&Proposal> {
+        self.preview
+            .as_ref()
+            .filter(|p| p.revision == self.document().revision() && p.selection == self.selection)
+    }
+
+    pub fn cancel_numbering(&mut self) {
+        self.preview = None;
+    }
+
+    /// Renumbers the selected row blocks and rows (07 §6), as one undo
+    /// entry. Nothing selected to number does nothing.
+    pub fn number(&mut self, numbering: &Numbering) -> Result<Applied, CommandError> {
+        self.edit_with_result(|v, s| {
+            let targets = numbering::targets(v, s);
+            let nodes = numbering::renumbered(v, &targets, numbering)?;
+            Ok(numbering::command(v.doc, &nodes, numbering))
+        })
+    }
+
+    /// The full label of seat `oid` of node `node` under the chart's label
+    /// template, with the numbering previewed if there is one: the hovered
+    /// seat's sample (07 §6).
+    pub fn sample(&self, node: u32, oid: u32) -> Option<String> {
+        let doc = self.document();
+        let proposal = self.proposal();
+        let previewed = proposal.and_then(|p| p.nodes.iter().find(|(id, _)| *id == node));
+        let overflow = proposal.map_or(doc.settings().alpha_overflow, |p| p.overflow);
+        let value = previewed.map(|(_, n)| n).or(doc.node(node))?;
+        numbering::sample(doc, node, value, oid, overflow)
+    }
+
+    /// The categories panel's list (07 §7).
+    pub fn categories(&self) -> CategoriesView {
+        categories::view(self.document(), &self.index, self.category.as_deref())
+    }
+
+    /// Adds a category at `index`, or at the end.
+    pub fn add_category(
+        &mut self,
+        index: Option<u32>,
+        category: Category,
+    ) -> Result<Applied, CommandError> {
+        let index = index.unwrap_or(self.document().categories().len() as u32);
+        self.apply(Command::AddCategory { index, category })
+    }
+
+    /// Replaces a category: its label, colour and accessible marker, or its
+    /// key, which every reference follows, the active category included.
+    pub fn update_category(
+        &mut self,
+        key: &str,
+        category: Category,
+    ) -> Result<Applied, CommandError> {
+        let new = category.key.clone();
+        let key = key.to_owned();
+        let result = self.apply(Command::UpdateCategory {
+            key: key.clone(),
+            category,
+        });
+        self.follow(&key, Some(new), &result);
+        result
+    }
+
+    /// Moves a category to `index` in the list (counted without it).
+    pub fn move_category(&mut self, key: &str, index: u32) -> Result<Applied, CommandError> {
+        let key = key.to_owned();
+        self.apply(Command::MoveCategory { key, index })
+    }
+
+    /// Merges category `from` into `into`: every node and seat override
+    /// naming `from` names `into`, and `from` is deleted, as one undo entry.
+    pub fn merge_category(&mut self, from: &str, into: &str) -> Result<Applied, CommandError> {
+        self.delete_category(from, Some(into))
+    }
+
+    /// Deletes a category. While nodes or seat overrides name it, a
+    /// `replacement` is needed (they move to it, as a merge); without one
+    /// the deletion is refused with [`CommandError::CategoryInUse`].
+    pub fn delete_category(
+        &mut self,
+        key: &str,
+        replacement: Option<&str>,
+    ) -> Result<Applied, CommandError> {
+        let references = categories::references(self.document(), key);
+        if replacement.is_none() && references > 0 {
+            self.reset_tool();
+            let key = key.to_owned();
+            return Err(CommandError::CategoryInUse { key, references });
+        }
+        let replacement = replacement.map(str::to_owned);
+        let result = self.apply(Command::RemoveCategory {
+            key: key.to_owned(),
+            replacement: replacement.clone(),
+        });
+        let next =
+            replacement.or_else(|| self.document().categories().first().map(|c| c.key.clone()));
+        self.follow(key, next, &result);
+        result
+    }
+
+    /// The active category follows a category renamed, merged or deleted.
+    fn follow(&mut self, key: &str, next: Option<String>, result: &Result<Applied, CommandError>) {
+        if result.is_ok() && self.category.as_deref() == Some(key) {
+            self.category = next;
+        }
+    }
+
+    /// Validation work for idle time (07 §10, §14): pieces until their cost
+    /// reaches `budget` (seat positions compiled, plus one per piece), at
+    /// least one. Each piece is indivisible; an edit between steps makes the
+    /// next step start from what changed.
+    pub fn validate(&mut self, budget: u64) -> Progress {
+        self.validator
+            .step(self.editor.document(), &self.index, budget)
+    }
+
+    /// The validation panel's list: exactly the compiler's when `complete`.
+    pub fn validation(&self) -> ValidationView {
+        self.validator.view(self.document())
+    }
+
+    /// Selects what a finding names, on its floor (shown if it is not), and
+    /// returns the world box to frame: a seat, a block's row, or the node.
+    pub fn focus(&mut self, node: u32, row: Option<u32>, seat: Option<u32>) -> Option<Rect> {
+        self.reset_tool();
+        let doc = self.editor.document();
+        let n = doc.node(node)?;
+        let floor = floor_of(doc, node);
+        if floor != self.floor {
+            self.floor = floor;
+        }
+        let pad = self.index.seat_pad(node);
+        let world = |pos| self.index.to_world(node, pos);
+        let seats = self.index.seats(node);
+        let row_index = match (n, row) {
+            (Node::RowBlock(b), Some(rid)) => b.rows.iter().position(|r| r.rid == rid),
+            _ => None,
+        };
+        let (level, item, bounds) =
+            if let Some(s) = seat.and_then(|o| seats.iter().find(|s| s.oid == o)) {
+                let p = world(s.pos)?;
+                (Level::Seats(node), s.oid, Some(Rect::new(p, p).grow(pad)))
+            } else if let (Some(i), Some(rid)) = (row_index, row) {
+                let pts = seats
+                    .iter()
+                    .filter(|s| s.row as usize == i)
+                    .filter_map(|s| world(s.pos));
+                (
+                    Level::Rows(node),
+                    rid,
+                    Rect::around(pts).map(|r| r.grow(pad)),
+                )
+            } else {
+                let level = doc.parent(node).map_or(Level::Top, Level::Section);
+                (level, node, self.index.bounds(node))
+            };
+        self.selection.set(self.editor.document(), level, [item]);
+        bounds
+    }
+
+    /// The user guides of the floor shown (07 §5.2), in the order added.
+    pub fn guides(&self) -> &[UserGuide] {
+        self.guides.on(self.floor)
+    }
+
+    /// Adds a guide on the floor shown; returns its index.
+    pub fn add_guide(&mut self, guide: UserGuide) -> Result<usize, CommandError> {
+        self.guides.add(self.floor, guide)
+    }
+
+    /// Moves guide `index` of the floor shown to `at`.
+    pub fn move_guide(&mut self, index: usize, at: f64) -> Result<(), CommandError> {
+        self.guides.set(self.floor, index, at)
+    }
+
+    /// Removes guide `index` of the floor shown (dragged back to a ruler).
+    pub fn remove_guide(&mut self, index: usize) -> bool {
+        self.guides.remove(self.floor, index)
+    }
+
+    /// Removes every guide of the floor shown.
+    pub fn clear_guides(&mut self) {
+        self.guides.clear(self.floor);
+    }
+
+    /// Every floor's guides, for the shell to store beside the draft.
+    pub fn saved_guides(&self) -> Vec<FloorGuides> {
+        let doc = self.document();
+        let none = doc.floors().is_empty();
+        self.guides.saved(|f| match f {
+            None => none,
+            Some(id) => doc.floors().iter().any(|l| l.id == id),
+        })
+    }
+
+    /// Replaces every guide with ones saved before, all or nothing.
+    pub fn restore_guides(&mut self, saved: Vec<FloorGuides>) -> Result<(), CommandError> {
+        self.guides.restore(saved)
     }
 
     /// Passes input to the active tool. A pointer event that is not finite,
@@ -449,6 +713,10 @@ impl Session {
             frame,
             sections: self.section_outlines(),
             guides: self.snap.guides.clone(),
+            user_guides: self.guides.on(self.floor).to_vec(),
+            markers: validation::markers(&self.validation(), &self.index, |n| {
+                selection::shown(self.document(), self.floor, n)
+            }),
             ..Overlay::default()
         };
         self.tool.overlay(&view, &self.selection, &mut out);
@@ -484,11 +752,13 @@ impl Session {
     }
 
     fn reset_tool(&mut self) {
+        self.preview = None;
         self.snap.guides.clear();
         self.with_tool(|tool, cx| tool.reset(cx));
     }
 
     fn with_tool(&mut self, f: impl FnOnce(&mut dyn Tool, &mut Context<'_>)) {
+        self.snap.user = self.guides.on(self.floor).to_vec();
         let mut cx = Context {
             editor: &mut self.editor,
             index: &self.index,
@@ -505,6 +775,7 @@ impl Session {
     fn settle(&mut self) {
         let doc = self.editor.document();
         self.index.sync(doc);
+        self.validator.sync(doc);
         self.selection.reconcile(doc);
         let listed = |f| doc.floors().iter().any(|l| l.id == f);
         if !self.floor.is_some_and(listed) {
@@ -514,6 +785,13 @@ impl Session {
                 self.selection = Selection::default();
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl Session {
+    pub(crate) fn validator(&self) -> &Validator {
+        &self.validator
     }
 }
 

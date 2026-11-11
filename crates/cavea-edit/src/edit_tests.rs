@@ -921,7 +921,7 @@ fn random_edit(t: &mut T, r: &mut Rng) -> bool {
     let end = [End::Start, End::End][r.below(2)];
     let axis = [Axis::Horizontal, Axis::Vertical][r.below(2)];
     let category = ["std", "vip", "zzz"].get(r.below(4)).map(|c| c.to_string());
-    let _ = match r.below(22) {
+    let _ = match r.below(24) {
         0 => t.s.row_seats(end, r.below(7) as i32 - 3),
         1 => t.s.shift_rows([27.5, -55.0, wild][r.below(3)]),
         2 => t.s.cut_aisle(at),
@@ -963,6 +963,21 @@ fn random_edit(t: &mut T, r: &mut Rng) -> bool {
         18 => t.s.set_focal_point(Some([wild, 0.0])),
         19 => t.s.set_locked(r.below(4) == 0),
         20 => t.s.cut().map(|_| Applied::default()),
+        21 => {
+            let seats = cavea_compiler::document::SeatLabels {
+                direction: [SeatDirection::Rtl, SeatDirection::CenterOut][r.below(2)],
+                continuous: r.below(2) == 0,
+                ..Default::default()
+            };
+            t.s.number(&Numbering {
+                rows: None,
+                seats: Some(seats),
+                after_z: None,
+                across: (r.below(2) == 0).then(Vec::new),
+                keep_overrides: r.below(2) == 0,
+            })
+        }
+        22 => t.s.merge_category("vip", "std"),
         _ => return t.s.undo().is_err(),
     };
     true
