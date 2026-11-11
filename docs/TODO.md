@@ -111,7 +111,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **REN-031** Gesture handling modes and `touch-action` (04 §14)
 - [x] **REN-032** Hierarchical hit testing with tolerance (04 §15)
 - [x] **REN-033** Zoom-to-select on touch (04 §15)
-- [ ] **REN-034** Selection engine: optimistic select, hold request and result, revert (04 §16)
+- [x] **REN-034** Selection engine: optimistic select, hold request and result, revert (04 §16)
 - [x] **REN-035** Maximum and minimum selection rules (02 §12)
 - [ ] **REN-036** Snapshot application in one pass (04 §17)
 - [ ] **REN-037** Delta application with merged dirty ranges (04 §17)

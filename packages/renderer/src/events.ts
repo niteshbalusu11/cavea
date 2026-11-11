@@ -18,11 +18,15 @@ export interface ObjectInfo {
 }
 
 export type RendererEvent =
+  /** Hold these labels, then answer with `holdOk` or `holdFailed`. */
+  | { type: "holdRequest"; request: number; labels: string[] }
+  /** Release these labels; there is no answer. */
+  | { type: "releaseRequest"; request: number; labels: string[] }
   | { type: "selectionChanged"; selected: ObjectInfo[] }
   /**
    * Rule `min`: the selection is not ready for checkout (`objects` is the
-   * selection). Any other rule (`max`, `not_free`): `objects` were refused
-   * and the selection is as it was.
+   * selection). Any other rule (`max`, `not_free`, a server code): `objects`
+   * were refused and the selection is as it was.
    */
   | { type: "selectionInvalid"; rule: string; objects: string[] }
   /** The selection meets the minimum again. */

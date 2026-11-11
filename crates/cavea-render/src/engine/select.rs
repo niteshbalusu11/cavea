@@ -1,11 +1,34 @@
-//! Taps, hover and focus (04 §15) and the selection (04 §16).
+//! Taps, hover and focus (04 §15) and the selection engine (04 §16).
 //!
-//! The selected seats are kept in the order selected, at most
-//! `MAX_SELECTED`. Hold requests are REN-034: until then the engine selects
-//! as in a manual session (`session: "manual"`, D-14), where the host holds at
-//! checkout: a tap selects at once and deselecting sends nothing. A selected
-//! seat whose public status turns unavailable was taken by someone else and
-//! leaves the selection with `ObjectUnavailable`.
+//! Per seat, the selection is one of: not selected; selected and pending (its
+//! hold not yet requested, or in flight); selected and held. The engine keeps
+//! the selected seats in order (at most `MAX_SELECTED`) and three lists for the
+//! hold protocol: seats whose hold request has not gone out, the one request
+//! in flight, and held seats deselected since whose release has not gone out.
+//! At most one hold request is in flight; everything else waits for its
+//! result and goes out in the next requests ("coalescing", 04 §16):
+//!
+//! - Taps of one frame, and every tap made while a hold is in flight, go out
+//!   together in the next `HoldRequest`.
+//! - A seat tapped on and off again before its request went out is in no
+//!   request at all.
+//! - A seat deselected while its hold is in flight stays in that request. If
+//!   the hold succeeds it is released in the next `ReleaseRequest`; if not,
+//!   nothing is sent. Tapped on again before the result, it is simply
+//!   selected again and the result applies to it.
+//! - A held seat deselected while a hold is in flight is released after the
+//!   result; tapped on again before that, it is held again with no request.
+//! - Releases go out before holds, and only when no hold is in flight, so a
+//!   release never overtakes the hold of the same seat. Releases have no
+//!   result; the host sends requests in the order emitted.
+//!
+//! Own holds: the public status of a seat this buyer holds turns unavailable,
+//! and that change must not knock the seat out of the selection. Until the
+//! server adapter reports the buyer's holds (`SetPrivateHolds`, a later slice)
+//! the engine trusts its own requests: a status change removes a selected seat
+//! only if no hold has been requested for it (manual sessions, or a request
+//! that has not gone out). A seat whose hold is in flight is decided by the
+//! `HoldResult`; a held seat stays selected.
 
 use cavea_core::rules::Rules;
 use cavea_format::full_label::{LabelIndex, full_label, seat_label};
@@ -13,17 +36,39 @@ use cavea_format::full_label::{LabelIndex, full_label, seat_label};
 use super::*;
 use crate::{
     hit::hit_test,
-    protocol::{ObjectInfo, ObjectRef},
-    theme::status,
+    protocol::{HoldOutcome, ObjectInfo, ObjectRef, SessionMode},
     tuning::{
         HIT_TOLERANCE_MOUSE_PX, HIT_TOLERANCE_TOUCH_PX, MAX_SELECTED, SELECT_MIN_SEAT_MOUSE_PX,
         SELECT_MIN_SEAT_TOUCH_PX, ZOOM_TO_SELECT_SEAT_PX,
     },
 };
 
+/// Server failure codes that mean someone else has the object (08 §9).
+const NOT_FREE: [&str; 2] = ["not_free", "object_not_free"];
+
+#[derive(Debug, Clone, Copy)]
+struct Selected {
+    idx: u32,
+    /// The hold is confirmed; always so in a manual session.
+    held: bool,
+}
+
+#[derive(Debug)]
+struct InFlight {
+    request: u32,
+    seats: Vec<u32>,
+    /// Seats of `seats` the buyer deselected after the request went out.
+    dropped: Vec<u32>,
+}
+
 #[derive(Debug)]
 pub(super) struct SelectState {
-    selected: Vec<u32>,
+    selected: Vec<Selected>,
+    to_hold: Vec<u32>,
+    to_release: Vec<u32>,
+    in_flight: Option<InFlight>,
+    next_request: u32,
+    mode: SessionMode,
     rules: Rules,
     /// Whether the selection is ready for checkout, as last reported.
     valid: bool,
@@ -35,6 +80,11 @@ impl Default for SelectState {
     fn default() -> Self {
         Self {
             selected: Vec::new(),
+            to_hold: Vec::new(),
+            to_release: Vec::new(),
+            in_flight: None,
+            next_request: 1,
+            mode: SessionMode::Hold,
             rules: Rules::new(Some(MAX_SELECTED), 0).unwrap_or_default(),
             valid: true,
             changed: false,
@@ -43,10 +93,34 @@ impl Default for SelectState {
 }
 
 impl SelectState {
+    fn find(&self, idx: u32) -> Option<usize> {
+        self.selected.iter().position(|s| s.idx == idx)
+    }
+
+    /// Seats this buyer still holds, or may, though they are not selected.
+    fn ours(&self, idx: u32) -> bool {
+        self.to_release.contains(&idx)
+            || self
+                .in_flight
+                .as_ref()
+                .is_some_and(|f| f.dropped.contains(&idx))
+    }
+
+    fn request_id(&mut self) -> u32 {
+        let id = self.next_request;
+        self.next_request = id.wrapping_add(1).max(1);
+        id
+    }
+
     fn count(&self) -> u32 {
         // At most `MAX_SELECTED`.
         self.selected.len() as u32
     }
+}
+
+fn remove(list: &mut Vec<u32>, idx: u32) -> bool {
+    let at = list.iter().position(|&i| i == idx);
+    at.map(|at| list.remove(at)).is_some()
 }
 
 /// At most 64 bytes of host text, for an error message.
@@ -177,15 +251,17 @@ impl<B: GpuBackend> Engine<B> {
         Some((self.info(idx), at.map(|v| v as f32)))
     }
 
-    fn labels(&self, seats: &[u32]) -> Vec<String> {
+    fn label(&self, idx: u32) -> String {
         let Some(loaded) = &self.scene else {
-            return Vec::new();
+            return String::new();
         };
-        let label = |idx| full_label(&loaded.scene.chart, idx).map(|l| l.as_str().to_owned());
-        seats
-            .iter()
-            .map(|&idx| label(idx).unwrap_or_default())
-            .collect()
+        full_label(&loaded.scene.chart, idx)
+            .map(|l| l.as_str().to_owned())
+            .unwrap_or_default()
+    }
+
+    fn labels(&self, seats: &[u32]) -> Vec<String> {
+        seats.iter().map(|&idx| self.label(idx)).collect()
     }
 
     pub(super) fn info(&self, idx: u32) -> ObjectInfo {
@@ -216,10 +292,14 @@ impl<B: GpuBackend> Engine<B> {
 
     /// Recomputes one seat's visual state and marks it for upload.
     fn refresh(&mut self, idx: u32) {
-        let state = if self.selection.selected.contains(&idx) {
-            Selection::Held
-        } else {
-            Selection::None
+        let state = match self
+            .selection
+            .find(idx)
+            .and_then(|i| self.selection.selected.get(i))
+        {
+            Some(s) if s.held => Selection::Held,
+            Some(_) => Selection::Pending,
+            None => Selection::None,
         };
         let Some(loaded) = &mut self.scene else {
             return;
@@ -235,17 +315,11 @@ impl<B: GpuBackend> Engine<B> {
         self.redraw();
     }
 
-    /// Whether seat `idx` is free to select.
-    fn available(&self, idx: u32) -> bool {
-        let scene = self.scene.as_ref().map(|l| &l.scene);
-        scene.and_then(|s| s.status.get(idx as usize)) == Some(&status::AVAILABLE)
-    }
-
-    /// A tap or click on seat `idx`: deselects it, selects it, or refuses it
-    /// with `SelectionInvalid`.
+    /// A tap or click on seat `idx`.
     fn tap(&mut self, idx: u32) {
-        if self.selection.selected.contains(&idx) {
-            return self.deselect_seat(idx);
+        if self.selection.find(idx).is_some() {
+            self.deselect_seat(idx);
+            return;
         }
         let rule = if !self.available(idx) {
             "not_free"
@@ -254,24 +328,55 @@ impl<B: GpuBackend> Engine<B> {
         } else {
             return self.select_seat(idx);
         };
-        let objects = self.labels(&[idx]);
+        let objects = vec![self.label(idx)];
         let rule = rule.to_owned();
         self.events.push(Event::SelectionInvalid { rule, objects });
     }
 
+    /// Whether the buyer may select `idx`: free, or still held by them.
+    fn available(&self, idx: u32) -> bool {
+        let status = self
+            .scene
+            .as_ref()
+            .and_then(|l| l.scene.status.get(idx as usize));
+        status == Some(&crate::theme::status::AVAILABLE) || self.selection.ours(idx)
+    }
+
     fn select_seat(&mut self, idx: u32) {
-        self.selection.selected.push(idx);
-        self.selection.changed = true;
+        let sel = &mut self.selection;
+        let held = if remove(&mut sel.to_release, idx) {
+            true
+        } else if let Some(f) = sel.in_flight.as_mut().filter(|f| f.dropped.contains(&idx)) {
+            remove(&mut f.dropped, idx);
+            false
+        } else if sel.mode == SessionMode::Manual {
+            true
+        } else {
+            sel.to_hold.push(idx);
+            false
+        };
+        sel.selected.push(Selected { idx, held });
+        sel.changed = true;
         self.refresh(idx);
     }
 
     fn deselect_seat(&mut self, idx: u32) {
         let sel = &mut self.selection;
-        if let Some(at) = sel.selected.iter().position(|&i| i == idx) {
-            sel.selected.remove(at);
-            sel.changed = true;
-            self.refresh(idx);
+        let Some(at) = sel.find(idx) else {
+            return;
+        };
+        let seat = sel.selected.remove(at);
+        if sel.mode == SessionMode::Hold {
+            if seat.held {
+                sel.to_release.push(idx);
+            } else if !remove(&mut sel.to_hold, idx)
+                && let Some(f) = &mut sel.in_flight
+            {
+                f.dropped.push(idx);
+            }
         }
+        sel.changed = true;
+        self.refresh(idx);
     }
 
     /// Resolves labels and indices to seats. Unknown objects are reported in
@@ -325,7 +430,7 @@ impl<B: GpuBackend> Engine<B> {
         let mut seats: Vec<u32> = Vec::new();
         let mut refused = None;
         for idx in requested {
-            if seats.contains(&idx) || self.selection.selected.contains(&idx) {
+            if seats.contains(&idx) || self.selection.find(idx).is_some() {
                 continue;
             }
             seats.push(idx);
@@ -368,9 +473,82 @@ impl<B: GpuBackend> Engine<B> {
     }
 
     pub(super) fn clear_selection(&mut self) {
-        let seats = std::mem::take(&mut self.selection.selected);
-        self.selection.changed |= !seats.is_empty();
-        seats.into_iter().for_each(|idx| self.refresh(idx));
+        let seats: Vec<u32> = self.selection.selected.iter().map(|s| s.idx).collect();
+        seats.into_iter().for_each(|idx| self.deselect_seat(idx));
+        self.flush_selection();
+    }
+
+    pub(super) fn hold_result(&mut self, request: u32, outcome: &HoldOutcome) {
+        let flight = self.selection.in_flight.take_if(|f| f.request == request);
+        let Some(flight) = flight else {
+            return self.error(ErrorCode::InvalidInput, "unknown hold request");
+        };
+        let failures = match outcome {
+            HoldOutcome::Ok => {
+                for &idx in &flight.seats {
+                    let sel = &mut self.selection;
+                    if flight.dropped.contains(&idx) {
+                        sel.to_release.push(idx);
+                    } else if let Some(at) = sel.find(idx)
+                        && let Some(seat) = sel.selected.get_mut(at)
+                    {
+                        seat.held = true;
+                        self.refresh(idx);
+                    }
+                }
+                return self.flush_selection();
+            }
+            HoldOutcome::Failed(failures) => failures,
+        };
+        // Holds are all or nothing (02 §4.3): no seat of the request is held.
+        // The seats the server names are refused; the others are requested
+        // again. With none named, all are refused.
+        let labels = self.labels(&flight.seats);
+        let mut refused: Vec<(u32, &str)> = Vec::new();
+        for failure in failures {
+            let named =
+                flight
+                    .seats
+                    .iter()
+                    .zip(&labels)
+                    .find(|&(&idx, label)| match &failure.object {
+                        ObjectRef::Idx(i) => *i == idx,
+                        ObjectRef::Label(l) => l == label,
+                    });
+            if let Some((&idx, _)) = named {
+                refused.push((idx, failure.code.as_str()));
+            }
+        }
+        if refused.is_empty() {
+            let code = failures.first().map_or("hold_failed", |f| f.code.as_str());
+            refused = flight.seats.iter().map(|&idx| (idx, code)).collect();
+        }
+        let mut invalid: Vec<(&str, Vec<String>)> = Vec::new();
+        for (&idx, label) in flight.seats.iter().zip(labels) {
+            if flight.dropped.contains(&idx) {
+                continue;
+            }
+            let Some(&(_, code)) = refused.iter().find(|(i, _)| *i == idx) else {
+                self.selection.to_hold.push(idx);
+                continue;
+            };
+            if let Some(at) = self.selection.find(idx) {
+                self.selection.selected.remove(at);
+                self.selection.changed = true;
+                self.refresh(idx);
+            }
+            if NOT_FREE.contains(&code) {
+                self.events.push(Event::ObjectUnavailable { label });
+            } else if let Some((_, objects)) = invalid.iter_mut().find(|(c, _)| *c == code) {
+                objects.push(label);
+            } else {
+                invalid.push((code, vec![label]));
+            }
+        }
+        for (rule, objects) in invalid {
+            let rule = rule.to_owned();
+            self.events.push(Event::SelectionInvalid { rule, objects });
+        }
         self.flush_selection();
     }
 
@@ -405,43 +583,68 @@ impl<B: GpuBackend> Engine<B> {
         self.flush_selection();
     }
 
-    /// After a status change in `range`: selected seats that became
-    /// unavailable leave the selection with `ObjectUnavailable`.
-    pub(super) fn status_changed(&mut self, range: Range<u32>) {
-        let taken: Vec<u32> = (self.selection.selected.iter().copied())
-            .filter(|idx| range.contains(idx) && !self.available(*idx))
-            .collect();
-        let labels = self.labels(&taken);
-        self.selection.selected.retain(|idx| !taken.contains(idx));
-        self.selection.changed |= !taken.is_empty();
-        for label in labels {
-            self.events.push(Event::ObjectUnavailable { label });
+    pub(super) fn set_session_mode(&mut self, mode: SessionMode) {
+        let sel = &self.selection;
+        if sel.selected.is_empty() && sel.in_flight.is_none() && sel.to_release.is_empty() {
+            self.selection.mode = mode;
+        } else {
+            self.error(
+                ErrorCode::InvalidInput,
+                "the session mode changes only with nothing selected or outstanding",
+            );
         }
-        // The fill reset the range; selected seats keep their state.
-        let kept: Vec<u32> = (self.selection.selected.iter().copied())
+    }
+
+    /// After a status change in `range`: selected seats with no hold
+    /// requested that became unavailable leave the selection with
+    /// `ObjectUnavailable`; the others keep their selected state.
+    pub(super) fn status_changed(&mut self, range: Range<u32>) {
+        let seats: Vec<u32> = (self.selection.selected.iter())
+            .map(|s| s.idx)
             .filter(|idx| range.contains(idx))
             .collect();
-        kept.into_iter().for_each(|idx| self.refresh(idx));
+        for idx in seats {
+            let sel = &self.selection;
+            let unrequested = sel.mode == SessionMode::Manual || sel.to_hold.contains(&idx);
+            if unrequested && !self.available(idx) {
+                let sel = &mut self.selection;
+                remove(&mut sel.to_hold, idx);
+                if let Some(at) = sel.find(idx) {
+                    sel.selected.remove(at);
+                }
+                sel.changed = true;
+                let label = self.label(idx);
+                self.events.push(Event::ObjectUnavailable { label });
+            }
+            self.refresh(idx);
+        }
         self.flush_selection();
     }
 
     /// Forgets the selection, hover and focus of the chart being replaced.
+    /// No release requests: the holds stay on the token, which the host owns.
     pub(super) fn reset_selection(&mut self) {
-        let sel = &mut self.selection;
-        sel.changed |= !sel.selected.is_empty();
-        sel.selected.clear();
+        let had = !self.selection.selected.is_empty();
+        self.selection = SelectState {
+            mode: self.selection.mode,
+            rules: self.selection.rules,
+            next_request: self.selection.next_request,
+            valid: self.selection.valid,
+            changed: had,
+            ..SelectState::default()
+        };
         self.hover_at = None;
         self.set_hover(None);
         self.set_focus(None);
     }
 
-    /// Emits what changed since the last call: `SelectionChanged`, then
-    /// `SelectionValid` or `SelectionInvalid` when readiness for checkout
-    /// changes.
+    /// Emits what changed since the last call, in this order:
+    /// `SelectionChanged`, `SelectionValid` or `SelectionInvalid` for the
+    /// minimum, then the next release and hold requests.
     pub(super) fn flush_selection(&mut self) {
         if std::mem::take(&mut self.selection.changed) {
             let selected = (self.selection.selected.iter())
-                .map(|&idx| self.info(idx))
+                .map(|s| self.info(s.idx))
                 .collect();
             self.events.push(Event::SelectionChanged { selected });
         }
@@ -450,11 +653,36 @@ impl<B: GpuBackend> Engine<B> {
             self.selection.valid = check.is_ok();
             self.events.push(match check {
                 Ok(()) => Event::SelectionValid,
-                Err(v) => Event::SelectionInvalid {
-                    rule: v.code().to_owned(),
-                    objects: self.labels(&self.selection.selected),
-                },
+                Err(v) => {
+                    let seats: Vec<u32> = self.selection.selected.iter().map(|s| s.idx).collect();
+                    Event::SelectionInvalid {
+                        rule: v.code().to_owned(),
+                        objects: self.labels(&seats),
+                    }
+                }
             });
+        }
+        let sel = &mut self.selection;
+        if sel.in_flight.is_some() || sel.mode == SessionMode::Manual {
+            return;
+        }
+        if !sel.to_release.is_empty() {
+            let seats = std::mem::take(&mut sel.to_release);
+            let request = sel.request_id();
+            let labels = self.labels(&seats);
+            self.events.push(Event::ReleaseRequest { request, labels });
+        }
+        let sel = &mut self.selection;
+        if !sel.to_hold.is_empty() {
+            let seats = std::mem::take(&mut sel.to_hold);
+            let request = sel.request_id();
+            let labels = self.labels(&seats);
+            self.selection.in_flight = Some(InFlight {
+                request,
+                seats,
+                dropped: Vec::new(),
+            });
+            self.events.push(Event::HoldRequest { request, labels });
         }
     }
 }

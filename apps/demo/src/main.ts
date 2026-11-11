@@ -9,10 +9,11 @@
 // sets gesture handling (cooperative makes the page scroll around the map),
 // `reducedMotion=1` turns animation off.
 //
-// Tap or click seats to select and deselect them; `max` and `min` set the
-// selection rules (default 4 and 0). Hold requests come with REN-034; until
-// then selection works as in a manual session. Small seats zoom instead of
-// selecting (touch below 18 px, mouse below 5 px).
+// Tap or click seats to select and deselect them. A fake host answers each
+// hold request after `holdMs` (default 400) milliseconds; `fail=n` makes every
+// n-th hold fail as taken by someone else, so the revert shows. `max` and `min`
+// set the selection rules (default 4 and 0); `manual=1` selects without holds.
+// Small seats zoom instead of selecting (touch below 18 px, mouse below 5 px).
 // `window.caveaDemo` counts frames and WebGL errors, keeps every engine event
 // in `events`, and offers `setTheme(name)` for scripted checks.
 import {
@@ -73,6 +74,9 @@ const gestures: GestureHandling =
 const reducedMotion = params.has("reducedMotion") ? params.get("reducedMotion") === "1" : undefined;
 const max = Number(params.get("max") ?? 4);
 const min = Number(params.get("min") ?? 0);
+const manual = params.get("manual") === "1";
+const failEvery = Number(params.get("fail") ?? 0);
+const holdMs = Number(params.get("holdMs") ?? 400);
 if (gestures === "cooperative") {
   document.body.classList.add("scrolling");
 }
@@ -139,15 +143,17 @@ function soldRuns(fraction: number, set: (start: number, count: number) => void)
   return runs;
 }
 
-/** What the host shows: the counter, readiness and the hovered seat. */
+/** The fake host: selection state for the counter, holds answered late. */
 let selected: string[] = [];
+let holds = 0;
+let pending = 0;
 let hover = "";
 let ready = true;
 let lastNote = "";
 function showSelection(): void {
   selectionLine.textContent =
     `selected ${selected.length}/${max}: ${selected.join(" ")}\n` +
-    `checkout ${ready ? "ready" : "not ready"}; ` +
+    `holds in flight: ${pending}; checkout ${ready ? "ready" : "not ready"}; ` +
     `hover: ${hover || "none"}\n${lastNote}`;
 }
 function note(line: string): void {
@@ -161,6 +167,27 @@ function onEvents(batch: RendererEvent[]): void {
       case "selectionChanged":
         selected = event.selected.map((o) => o.label);
         note(`selection: ${selected.join(", ") || "empty"}`);
+        break;
+      case "holdRequest": {
+        holds += 1;
+        pending += 1;
+        const fails = failEvery > 0 && holds % failEvery === 0;
+        note(`hold ${event.request} requested: ${event.labels.join(", ")}`);
+        setTimeout(() => {
+          pending -= 1;
+          if (fails) {
+            note(`hold ${event.request} failed: ${event.labels[0] ?? ""} is taken`);
+            view.holdFailed(event.request, event.labels.slice(0, 1), ["not_free"]);
+          } else {
+            note(`hold ${event.request} ok`);
+            view.holdOk(event.request);
+          }
+          host?.update();
+        }, holdMs);
+        break;
+      }
+      case "releaseRequest":
+        note(`release ${event.request}: ${event.labels.join(", ")}`);
         break;
       case "selectionInvalid":
         if (event.rule === "min") {
@@ -203,6 +230,9 @@ if (
       `loadChart ${(loadedAt - loadStart).toFixed(1)} ms; theme ${theme}`,
   );
   view.setRules(max, min);
+  if (manual) {
+    view.setManualSession(true);
+  }
   if (camera !== undefined && camera.length === 4) {
     const [x = 0, y = 0, width = 1, height = 1] = camera;
     view.setCamera(x, y, width, height);

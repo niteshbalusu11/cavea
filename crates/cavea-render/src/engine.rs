@@ -2,9 +2,9 @@
 //! [`GpuBackend`]. Implemented so far: `LoadChart`, `SetTheme`, `Resize`,
 //! `Pointer`, `Wheel`, `SetCamera` and `FlyTo` with bounds,
 //! `SetGestureHandling`, `SetReducedMotion`, `Select`, `Deselect`,
-//! `ClearSelection`, `SetRules`, `Tick` and `ContextLost`; every other command
-//! is answered with an `Unsupported` error event. Taps, hover and selection
-//! are in [`select`].
+//! `ClearSelection`, `HoldResult`, `SetRules`, `SetSessionMode`, `Tick` and
+//! `ContextLost`; every other command is answered with an `Unsupported` error
+//! event. Taps, hover and selection are in [`select`].
 //!
 //! Frames (04 §18): input, camera commands and resizes are queued and applied
 //! at the start of the next `Tick`. A frame is drawn only when something is
@@ -285,12 +285,14 @@ impl<B: GpuBackend> Engine<B> {
             Command::Select { objects } => self.select_objects(&objects),
             Command::Deselect { objects } => self.deselect_objects(&objects),
             Command::ClearSelection => self.clear_selection(),
+            Command::HoldResult { request, outcome } => self.hold_result(request, &outcome),
             Command::SetRules {
                 max,
                 min,
                 validators,
                 group_size,
             } => self.set_rules(max, min, &validators, group_size),
+            Command::SetSessionMode(mode) => self.set_session_mode(mode),
             Command::Tick { time_ms } => self.frame(time_ms),
             Command::ContextLost => self.context_lost = true,
             _ => self.error(

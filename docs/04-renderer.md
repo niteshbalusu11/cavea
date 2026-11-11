@@ -66,6 +66,7 @@ The engine is driven only by commands and emits only events. Both are plain data
 | `SetFilter` | Categories, price range, accessible only |
 | `SetTheme` | A built-in theme (`light`, `dark`, `high-contrast`) and token values to apply over it (§19) |
 | `SetMode` | `picker`, `static`, `spotlight`, `manager` |
+| `SetSessionMode` | `hold` (default: a selection emits `HoldRequest`) or `manual` (no hold or release requests; the host holds at checkout). Refused while anything is selected or a request is outstanding |
 | `SetRules` | Maximum (1 to 100, default 100), minimum, validators, group size |
 | `SetFloor` | Floor id |
 | `Tick` | Frame time |
@@ -82,7 +83,7 @@ The engine is driven only by commands and emits only events. Both are plain data
 | `SelectionInvalid` / `SelectionValid` | Rule and offending objects (§16) |
 | `ObjectHover` / `ObjectFocus` | Object details, anchor position in screen space (the object's centre in CSS pixels); none when it leaves every object |
 | `SectionEnter` | Section |
-| `ObjectUnavailable` | A selected object was taken by someone else; it is no longer selected |
+| `ObjectUnavailable` | A selected object was taken by someone else, or its hold failed with `not_free`; it is no longer selected |
 | `CameraChanged` | Centre, zoom, level of detail |
 | `Announce` | Text for assistive technology |
 | `Metrics` | Timing marks and frame statistics |
@@ -356,17 +357,23 @@ tap → hit test → rules check ──fail──▶ SelectionInvalid (no state 
    visual = selected-held    revert, ObjectUnavailable or SelectionInvalid
 ```
 
-- Rules run locally first (`02-domain-model.md` §12) using the same code the server uses (`cavea_core::rules`). A seat that is not available (public status other than 0) is refused with `SelectionInvalid` rule `not_free`; one over the maximum with rule `max`. Neither changes anything.
+- Rules run locally first (`02-domain-model.md` §12) using the same code the server uses (`cavea_core::rules`). A seat that is not available (public status other than 0, and not still held by this buyer) is refused with `SelectionInvalid` rule `not_free`; one over the maximum with rule `max`. Neither changes anything.
 - The visual state changes in the frame of the `Tick` that takes the tap: one dynamic-buffer sub-range upload.
-- At most `MAX_SELECTED` (100) seats are selected, kept in the order selected.
-- Hold requests for one token are sent in order, one in flight at a time; taps made meanwhile are coalesced into the next request. (Hold requests, results and revert are REN-034. Until then the engine selects as in a manual session: a tap selects at once, visual state selected-held, and deselecting sends nothing.)
-- **Readiness:** `SelectionValid` and `SelectionInvalid` with rule `min` (objects: the selection) report, when it changes, whether the selection meets the minimum for checkout. Every other `SelectionInvalid` reports objects that were refused; the selection is as it was. `SetRules` refuses a maximum below the current selection.
+- Per seat, the selection is: not selected, selected and pending (hold not yet requested, or in flight), or selected and held. At most `MAX_SELECTED` (100) seats are selected.
+- Hold requests for one token are sent in order, one in flight at a time; taps made meanwhile are coalesced into the next request. Precisely:
+  - Taps of one frame, and all taps made while a hold is in flight, go out together in the next `HoldRequest`.
+  - A seat tapped on and off again before its request went out is in no request.
+  - A seat deselected while its hold is in flight stays in that request; if the hold succeeds the seat is released in the next `ReleaseRequest`, otherwise nothing is sent. Tapped on again before the result, it is selected again and the result applies to it.
+  - A held seat deselected while a hold is in flight is released after the result; tapped on again before that, it is held again with no request.
+  - Releases go out before holds, and only while no hold is in flight, so a release never overtakes the hold of the same seat. Releases have no result; the host sends requests in the order emitted.
+- `HoldResult` ok: the request's seats become held. Failed: holds are all or nothing (`02-domain-model.md` §4.3), so no seat of the request is held. Each seat the failure names reverts: `ObjectUnavailable` for `not_free` (or `object_not_free`), otherwise `SelectionInvalid` with the code as the rule. Seats the failure does not name stay pending and go out in the next request; if it names none of the request's seats, all revert with the first code. A result for an unknown request id, or a second result, is an `InvalidInput` error and changes nothing.
+- **Readiness:** `SelectionValid` and `SelectionInvalid` with rule `min` (objects: the selection) report, when it changes, whether the selection meets the minimum for checkout. Every other `SelectionInvalid` reports objects that were refused; the selection is as it was.
 - `Select`, `Deselect` and `ClearSelection` behave as taps and take labels or `idx`; `Select` is all or nothing (any unavailable seat, or too many, refuses the whole command). An unknown label or `idx` is an `InvalidInput` error for the whole command. Labels resolve through an index of every seat's full label, built on the first lookup by label (8 bytes per seat; 9 ms for 100,000 seats, measured locally).
 - **Group selection:** with a group size *n*, one tap selects the *n* seats in the tapped seat's segment that contain it and create the fewest orphans, preferring the window centred on the tap.
-- `session: "manual"` skips hold requests; the host holds at checkout.
-- If a status change (a delta) makes a selected object unavailable, it is removed from the selection and `ObjectUnavailable` fires. (With hold requests, the buyer's own hold also makes the public status unavailable; telling it from someone else's is REN-034, through `SetPrivateHolds` or the engine's own requests.)
+- `session: "manual"` (`SetSessionMode`) skips hold requests; a tap selects at once (visual state selected-held) and deselecting sends no release.
+- If a status change (a delta) makes a selected object unavailable, it is removed from the selection and `ObjectUnavailable` fires. The buyer's own hold makes the seat's public status unavailable too, so until `SetPrivateHolds` tells the engine which seats the buyer holds (§17), it trusts its own requests: a status change removes only a selected seat with no hold requested (manual session, or a request not yet sent). A seat whose hold is in flight is decided by its `HoldResult`; a held seat stays selected.
 - Deselecting sends a release.
-- `LoadChart` forgets the selection, hover and focus, and emits `SelectionChanged` if anything was selected.
+- `LoadChart` forgets the selection, hover and focus without release requests (the holds stay on the token, which the host owns) and emits `SelectionChanged` if anything was selected.
 
 ## 17. Applying state
 

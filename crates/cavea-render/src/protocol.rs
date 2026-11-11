@@ -103,6 +103,17 @@ pub struct PriceRange {
     pub max: u64,
 }
 
+/// Whether a selection asks the host to hold (04 §16, `session` in 05 §4).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SessionMode {
+    /// A tap selects at once and emits `HoldRequest`; deselecting emits
+    /// `ReleaseRequest`.
+    #[default]
+    Hold,
+    /// No hold or release requests: the host holds at checkout.
+    Manual,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Picker,
@@ -217,6 +228,9 @@ pub enum Command {
         tokens: Vec<ThemeToken>,
     },
     SetMode(Mode),
+    /// Refused with `InvalidInput` while anything is selected or a request
+    /// is outstanding.
+    SetSessionMode(SessionMode),
     /// `max`: at most this many objects, 1 to `tuning::MAX_SELECTED` (the
     /// default). `min`: at least this many before checkout.
     SetRules {
@@ -355,7 +369,8 @@ pub enum Event {
     SectionEnter {
         section: String,
     },
-    /// A selected object was taken by someone else; it is no longer selected.
+    /// A selected object was taken by someone else, or its hold was refused
+    /// because it is not free; it is no longer selected.
     ObjectUnavailable {
         label: String,
     },

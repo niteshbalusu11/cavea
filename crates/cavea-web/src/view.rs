@@ -9,8 +9,8 @@ use cavea_render::{
     backend::glow::GlowBackend,
     backing_size,
     protocol::{
-        BuiltinTheme, Command, Event, GestureHandling, Modifiers, ObjectRef, PointerKind,
-        PointerType,
+        BuiltinTheme, Command, Event, GestureHandling, HoldOutcome, Modifiers, ObjectFailure,
+        ObjectRef, PointerKind, PointerType, SessionMode,
     },
     tuning::{MAX_DPR_OTHER, MAX_DPR_TOUCH},
 };
@@ -241,6 +241,46 @@ impl View {
         self.send(Command::ClearSelection)
     }
 
+    /// The hold of `request` (a `holdRequest` event) succeeded.
+    #[wasm_bindgen(js_name = holdOk)]
+    pub fn hold_ok(&mut self, request: u32) -> Result<(), JsError> {
+        let outcome = HoldOutcome::Ok;
+        self.send(Command::HoldResult { request, outcome })
+    }
+
+    /// The hold of `request` failed: the labels the server named, each with
+    /// its reason code (`not_free` makes the seat unavailable). With no
+    /// labels, every seat of the request is refused with `codes[0]`.
+    #[wasm_bindgen(js_name = holdFailed)]
+    pub fn hold_failed(
+        &mut self,
+        request: u32,
+        labels: Vec<String>,
+        codes: Vec<String>,
+    ) -> Result<(), JsError> {
+        let mut failures: Vec<ObjectFailure> = labels
+            .into_iter()
+            .zip(
+                codes
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::repeat(String::new())),
+            )
+            .map(|(label, code)| ObjectFailure {
+                object: ObjectRef::Label(label),
+                code,
+            })
+            .collect();
+        if failures.is_empty() {
+            failures.push(ObjectFailure {
+                object: ObjectRef::Label(String::new()),
+                code: codes.into_iter().next().unwrap_or_default(),
+            });
+        }
+        let outcome = HoldOutcome::Failed(failures);
+        self.send(Command::HoldResult { request, outcome })
+    }
+
     /// `max` (1 to 100, default 100) and `min` (default 0) selection (02 §12).
     #[wasm_bindgen(js_name = setRules)]
     pub fn set_rules(&mut self, max: Option<u32>, min: Option<u32>) -> Result<(), JsError> {
@@ -250,6 +290,17 @@ impl View {
             validators: Vec::new(),
             group_size: None,
         })
+    }
+
+    /// `manual`: taps send no hold requests; the host holds at checkout.
+    #[wasm_bindgen(js_name = setManualSession)]
+    pub fn set_manual_session(&mut self, manual: bool) -> Result<(), JsError> {
+        let mode = if manual {
+            SessionMode::Manual
+        } else {
+            SessionMode::Hold
+        };
+        self.send(Command::SetSessionMode(mode))
     }
 
     /// Whether a frame is wanted, after a call other than `frame`.

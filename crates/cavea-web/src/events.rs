@@ -7,8 +7,8 @@ use std::fmt::Write;
 
 use cavea_render::protocol::{Event, Lod, ObjectInfo};
 
-/// Appends the events the host is told about (selection, hover, focus,
-/// camera) as a JSON array; others are skipped.
+/// Appends the events the host is told about (selection, hold and release
+/// requests, hover, focus, camera) as a JSON array; others are skipped.
 pub fn to_json(events: &[Event], out: &mut String) {
     out.push('[');
     let mut first = true;
@@ -34,6 +34,21 @@ fn write_event(event: &Event, out: &mut String) -> bool {
         out.push('"');
     };
     match event {
+        Event::HoldRequest { request, labels } | Event::ReleaseRequest { request, labels } => {
+            let hold = matches!(event, Event::HoldRequest { .. });
+            kind(
+                out,
+                if hold {
+                    "holdRequest"
+                } else {
+                    "releaseRequest"
+                },
+            );
+            field(out, "request");
+            let _ = write!(out, "{request}");
+            field(out, "labels");
+            strings(out, labels);
+        }
         Event::SelectionChanged { selected } => {
             kind(out, "selectionChanged");
             field(out, "selected");
@@ -182,9 +197,9 @@ mod tests {
             Event::NeedFrame,
             Event::ObjectHover(Some((object, [-1.5, f32::NAN]))),
             Event::ObjectFocus(None),
-            Event::SelectionInvalid {
-                rule: "max".into(),
-                objects: vec!["x".into(), "y".into()],
+            Event::HoldRequest {
+                request: 7,
+                labels: vec!["x".into(), "y".into()],
             },
             Event::SelectionValid,
         ];
@@ -194,7 +209,7 @@ mod tests {
         assert_eq!(
             out,
             format!(
-                r#"[{{"type":"selectionChanged","selected":[{object}]}},{{"type":"objectHover","object":{object},"at":[-1.5000,0.0000]}},{{"type":"objectFocus","object":null,"at":null}},{{"type":"selectionInvalid","rule":"max","objects":["x","y"]}},{{"type":"selectionValid"}}]"#
+                r#"[{{"type":"selectionChanged","selected":[{object}]}},{{"type":"objectHover","object":{object},"at":[-1.5000,0.0000]}},{{"type":"objectFocus","object":null,"at":null}},{{"type":"holdRequest","request":7,"labels":["x","y"]}},{{"type":"selectionValid"}}]"#
             )
         );
         let mut out = String::new();
