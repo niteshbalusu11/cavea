@@ -219,7 +219,7 @@ Drawing 100,000 seats is one instanced draw call, so the GPU is not the constrai
 
 ### Build and release
 
-- `cargo xtask build-web` produces the WASM, runs `wasm-opt`, generates TypeScript types and enforces the size gate.
+- `cargo xtask build-web` produces the WASM, runs `wasm-opt`, generates TypeScript types and enforces the size gate against a committed baseline (`13-testing-benchmarks.md` §6.3).
 - `cargo xtask release` builds the server binary and Docker image, signs both, and writes an SBOM.
 - Every release publishes: Docker image, npm packages, Swift package, Android library, changelog, upgrade notes.
 

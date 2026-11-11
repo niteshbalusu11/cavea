@@ -10,5 +10,13 @@ publish.workspace = true
 name = "cavea"
 path = "src/main.rs"
 
+[dependencies]
+anyhow.workspace = true
+brotli.workspace = true
+cavea-compiler.workspace = true
+cavea-format.workspace = true
+cavea-testkit.workspace = true
+serde_json.workspace = true
+
 [lints]
 workspace = true

@@ -37,6 +37,16 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo build --workspace --locked
       - run: cargo xtask check-deps
+      # wasm-opt for build-web's payload gate: binaryen 132, the version
+      # flake.nix provides. The gate refuses a build without it or with
+      # another version, whose sizes are not comparable with the baseline.
+      - name: Install binaryen 132
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/binaryen.tar.gz" \
+            https://github.com/WebAssembly/binaryen/releases/download/version_132/binaryen-version_132-x86_64-linux.tar.gz
+          echo "195ddc94f9bc89f45abdabb0b9eea86023d727ba90eac8b35b80f2544fc30572  $RUNNER_TEMP/binaryen.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/binaryen.tar.gz" -C "$RUNNER_TEMP" binaryen-version_132/bin/wasm-opt
+          echo "$RUNNER_TEMP/binaryen-version_132/bin" >> "$GITHUB_PATH"
       # The wasm32 build of cavea-web plus bindings; the web job consumes the output.
       - run: cargo xtask build-web
       - uses: actions/upload-artifact@v7
