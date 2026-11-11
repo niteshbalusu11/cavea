@@ -10,8 +10,8 @@ export interface ChartSource {
   save(draft: string, name: string): Promise<void>;
 }
 
-/** A chart with nothing in it and one category (07 §16: the templates of
- * the first-run screen arrive with DSN-042). */
+/** A chart with nothing in it and one category (07 §16: "draw from
+ * scratch"). */
 export function emptyChart(name: string): string {
   return JSON.stringify({
     schema: 1,
@@ -40,10 +40,21 @@ export function fileName(name: string): string {
   return `${base === "" ? "chart" : base}.json`;
 }
 
-/** The local source: nothing to open at first, and saving downloads the
- * chart document. */
+/** A chart the console chose before opening the designer (a template, a
+ * file, an empty chart from the charts screen), for the local source. */
+let handed: string | null = null;
+export function handOff(text: string): void {
+  handed = text;
+}
+
+/** The local source: what the console handed over, else nothing (the
+ * new-chart screen); saving downloads the chart document. */
 export const localSource: ChartSource = {
-  open: () => Promise.resolve(null),
+  open() {
+    const text = handed;
+    handed = null;
+    return Promise.resolve(text);
+  },
   save(draft, name) {
     const url = URL.createObjectURL(new Blob([draft], { type: "application/json" }));
     const a = document.createElement("a");

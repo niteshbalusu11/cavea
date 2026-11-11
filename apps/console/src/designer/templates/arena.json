@@ -1,0 +1,1644 @@
+{
+  "schema": 1,
+  "name": "Arena bowl",
+  "settings": {
+    "seatSize": 44.0,
+    "seatShape": "circle",
+    "labelTemplate": "{section}-{row}-{seat}",
+    "tableLabelTemplate": "{section}-{table}-{seat}",
+    "rowLabelDisplay": "both",
+    "alphaOverflow": "double"
+  },
+  "nextOid": 21647,
+  "categories": [
+    { "key": "premium", "label": "Premium", "color": "#2563EB", "accessible": false },
+    { "key": "standard", "label": "Standard", "color": "#B45309", "accessible": false },
+    { "key": "value", "label": "Value", "color": "#047857", "accessible": false },
+    { "key": "access", "label": "Wheelchair space", "color": "#C026D3", "accessible": true }
+  ],
+  "floors": [{ "id": 1, "name": "Arena", "level": 0, "focalPoint": [0.0, 0.0] }],
+  "nodes": [
+    {
+      "type": "section",
+      "id": 1,
+      "origin": [0.0, 0.0],
+      "rotation": 0.0,
+      "label": "101",
+      "outline": "auto",
+      "category": "standard",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 2,
+          "origin": [2057.1428571428573, 2100.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 3, "seats": 11, "offset": 0.0, "oids": [[4, 11]] },
+            { "rid": 15, "seats": 11, "offset": 0.0, "oids": [[16, 11]] },
+            { "rid": 27, "seats": 11, "offset": 0.0, "oids": [[28, 11]] },
+            { "rid": 39, "seats": 11, "offset": 0.0, "oids": [[40, 11]] },
+            { "rid": 51, "seats": 11, "offset": 0.0, "oids": [[52, 11]] }
+          ],
+          "seatOverrides": {
+            "4": { "flags": ["accessible"], "category": "access" },
+            "5": { "flags": ["accessible"], "category": "access" },
+            "6": { "flags": ["companion"] },
+            "12": { "flags": ["companion"] },
+            "13": { "flags": ["accessible"], "category": "access" },
+            "14": { "flags": ["accessible"], "category": "access" }
+          }
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 467,
+      "origin": [0.0, 0.0],
+      "rotation": 0.0,
+      "label": "102",
+      "outline": "auto",
+      "category": "standard",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 468,
+          "origin": [1371.4285714285716, 2100.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 469, "seats": 11, "offset": 0.0, "oids": [[470, 11]] },
+            { "rid": 481, "seats": 11, "offset": 0.0, "oids": [[482, 11]] },
+            { "rid": 493, "seats": 11, "offset": 0.0, "oids": [[494, 11]] },
+            { "rid": 505, "seats": 11, "offset": 0.0, "oids": [[506, 11]] },
+            { "rid": 517, "seats": 11, "offset": 0.0, "oids": [[518, 11]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 933,
+      "origin": [0.0, 0.0],
+      "rotation": 0.0,
+      "label": "103",
+      "outline": "auto",
+      "category": "premium",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 934,
+          "origin": [685.7142857142858, 2100.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 935, "seats": 11, "offset": 0.0, "oids": [[936, 11]] },
+            { "rid": 947, "seats": 11, "offset": 0.0, "oids": [[948, 11]] },
+            { "rid": 959, "seats": 11, "offset": 0.0, "oids": [[960, 11]] },
+            { "rid": 971, "seats": 11, "offset": 0.0, "oids": [[972, 11]] },
+            { "rid": 983, "seats": 11, "offset": 0.0, "oids": [[984, 11]] }
+          ],
+          "seatOverrides": {
+            "936": { "flags": ["accessible"], "category": "access" },
+            "937": { "flags": ["accessible"], "category": "access" },
+            "938": { "flags": ["companion"] },
+            "944": { "flags": ["companion"] },
+            "945": { "flags": ["accessible"], "category": "access" },
+            "946": { "flags": ["accessible"], "category": "access" }
+          }
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 1399,
+      "origin": [0.0, 0.0],
+      "rotation": 0.0,
+      "label": "104",
+      "outline": "auto",
+      "category": "premium",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 1400,
+          "origin": [0.0, 2100.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 1401, "seats": 11, "offset": 0.0, "oids": [[1402, 11]] },
+            { "rid": 1413, "seats": 11, "offset": 0.0, "oids": [[1414, 11]] },
+            { "rid": 1425, "seats": 11, "offset": 0.0, "oids": [[1426, 11]] },
+            { "rid": 1437, "seats": 11, "offset": 0.0, "oids": [[1438, 11]] },
+            { "rid": 1449, "seats": 11, "offset": 0.0, "oids": [[1450, 11]] }
+          ],
+          "seatOverrides": {
+            "1402": { "flags": ["accessible"], "category": "access" },
+            "1403": { "flags": ["accessible"], "category": "access" },
+            "1404": { "flags": ["companion"] },
+            "1410": { "flags": ["companion"] },
+            "1411": { "flags": ["accessible"], "category": "access" },
+            "1412": { "flags": ["accessible"], "category": "access" }
+          }
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 1865,
+      "origin": [0.0, 0.0],
+      "rotation": 0.0,
+      "label": "105",
+      "outline": "auto",
+      "category": "premium",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 1866,
+          "origin": [-685.7142857142853, 2100.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 1867, "seats": 11, "offset": 0.0, "oids": [[1868, 11]] },
+            { "rid": 1879, "seats": 11, "offset": 0.0, "oids": [[1880, 11]] },
+            { "rid": 1891, "seats": 11, "offset": 0.0, "oids": [[1892, 11]] },
+            { "rid": 1903, "seats": 11, "offset": 0.0, "oids": [[1904, 11]] },
+            { "rid": 1915, "seats": 11, "offset": 0.0, "oids": [[1916, 11]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 2331,
+      "origin": [0.0, 0.0],
+      "rotation": 0.0,
+      "label": "106",
+      "outline": "auto",
+      "category": "premium",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 2332,
+          "origin": [-1371.428571428571, 2100.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 2333, "seats": 11, "offset": 0.0, "oids": [[2334, 11]] },
+            { "rid": 2345, "seats": 11, "offset": 0.0, "oids": [[2346, 11]] },
+            { "rid": 2357, "seats": 11, "offset": 0.0, "oids": [[2358, 11]] },
+            { "rid": 2369, "seats": 11, "offset": 0.0, "oids": [[2370, 11]] },
+            { "rid": 2381, "seats": 11, "offset": 0.0, "oids": [[2382, 11]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 2797,
+      "origin": [0.0, 0.0],
+      "rotation": 0.0,
+      "label": "107",
+      "outline": "auto",
+      "category": "standard",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 2798,
+          "origin": [-2057.142857142857, 2100.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 2799, "seats": 11, "offset": 0.0, "oids": [[2800, 11]] },
+            { "rid": 2811, "seats": 11, "offset": 0.0, "oids": [[2812, 11]] },
+            { "rid": 2823, "seats": 11, "offset": 0.0, "oids": [[2824, 11]] },
+            { "rid": 2835, "seats": 11, "offset": 0.0, "oids": [[2836, 11]] },
+            { "rid": 2847, "seats": 11, "offset": 0.0, "oids": [[2848, 11]] }
+          ],
+          "seatOverrides": {
+            "2800": { "flags": ["accessible"], "category": "access" },
+            "2801": { "flags": ["accessible"], "category": "access" },
+            "2802": { "flags": ["companion"] },
+            "2808": { "flags": ["companion"] },
+            "2809": { "flags": ["accessible"], "category": "access" },
+            "2810": { "flags": ["accessible"], "category": "access" }
+          }
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 3263,
+      "origin": [-2400.0, 900.0],
+      "rotation": 9.0,
+      "label": "108",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 3264,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 3265, "seats": 5, "offset": 0.0, "oids": [[3266, 5]] },
+            { "rid": 3271, "seats": 6, "offset": 0.0, "oids": [[3272, 6]] },
+            { "rid": 3278, "seats": 6, "offset": 0.0, "oids": [[3279, 6]] },
+            { "rid": 3285, "seats": 7, "offset": 0.0, "oids": [[3286, 7]] },
+            { "rid": 3293, "seats": 8, "offset": 0.0, "oids": [[3294, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 3903,
+      "origin": [-2400.0, 900.0],
+      "rotation": 27.0,
+      "label": "109",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 3904,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 3905, "seats": 5, "offset": 0.0, "oids": [[3906, 5]] },
+            { "rid": 3911, "seats": 6, "offset": 0.0, "oids": [[3912, 6]] },
+            { "rid": 3918, "seats": 6, "offset": 0.0, "oids": [[3919, 6]] },
+            { "rid": 3925, "seats": 7, "offset": 0.0, "oids": [[3926, 7]] },
+            { "rid": 3933, "seats": 8, "offset": 0.0, "oids": [[3934, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 4543,
+      "origin": [-2400.0, 900.0],
+      "rotation": 45.0,
+      "label": "110",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 4544,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 4545, "seats": 5, "offset": 0.0, "oids": [[4546, 5]] },
+            { "rid": 4551, "seats": 6, "offset": 0.0, "oids": [[4552, 6]] },
+            { "rid": 4558, "seats": 6, "offset": 0.0, "oids": [[4559, 6]] },
+            { "rid": 4565, "seats": 7, "offset": 0.0, "oids": [[4566, 7]] },
+            { "rid": 4573, "seats": 8, "offset": 0.0, "oids": [[4574, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 5183,
+      "origin": [-2400.0, 900.0],
+      "rotation": 63.0,
+      "label": "111",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 5184,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 5185, "seats": 5, "offset": 0.0, "oids": [[5186, 5]] },
+            { "rid": 5191, "seats": 6, "offset": 0.0, "oids": [[5192, 6]] },
+            { "rid": 5198, "seats": 6, "offset": 0.0, "oids": [[5199, 6]] },
+            { "rid": 5205, "seats": 7, "offset": 0.0, "oids": [[5206, 7]] },
+            { "rid": 5213, "seats": 8, "offset": 0.0, "oids": [[5214, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 5823,
+      "origin": [-2400.0, 900.0],
+      "rotation": 81.0,
+      "label": "112",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 5824,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 5825, "seats": 5, "offset": 0.0, "oids": [[5826, 5]] },
+            { "rid": 5831, "seats": 6, "offset": 0.0, "oids": [[5832, 6]] },
+            { "rid": 5838, "seats": 6, "offset": 0.0, "oids": [[5839, 6]] },
+            { "rid": 5845, "seats": 7, "offset": 0.0, "oids": [[5846, 7]] },
+            { "rid": 5853, "seats": 8, "offset": 0.0, "oids": [[5854, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 6463,
+      "origin": [0.0, 0.0],
+      "rotation": 90.0,
+      "label": "113",
+      "outline": "auto",
+      "category": "standard",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 6464,
+          "origin": [600.0, 3600.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 6465, "seats": 9, "offset": 0.0, "oids": [[6466, 9]] },
+            { "rid": 6475, "seats": 9, "offset": 0.0, "oids": [[6476, 9]] },
+            { "rid": 6485, "seats": 9, "offset": 0.0, "oids": [[6486, 9]] },
+            { "rid": 6495, "seats": 9, "offset": 0.0, "oids": [[6496, 9]] },
+            { "rid": 6505, "seats": 9, "offset": 0.0, "oids": [[6506, 9]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 6852,
+      "origin": [0.0, 0.0],
+      "rotation": 90.0,
+      "label": "114",
+      "outline": "auto",
+      "category": "standard",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 6853,
+          "origin": [0.0, 3600.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 6854, "seats": 9, "offset": 0.0, "oids": [[6855, 9]] },
+            { "rid": 6864, "seats": 9, "offset": 0.0, "oids": [[6865, 9]] },
+            { "rid": 6874, "seats": 9, "offset": 0.0, "oids": [[6875, 9]] },
+            { "rid": 6884, "seats": 9, "offset": 0.0, "oids": [[6885, 9]] },
+            { "rid": 6894, "seats": 9, "offset": 0.0, "oids": [[6895, 9]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 7241,
+      "origin": [0.0, 0.0],
+      "rotation": 90.0,
+      "label": "115",
+      "outline": "auto",
+      "category": "standard",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 7242,
+          "origin": [-600.0, 3600.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 7243, "seats": 9, "offset": 0.0, "oids": [[7244, 9]] },
+            { "rid": 7253, "seats": 9, "offset": 0.0, "oids": [[7254, 9]] },
+            { "rid": 7263, "seats": 9, "offset": 0.0, "oids": [[7264, 9]] },
+            { "rid": 7273, "seats": 9, "offset": 0.0, "oids": [[7274, 9]] },
+            { "rid": 7283, "seats": 9, "offset": 0.0, "oids": [[7284, 9]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 7630,
+      "origin": [-2400.0, -900.0],
+      "rotation": 99.0,
+      "label": "116",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 7631,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 7632, "seats": 5, "offset": 0.0, "oids": [[7633, 5]] },
+            { "rid": 7638, "seats": 6, "offset": 0.0, "oids": [[7639, 6]] },
+            { "rid": 7645, "seats": 6, "offset": 0.0, "oids": [[7646, 6]] },
+            { "rid": 7652, "seats": 7, "offset": 0.0, "oids": [[7653, 7]] },
+            { "rid": 7660, "seats": 8, "offset": 0.0, "oids": [[7661, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 8270,
+      "origin": [-2400.0, -900.0],
+      "rotation": 117.0,
+      "label": "117",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 8271,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 8272, "seats": 5, "offset": 0.0, "oids": [[8273, 5]] },
+            { "rid": 8278, "seats": 6, "offset": 0.0, "oids": [[8279, 6]] },
+            { "rid": 8285, "seats": 6, "offset": 0.0, "oids": [[8286, 6]] },
+            { "rid": 8292, "seats": 7, "offset": 0.0, "oids": [[8293, 7]] },
+            { "rid": 8300, "seats": 8, "offset": 0.0, "oids": [[8301, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 8910,
+      "origin": [-2400.0, -900.0],
+      "rotation": 135.0,
+      "label": "118",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 8911,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 8912, "seats": 5, "offset": 0.0, "oids": [[8913, 5]] },
+            { "rid": 8918, "seats": 6, "offset": 0.0, "oids": [[8919, 6]] },
+            { "rid": 8925, "seats": 6, "offset": 0.0, "oids": [[8926, 6]] },
+            { "rid": 8932, "seats": 7, "offset": 0.0, "oids": [[8933, 7]] },
+            { "rid": 8940, "seats": 8, "offset": 0.0, "oids": [[8941, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 9550,
+      "origin": [-2400.0, -900.0],
+      "rotation": 153.0,
+      "label": "119",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 9551,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 9552, "seats": 5, "offset": 0.0, "oids": [[9553, 5]] },
+            { "rid": 9558, "seats": 6, "offset": 0.0, "oids": [[9559, 6]] },
+            { "rid": 9565, "seats": 6, "offset": 0.0, "oids": [[9566, 6]] },
+            { "rid": 9572, "seats": 7, "offset": 0.0, "oids": [[9573, 7]] },
+            { "rid": 9580, "seats": 8, "offset": 0.0, "oids": [[9581, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 10190,
+      "origin": [-2400.0, -900.0],
+      "rotation": 171.0,
+      "label": "120",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 10191,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 10192, "seats": 5, "offset": 0.0, "oids": [[10193, 5]] },
+            { "rid": 10198, "seats": 6, "offset": 0.0, "oids": [[10199, 6]] },
+            { "rid": 10205, "seats": 6, "offset": 0.0, "oids": [[10206, 6]] },
+            { "rid": 10212, "seats": 7, "offset": 0.0, "oids": [[10213, 7]] },
+            { "rid": 10220, "seats": 8, "offset": 0.0, "oids": [[10221, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 10830,
+      "origin": [0.0, 0.0],
+      "rotation": 180.0,
+      "label": "121",
+      "outline": "auto",
+      "category": "standard",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 10831,
+          "origin": [2057.1428571428573, 2100.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 10832, "seats": 11, "offset": 0.0, "oids": [[10833, 11]] },
+            { "rid": 10844, "seats": 11, "offset": 0.0, "oids": [[10845, 11]] },
+            { "rid": 10856, "seats": 11, "offset": 0.0, "oids": [[10857, 11]] },
+            { "rid": 10868, "seats": 11, "offset": 0.0, "oids": [[10869, 11]] },
+            { "rid": 10880, "seats": 11, "offset": 0.0, "oids": [[10881, 11]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 11296,
+      "origin": [0.0, 0.0],
+      "rotation": 180.0,
+      "label": "122",
+      "outline": "auto",
+      "category": "standard",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 11297,
+          "origin": [1371.4285714285716, 2100.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 11298, "seats": 11, "offset": 0.0, "oids": [[11299, 11]] },
+            { "rid": 11310, "seats": 11, "offset": 0.0, "oids": [[11311, 11]] },
+            { "rid": 11322, "seats": 11, "offset": 0.0, "oids": [[11323, 11]] },
+            { "rid": 11334, "seats": 11, "offset": 0.0, "oids": [[11335, 11]] },
+            { "rid": 11346, "seats": 11, "offset": 0.0, "oids": [[11347, 11]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 11762,
+      "origin": [0.0, 0.0],
+      "rotation": 180.0,
+      "label": "123",
+      "outline": "auto",
+      "category": "premium",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 11763,
+          "origin": [685.7142857142858, 2100.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 11764, "seats": 11, "offset": 0.0, "oids": [[11765, 11]] },
+            { "rid": 11776, "seats": 11, "offset": 0.0, "oids": [[11777, 11]] },
+            { "rid": 11788, "seats": 11, "offset": 0.0, "oids": [[11789, 11]] },
+            { "rid": 11800, "seats": 11, "offset": 0.0, "oids": [[11801, 11]] },
+            { "rid": 11812, "seats": 11, "offset": 0.0, "oids": [[11813, 11]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 12227,
+      "origin": [0.0, 0.0],
+      "rotation": 180.0,
+      "label": "124",
+      "outline": "auto",
+      "category": "premium",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 12228,
+          "origin": [0.0, 2100.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 12229, "seats": 11, "offset": 0.0, "oids": [[12230, 11]] },
+            { "rid": 12241, "seats": 11, "offset": 0.0, "oids": [[12242, 11]] },
+            { "rid": 12253, "seats": 11, "offset": 0.0, "oids": [[12254, 11]] },
+            { "rid": 12265, "seats": 11, "offset": 0.0, "oids": [[12266, 11]] },
+            { "rid": 12277, "seats": 11, "offset": 0.0, "oids": [[12278, 11]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 12692,
+      "origin": [0.0, 0.0],
+      "rotation": 180.0,
+      "label": "125",
+      "outline": "auto",
+      "category": "premium",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 12693,
+          "origin": [-685.7142857142853, 2100.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 12694, "seats": 11, "offset": 0.0, "oids": [[12695, 11]] },
+            { "rid": 12706, "seats": 11, "offset": 0.0, "oids": [[12707, 11]] },
+            { "rid": 12718, "seats": 11, "offset": 0.0, "oids": [[12719, 11]] },
+            { "rid": 12730, "seats": 11, "offset": 0.0, "oids": [[12731, 11]] },
+            { "rid": 12742, "seats": 11, "offset": 0.0, "oids": [[12743, 11]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 13157,
+      "origin": [0.0, 0.0],
+      "rotation": 180.0,
+      "label": "126",
+      "outline": "auto",
+      "category": "premium",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 13158,
+          "origin": [-1371.428571428571, 2100.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 13159, "seats": 11, "offset": 0.0, "oids": [[13160, 11]] },
+            { "rid": 13171, "seats": 11, "offset": 0.0, "oids": [[13172, 11]] },
+            { "rid": 13183, "seats": 11, "offset": 0.0, "oids": [[13184, 11]] },
+            { "rid": 13195, "seats": 11, "offset": 0.0, "oids": [[13196, 11]] },
+            { "rid": 13207, "seats": 11, "offset": 0.0, "oids": [[13208, 11]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 13622,
+      "origin": [0.0, 0.0],
+      "rotation": 180.0,
+      "label": "127",
+      "outline": "auto",
+      "category": "standard",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 13623,
+          "origin": [-2057.142857142857, 2100.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 13624, "seats": 11, "offset": 0.0, "oids": [[13625, 11]] },
+            { "rid": 13636, "seats": 11, "offset": 0.0, "oids": [[13637, 11]] },
+            { "rid": 13648, "seats": 11, "offset": 0.0, "oids": [[13649, 11]] },
+            { "rid": 13660, "seats": 11, "offset": 0.0, "oids": [[13661, 11]] },
+            { "rid": 13672, "seats": 11, "offset": 0.0, "oids": [[13673, 11]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 14087,
+      "origin": [2400.0, -900.0],
+      "rotation": 189.0,
+      "label": "128",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 14088,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 14089, "seats": 5, "offset": 0.0, "oids": [[14090, 5]] },
+            { "rid": 14095, "seats": 6, "offset": 0.0, "oids": [[14096, 6]] },
+            { "rid": 14102, "seats": 6, "offset": 0.0, "oids": [[14103, 6]] },
+            { "rid": 14109, "seats": 7, "offset": 0.0, "oids": [[14110, 7]] },
+            { "rid": 14117, "seats": 8, "offset": 0.0, "oids": [[14118, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 14726,
+      "origin": [2400.0, -900.0],
+      "rotation": 207.0,
+      "label": "129",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 14727,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 14728, "seats": 5, "offset": 0.0, "oids": [[14729, 5]] },
+            { "rid": 14734, "seats": 6, "offset": 0.0, "oids": [[14735, 6]] },
+            { "rid": 14741, "seats": 6, "offset": 0.0, "oids": [[14742, 6]] },
+            { "rid": 14748, "seats": 7, "offset": 0.0, "oids": [[14749, 7]] },
+            { "rid": 14756, "seats": 8, "offset": 0.0, "oids": [[14757, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 15365,
+      "origin": [2400.0, -900.0],
+      "rotation": 225.0,
+      "label": "130",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 15366,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 15367, "seats": 5, "offset": 0.0, "oids": [[15368, 5]] },
+            { "rid": 15373, "seats": 6, "offset": 0.0, "oids": [[15374, 6]] },
+            { "rid": 15380, "seats": 6, "offset": 0.0, "oids": [[15381, 6]] },
+            { "rid": 15387, "seats": 7, "offset": 0.0, "oids": [[15388, 7]] },
+            { "rid": 15395, "seats": 8, "offset": 0.0, "oids": [[15396, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 16004,
+      "origin": [2400.0, -900.0],
+      "rotation": 243.0,
+      "label": "131",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 16005,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 16006, "seats": 5, "offset": 0.0, "oids": [[16007, 5]] },
+            { "rid": 16012, "seats": 6, "offset": 0.0, "oids": [[16013, 6]] },
+            { "rid": 16019, "seats": 6, "offset": 0.0, "oids": [[16020, 6]] },
+            { "rid": 16026, "seats": 7, "offset": 0.0, "oids": [[16027, 7]] },
+            { "rid": 16034, "seats": 8, "offset": 0.0, "oids": [[16035, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 16643,
+      "origin": [2400.0, -900.0],
+      "rotation": 261.0,
+      "label": "132",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 16644,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 16645, "seats": 5, "offset": 0.0, "oids": [[16646, 5]] },
+            { "rid": 16651, "seats": 6, "offset": 0.0, "oids": [[16652, 6]] },
+            { "rid": 16658, "seats": 6, "offset": 0.0, "oids": [[16659, 6]] },
+            { "rid": 16665, "seats": 7, "offset": 0.0, "oids": [[16666, 7]] },
+            { "rid": 16673, "seats": 8, "offset": 0.0, "oids": [[16674, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 17282,
+      "origin": [0.0, 0.0],
+      "rotation": 270.0,
+      "label": "133",
+      "outline": "auto",
+      "category": "standard",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 17283,
+          "origin": [600.0, 3600.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 17284, "seats": 9, "offset": 0.0, "oids": [[17285, 9]] },
+            { "rid": 17294, "seats": 9, "offset": 0.0, "oids": [[17295, 9]] },
+            { "rid": 17304, "seats": 9, "offset": 0.0, "oids": [[17305, 9]] },
+            { "rid": 17314, "seats": 9, "offset": 0.0, "oids": [[17315, 9]] },
+            { "rid": 17324, "seats": 9, "offset": 0.0, "oids": [[17325, 9]] }
+          ],
+          "seatOverrides": {
+            "17285": { "flags": ["accessible"], "category": "access" },
+            "17286": { "flags": ["accessible"], "category": "access" },
+            "17287": { "flags": ["companion"] },
+            "17291": { "flags": ["companion"] },
+            "17292": { "flags": ["accessible"], "category": "access" },
+            "17293": { "flags": ["accessible"], "category": "access" }
+          }
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 17670,
+      "origin": [0.0, 0.0],
+      "rotation": 270.0,
+      "label": "134",
+      "outline": "auto",
+      "category": "standard",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 17671,
+          "origin": [0.0, 3600.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 17672, "seats": 9, "offset": 0.0, "oids": [[17673, 9]] },
+            { "rid": 17682, "seats": 9, "offset": 0.0, "oids": [[17683, 9]] },
+            { "rid": 17692, "seats": 9, "offset": 0.0, "oids": [[17693, 9]] },
+            { "rid": 17702, "seats": 9, "offset": 0.0, "oids": [[17703, 9]] },
+            { "rid": 17712, "seats": 9, "offset": 0.0, "oids": [[17713, 9]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 18058,
+      "origin": [0.0, 0.0],
+      "rotation": 270.0,
+      "label": "135",
+      "outline": "auto",
+      "category": "standard",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 18059,
+          "origin": [-600.0, 3600.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "none" },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 18060, "seats": 9, "offset": 0.0, "oids": [[18061, 9]] },
+            { "rid": 18070, "seats": 9, "offset": 0.0, "oids": [[18071, 9]] },
+            { "rid": 18080, "seats": 9, "offset": 0.0, "oids": [[18081, 9]] },
+            { "rid": 18090, "seats": 9, "offset": 0.0, "oids": [[18091, 9]] },
+            { "rid": 18100, "seats": 9, "offset": 0.0, "oids": [[18101, 9]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 18446,
+      "origin": [2400.0, 900.0],
+      "rotation": 279.0,
+      "label": "136",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 18447,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 18448, "seats": 5, "offset": 0.0, "oids": [[18449, 5]] },
+            { "rid": 18454, "seats": 6, "offset": 0.0, "oids": [[18455, 6]] },
+            { "rid": 18461, "seats": 6, "offset": 0.0, "oids": [[18462, 6]] },
+            { "rid": 18468, "seats": 7, "offset": 0.0, "oids": [[18469, 7]] },
+            { "rid": 18476, "seats": 8, "offset": 0.0, "oids": [[18477, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 19085,
+      "origin": [2400.0, 900.0],
+      "rotation": 297.0,
+      "label": "137",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 19086,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 19087, "seats": 5, "offset": 0.0, "oids": [[19088, 5]] },
+            { "rid": 19093, "seats": 6, "offset": 0.0, "oids": [[19094, 6]] },
+            { "rid": 19100, "seats": 6, "offset": 0.0, "oids": [[19101, 6]] },
+            { "rid": 19107, "seats": 7, "offset": 0.0, "oids": [[19108, 7]] },
+            { "rid": 19115, "seats": 8, "offset": 0.0, "oids": [[19116, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 19724,
+      "origin": [2400.0, 900.0],
+      "rotation": 315.0,
+      "label": "138",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 19725,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 19726, "seats": 5, "offset": 0.0, "oids": [[19727, 5]] },
+            { "rid": 19732, "seats": 6, "offset": 0.0, "oids": [[19733, 6]] },
+            { "rid": 19739, "seats": 6, "offset": 0.0, "oids": [[19740, 6]] },
+            { "rid": 19746, "seats": 7, "offset": 0.0, "oids": [[19747, 7]] },
+            { "rid": 19754, "seats": 8, "offset": 0.0, "oids": [[19755, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 20363,
+      "origin": [2400.0, 900.0],
+      "rotation": 333.0,
+      "label": "139",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 20364,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 20365, "seats": 5, "offset": 0.0, "oids": [[20366, 5]] },
+            { "rid": 20371, "seats": 6, "offset": 0.0, "oids": [[20372, 6]] },
+            { "rid": 20378, "seats": 6, "offset": 0.0, "oids": [[20379, 6]] },
+            { "rid": 20385, "seats": 7, "offset": 0.0, "oids": [[20386, 7]] },
+            { "rid": 20393, "seats": 8, "offset": 0.0, "oids": [[20394, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 21002,
+      "origin": [2400.0, 900.0],
+      "rotation": 351.0,
+      "label": "140",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 21003,
+          "origin": [0.0, 1200.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1200.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 21004, "seats": 5, "offset": 0.0, "oids": [[21005, 5]] },
+            { "rid": 21010, "seats": 6, "offset": 0.0, "oids": [[21011, 6]] },
+            { "rid": 21017, "seats": 6, "offset": 0.0, "oids": [[21018, 6]] },
+            { "rid": 21024, "seats": 7, "offset": 0.0, "oids": [[21025, 7]] },
+            { "rid": 21032, "seats": 8, "offset": 0.0, "oids": [[21033, 8]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "shape",
+      "id": 21641,
+      "origin": [0.0, 0.0],
+      "rotation": 0.0,
+      "kind": "rect",
+      "size": [6000.0, 3000.0],
+      "cornerRadius": 850.0,
+      "style": { "fill": "#E7E5E4", "strokeWidth": 0.0, "opacity": 1.0 },
+      "layer": "below"
+    },
+    {
+      "type": "shape",
+      "id": 21642,
+      "origin": [0.0, 0.0],
+      "rotation": 0.0,
+      "kind": "line",
+      "points": [
+        [0.0, -1500.0],
+        [0.0, 1500.0]
+      ],
+      "style": { "stroke": "#B91C1C", "strokeWidth": 30.0, "opacity": 1.0 },
+      "layer": "below"
+    },
+    {
+      "type": "shape",
+      "id": 21643,
+      "origin": [0.0, 0.0],
+      "rotation": 0.0,
+      "kind": "ellipse",
+      "size": [900.0, 900.0],
+      "style": { "stroke": "#B91C1C", "strokeWidth": 30.0, "opacity": 1.0 },
+      "layer": "below"
+    },
+    {
+      "type": "text",
+      "id": 21644,
+      "origin": [0.0, -900.0],
+      "rotation": 0.0,
+      "text": "FLOOR",
+      "size": 300.0,
+      "weight": 600,
+      "color": "#44403C",
+      "align": "center",
+      "minZoom": 0.0
+    },
+    {
+      "type": "icon",
+      "id": 21645,
+      "origin": [-3300.0, 0.0],
+      "rotation": 0.0,
+      "icon": "entrance",
+      "size": 200.0
+    },
+    {
+      "type": "icon",
+      "id": 21646,
+      "origin": [3300.0, 0.0],
+      "rotation": 0.0,
+      "icon": "entrance",
+      "size": 200.0
+    }
+  ]
+}
