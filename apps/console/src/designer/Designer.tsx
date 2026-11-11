@@ -18,6 +18,7 @@ import { Button, IconButton } from "../ui/controls.tsx";
 import { Confirm, notify } from "../ui/overlays.tsx";
 import { Splitter } from "../ui/Splitter.tsx";
 import { CanvasHost } from "./CanvasHost.tsx";
+import { CategoriesPanel } from "./CategoriesPanel.tsx";
 import { createEditor, type Editor } from "./editor.ts";
 import { failureMessage, failureOf } from "./errors.ts";
 import { Inspector } from "./Inspector.tsx";
@@ -27,6 +28,7 @@ import { LAYOUT_KEY, parseLayout, SIDE, SPLIT, type Layout, type PanelTab } from
 import { StatusBar, ToolRail } from "./Rails.tsx";
 import { emptyChart, fileName, type ChartSource } from "./source.ts";
 import { TopBar } from "./TopBar.tsx";
+import { ValidationPanel } from "./ValidationPanel.tsx";
 
 /** 09 §8: the designer needs 1,280 px. */
 const MIN_WIDTH = 1280;
@@ -362,11 +364,11 @@ function Shell(props: {
               <Tabs.Content value="layers" class="flex min-h-0 flex-1 flex-col outline-none">
                 <LayersPanel editor={editor} />
               </Tabs.Content>
-              <Tabs.Content value="categories" class="p-3 text-sm text-faint outline-none">
-                {msg("panel.pending", { task: "DSN-028" })}
+              <Tabs.Content value="categories" class="flex min-h-0 flex-1 flex-col outline-none">
+                <CategoriesPanel editor={editor} />
               </Tabs.Content>
-              <Tabs.Content value="validation" class="p-3 text-sm text-faint outline-none">
-                {msg("panel.pending", { task: "DSN-038" })}
+              <Tabs.Content value="validation" class="flex min-h-0 flex-1 flex-col outline-none">
+                <ValidationPanel editor={editor} />
               </Tabs.Content>
             </Show>
           </Tabs>
