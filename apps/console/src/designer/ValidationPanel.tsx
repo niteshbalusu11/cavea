@@ -6,7 +6,7 @@
 // the compiler's English under the catalogue's title for its code: the view
 // carries no data to compose the sentence from.
 import type { FindingView } from "@cavea/designer-core";
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { msg, msgOf } from "../i18n/messages.ts";
 import { Icon } from "../ui/Icon.tsx";
 import { windowFor } from "../ui/window.ts";
@@ -30,7 +30,7 @@ export function ValidationPanel(props: { editor: Editor }) {
   });
   /** The two groups, each a heading and its rows, laid out one after the
    * other: the view lists errors first. */
-  const groups = () => {
+  const groups = createMemo(() => {
     const errors = v().findings.filter((f) => f.severity === "error").length;
     const n = v().findings.length;
     const out: { severity: Severity; top: number; first: number; count: number }[] = [];
@@ -44,14 +44,26 @@ export function ValidationPanel(props: { editor: Editor }) {
       top += HEAD + count * ROW;
     }
     return { out, height: top };
-  };
-  /** The rows each group shows at this scroll position. */
+  });
+  /** Where each finding sits, by the store's own objects: recomputed when
+   * the list changes, not on scroll. */
+  const tops = createMemo(() => {
+    const at = new Map<FindingView, number>();
+    for (const g of groups().out) {
+      for (let i = 0; i < g.count; i++) {
+        const f = v().findings[g.first + i];
+        if (f !== undefined) at.set(f, g.top + HEAD + i * ROW);
+      }
+    }
+    return at;
+  });
+  /** The findings each group shows at this scroll position: the store's
+   * objects themselves, so a row scrolled into view or kept in view keeps
+   * its element, and focus with it. */
   const shown = () =>
     groups().out.flatMap((g) => {
       const w = windowFor(scrollTop() - g.top - HEAD, height(), ROW, g.count, OVERSCAN);
-      return v()
-        .findings.slice(g.first + w.start, g.first + w.start + w.count)
-        .map((f, i) => ({ f, top: g.top + HEAD + (w.start + i) * ROW }));
+      return v().findings.slice(g.first + w.start, g.first + w.start + w.count);
     });
   const go = (f: FindingView) => {
     const node = f.node;
@@ -129,10 +141,13 @@ export function ValidationPanel(props: { editor: Editor }) {
           </For>
           <ul aria-label={msg("validation.label")}>
             <For each={shown()}>
-              {({ f, top }) => {
+              {(f) => {
                 const title = msgOf("validation", f.code) ?? f.code;
                 return (
-                  <li class="absolute inset-x-0" style={{ top: `${top}px`, height: `${ROW}px` }}>
+                  <li
+                    class="absolute inset-x-0"
+                    style={{ top: `${tops().get(f) ?? 0}px`, height: `${ROW}px` }}
+                  >
                     <button
                       type="button"
                       disabled={f.node === null}
