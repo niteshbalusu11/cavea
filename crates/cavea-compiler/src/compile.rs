@@ -6,8 +6,9 @@
 //! row segmentation (5), labelling and the uniqueness check (6–7), ranking (8),
 //! `idx` order and render chunks (9–10), section outlines, label anchors and
 //! outline tessellation (11–12, in [`crate::geometry`] and
-//! [`crate::tessellate`]), quantisation (13), and encoding with the content
-//! hash (14–15). Decoration nodes are not compiled yet.
+//! [`crate::tessellate`]), decoration shapes ([`decoration`]), quantisation
+//! (13), and encoding with the content hash (14–15). Text, icon and image
+//! nodes are not compiled yet.
 //!
 //! Everything here is deterministic: no platform maths beyond `+ − × ÷ √`,
 //! no hash-map iteration, and every sort has a total order.
@@ -19,6 +20,7 @@ use std::ops::Range;
 use cavea_core::label::{LabelBuf, Scheme, SeatDirection};
 use cavea_core::limits::{MAX_CATEGORIES, MAX_FLOORS, MAX_SECTIONS};
 use cavea_format::{self as ccf, Artefact, Bounds, CHUNK_MAX_SEATS, NONE, Point};
+use lyon_tessellation::FillRule;
 
 use crate::detmath;
 use crate::document::{self as doc, ChartDocument, Node};
@@ -26,6 +28,10 @@ use crate::expand::{ExpandedRow, Expansion, Seat};
 use crate::finding::{Code, Detail, Finding, Findings, expand_code};
 use crate::geometry::{self, OutlineError, P};
 use crate::tessellate::{self, TessError};
+
+mod decoration;
+
+use decoration::{Decorated, Decoration};
 
 /// The document schema this compiler reads.
 pub const SCHEMA: u32 = 1;
@@ -356,6 +362,8 @@ struct Compiler<'d> {
     floor_index: BTreeMap<u32, usize>,
     /// Every `id`, `rid` and `oid` with the node it belongs to.
     ids: Vec<(u32, u32)>,
+    /// Visible decoration nodes in document order.
+    decorations: Vec<Decoration<'d>>,
 }
 
 impl<'d> Compiler<'d> {
@@ -368,6 +376,7 @@ impl<'d> Compiler<'d> {
             floors: Vec::new(),
             floor_index: BTreeMap::new(),
             ids: Vec::new(),
+            decorations: Vec::new(),
         }
     }
 
@@ -492,6 +501,11 @@ impl<'d> Compiler<'d> {
                         });
                     }
                 }
+                Node::Shape(_) => {
+                    if let Some(floor) = self.floor(node_floor(node), id, f) {
+                        self.decoration(node, Place::IDENTITY, floor, f);
+                    }
+                }
                 other => unsupported(other, f),
             }
         }
@@ -521,20 +535,25 @@ impl<'d> Compiler<'d> {
         for child in s.children.iter().filter(|c| !is_hidden(c)) {
             let id = node_id(child);
             self.ids.push((id, id));
+            // A child is on its section's floor; naming another is an error.
+            if let Some(own) = node_floor(child)
+                && let Some(mine) = self.floor(Some(own), id, f)
+                && floor.is_some_and(|sf| sf != mine)
+            {
+                let section_floor = s.floor.unwrap_or(self.default_floor_id());
+                let detail = Detail::FloorConflict {
+                    floor: own,
+                    section_floor,
+                };
+                f.push(Code::E007, Some(id), detail);
+            }
             match child {
-                Node::RowBlock(_) | Node::Row(_) => {
-                    // A child is on its section's floor; naming another is an error.
-                    if let Some(own) = node_floor(child)
-                        && let Some(mine) = self.floor(Some(own), id, f)
-                        && floor.is_some_and(|sf| sf != mine)
-                    {
-                        let section_floor = s.floor.unwrap_or(self.default_floor_id());
-                        let detail = Detail::FloorConflict {
-                            floor: own,
-                            section_floor,
-                        };
-                        f.push(Code::E007, Some(id), detail);
+                Node::Shape(_) => {
+                    if let (Some(place), Some(floor)) = (place, floor) {
+                        self.decoration(child, place, floor, f);
                     }
+                }
+                Node::RowBlock(_) | Node::Row(_) => {
                     if let Some(place) = place
                         && let Some(m) = self.member(child, place, f)
                     {
@@ -678,12 +697,37 @@ impl<'d> Compiler<'d> {
         b.close_chunk();
         b.check_labels(e, f);
 
+        // Decoration, after the section outlines in `MESH`.
+        let mut d = Decorated::new(self.floors.len(), b.outline_indices.len());
+        for deco in std::mem::take(&mut self.decorations) {
+            if let Err((code, detail)) = d.node(&deco, &mut b.vertices) {
+                f.push(code, Some(node_id(deco.node)), detail);
+            }
+        }
+        let draws = d.draws(&mut b.outline_indices);
+        // A floor's bounds cover its seats, its sections' outlines and its
+        // decoration; the chart's cover its floors.
+        for s in &b.sections {
+            if let Some(fl) = b.floor_seats.get_mut(s.floor as usize)
+                && (s.seat_count > 0 || s.mesh_count > 0)
+            {
+                grow(&mut fl.1, s.bounds);
+            }
+        }
+        let mut chart_bounds = None;
         let mut first = 0u32;
         let floors = self
             .floors
             .iter()
             .zip(&b.floor_seats)
-            .map(|(fl, &(count, bounds))| {
+            .zip(&d.bounds)
+            .map(|((fl, &(count, mut bounds)), deco)| {
+                if let Some(deco) = *deco {
+                    grow(&mut bounds, deco);
+                }
+                if let Some(bounds) = bounds {
+                    grow(&mut chart_bounds, bounds);
+                }
                 let floor = ccf::Floor {
                     name: self.strings.get(fl.name),
                     level: fl.level,
@@ -705,7 +749,7 @@ impl<'d> Compiler<'d> {
                 .strings
                 .get(concat!("cavea-compiler ", env!("CARGO_PKG_VERSION"))),
             seat_count: b.seat_pos.len() as u32, // ≤ MAX_OBJECTS, checked by expansion
-            bounds: b.bounds.unwrap_or_default(),
+            bounds: chart_bounds.unwrap_or_default(),
             seat_size,
             seat_shape: shape,
             row_label_display: match settings.row_label_display {
@@ -738,7 +782,7 @@ impl<'d> Compiler<'d> {
             mesh: ccf::Mesh {
                 vertices: b.vertices,
                 indices: b.outline_indices,
-                draws: Vec::new(),
+                draws,
             },
             texts: Vec::new(),
             icons: Vec::new(),
@@ -789,10 +833,10 @@ struct Builder<'d> {
     /// The chunk being filled and its scope: floor and section.
     chunk: Option<((usize, u32), ccf::RenderChunk)>,
     floor_seats: Vec<(u32, Option<Bounds>)>,
-    bounds: Option<Bounds>,
     /// The current section's seats in its own space, for its outline.
     local: Vec<[f64; 2]>,
-    /// `MESH` vertices, and the indices of section outlines in `SECT` order.
+    /// `MESH` vertices, and the indices of section outlines in `SECT` order
+    /// (then decoration).
     vertices: Vec<ccf::Vertex>,
     outline_indices: Vec<u32>,
     /// Points of explicit outlines so far.
@@ -926,8 +970,11 @@ impl<'d> Builder<'d> {
             return;
         }
         let first = self.outline_indices.len();
+        let area = geometry::area2(&world).abs();
         let tess = tessellate::fill(
-            &world,
+            core::slice::from_ref(&world),
+            FillRule::NonZero,
+            [area, area],
             OUTLINE_COLOR,
             &mut self.vertices,
             &mut self.outline_indices,
@@ -1121,7 +1168,6 @@ impl<'d> Builder<'d> {
             fl.0 += count;
             grow(&mut fl.1, bounds);
         }
-        grow(&mut self.bounds, bounds);
         Some(bounds)
     }
 
@@ -1376,6 +1422,7 @@ fn node_floor(node: &Node) -> Option<u32> {
     match node {
         Node::RowBlock(n) => n.floor,
         Node::Row(n) => n.floor,
+        Node::Shape(n) => n.floor,
         _ => None,
     }
 }
@@ -1396,7 +1443,7 @@ fn is_hidden(node: &Node) -> bool {
 }
 
 /// Bookable non-seat objects are not compiled yet and block the compile;
-/// decoration nodes are left for the decoration slice (FMT-019).
+/// text, icon and image nodes are left for a later slice (FMT-019).
 fn unsupported(node: &Node, f: &mut Findings) {
     let kind = match node {
         Node::Table(_) => "table",

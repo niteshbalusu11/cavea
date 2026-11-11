@@ -216,6 +216,10 @@ The engine must uphold these at every sequence number. Tests in `13-testing-benc
 | Points per explicit section outline | 4,096 |
 | Points in all explicit section outlines of a chart | 262,144 |
 | `MESH` vertices per chart | 262,144 |
+| `MESH` indices per chart | 2,097,152 |
+| Shapes per chart | 65,535 |
+| Points per shape, once flattened | 4,096 |
+| Points in all shapes of a chart, once flattened | 262,144 |
 | Objects per command | 1,000 (publishable: the token limit) |
 | Custom statuses per workspace | 12 |
 | Channels per event | 4,095 |

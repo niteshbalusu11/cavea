@@ -156,3 +156,11 @@ Each entry records what was decided, what was rejected and what would make us re
 - **Decision:** `CAVEA_ADMIN_KEY` is optional. When it is set it must be 32 to 512 printable ASCII characters, or the server refuses to start; when it is unset the server starts, logs a warning, and the admin endpoints (`/v1/workspaces`) refuse every request (`401`, or `403` for a valid API key, as on any admin route). Each new workspace is created with its first secret key, returned once in the creation response (08 §11).
 - **Why:** 12 §4 read "required to be set explicitly". What it guards against is a default key. Requiring one at every start would make operators keep a key that can create tenants configured long after the last workspace exists; unsetting it is the safer steady state. A short key is refused because the admin key is not rate limited.
 - **Revisit if:** console users and roles (09) give the operator another way to create workspaces, or an endpoint other than workspace creation needs the admin key.
+
+## D-25 · Decoration carries its floor; strokes are built without `lyon` (2026-11-11)
+
+- **Decision:** `TEXT`, `ICON` and `IMGS` records carry a floor, and `MESH` draw ranges are one per floor and layer, sorted (03 §4.2), so a renderer drawing one floor finds that floor's decoration. The version-1 layouts changed in place: the format was unreleased and no compiled chart existed outside tests. Strokes are convex pieces the compiler builds and fans itself (03 §3.1.1); only fills go through `lyon`.
+- **Why:** Without a floor, a multi-floor chart would draw every floor's stage and labels at once. `lyon`'s stroke tessellator overlaps triangles at joins (darker joins when translucent) and its round joins use platform trigonometry; filling the union of overlapping stroke pieces with `lyon` failed its own coverage check at real coordinates (≈ 30,000 cu, where `f32` steps by 0.004 cu) because the pieces share near-collinear edges.
+- **Rejected:** per-floor tables of decoration (a second index for the same thing); `lyon`'s stroke tessellator; filling the union of overlapping stroke pieces.
+- **Cost:** a join whose segments are too short for it keeps butt ends and overlaps on its inner side. Only butt caps and miter or bevel joins.
+- **Revisit if:** designers need round caps or joins, or dashes.

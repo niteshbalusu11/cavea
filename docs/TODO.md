@@ -75,8 +75,8 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **FMT-015** Seat rank computation, versioned (03 §3.3)
 - [x] **FMT-016** `idx` ordering and chunking to at most 4,096 seats (03 §3.1 steps 9–10)
 - [x] **FMT-017** Section label anchor by pole of inaccessibility and maximum font size (03 §3.1 step 11)
-- [ ] **FMT-018** Tessellate shapes, outlines and table shapes with `lyon` (03 §3.1 step 12); section outlines done, shapes with FMT-019, table shapes with tables
-- [ ] **FMT-019** Decoration nodes: shape, text, icon, image (03 §2.7)
+- [x] **FMT-018** Tessellate shapes, outlines and table shapes with `lyon` (03 §3.1 step 12); section outlines and shapes done (strokes are built without `lyon`, D-25); table shapes wait for tables
+- [ ] **FMT-019** Decoration nodes: shape, text, icon, image (03 §2.7); shapes done (with FMT-018), and `TEXT`, `ICON` and `IMGS` carry floors; text, icon and image nodes remain
 - [x] **FMT-020** CCF writer: header, directory, all chunks and encodings (03 §4.1, §4.2)
 - [x] **FMT-021** CCF reader: validated, single pass, no panics (03 §4.4)
 - [x] **FMT-022** Emit public and full artefacts with content hash (03 §3.1 steps 14–15)

@@ -3,9 +3,12 @@
 //!
 //! `lyon` builds curves, arcs and round joins with platform trigonometry,
 //! which differs between targets. It is handed only straight-edged polygons,
-//! which its fill tessellator handles with `+ − × ÷ √` and comparisons in
-//! `f32`, single-threaded and without hash maps, so every target gets the
-//! same triangles in the same order.
+//! which its fill tessellator handles with `+ − × ÷ √` and comparisons
+//! (crossings included, in `f64`), single-threaded and without hash maps, so
+//! every target gets the same triangles in the same order. Curves are
+//! flattened and strokes built as polygons by [`crate::shape`].
+
+use std::collections::BTreeMap;
 
 use cavea_format::{Rgba, Vertex};
 use lyon_tessellation::geometry_builder::{
@@ -13,9 +16,9 @@ use lyon_tessellation::geometry_builder::{
 };
 use lyon_tessellation::math::point;
 use lyon_tessellation::path::PathEvent;
-use lyon_tessellation::{FillOptions, FillTessellator, FillVertex, VertexId};
+use lyon_tessellation::{FillOptions, FillRule, FillTessellator, FillVertex, VertexId};
 
-use crate::geometry::P;
+use crate::geometry::{P, area2};
 
 /// Vertices in the whole `MESH` table.
 pub(crate) const MAX_VERTICES: usize = 1 << 18;
@@ -28,7 +31,7 @@ const TOLERANCE: f32 = 1e-3;
 pub(crate) enum TessError {
     /// [`MAX_VERTICES`] reached.
     TooManyVertices,
-    /// `lyon` refused the geometry.
+    /// `lyon` refused the geometry, or its triangles do not cover it.
     Failed,
 }
 
@@ -70,34 +73,40 @@ impl FillGeometryBuilder for Sink<'_> {
     }
 }
 
-/// Fills a simple polygon (non-zero rule) into the mesh. Its coordinates are
-/// world chart units that `f32` holds exactly, so the vertices written are
-/// exactly its points. The triangles must cover the polygon: their areas add
-/// up to its area within a millionth, else [`TessError::Failed`]. Returns the
+/// Fills closed rings into the mesh. Their coordinates are world chart units
+/// that `f32` holds exactly, so the vertices written are exactly their points
+/// and the crossings `lyon` finds. The triangles must cover what the rule
+/// fills: twice their area lies in `area2` (low, high), within a millionth,
+/// and the low end is positive, else [`TessError::Failed`]. Returns the
 /// range of indices added; on error the mesh is unchanged.
 pub(crate) fn fill(
-    poly: &[P],
+    rings: &[Vec<P>],
+    rule: FillRule,
+    [lo, hi]: [f64; 2],
     color: Rgba,
     vertices: &mut Vec<Vertex>,
     indices: &mut Vec<u32>,
 ) -> Result<(u32, u32), TessError> {
     let at = |p: P| point(p[0] as f32, p[1] as f32);
-    let (Some(&first), Some(&last)) = (poly.first(), poly.last()) else {
-        return Ok((indices.len() as u32, 0));
-    };
-    let mut events = vec![PathEvent::Begin { at: at(first) }];
-    events.extend(poly.windows(2).filter_map(|w| match *w {
-        [a, b] => Some(PathEvent::Line {
-            from: at(a),
-            to: at(b),
-        }),
-        _ => None,
-    }));
-    events.push(PathEvent::End {
-        last: at(last),
-        first: at(first),
-        close: true,
-    });
+    let mut events = Vec::new();
+    for ring in rings {
+        let (Some(&first), Some(&last)) = (ring.first(), ring.last()) else {
+            continue;
+        };
+        events.push(PathEvent::Begin { at: at(first) });
+        events.extend(ring.windows(2).filter_map(|w| match *w {
+            [a, b] => Some(PathEvent::Line {
+                from: at(a),
+                to: at(b),
+            }),
+            _ => None,
+        }));
+        events.push(PathEvent::End {
+            last: at(last),
+            first: at(first),
+            close: true,
+        });
+    }
     let (v0, i0) = (vertices.len(), indices.len());
     let mut sink = Sink {
         vertices,
@@ -106,21 +115,10 @@ pub(crate) fn fill(
         full: false,
         start: (v0, i0),
     };
-    let options = FillOptions::non_zero().with_tolerance(TOLERANCE);
+    let options = FillOptions::tolerance(TOLERANCE).with_fill_rule(rule);
     let result = FillTessellator::new().tessellate(events, &options, &mut sink);
     let full = sink.full;
     let covered = || {
-        // Relative to the first point: differences of values `f32` holds
-        // are exact in `f64`, so far from the origin nothing cancels.
-        let n = poly.len();
-        let rel = |p: P| [p[0] - first[0], p[1] - first[1]];
-        let want = (0..n)
-            .map(|i| {
-                let (a, b) = (rel(poly[i]), rel(poly[(i + 1) % n]));
-                a[0] * b[1] - b[0] * a[1]
-            })
-            .sum::<f64>()
-            .abs();
         let at = |i: u32| {
             vertices
                 .get(i as usize)
@@ -132,12 +130,9 @@ pub(crate) fn fill(
             .as_chunks::<3>()
             .0
             .iter()
-            .map(|&[i, j, k]| {
-                let (a, b, c) = (at(i), at(j), at(k));
-                ((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])).abs()
-            })
+            .map(|&[i, j, k]| area2(&[at(i), at(j), at(k)]).abs())
             .sum();
-        want > 0.0 && (got - want).abs() <= want * 1e-6
+        lo > 0.0 && got >= lo - lo * 1e-6 && got <= hi + hi * 1e-6
     };
     if result.is_err() || !covered() {
         vertices.truncate(v0);
@@ -150,4 +145,40 @@ pub(crate) fn fill(
     }
     let count = indices.len() - i0;
     Ok((i0 as u32, count as u32)) // indices ≤ 3 × triangles, bounded by MAX_VERTICES
+}
+
+/// Appends convex polygons as triangle fans, without `lyon`: strokes, whose
+/// pieces [`crate::shape::stroke`] builds already tiled. Pieces share the
+/// vertices they have in common. On error the mesh is unchanged.
+pub(crate) fn convex(
+    pieces: &[Vec<P>],
+    color: Rgba,
+    vertices: &mut Vec<Vertex>,
+    indices: &mut Vec<u32>,
+) -> Result<(), TessError> {
+    let (v0, i0) = (vertices.len(), indices.len());
+    let mut index: BTreeMap<[u32; 2], u32> = BTreeMap::new();
+    for piece in pieces {
+        let mut fan = Vec::with_capacity(piece.len());
+        for p in piece {
+            let pos = [p[0] as f32, p[1] as f32];
+            let next = vertices.len() as u32; // < MAX_VERTICES
+            let i = *index.entry(pos.map(f32::to_bits)).or_insert(next);
+            if i == next {
+                if vertices.len() >= MAX_VERTICES {
+                    vertices.truncate(v0);
+                    indices.truncate(i0);
+                    return Err(TessError::TooManyVertices);
+                }
+                vertices.push(Vertex { pos, color });
+            }
+            fan.push(i);
+        }
+        if let Some((&first, rest)) = fan.split_first() {
+            for w in rest.windows(2) {
+                indices.extend([first, w[0], w[1]]);
+            }
+        }
+    }
+    Ok(())
 }
