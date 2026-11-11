@@ -779,6 +779,36 @@ fn bookable_objects_this_slice_cannot_compile_are_reported() {
     assert_eq!(decode_both(&compile_json(json).unwrap()).seat_pos.len(), 0);
 }
 
+/// Whole turns of rotation, however many, place seats as no rotation does.
+#[test]
+fn whole_turns_do_not_move_seats() {
+    let doc = |rotation: &str| {
+        format!(
+            r##"{{"schema":1,"name":"t","nextOid":99,"categories":[{{"key":"a","label":"A","color":"#000000"}}],
+              "nodes":[{{"id":1,"type":"section","rotation":{rotation},"children":[
+                {{"id":2,"type":"row","rotation":{rotation},"path":{{"kind":"polyline","points":[[0,0],[55,0]]}},"seats":3,"oids":[[10,3]],"label":"A","category":"a"}}]}}]}}"##
+        )
+    };
+    let pos = |r: &str| decode_both(&compile_json(&doc(r)).unwrap()).seat_pos;
+    assert_eq!(pos("0"), [[0, 0], [220, 0], [440, 0]]);
+    assert_eq!(pos("36000000000000000"), pos("0"));
+    assert_eq!(pos("-720"), pos("0"));
+}
+
+/// A row with no positions has no seat labels to check its rule against; it
+/// is left out rather than storing a rule the format refuses.
+#[test]
+fn empty_rows_store_no_label_rule() {
+    let prefix = "p".repeat(65);
+    let json = format!(
+        r##"{{"schema":1,"name":"e","nextOid":99,"categories":[{{"key":"a","label":"A","color":"#000000"}}],
+          "nodes":[{{"id":1,"type":"row","path":{{"kind":"polyline","points":[[0,0],[1,0]]}},"seats":0,"oids":[],"label":"A","category":"a",
+            "seatLabels":{{"prefix":"{prefix}"}}}}]}}"##
+    );
+    let chart = decode_both(&compile_json(&json).unwrap());
+    assert!(chart.rows.is_empty() && chart.label_rules.is_empty());
+}
+
 /// Structurally random documents, nonsense included: compiling never panics,
 /// and whatever compiles decodes.
 #[test]

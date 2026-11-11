@@ -196,7 +196,9 @@ impl Place {
         if !rotation.is_finite() {
             return Err("rotation");
         }
-        let (sin, cos) = detmath::sin_cos(detmath::radians(rotation));
+        // Whole turns first: `sin_cos` is accurate only for moderate angles.
+        // `%` is C's `fmod`, whose result is exact, so every target agrees.
+        let (sin, cos) = detmath::sin_cos(detmath::radians(rotation % 360.0));
         Ok(Self { sin, cos, origin })
     }
 
@@ -850,7 +852,6 @@ impl<'d> Builder<'d> {
         }
         let first = row.first_seat as usize;
         let seats = e.seats.get(first..first + usize::from(row.seat_count))?;
-        let rule = self.rule(&mut c.strings, row);
         // Serpentine resolves per row to left-to-right or right-to-left.
         let order = match row.seat_direction {
             SeatDirection::Ltr => ccf::SeatOrder::Ltr,
@@ -932,6 +933,9 @@ impl<'d> Builder<'d> {
         if count == 0 {
             return None;
         }
+        // Only after a seat: expansion has then written every position's
+        // label with this rule, so its parts are within the limits.
+        let rule = self.rule(&mut c.strings, row);
         let bounds = bounds.unwrap_or_default();
         let at = |i: u32| self.seat_pos.get(i as usize).copied().unwrap_or_default();
         let last = seat_first + count - 1;
