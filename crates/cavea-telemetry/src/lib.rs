@@ -5,12 +5,13 @@
 //! A request is followed end to end through spans:
 //!
 //! ```text
-//! request {request_id, method, route, status, duration_ms, commit_seq,
-//!          workspace, event}
+//! request {request_id, method, route, status, duration_ms, workspace, event,
+//!          event_id, commit_seq}
 //! ├─ mailbox_wait {op}         (cavea-engine, while the command is queued)
 //! ├─ apply {op}                (cavea-engine, on the actor's task)
 //! └─ db {statement}            (database calls made by the handler)
-//! commit {seq, commands}       (cavea-engine; one per batch, follows_from
+//! commit {event_id, seq, commands}
+//!                              (cavea-engine; one per batch, follows_from
 //!                               every apply span in the batch)
 //! ```
 //!
@@ -35,18 +36,19 @@ pub use http::{
 pub mod span {
     /// One per HTTP request: `request_id`, `method`, `route` (the matched
     /// template), `status`, `duration_ms`, `workspace`, `event`, and
-    /// `commit_seq`, recorded by the engine when a command the request
-    /// submitted from this span goes into a commit.
+    /// `event_id` and `commit_seq`, recorded by the engine when a command the
+    /// request submitted from this span goes into a commit.
     pub const REQUEST: &str = "request";
     /// A command waiting in an event actor's mailbox: `op`.
     pub const MAILBOX_WAIT: &str = "mailbox_wait";
     /// A command applied to event state, a child of the submitting request's
     /// span even though it runs on the actor's task: `op`.
     pub const APPLY: &str = "apply";
-    /// One batch commit: `seq`, `commands`. A batch serves many requests, so
-    /// it is not a child of any of them; it `follows_from` each `apply` span,
-    /// and each submitting span gets `commit_seq` = `seq`, so log records
-    /// inside the commit and the requests' own records share that number.
+    /// One batch commit: `event_id` (32 hex digits), `seq`, `commands`. A
+    /// batch serves many requests, so it is not a child of any of them; it
+    /// `follows_from` each `apply` span, and each submitting span gets the
+    /// same `event_id` and `commit_seq` = `seq`, so log records inside the
+    /// commit and the requests' own records share that pair.
     pub const COMMIT: &str = "commit";
     /// One database call: `statement`, a fixed name, never SQL text or values.
     pub const DB: &str = "db";

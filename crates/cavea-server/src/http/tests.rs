@@ -16,9 +16,9 @@ use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderValue, Request, Response, StatusCode, header};
 use axum::routing::{get, post};
 use cavea_engine::{
-    ActorConfig, ChartView, Command, EventId, EventState, Failure, InvalidReason, LoadedEvent,
-    ManualClock, MemoryStore, Missing, ObjectFailure, ObjectReason, ObjectRef, Outcome,
-    Request as EngineRequest, Timestamp, TokenHash,
+    ActorConfig, Batch, ChartView, Command, EventId, EventState, Failure, InvalidReason,
+    LoadedEvent, ManualClock, MemoryStore, Missing, ObjectFailure, ObjectReason, ObjectRef,
+    Outcome, Request as EngineRequest, SeatStore, StoreError, Timestamp, TokenHash,
 };
 use cavea_telemetry::{LogFormat, REQUEST_ID_HEADER, span};
 use serde_json::{Value, json};
@@ -359,17 +359,28 @@ async fn axum_rejections_are_problem_json() {
     assert_eq!(body, json!({"a": 1}));
 }
 
-/// A command submitted in a request handler is applied and committed on the
-/// actor's task. In the production JSON logs a record inside `apply` carries
-/// the submitting request's id, and the request's completion record names the
-/// commit that made its command durable.
-#[tokio::test]
-async fn actor_work_is_tied_to_its_request_in_logs() {
-    let _serial = serial();
-    let logs = Captured::default();
-    let _guard = logs.install();
+/// The in-memory store, logging once inside each commit as a database store
+/// would.
+struct LoggingStore(MemoryStore);
 
-    let event = EventId(1);
+impl SeatStore for LoggingStore {
+    async fn load_event(&self, event: EventId) -> Result<LoadedEvent, StoreError> {
+        self.0.load_event(event).await
+    }
+
+    async fn commit_batch(&self, batch: Batch) -> Result<(), StoreError> {
+        tracing::info!("committing");
+        self.0.commit_batch(batch).await
+    }
+}
+
+/// An actor for a one-seat event, and a route that creates hold token 1 on it.
+fn hold_route(
+    event: EventId,
+) -> (
+    axum::routing::MethodRouter<AppState>,
+    tokio::task::JoinHandle<Result<(), cavea_engine::ActorError>>,
+) {
     let chart = Arc::new(ChartView::new([(100, "S-0")]).unwrap());
     let loaded = LoadedEvent {
         epoch: 1,
@@ -377,51 +388,79 @@ async fn actor_work_is_tied_to_its_request_in_logs() {
         holds: vec![],
         objects: vec![],
     };
-    let store = Arc::new(MemoryStore::new());
+    let store = MemoryStore::new();
     store.create_event(event, 1);
     let (handle, run) = cavea_engine::actor(
         EventState::restore(event, chart, loaded).unwrap(),
-        Arc::clone(&store),
+        Arc::new(LoggingStore(store)),
         ManualClock::new(Timestamp(1_000_000)),
         ActorConfig::default(),
     );
-    let actor = tokio::spawn(run);
-
-    let submit = handle.clone();
-    let app = app(Router::new().route(
-        "/hold",
-        post(move || {
-            let submit = submit.clone();
-            async move {
-                let request = EngineRequest {
-                    actor: "sk_test".into(),
-                    command: Command::CreateHold {
-                        token: TokenHash([1; 32]),
-                        ttl_secs: 900,
-                        max_objects: None,
-                    },
-                };
-                match submit.send(request).await {
-                    Ok(Outcome::HoldCreated { .. }) => Ok(StatusCode::CREATED),
-                    Ok(_) => Err(ApiError::internal("unexpected outcome")),
-                    Err(failure) => Err(ApiError::from(failure)),
-                }
+    let route = post(move || {
+        let handle = handle.clone();
+        async move {
+            let request = EngineRequest {
+                actor: "sk_test".into(),
+                command: Command::CreateHold {
+                    token: TokenHash([1; 32]),
+                    ttl_secs: 900,
+                    max_objects: None,
+                },
+            };
+            match handle.send(request).await {
+                Ok(Outcome::HoldCreated { .. }) => Ok(StatusCode::CREATED),
+                Ok(_) => Err(ApiError::internal("unexpected outcome")),
+                Err(failure) => Err(ApiError::from(failure)),
             }
-        }),
-    ));
-    let hold = || Request::post("/hold").body(Body::empty()).unwrap();
-    let (created, _) = send(app.clone(), hold()).await;
-    assert_eq!(created.status(), StatusCode::CREATED);
-    // The same token again: refused in `apply`, so nothing to commit.
-    let (refused, _) = send(app, hold()).await;
-    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
-    drop(handle);
-    actor.await.unwrap().unwrap();
+        }
+    });
+    (route, tokio::spawn(run))
+}
 
-    let committed = store.committed();
-    assert_eq!(committed.len(), 1);
-    let created = logs.completed(request_id(&created));
-    assert_eq!(created["commit_seq"], committed[0].seq);
+/// Commands submitted in request handlers are applied and committed on the
+/// actors' tasks. In the production JSON logs a record inside `apply` carries
+/// the submitting request's id, and a record inside `commit` shares its
+/// `event_id` and `seq` with exactly the requests whose commands it made
+/// durable, even when two events commit the same `seq`.
+#[tokio::test]
+async fn actor_work_is_tied_to_its_request_in_logs() {
+    let _serial = serial();
+    let logs = Captured::default();
+    let _guard = logs.install();
+
+    let (route_a, actor_a) = hold_route(EventId(0xa));
+    let (route_b, actor_b) = hold_route(EventId(0xb));
+    let app = app(Router::new().route("/a", route_a).route("/b", route_b));
+    let hold = |uri| Request::post(uri).body(Body::empty()).unwrap();
+
+    let mut created = Vec::new();
+    for uri in ["/a", "/b"] {
+        let (response, _) = send(app.clone(), hold(uri)).await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        created.push(request_id(&response).to_owned());
+    }
+    // The same token again: refused in `apply`, so nothing to commit.
+    let (refused, _) = send(app.clone(), hold("/a")).await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    drop(app);
+    actor_a.await.unwrap().unwrap();
+    actor_b.await.unwrap().unwrap();
+
+    let commits: Vec<Value> = logs
+        .records()
+        .into_iter()
+        .filter(|r| r["message"] == "committing")
+        .map(|r| r["spans"][0].clone())
+        .collect();
+    assert_eq!(commits.len(), 2);
+    for (id, commit) in created.iter().zip(&commits) {
+        assert_eq!(commit["name"], span::COMMIT);
+        assert_eq!(commit["seq"], 1);
+        let request = logs.completed(id);
+        assert_eq!(request["commit_seq"], commit["seq"]);
+        assert_eq!(request["event_id"], commit["event_id"]);
+    }
+    assert_ne!(commits[0]["event_id"], commits[1]["event_id"]);
 
     let refused_id = request_id(&refused);
     assert!(logs.completed(refused_id).get("commit_seq").is_none());

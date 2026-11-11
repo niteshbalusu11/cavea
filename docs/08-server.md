@@ -799,16 +799,16 @@ Metrics (Prometheus):
 Tracing: one span per request, with child spans for mailbox wait, apply and commit. Logs are JSON with request id, workspace and event.
 
 ```
-request {request_id, method, route, status, duration_ms, commit_seq, workspace, event}
+request {request_id, method, route, status, duration_ms, workspace, event, event_id, commit_seq}
 ├─ mailbox_wait {op}     queued in the actor's mailbox
 ├─ apply {op}            on the actor's task, parented to the request explicitly
 └─ db {statement}        a database call made by the handler
-commit {seq, commands}   one per batch; follows_from each apply span in it
+commit {event_id, seq, commands}   one per batch; follows_from each apply span in it
 ```
 
 - `route` is the matched template (`/v1/events/{event_key}`), or `<unmatched>`; the raw path is never logged because it carries customer keys. Query strings, headers and bodies are never logged.
 - Each request logs one `request completed` record when it finishes: `info`, or `debug` for a successful `/healthz`.
-- A batch serves many requests, so `commit` is not a child of any one of them. Its `follows_from` links lead to each `apply` span and through it to the request id, for trace export. In logs, the engine records the batch's `seq` as `commit_seq` on the span that submitted each command (the request span, when the handler submits from it), so a record inside `commit {seq: 42}` and the `request completed` records with `commit_seq: 42` belong together.
+- A batch serves many requests, so `commit` is not a child of any one of them. Its `follows_from` links lead to each `apply` span and through it to the request id, for trace export. In logs, the engine records the batch's `event_id` and `seq` (as `commit_seq`) on the span that submitted each command (the request span, when the handler submits from it), so a record inside `commit {event_id: E, seq: 42}` and the `request completed` records with `event_id: E, commit_seq: 42` belong together. `seq` alone is per event and does not identify a commit. `event_id` is the event's UUID as 32 hex digits; `event` is the customer's event key.
 - A JSON record lists every enclosing span with its fields under `spans`, outermost first, so a record inside `apply` carries the request id.
 
 ## 16. Failure modes

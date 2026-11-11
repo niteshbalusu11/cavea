@@ -157,10 +157,18 @@ async fn run<S: SeatStore, C: Clock>(
                 // they observed is already committed.
                 Ok(None) => release(&mut pending),
                 Ok(Some(batch)) => {
-                    let span = info_span!("commit", seq = batch.seq, commands = pending.len());
+                    // `seq` is per event, so the event id names the commit too.
+                    let event_id = format!("{:032x}", batch.event.0);
+                    let span = info_span!(
+                        "commit",
+                        event_id,
+                        seq = batch.seq,
+                        commands = pending.len()
+                    );
                     for (_, _, apply, caller) in &pending {
                         span.follows_from(apply);
                         // Lets the caller's own log records name this commit.
+                        caller.record("event_id", &event_id);
                         caller.record("commit_seq", batch.seq);
                     }
                     in_flight = Some(Box::pin(store.commit_batch(batch).instrument(span)));
