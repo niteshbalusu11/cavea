@@ -16,6 +16,20 @@ async fn post(app: &Router, secret: &str, uri: &str, body: Value) -> (Response<B
     call(app, Method::POST, uri, Some(secret), Some(body)).await
 }
 
+const IDEMPOTENCY_KEY: header::HeaderName = header::HeaderName::from_static("idempotency-key");
+
+/// POST a JSON body with an `Idempotency-Key`.
+async fn post_keyed(
+    app: &Router,
+    secret: &str,
+    uri: &str,
+    body: Value,
+    key: &str,
+) -> (Response<Body>, Value) {
+    let headers = [(IDEMPOTENCY_KEY, key)];
+    call_with(app, Method::POST, uri, Some(secret), &headers, Some(body)).await
+}
+
 async fn get(app: &Router, secret: &str, uri: &str) -> (Response<Body>, Value) {
     call(app, Method::GET, uri, Some(secret), None).await
 }
@@ -219,6 +233,97 @@ async fn seat_flow() {
     .await;
 }
 
+/// Book with a token once under an idempotency key (a replay returns the
+/// original reply; another body is a mismatch), release booked seats, block,
+/// set a custom status and unblock; no order reference or `extra` is logged.
+#[tokio::test]
+#[ignore = "needs CAVEA_TEST_DATABASE_URL"]
+async fn book_and_status() {
+    let _serial = serial();
+    let logs = Captured::default();
+    let _guard = logs.install();
+    let logs_in = logs.clone();
+    with_db(async move |pool| {
+        let logs = logs_in;
+        let (app, seats) = api_with(&pool, Some(ADMIN), ServerClock::System, "test");
+        let t = Tenant::create(&app, "a").await;
+        let ev = |op: &str| format!("/v1/events/{}/{op}", t.event);
+        let first = token(&app, &t, json!({})).await;
+        let body = json!({ "hold_token": first, "objects": by_idx(&t, &[5, 6]) });
+        let (response, held) = post(&app, &t.secret, &ev("hold"), body).await;
+        assert_eq!(response.status(), 200, "{held}");
+        let seats_56 = labels(&held["objects"]);
+
+        // Booking needs a secret key: a publishable key never reaches the engine.
+        let body = json!({ "hold_token": first, "order_ref": "x" });
+        let (response, p) = post(&app, &t.publishable, &ev("book"), body).await;
+        assert_problem(&response, &p, Code::Forbidden);
+
+        let book = json!({
+            "hold_token": first, "order_ref": "ORDREF-secret-77120",
+            "ticket_types": { &seats_56[0]: "adult" },
+            "extra": { &seats_56[1]: { "note": "EXTRA-secret-text" } },
+        });
+        let key = "book-77120";
+        let (response, booked) = post_keyed(&app, &t.secret, &ev("book"), book.clone(), key).await;
+        assert_eq!(response.status(), 200, "{booked}");
+        assert_eq!(booked["objects"], held["objects"]);
+        let (response, again) = post_keyed(&app, &t.secret, &ev("book"), book.clone(), key).await;
+        assert_eq!((response.status().as_u16(), &again), (200, &booked));
+        let mut other = book.clone();
+        other["order_ref"] = json!("ORDREF-secret-other");
+        let (response, p) = post_keyed(&app, &t.secret, &ev("book"), other, key).await;
+        assert_problem(&response, &p, Code::IdempotencyMismatch);
+        assert_eq!(
+            scalar(&pool, "SELECT count(*) FROM event_log WHERE op = 5").await,
+            1
+        );
+        let (ticket, extra): (Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT max(ticket_type), max(extra::text) FROM object_state WHERE status = 2",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(ticket.as_deref(), Some("adult"));
+        assert_eq!(extra.as_deref(), Some(r#"{"note":"EXTRA-secret-text"}"#));
+        let (_, event) = get(&app, &t.secret, &format!("/v1/events/{}", t.event)).await;
+        assert_eq!(event["counts"]["booked"], 2, "{event}");
+        // Booking its last objects deleted the token.
+        let (response, _) = get(&app, &t.secret, &format!("/v1/hold-tokens/{first}")).await;
+        assert_eq!(response.status(), 404);
+
+        // Release the booked seats without a token; again is a conflict.
+        let body = json!({ "objects": seats_56 });
+        let (response, released) = post(&app, &t.secret, &ev("release"), body.clone()).await;
+        assert_eq!(response.status(), 200, "{released}");
+        assert_eq!(released["objects"], held["objects"]);
+        let (response, p) = post(&app, &t.secret, &ev("release"), body).await;
+        assert_problem(&response, &p, Code::ObjectStatusConflict);
+        assert_eq!(p["details"]["objects"][0]["reason"], "not_booked");
+        assert_eq!(p["details"]["objects"][0]["label"], seats_56[0].as_str());
+
+        // Block, free, a custom status; held and booked cannot be set.
+        let to = |status: Value| json!({ "objects": [&seats_56[0]], "status": status });
+        for status in [json!("blocked"), json!("free"), json!(7)] {
+            let (response, changed) = post(&app, &t.secret, &ev("change-status"), to(status)).await;
+            assert_eq!(response.status(), 200, "{changed}");
+        }
+        let (_, event) = get(&app, &t.secret, &format!("/v1/events/{}", t.event)).await;
+        assert_eq!(event["counts"]["custom"], json!({ "7": 1 }));
+        for (status, reason) in [(json!("held"), "bad_status"), (json!(16), "invalid_field")] {
+            let (response, p) = post(&app, &t.secret, &ev("change-status"), to(status)).await;
+            assert_problem(&response, &p, Code::InvalidRequest);
+            assert_eq!(p["details"]["reason"], reason);
+        }
+
+        seats.shutdown().await;
+        let mut secrets = t.secrets().to_vec();
+        secrets.extend([first.as_str(), "ORDREF-secret", "EXTRA-secret"]);
+        assert_no_secrets(&logs, &secrets);
+    })
+    .await;
+}
+
 /// Version pinning, refusals at creation, settings, changes, the list, and
 /// archiving.
 #[tokio::test]
@@ -384,7 +489,8 @@ fn now_ms() -> u64 {
 
 /// A token of the minimum lifetime expires and frees its seats; shutdown
 /// releases every lease, so another node acquires at once; after a restart an
-/// event with holds is loaded at start-up and its hold expires with no request.
+/// event with holds is loaded at start-up and its hold expires with no request,
+/// and an idempotent booking still replays its original reply.
 #[tokio::test]
 #[ignore = "needs CAVEA_TEST_DATABASE_URL"]
 async fn expiry_restart_and_shutdown() {
@@ -403,6 +509,10 @@ async fn expiry_restart_and_shutdown() {
         let body = json!({ "hold_token": short, "objects": by_idx(&t, &[0, 1]) });
         let (response, _) = post(&app, sk, &ev("hold"), body).await;
         assert_eq!(response.status(), 200);
+
+        let book = json!({ "objects": by_idx(&t, &[10]), "order_ref": "R-1" });
+        let (response, booked) = post_keyed(&app, sk, &ev("book"), book.clone(), "restart").await;
+        assert_eq!(response.status(), 200, "{booked}");
 
         clock.advance_ms(60_000);
         until_zero(&pool, "SELECT count(*) FROM object_state WHERE status = 1").await;
@@ -440,6 +550,8 @@ async fn expiry_restart_and_shutdown() {
         assert_eq!(owner, "node-2");
         let (_, read) = get(&app, sk, &format!("/v1/hold-tokens/{long}")).await;
         assert_eq!(read["objects"], held["objects"]);
+        let (response, again) = post_keyed(&app, sk, &ev("book"), book, "restart").await;
+        assert_eq!((response.status().as_u16(), &again), (200, &booked));
 
         // The preloaded actor expires the hold with no request arriving.
         clock.advance_ms(600_000);

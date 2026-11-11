@@ -223,6 +223,7 @@ pub type Engine = Registry<PgStore, PgCharts, ServerClock>;
 pub struct Seats {
     pub registry: Engine,
     pub charts: Arc<PgCharts>,
+    pub clock: ServerClock,
     pool: PgPool,
 }
 
@@ -245,10 +246,16 @@ impl Seats {
             },
             ..RegistryConfig::default()
         };
-        let registry = Registry::new(Arc::new(store), charts.clone(), clock, registry_config);
+        let registry = Registry::new(
+            Arc::new(store),
+            charts.clone(),
+            clock.clone(),
+            registry_config,
+        );
         Self {
             registry,
             charts,
+            clock,
             pool,
         }
     }
