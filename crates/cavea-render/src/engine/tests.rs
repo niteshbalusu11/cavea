@@ -1,11 +1,15 @@
 //! Engine behaviour driven only through `Engine::handle` with scripted,
 //! timestamped commands, as a recorded input trace would drive it (04 §26).
 
+use std::collections::BTreeMap;
+
 use super::*;
 use crate::{
     backend::{Caps, Rect as TexRect},
     protocol::{GestureHandling, Modifiers},
 };
+
+mod chart;
 use PointerKind::{Cancel, Down, Move, Up};
 
 const MOUSE: PointerType = PointerType::Mouse;
@@ -17,10 +21,17 @@ const SIZE: Size = Size {
     height: 600.0,
 };
 
+/// A backend that keeps every live resource's bytes and records every call.
 #[derive(Default)]
 struct Fake {
     next: u32,
-    draws: usize,
+    buffers: BTreeMap<u32, Vec<u8>>,
+    textures: BTreeMap<u32, (TextureDesc, Vec<u8>)>,
+    /// `update_buffer` calls: buffer, byte offset, length.
+    buffer_writes: Vec<(u32, u32, usize)>,
+    destroyed: Vec<ResourceId>,
+    /// Instance range of each `draw`.
+    draws: Vec<Range<u32>>,
     targets: Vec<Target>,
 }
 
@@ -32,19 +43,36 @@ impl GpuBackend for Fake {
             max_texture_size: 4096,
         }
     }
-    fn create_buffer(&mut self, _: BufferDesc, _: &[u8]) -> Result<BufferId, BackendError> {
+    fn create_buffer(&mut self, _: BufferDesc, data: &[u8]) -> Result<BufferId, BackendError> {
         self.next += 1;
+        self.buffers.insert(self.next, data.to_vec());
         Ok(BufferId(self.next))
     }
-    fn update_buffer(&mut self, _: BufferId, _: u32, _: &[u8]) -> Result<(), BackendError> {
+    fn update_buffer(
+        &mut self,
+        id: BufferId,
+        offset: u32,
+        data: &[u8],
+    ) -> Result<(), BackendError> {
+        let buffer = self
+            .buffers
+            .get_mut(&id.0)
+            .ok_or(BackendError::UnknownResource)?;
+        let slot = buffer
+            .get_mut(offset as usize..offset as usize + data.len())
+            .ok_or(BackendError::InvalidData)?;
+        slot.copy_from_slice(data);
+        self.buffer_writes.push((id.0, offset, data.len()));
         Ok(())
     }
     fn create_texture(
         &mut self,
-        _: TextureDesc,
-        _: Option<&[u8]>,
+        desc: TextureDesc,
+        data: Option<&[u8]>,
     ) -> Result<TextureId, BackendError> {
         self.next += 1;
+        let data = data.map(<[u8]>::to_vec).unwrap_or_default();
+        self.textures.insert(self.next, (desc, data));
         Ok(TextureId(self.next))
     }
     fn update_texture(&mut self, _: TextureId, _: TexRect, _: &[u8]) -> Result<(), BackendError> {
@@ -53,25 +81,51 @@ impl GpuBackend for Fake {
     fn begin_frame(&mut self, target: Target, _: [f32; 4]) {
         self.targets.push(target);
     }
-    fn draw(&mut self, _: &DrawCall) -> Result<(), BackendError> {
-        self.draws += 1;
+    fn draw(&mut self, call: &DrawCall) -> Result<(), BackendError> {
+        self.draws.push(call.instances.clone());
         Ok(())
     }
     fn end_frame(&mut self) {}
-    fn destroy(&mut self, _: ResourceId) {}
+    fn destroy(&mut self, id: ResourceId) {
+        match id {
+            ResourceId::Buffer(b) => self.buffers.remove(&b.0).map(drop),
+            ResourceId::Texture(t) => self.textures.remove(&t.0).map(drop),
+        };
+        self.destroyed.push(id);
+    }
+}
+
+/// Public CCF bytes of a chart document given as JSON.
+fn compile(json: &str) -> Vec<u8> {
+    let doc = cavea_compiler::ChartDocument::from_json(json.as_bytes()).unwrap();
+    cavea_compiler::compile(&doc).unwrap().public
+}
+
+/// Two seats of size 1 centred at `min` and `max`, in rows of their own.
+fn two_seats(min: [f32; 2], max: [f32; 2]) -> Vec<u8> {
+    let block = |id: u32, label: &str, [x, y]: [f32; 2]| {
+        format!(
+            r#"{{"id":{id},"type":"rowBlock","origin":[{x},{y}],"category":"a","rows":[{{"rid":{},"seats":1,"label":"{label}","oids":[[{},1]]}}]}}"#,
+            id + 1,
+            id + 2
+        )
+    };
+    compile(&format!(
+        r##"{{"schema":1,"name":"t","settings":{{"seatSize":1}},"nextOid":10,
+          "categories":[{{"key":"a","label":"A","color":"#ff0000"}}],
+          "nodes":[{},{}]}}"##,
+        block(1, "X", min),
+        block(4, "Y", max)
+    ))
 }
 
 /// An engine showing seats (size 1) centred at `min` and `max` in a
 /// `width` × `height` view, after its first frame at time 0.
 fn engine_with(min: [f32; 2], max: [f32; 2], width: f32, height: f32) -> E {
     let mut e = Engine::new(Fake::default());
-    let (pos, cat) = (vec![min, max], vec![0, 0]);
-    e.handle(Command::LoadSeats(SeatArrays {
-        pos,
-        cat,
-        size: 1.0,
-        shape: 0,
-    }));
+    e.handle(Command::LoadChart {
+        ccf: two_seats(min, max),
+    });
     resize(&mut e, width, height, 1.0, 3.0);
     tick(&mut e, 0.0);
     e
@@ -186,7 +240,7 @@ impl Rng {
 #[test]
 fn idle_engine_asks_for_and_draws_nothing() {
     let mut e = engine();
-    assert_eq!(e.backend.draws, 1);
+    assert_eq!(e.backend.draws.len(), 1);
     for t in 1..100 {
         assert!(tick(&mut e, f64::from(t) * 16.0).is_empty());
     }
@@ -194,7 +248,7 @@ fn idle_engine_asks_for_and_draws_nothing() {
     ptr(&mut e, Move, 1, MOUSE, [10.0, 10.0], 2000.0);
     assert_eq!(e.drain_events().collect::<Vec<_>>(), [Event::NeedFrame]);
     assert!(tick(&mut e, 2000.0).is_empty());
-    assert_eq!(e.backend.draws, 1);
+    assert_eq!(e.backend.draws.len(), 1);
 }
 
 #[test]
@@ -204,8 +258,13 @@ fn zoom_and_centre_stay_within_limits() {
     assert_eq!(cam(&e).zoom, 64.0);
     let mut rng = Rng(0x5eed);
     for _ in 0..300 {
-        let min = [rng.range(-1e4, 1e4), rng.range(-1e4, 1e4)];
-        let max = [min[0] + rng.range(0.0, 5e4), min[1] + rng.range(0.0, 5e4)];
+        // Charts store positions in quarter units.
+        let q = |v: f32| (v * 4.0).round() / 4.0;
+        let min = [q(rng.range(-1e4, 1e4)), q(rng.range(-1e4, 1e4))];
+        let max = [
+            q(min[0] + rng.range(0.0, 5e4)),
+            q(min[1] + rng.range(0.0, 5e4)),
+        ];
         let (w, h) = (rng.range(40.0, 3000.0), rng.range(40.0, 3000.0));
         let mut e = engine_with(min, max, w, h);
         let chart = [
@@ -432,7 +491,7 @@ fn inertia_decays_stops_and_then_asks_for_nothing() {
     let travelled = (cam(&e).centre[0] - released.centre[0]) * released.zoom;
     assert!((travelled - 321.75).abs() < 0.5, "travelled {travelled}");
     assert!(t - 110.0 < 1600.0);
-    assert_eq!(e.backend.draws, steps.len() + 4);
+    assert_eq!(e.backend.draws.len(), steps.len() + 4);
     for later in 0..10 {
         assert!(tick(&mut e, t + f64::from(later) * 16.0).is_empty());
     }

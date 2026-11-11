@@ -5,7 +5,8 @@
 //!
 //! Built so far: the command and event protocol, the backend trait with the
 //! `glow` backend (feature `glow`), the `shape` program, the seat buffers, the
-//! host service traits, the camera, the gesture recogniser and on-demand frames.
+//! host service traits, the camera, the gesture recogniser and on-demand frames,
+//! scenes loaded from compiled charts, visual states and the palette.
 
 pub mod backend;
 pub mod camera;
@@ -13,7 +14,9 @@ pub mod engine;
 pub mod gesture;
 pub mod host;
 pub mod protocol;
+pub mod scene;
 pub mod seat;
+pub mod theme;
 pub mod tuning;
 
 pub use engine::{Engine, backing_size};

@@ -252,6 +252,9 @@ dependencies = [
 name = "cavea-render"
 version = "0.0.0"
 dependencies = [
+ "cavea-compiler",
+ "cavea-format",
+ "cavea-testkit",
  "glow",
  "naga",
 ]
@@ -287,11 +290,15 @@ dependencies = [
 [[package]]
 name = "cavea-testkit"
 version = "0.0.0"
+dependencies = [
+ "cavea-compiler",
+]
 
 [[package]]
 name = "cavea-web"
 version = "0.0.0"
 dependencies = [
+ "cavea-compiler",
  "cavea-render",
  "cavea-testkit",
  "glow",

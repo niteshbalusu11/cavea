@@ -49,7 +49,7 @@ The engine is driven only by commands and emits only events. Both are plain data
 
 | Command | Payload |
 |---|---|
-| `LoadChart` | CCF bytes |
+| `LoadChart` | CCF bytes (public or full artefact); replaces the loaded chart |
 | `SetSnapshot` | `seq`, state bytes |
 | `ApplyDelta` | `from_seq`, `to_seq`, changes |
 | `SetPrivateHolds` | List of `idx`, expiry |
@@ -75,7 +75,7 @@ The engine is driven only by commands and emits only events. Both are plain data
 
 | Event | Payload |
 |---|---|
-| `Ready` | Chart metadata: floors, sections, categories, counts |
+| `Ready` | Chart metadata: name; floors (name, level, seats); sections (label, floor, seats); categories (key, label, colour, objects); seat and object counts |
 | `NeedFrame` | — |
 | `HoldRequest` / `ReleaseRequest` | Request id, labels |
 | `SelectionChanged` | Selected objects with label, category, section, row, seat, flags |
@@ -86,7 +86,7 @@ The engine is driven only by commands and emits only events. Both are plain data
 | `CameraChanged` | Centre, zoom, level of detail |
 | `Announce` | Text for assistive technology |
 | `Metrics` | Timing marks and frame statistics |
-| `Error` | Code, message |
+| `Error` | Code (`Gpu`, `Unsupported`, `InvalidInput`, `BadChart`), message |
 
 ## 4. Load sequence
 
@@ -109,28 +109,34 @@ Rules:
 - The four fetches start together, before any of them completes.
 - The first frame does not wait for the snapshot or the font atlas.
 - If the snapshot arrives before the chart, it is kept and applied on decode.
+- Until state arrives every seat has status 0 and is drawn available: that is the neutral state of the first frame.
+- A chart that does not decode is reported as `Error` with `BadChart`; the chart already loaded, if any, stays. The old chart's GPU resources are destroyed only once the new chart's are created.
 - Shader programs are compiled before the chart arrives, where the browser allows parallel compilation.
 - Nothing on this path allocates per seat or crosses the JavaScript boundary per seat.
 
 ## 5. Scene data (CPU)
 
-Decoded from CCF into structure-of-arrays, indexed by `idx`:
+Decoded from CCF into structure-of-arrays, indexed by `idx` (`cavea_render::scene::Scene`), in one linear pass with one allocation per array:
 
 | Array | Type | Use |
 |---|---|---|
-| `pos` | `[f32; 2]` per seat | Hit testing, upload |
-| `cat` | u16 | Palette row, filters |
-| `flags` | u8 | Accessibility filter, rules |
+| `pos` | `[f32; 2]` per seat, chart units | Hit testing, upload. Converted in place from the decoded quarter units |
+| `cat` | u16 | Palette row, filters. The decoded `SCAT` array, not copied |
+| `flags` | u8 | Accessibility filter, rules. The decoded `SFLG` array, not copied |
 | `row` | u32 | Adjacency, labels |
 | `status` | u8 | Public or manager status code |
 | `visual` | u8 | Derived visual state (§9) |
 | `fx` | u8 | Dim, highlight, pulse bits |
 
-Plus per-row, per-segment, per-section, per-chunk and per-floor tables as in the CCF.
+Plus per-row, per-segment, per-section, per-chunk and per-floor tables: the decoded chart itself, kept whole.
+
+- **Active floor.** Only the active floor's `idx` range is drawn, and the camera fits that floor (§13). Until `SetFloor` exists it is the first floor; the other floors' seats are loaded and uploaded but not drawn.
+- **Status entry point.** Setting the status of an `idx` range updates `status` and `visual` and grows the dynamic buffer's dirty range; `SetSnapshot` and `ApplyDelta` (§17) call it once per run of equal status.
+- **Memory at 100,000 seats:** 18 bytes per seat, 1.8 MB, for these arrays, plus the chart's tables (about 0.2 MB for the synthetic 100,000-seat stadium, measured locally). Loading also holds the 16 bytes per seat of buffer data being uploaded until the upload returns.
 
 Derived at load:
 
-- Per-section and per-category availability counters, updated incrementally with every status change.
+- Per-section and per-category availability counters, updated incrementally with every status change (with state application, §17).
 - A neighbour table is not needed: seats within a row are stored in physical order, and `RSEG` marks the breaks.
 
 ## 6. GPU resources
@@ -141,7 +147,7 @@ Derived at load:
 | Seat dynamic buffer | 4 bytes × seats | Sub-ranges on state change |
 | Decoration mesh (vertices, indices) | From `MESH` | Once |
 | Table and booth instance buffer | 24 bytes × objects | Once; dynamic part on state change |
-| Palette texture | 16 × categories, RGBA8 | On theme or pricing change |
+| Palette texture | 24 × (categories + 1), RGBA8 | On theme or pricing change |
 | MSDF glyph atlas | 256 × 256, RGB8 | Once |
 | Dynamic text atlas | Up to 2048 × 2048, R8 | When new strings or zoom buckets are needed |
 | Label glyph buffers | Per chunk, built lazily, LRU of 64 chunks | On first need |
@@ -157,6 +163,9 @@ Static, 12 bytes                    Dynamic, 4 bytes
   angle  : u8   (360° / 256)          fx     : u8
   shape  : u8
 ```
+
+- `half` and `shape` come from the seat's row (`ROWS` seat size and shape: 0 circle, 1 rounded, 2 chair).
+- `angle` is 0 for circles. For oriented shapes (rounded, chair) it is the direction of the row at the seat, from the seat before it to the seat after it in its segment (one-sided at a segment's ends); a seat alone in its segment takes its row's direction from first to last seat. The seat's local +y is therefore behind it, away from the front rows.
 
 ## 7. Pipelines
 
@@ -190,14 +199,14 @@ Programs:
 ## 8. Seat shader
 
 - Each seat is a quad built from `gl_VertexID` (triangle strip of 4), scaled by `half`, rotated by `angle`, translated by `pos`, transformed by the camera matrix.
-- The vertex shader fetches fill and ink colours from the palette with `texelFetch(palette, ivec2(visual × 2 + k, cat), 0)` and passes them flat.
+- The vertex shader fetches fill and stroke colours from the palette with `texelFetch(palette, ivec2(visual × 3 + k, cat), 0)`, `k` 0 fill, 1 stroke (2 is the ink for text on the seat), and passes them flat.
 - The fragment shader evaluates a signed distance for the shape:
 
 | Shape id | Distance function |
 |---|---|
 | 0 circle | `length(uv) − 1` |
 | 1 rounded square | Rounded box, radius 0.3 |
-| 2 chair | Rounded box with a thicker edge on the back side |
+| 2 chair | Rounded box with a thicker edge on the back side (local +y, §6) |
 | 3 diamond | `abs(uv.x) + abs(uv.y) − 1` |
 
 - Anti-aliasing uses the on-screen pixel size passed as a uniform: `alpha = clamp(0.5 − d × half_px, 0, 1)`.
@@ -220,7 +229,17 @@ The engine maps status, selection and mode to one visual state per object:
 | 6 | Held by another | — | Held |
 | 7 | Custom | — | Custom status (colour from the status table) |
 
-The palette texture has one row per category and one extra row for states whose colour does not depend on category. Changing a theme or a category colour rewrites the texture and touches no instance data.
+Picker mode: the buyer's own selection wins over the status (pending 2, held 3); otherwise status 0 is available and any other status unavailable. Filters do not change the state; they set the dim bit of `fx`. Manager mode keeps codes 4–7; their colours are placeholders until that mode is built.
+
+The palette texture has one row per category and one extra, last row for objects without a category. Each row has three texels per visual state: fill, stroke, ink. A state whose colour does not depend on the category is written identically into every row, so the shader always indexes by `cat`. Changing a theme or a category colour rewrites the texture and touches no instance data.
+
+| State | Fill | Stroke | Ink |
+|---|---|---|---|
+| Available, custom | Category colour | `seat-available-stroke` | Black or white, whichever contrasts more with the fill |
+| Unavailable, booked | `seat-unavailable-fill` | `seat-unavailable-stroke` | `fg-muted` |
+| Selected (pending, held) | `seat-selected-fill` | `seat-selected-fill` | `seat-selected-ink` |
+| Blocked | `fg-muted` | `fg` | `bg` |
+| Held by another | Category colour | `fg` | As available |
 
 States must differ by more than colour (`11-accessibility.md` §6): unavailable seats are drawn hollow or with a cross at detail level, selected seats carry a tick.
 
@@ -366,6 +385,8 @@ Tokens (the full list with CSS names is in `05-web-sdk.md` §8):
 - Font family for dynamic text.
 
 Built-in themes: `light`, `dark`, `high-contrast`, and a `colorblind` modifier that switches to a tested palette and stronger shape cues. Category colours come from the chart and can be overridden by the host.
+
+- Until `SetTheme` is implemented (REN-041) the engine uses the light theme. It sets the palette (§9), the clear colour (`bg`) and the dim factor. Its unavailable seats are filled close to the background with a strong stroke, so they read as hollow and differ from solid available seats by more than hue (`11-accessibility.md` §6); the stroke has 4.6:1 contrast (WCAG) against the background, and below 5 px on screen, where there is no stroke, the difference is lightness. The synthetic charts' category colours have at least 4.5:1 against the background.
 
 ## 20. Backends
 
