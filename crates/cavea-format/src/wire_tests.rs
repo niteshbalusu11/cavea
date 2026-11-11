@@ -366,7 +366,7 @@ fn frames(r: &mut Rng) -> Vec<(Vec<u8>, View)> {
 }
 
 fn client_frames(r: &mut Rng) -> Vec<Vec<u8>> {
-    let key = "Ü".repeat(MAX_KEY_BYTES / 2);
+    let key = "Ü".repeat(MAX_KEY_CHARS);
     let long = vec![0xAB; MAX_TOKEN_BYTES];
     let tokens: [Option<&[u8]>; 4] = [None, Some(&[]), Some(b"ht_abc"), Some(&long)];
     let mut out = Vec::new();
@@ -547,7 +547,8 @@ fn hostile_frames_give_typed_errors() {
         ("subscribe v0", cat(&[&[0x10, 0], &key(b"e"), &[0, 0, 0]]), UnsupportedVersion),
         ("no key", sub(&[]), Truncated),
         ("key cut short", sub(&[3, b'a']), Truncated),
-        ("key over the limit", sub(&key(&[b'a'; MAX_KEY_BYTES + 1])), OverLimit),
+        ("key over the byte limit", sub(&key(&[b'a'; MAX_KEY_BYTES + 1])), OverLimit),
+        ("key over the character limit", sub(&cat(&[&key(&[b'a'; MAX_KEY_CHARS + 1]), &[0, 0, 0]])), OverLimit),
         ("key not UTF-8", sub(&cat(&[&key(&[0xFF]), &[0, 0, 0]])), BadValue),
         ("no last seq", sub(&key(b"e")), Truncated),
         ("no hold presence", sub(&cat(&[&key(b"e"), &[0]])), Truncated),
@@ -576,16 +577,22 @@ fn hostile_frames_give_typed_errors() {
     let ServerFrame::Delta(d) = server(&d, Public) else {
         panic!("not a delta");
     };
-    assert_eq!(d.changes(4).err(), Some(OutOfRange));
-    assert!(d.changes(5).is_ok());
-    assert_eq!(d.areas(7).err(), Some(OutOfRange));
+    // Changes end at idx 4, the area at idx 7: either list past the receiver's
+    // count refuses the whole frame, whichever list is asked for.
+    for objects in [4, 5, 7] {
+        assert_eq!(d.changes(objects).err(), Some(OutOfRange));
+        assert_eq!(d.areas(objects).err(), Some(OutOfRange));
+    }
+    assert!(d.changes(8).is_ok() && d.areas(8).is_ok());
     let p = cat(&[&[0x04], &v(9), &[1, 9, 1, 2, 1]]);
     let ServerFrame::Private(p) = server(&p, Public) else {
         panic!("not a private frame");
     };
-    assert_eq!(p.objects(9).err(), Some(OutOfRange));
-    assert_eq!(p.areas(2).err(), Some(OutOfRange));
-    assert!(p.objects(10).is_ok() && p.areas(3).is_ok());
+    for objects in [2, 9] {
+        assert_eq!(p.objects(objects).err(), Some(OutOfRange));
+        assert_eq!(p.areas(objects).err(), Some(OutOfRange));
+    }
+    assert!(p.objects(10).is_ok() && p.areas(10).is_ok());
 
     // Encoders refuse what decoders would refuse.
     let c = |idx| Change { idx, code: 1 };
@@ -596,6 +603,12 @@ fn hostile_frames_give_typed_errors() {
     );
     assert_eq!(encode_delta(Public, 1, 2, &[c(3)], 3, &[]), Err(OutOfRange));
     assert_eq!(encode_private(0, &[2, 1], 3, &[]), Err(NotIncreasing));
+    let past = MAX_OBJECTS + 1;
+    assert_eq!(encode_private(0, &[MAX_OBJECTS], past, &[]), Err(OverLimit));
+    assert_eq!(
+        encode_delta(Public, 1, 2, &[c(MAX_OBJECTS)], past, &[]),
+        Err(OverLimit)
+    );
     let long = vec![0; MAX_TOKEN_BYTES + 1];
     let too_long = Subscribe {
         version: 1,
@@ -605,6 +618,13 @@ fn hostile_frames_give_typed_errors() {
         session_token: None,
     };
     assert_eq!(encode_subscribe(&too_long), Err(OverLimit));
+    let key = "a".repeat(MAX_KEY_CHARS + 1);
+    let long_key = Subscribe {
+        event_key: &key,
+        hold_token: None,
+        ..too_long
+    };
+    assert_eq!(encode_subscribe(&long_key), Err(OverLimit));
 }
 
 #[test]

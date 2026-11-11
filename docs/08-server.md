@@ -822,7 +822,7 @@ The server picks the encoding with the smallest state, ties going to the lower n
 
 | Type | Name | Layout |
 |---|---|---|
-| `0x10` | SUBSCRIBE | `u8` version · `bytes(512)` event key (UTF-8, the 128-character key of `02-domain-model.md` §3) · `v64` last `seq` seen (0 if none) · `opt bytes(256)` hold token · `opt bytes(256)` session token |
+| `0x10` | SUBSCRIBE | `u8` version · `bytes(512)` event key (UTF-8 of at most 128 characters, `02-domain-model.md` §3) · `v64` last `seq` seen (0 if none) · `opt bytes(256)` hold token · `opt bytes(256)` session token |
 | `0x11` | PONG | `v64` nonce, echoing the PING's |
 
 Tokens are opaque bytes; a present token may be empty.

@@ -19,8 +19,10 @@ use cavea_core::limits::MAX_OBJECTS;
 
 /// The protocol version this crate speaks: the highest and the only one.
 pub const PROTOCOL_VERSION: u8 = 1;
-/// Longest event key in a SUBSCRIBE: 128 characters of UTF-8 (02 §3).
-pub const MAX_KEY_BYTES: usize = 512;
+/// Longest event key in a SUBSCRIBE, in characters (02 §3)...
+pub const MAX_KEY_CHARS: usize = 128;
+/// ...and so in bytes of UTF-8.
+pub const MAX_KEY_BYTES: usize = 4 * MAX_KEY_CHARS;
 /// Longest hold or session token in a SUBSCRIBE.
 pub const MAX_TOKEN_BYTES: usize = 256;
 /// Highest domain status code (02 §4.1).
@@ -279,11 +281,15 @@ pub struct Delta<'a> {
 
 impl<'a> Delta<'a> {
     /// The changes in ascending `idx`, for a receiver with `objects` objects.
+    /// Both checks the whole frame: an `idx` past `objects` in either list
+    /// refuses it.
     pub fn changes(&self, objects: u32) -> Result<Changes<'a>, WireError> {
+        self.areas.items(objects)?;
         Ok(Changes(self.changes.items(objects)?))
     }
 
     pub fn areas(&self, objects: u32) -> Result<Areas<'a>, WireError> {
+        self.changes.items(objects)?;
         Ok(Areas(self.areas.items(objects)?))
     }
 }
@@ -300,12 +306,15 @@ pub struct Private<'a> {
 impl<'a> Private<'a> {
     /// The held objects in ascending `idx`, for a receiver with `objects`
     /// objects.
+    /// objects. Both this and [`Private::areas`] check the whole frame.
     pub fn objects(&self, objects: u32) -> Result<IdxIter<'a>, WireError> {
+        self.areas.items(objects)?;
         Ok(IdxIter(self.objects.items(objects)?))
     }
 
     /// Quantities held in each area.
     pub fn areas(&self, objects: u32) -> Result<Areas<'a>, WireError> {
+        self.objects.items(objects)?;
         Ok(Areas(self.areas.items(objects)?))
     }
 }
@@ -366,6 +375,7 @@ pub fn decode_client(frame: &[u8]) -> Result<ClientFrame<'_>, WireError> {
             }
             let event_key =
                 core::str::from_utf8(r.bytes(MAX_KEY_BYTES)?).map_err(|_| WireError::BadValue)?;
+            check_key(event_key)?;
             let last_seq = r.varint()?;
             let hold_token = r.token()?;
             let session_token = r.token()?;
@@ -876,6 +886,7 @@ pub fn encode_delta(
     if to_seq <= from_seq {
         return Err(WireError::BadSeq);
     }
+    object_count(objects as usize)?;
     let mut out = Vec::with_capacity(16 + changes.len() * 3);
     out.push(types::DELTA);
     put_varint(&mut out, from_seq);
@@ -899,6 +910,7 @@ pub fn encode_private(
     objects: u32,
     areas: &[Area],
 ) -> Result<Vec<u8>, WireError> {
+    object_count(objects as usize)?;
     let mut out = Vec::with_capacity(16 + idx.len() * 2);
     out.push(types::PRIVATE);
     put_varint(&mut out, expires_at_ms);
@@ -931,6 +943,7 @@ pub fn encode_subscribe(s: &Subscribe<'_>) -> Result<Vec<u8>, WireError> {
         return Err(WireError::UnsupportedVersion);
     }
     let mut out = vec![types::SUBSCRIBE, s.version];
+    check_key(s.event_key)?;
     put_bytes(&mut out, s.event_key.as_bytes(), MAX_KEY_BYTES)?;
     put_varint(&mut out, s.last_seq);
     for token in [s.hold_token, s.session_token] {
@@ -943,6 +956,13 @@ pub fn encode_subscribe(s: &Subscribe<'_>) -> Result<Vec<u8>, WireError> {
         }
     }
     Ok(out)
+}
+
+fn check_key(key: &str) -> Result<(), WireError> {
+    if key.chars().count() > MAX_KEY_CHARS {
+        return Err(WireError::OverLimit);
+    }
+    Ok(())
 }
 
 fn put_bytes(out: &mut Vec<u8>, bytes: &[u8], max: usize) -> Result<(), WireError> {
