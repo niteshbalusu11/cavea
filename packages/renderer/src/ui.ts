@@ -400,20 +400,16 @@ export function createUi(root: HTMLElement, canvas: HTMLElement, host: UiHost): 
       const buttons: HTMLButtonElement[] = [];
       group.setAttribute("role", "group");
       group.setAttribute("aria-label", t("ticketType"));
-      types.forEach((type, i) => {
+      for (const type of types) {
         const b = button(group, "ticket-type", type.label ?? type.key, undefined, true);
         b.setAttribute("aria-pressed", String(type.key === object.ticketType));
         const typePrice = host.prices.text(object.category.key, type.key);
         if (typePrice !== undefined) {
           make("span", "pr", "", b).textContent = typePrice;
         }
-        b.addEventListener("click", () => {
-          host.chooseTicketType(object.label, type.key);
-          // The choice renders the buttons again: focus stays on this one's successor.
-          (group.isConnected ? b : typeButtons[i])?.focus();
-        });
+        b.addEventListener("click", () => host.chooseTicketType(object.label, type.key));
         buttons.push(b);
-      });
+      }
       typeButtons = buttons;
       lines.push(group);
     }
@@ -444,7 +440,13 @@ export function createUi(root: HTMLElement, canvas: HTMLElement, host: UiHost): 
       }
       tip.replaceChildren(custom);
     } else {
+      // A re-render (a choice, a hold confirmed) replaces the buttons: focus
+      // on one moves to its successor, so keyboard use is not interrupted.
+      const active = (root.getRootNode() as Document | ShadowRoot).activeElement;
+      const focused = typeButtons.findIndex((b) => b === active);
+      typeButtons = [];
       tip.replaceChildren(...content(object));
+      typeButtons[focused]?.focus();
     }
     tip.classList.toggle("pin", pin);
     tip.hidden = false;

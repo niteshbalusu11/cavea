@@ -142,6 +142,9 @@ export class FakeNode extends EventTarget {
   top(): FakeNode {
     return this.parentNode === null ? this : this.parentNode.top();
   }
+  getRootNode(): FakeNode {
+    return this.ownerDocument;
+  }
   focus(): void {
     this.ownerDocument.activeElement = this;
   }
