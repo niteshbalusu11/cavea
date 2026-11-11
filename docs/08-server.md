@@ -108,7 +108,9 @@ Properties:
 - **Natural batching.** A batch is whatever arrived while the previous commit was in flight. At low load each command commits alone, with minimal latency. Under load, batches grow by themselves. No timer is involved.
 - **Acknowledge after commit.** Replies and deltas for a batch are released only when its transaction commits (INV-7, INV-8).
 - **Validation sees uncommitted state.** Commands in batch *n+1* are checked against memory that already includes batch *n*. This is safe because batches commit in order and a failed commit poisons the actor (§4.6).
-- **Caps.** A batch holds at most 2,000 commands. The mailbox holds at most 10,000; beyond that, callers get `503 overloaded` with `Retry-After`.
+- **Caps.** A batch holds at most 2,000 commands. The mailbox holds at most 10,000; beyond that, callers get `503 overloaded` with `Retry-After`. While a commit is in flight and the next batch is full, the actor stops reading the mailbox, so the excess waits there in order and forms the batch after.
+- **Refusals and no-ops.** A refused command, or one that changes nothing (holding only objects the token already holds, releasing a token that holds nothing), takes no `seq` and writes no log row. Its reply carries the `seq` it observed and is released in order with the batch it was applied in, since it may depend on that batch's uncommitted state. A batch of only such commands needs no transaction.
+- **Stopping.** When a commit fails, callers whose commands are in that batch, in the next one, or still in the mailbox all get `503 unavailable`, and the mailbox is closed.
 
 ### 4.4 Commit
 
@@ -122,8 +124,8 @@ UPDATE events
 
 -- 2. New and changed holds.
 INSERT INTO holds (...) SELECT ... FROM UNNEST(...);
-UPDATE holds SET expires_at = u.expires_at FROM UNNEST(...) u WHERE holds.id = u.id;
-DELETE FROM holds WHERE id = ANY($released_or_expired);
+UPDATE holds SET expires_at = u.expires_at FROM UNNEST(...) u WHERE holds.event_id = $event AND holds.id = u.id;
+DELETE FROM holds WHERE event_id = $event AND id = ANY($released_or_expired);
 
 -- 3. Objects that are no longer in the default state.
 INSERT INTO object_state (event_id, oid, status, hold_id, channel, order_ref, ticket_type, extra, seq)
@@ -150,6 +152,8 @@ INSERT INTO idempotency (...) SELECT ...;
 ```
 
 All eight statements go in one round trip (a pipelined transaction).
+
+A batch carries the net effect of its commands as of its last one: each object appears at most once, in either the upsert list (with the `seq` of the last command that changed it) or the freed list, and a hold created and extended in the same batch is inserted once with its final expiry. The statement order above is then correct without the store knowing engine internals.
 
 ### 4.5 Reads
 
@@ -290,16 +294,16 @@ CREATE TABLE channels (
 );
 
 CREATE TABLE holds (
-  id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   event_id    uuid NOT NULL REFERENCES events,
+  id          bigint NOT NULL,                   -- seq of the CreateHold command; assigned by the actor
   token_hash  bytea NOT NULL UNIQUE,
   expires_at  timestamptz NOT NULL,
-  max_objects int NOT NULL,
+  max_objects int,                               -- null: unlimited (secret-key tokens)
   session_sub text,
   created_by  uuid,
-  created_at  timestamptz NOT NULL DEFAULT now()
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (event_id, id)
 );
-CREATE INDEX holds_event ON holds (event_id);
 
 -- A row exists only for objects that are not free, or that have a channel.
 CREATE TABLE object_state (
@@ -584,6 +588,14 @@ Idempotency-Key: order-77120
 5. Count: the token's objects plus the new ones must not exceed its limit.
 6. If the event's orphan policy is `enforce`, run the orphan check on the token's whole selection (`02-domain-model.md` §12).
 7. Mutate memory, add to the pending batch, reply after commit.
+
+Request shape is checked first: an empty object list, more than 1,000 objects, or a lifetime outside 60 to 7,200 seconds → `invalid_request`. Duplicate references in one request count once. Unknown references are all listed together.
+
+**Create hold.** The token's hash must be new to the event. Its expiry is the engine clock at processing time plus the lifetime; its id is the command's `seq`. The caller sets the object limit (none for secret keys); the engine only rejects a limit of zero.
+
+**Release by token.** The token must exist and be unexpired. Every named object must be held by it, otherwise → `object_not_held_by_token` listing each failing object; an empty list releases all of the token's objects. The token stays valid with no objects; only expiry (and booking its last objects) deletes it.
+
+**Extend.** The token must exist and be unexpired: an expired token cannot be revived. The new expiry is processing time plus the requested lifetime; the caller enforces the workspace maximum, the engine the 60 to 7,200 second bounds.
 
 ### 7.2 Book
 
