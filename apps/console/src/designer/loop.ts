@@ -57,8 +57,9 @@ export type LoopSession = Pick<
 >;
 
 /** Views read whenever they change. `numbering` is read only while the
- * numbering panel shows (`watch`); `overlay` and `cursor` (the canvas,
- * DSN-004) and `guides` (DSN-031) are never read yet. */
+ * numbering panel shows (`watch`); `overlay` and `cursor` are the canvas's,
+ * told to the painter (`setPainter`), and `guides` (DSN-031) is never read
+ * yet. */
 const ON_DEMAND = { numbering: "numbering" } as const satisfies Partial<
   Record<ViewName, keyof Views>
 >;
@@ -81,8 +82,16 @@ export interface IdleDeadline {
   timeRemaining(): number;
 }
 
+/** What draws the canvas (`paint.ts`): told what changed whenever the loop
+ * asks `changed()`, and given each animation frame after the views are
+ * read, where it draws only if something asked. */
+export interface Paint {
+  changed(names: ReadonlySet<ViewName>): void;
+  frame(time: number): void;
+}
+
 export interface Scheduler {
-  frame(run: () => void): () => void;
+  frame(run: (time: number) => void): () => void;
   idle(run: (deadline: IdleDeadline) => void): () => void;
   now(): number;
   /** Calls `run` when the page is hidden or shown; returns the unsubscribe. */
@@ -110,6 +119,7 @@ export class FrameLoop {
   #watched = new Set<OnDemand>();
   #dirty = new Set<OnDemand>();
   #cancelFrame: (() => void) | null = null;
+  #paint: Paint | null = null;
   #cancelIdle: (() => void) | null = null;
   #unwatch: () => void = () => {};
   #revision = -1;
@@ -181,10 +191,17 @@ export class FrameLoop {
     if (!this.#disposed) this.#guard(() => void this.tick());
   }
 
-  /** One frame: the views read, for the tests. */
-  tick(): (keyof Views)[] {
+  /** Sets what draws the canvas each frame (`null`: nothing). */
+  setPainter(paint: Paint | null): void {
+    this.#paint = paint;
+  }
+
+  /** One frame (an animation frame when `time` is given, else a `flush`):
+   * the views read, for the tests. */
+  tick(time?: number): (keyof Views)[] {
     const read: (keyof Views)[] = [];
-    const names = new Set(this.#session.changed());
+    const changed = new Set(this.#session.changed());
+    const names = new Set<ViewName>(changed);
     if (this.#windowDirty) names.add("layers");
     this.#windowDirty = false;
     for (const name of this.#dirty) names.add(name);
@@ -199,6 +216,8 @@ export class FrameLoop {
       read.push(view);
       this.#read(view);
     }
+    if (changed.size > 0) this.#paint?.changed(changed);
+    if (time !== undefined) this.#paint?.frame(time);
     return read;
   }
 
@@ -246,10 +265,10 @@ export class FrameLoop {
 
   #request(): void {
     if (this.#disposed || this.#cancelFrame !== null) return;
-    this.#cancelFrame = this.#at.frame(() => {
+    this.#cancelFrame = this.#at.frame((time) => {
       this.#cancelFrame = null;
       this.#guard(() => {
-        this.tick();
+        this.tick(time);
         this.#request();
       });
     });

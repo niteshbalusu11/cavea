@@ -1,13 +1,17 @@
 // One open chart: the session, the stores the frame loop fills, the
 // shell's camera, and the actions the menus, panels and shortcuts share.
-import type {
-  DesignerFailure,
-  Input,
-  Key,
-  Modifiers,
-  Rect,
-  Session,
-  ToolId,
+import {
+  fitView,
+  pan as panView,
+  zoomAbout,
+  type DesignerFailure,
+  type Input,
+  type Key,
+  type Modifiers,
+  type Rect,
+  type Session,
+  type ToolId,
+  type View,
 } from "@cavea/designer-core";
 import { createSignal, type Accessor } from "solid-js";
 import { createStore, reconcile, type SetStoreFunction } from "solid-js/store";
@@ -23,8 +27,31 @@ export interface Camera {
   y: number;
   zoom: number;
 }
+/** The zoom range until the canvas knows the chart's (`Canvas.zoomLimits`). */
 export const ZOOM = { min: 0.002, max: 64, step: 1.25 } as const;
-const clampZoom = (z: number) => Math.min(ZOOM.max, Math.max(ZOOM.min, z));
+/** CSS px left around a box framed by zoom to fit or to selection. */
+export const FRAME_PADDING = 24;
+
+/** The canvas's view of a camera at a size and pixel ratio. */
+export function viewOf(camera: Camera, size: [number, number], dpr: number): View {
+  return {
+    centre: [camera.x, camera.y],
+    zoom: camera.zoom,
+    width: size[0],
+    height: size[1],
+    dpr,
+  };
+}
+
+const cameraOf = (view: View): Camera => ({
+  x: view.centre[0],
+  y: view.centre[1],
+  zoom: view.zoom,
+});
+
+/** A camera the canvas can draw: finite, with a positive zoom. */
+export const drawable = (c: Camera): boolean =>
+  Number.isFinite(c.x) && Number.isFinite(c.y) && Number.isFinite(c.zoom) && c.zoom > 0;
 
 /** What happened to a call: its value, or the refusal in words and as data. */
 export type Outcome<T> = { ok: T } | { error: string; failure: DesignerFailure };
@@ -38,6 +65,15 @@ export interface Editor {
   /** The canvas region's size in CSS px, set by the canvas host. */
   size: Accessor<[number, number]>;
   setSize: (size: [number, number]) => void;
+  /** The device pixel ratio, set by the canvas host. */
+  dpr: Accessor<number>;
+  setDpr: (dpr: number) => void;
+  /** The canvas's zoom range (CSS px per chart unit), once it knows it. */
+  limits: Accessor<[number, number] | null>;
+  setLimits: (limits: [number, number] | null) => void;
+  /** The camera, size and pixel ratio as the canvas's `View`: the one view
+   * the canvas draws and pointer positions are read in. */
+  view: Accessor<View>;
   /** The pointer over the canvas region, in chart units, for the status bar. */
   pointer: Accessor<[number, number] | null>;
   setPointer: (at: [number, number] | null) => void;
@@ -54,8 +90,15 @@ export interface Editor {
   reveal(id: number | undefined): void;
   input(input: Input): void;
   key(kind: "keyDown" | "keyUp", key: Key, mods: Modifiers): void;
+  /** Frames a box (zoom to fit, zoom to selection, a finding). */
   frame(box: Rect | null): void;
-  zoomBy(factor: number): void;
+  /** Zooms by `factor` about a point of the canvas (CSS px), its centre
+   * by default, within the zoom range. */
+  zoomBy(factor: number, at?: [number, number]): void;
+  /** Moves the chart by `by` CSS px on the canvas (it follows a drag). */
+  pan(by: [number, number]): void;
+  /** Runs `dispose` when the editor is disposed, before its session. */
+  attach(dispose: () => void): void;
   setTool(tool: ToolId): void;
   copy(cut: boolean): Promise<void>;
   paste(): Promise<void>;
@@ -119,8 +162,20 @@ export function createEditor(session: Session, onPanic: (message: string) => voi
   const [views, setViews] = createStore<Views>(first as Views);
   set = setViews;
 
-  const [camera, setCamera] = createSignal<Camera>({ x: 0, y: 0, zoom: 0.1 });
-  const [size, setSize] = createSignal<[number, number]>([0, 0]);
+  const [camera, setCameraSignal] = createSignal<Camera>({ x: 0, y: 0, zoom: 0.1 });
+  const setCamera = (c: Camera) => {
+    if (drawable(c)) setCameraSignal(c);
+  };
+  const [size, setSize] = createSignal<[number, number]>([0, 0], {
+    equals: (a, b) => a[0] === b[0] && a[1] === b[1],
+  });
+  const [dpr, setDpr] = createSignal(1);
+  const [limits, setLimits] = createSignal<[number, number] | null>(null, {
+    equals: (a, b) => a === b || (a !== null && b !== null && a[0] === b[0] && a[1] === b[1]),
+  });
+  const range = (): [number, number] => limits() ?? [ZOOM.min, ZOOM.max];
+  const view = () => viewOf(camera(), size(), dpr());
+  const attached: (() => void)[] = [];
   const [revealed, setRevealed] = createSignal<{ row: number } | null>(null);
   const [pointer, setPointer] = createSignal<[number, number] | null>(null);
   const [saved, setSaved] = createSignal({
@@ -145,12 +200,6 @@ export function createEditor(session: Session, onPanic: (message: string) => voi
     return undefined;
   };
 
-  const pan = (by: [number, number] | null) => {
-    if (by === null) return;
-    const c = camera();
-    setCamera({ ...c, x: c.x - by[0] / c.zoom, y: c.y - by[1] / c.zoom });
-  };
-
   const editor: Editor = {
     session,
     views,
@@ -159,6 +208,11 @@ export function createEditor(session: Session, onPanic: (message: string) => voi
     setCamera,
     size,
     setSize,
+    dpr,
+    setDpr,
+    limits,
+    setLimits,
+    view,
     revealed,
     pointer,
     setPointer,
@@ -172,25 +226,26 @@ export function createEditor(session: Session, onPanic: (message: string) => voi
       if (row !== undefined && row !== null) setRevealed({ row });
     },
     input(input) {
-      pan(run((s) => s.input(input))?.pan ?? null);
+      const by = run((s) => s.input(input))?.pan ?? null;
+      if (by !== null) editor.pan(by);
     },
     key(kind, key, mods) {
       editor.input({ kind, data: [key, mods] });
     },
     frame(box) {
-      const [w, h] = size();
-      if (box === null || w <= 0 || h <= 0) return;
-      const bw = Math.max(1, box.max[0] - box.min[0]);
-      const bh = Math.max(1, box.max[1] - box.min[1]);
-      setCamera({
-        x: (box.min[0] + box.max[0]) / 2,
-        y: (box.min[1] + box.max[1]) / 2,
-        zoom: clampZoom(Math.min(w / bw, h / bh) * 0.9),
-      });
+      const v = view();
+      if (box === null || v.width <= 0 || v.height <= 0) return;
+      setCamera(cameraOf(fitView(v, box, FRAME_PADDING, range())));
     },
-    zoomBy(factor) {
-      const c = camera();
-      setCamera({ ...c, zoom: clampZoom(c.zoom * factor) });
+    zoomBy(factor, at) {
+      const v = view();
+      setCamera(cameraOf(zoomAbout(v, factor, at ?? [v.width / 2, v.height / 2], range())));
+    },
+    pan(by) {
+      setCamera(cameraOf(panView(view(), by)));
+    },
+    attach(dispose) {
+      attached.push(dispose);
     },
     setTool(tool) {
       run((s) => s.setTool(tool));
@@ -206,6 +261,7 @@ export function createEditor(session: Session, onPanic: (message: string) => voi
     },
     dispose() {
       loop.dispose();
+      for (const d of attached.splice(0)) d();
       session.dispose();
     },
   };

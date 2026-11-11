@@ -401,10 +401,13 @@ const ui = {
   "topbar.publishChecking": "Checking the chart…",
 
   "rail.label": "Tools",
-  "canvas.label": "Canvas",
-  "canvas.placeholder": "The canvas arrives with DSN-004.",
-  "canvas.summary": "{seats} seats · {nodes} objects",
-  "canvas.camera": "Centre {x}, {y} · zoom {zoom}",
+  "canvas.label": "{name}: canvas",
+  "canvas.role": "chart canvas",
+  "canvas.unavailable": "The canvas cannot draw here",
+  "canvas.noWebgl": "This browser has no WebGL2, which the designer's canvas needs.",
+  "canvas.failed": "The canvas stopped: {message}",
+  "canvas.panelsStill": "The panels, the layers and the Insert row block form still work.",
+  "canvas.gpuError": "The graphics card reported an error; the canvas carries on.",
 
   "status.seats": "{n} seats",
   "status.nodes": "{n} objects",
