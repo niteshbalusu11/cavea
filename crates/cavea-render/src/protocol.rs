@@ -189,10 +189,16 @@ pub enum Command {
         modifiers: Modifiers,
         time_ms: f64,
     },
+    /// A key pressed while the map has the page's focus: `key` as the DOM's
+    /// `KeyboardEvent.key`. The baseline keys of `11-accessibility.md` §3
+    /// (`Engine::takes_key` says which are taken); others are ignored.
     Key {
         key: String,
         modifiers: Modifiers,
     },
+    /// The map gained the page's focus from the keyboard (`true`: the
+    /// remembered focus is shown again) or lost it (`false`: hidden, kept).
+    SetFocusShown(bool),
     SetCamera {
         target: CameraTarget,
     },
@@ -419,6 +425,9 @@ pub enum Event {
     /// `None` when the pointer leaves every object. The anchor is the
     /// object's centre in CSS pixels on the canvas.
     ObjectHover(Option<(ObjectInfo, [f32; 2])>),
+    /// The keyboard focus shown, `None` when it is hidden; again when its
+    /// state changes or the camera settles after moving it on screen. The
+    /// anchor is where the camera comes to rest.
     ObjectFocus(Option<(ObjectInfo, [f32; 2])>),
     SectionEnter {
         section: String,

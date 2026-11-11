@@ -205,6 +205,9 @@ impl<B: GpuBackend> Engine<B> {
                 let Some((idx, seat_cu)) = self.hit(at, tolerance) else {
                     return;
                 };
+                // The keyboard resumes from the tapped seat; the ring hides.
+                self.show_focus(false);
+                self.focus = Some(idx);
                 let min = if touch {
                     SELECT_MIN_SEAT_TOUCH_PX
                 } else {
@@ -276,26 +279,36 @@ impl<B: GpuBackend> Engine<B> {
         }
     }
 
-    /// Moves the focus ring (`None` removes it) and emits `ObjectFocus`. The
-    /// entry point for keyboard navigation (A11Y-001), which will call it from
-    /// `Key`; until then only tests do.
+    /// Moves the focus and shows it (`None` removes it), emitting
+    /// `ObjectFocus` if that changes what is shown. Keys move it through
+    /// `keys`; tests and a new chart call this.
     pub fn set_focus(&mut self, idx: Option<u32>) {
         let seats = self.scene.as_ref().map_or(0, |l| l.scene.pos.len());
         if idx.is_some_and(|idx| idx as usize >= seats) {
             return self.error(ErrorCode::InvalidInput, "focus is not a seat");
         }
-        if idx != self.focus {
-            self.focus = idx;
-            let object = idx.and_then(|idx| self.anchored(idx));
-            self.events.push(Event::ObjectFocus(object));
+        let was = self.focus.filter(|_| self.focus_shown);
+        self.focus = idx;
+        self.focus_shown = idx.is_some();
+        if idx != was {
+            self.emit_focus();
             self.redraw();
         }
     }
 
     /// An object's details and its centre on screen.
     fn anchored(&self, idx: u32) -> Option<(ObjectInfo, [f32; 2])> {
+        self.anchored_at(idx, self.camera)
+    }
+
+    /// An object's details and its centre on screen under `camera`.
+    pub(super) fn anchored_at(
+        &self,
+        idx: u32,
+        camera: Option<Camera>,
+    ) -> Option<(ObjectInfo, [f32; 2])> {
         let pos = self.scene.as_ref()?.scene.pos.get(idx as usize)?;
-        let at = match (self.camera, self.stage()) {
+        let at = match (camera, self.stage()) {
             (Some(camera), Some(stage)) => {
                 camera.to_screen([f64::from(pos[0]), f64::from(pos[1])], stage.size)
             }
@@ -374,7 +387,7 @@ impl<B: GpuBackend> Engine<B> {
     }
 
     /// A tap or click on seat `idx`.
-    fn tap(&mut self, idx: u32) {
+    pub(super) fn tap(&mut self, idx: u32) {
         if self.selection.find(idx).is_some() {
             self.deselect_seat(idx);
             return;
@@ -450,12 +463,16 @@ impl<B: GpuBackend> Engine<B> {
         .find(chart, label)
     }
 
-    /// A seat's details and public status code (0 available, 1 unavailable),
-    /// for the SDK's `findObject` (05 §6).
-    pub fn object(&mut self, label: &str) -> Option<(ObjectInfo, u8)> {
+    /// A seat's details, public status code (0 available, 1 unavailable) and
+    /// position in its row (its place from 1, and the row's seats), for the
+    /// SDK's `findObject` (05 §6) and the proxy's name (11 §5).
+    pub fn object(&mut self, label: &str) -> Option<(ObjectInfo, u8, [u32; 2])> {
         let idx = self.idx_of(label)?;
-        let status = *self.scene.as_ref()?.scene.status.get(idx as usize)?;
-        Some((self.info(idx), status))
+        let scene = &self.scene.as_ref()?.scene;
+        let status = *scene.status.get(idx as usize)?;
+        let row = scene.chart.rows.get(*scene.row.get(idx as usize)? as usize)?;
+        let place = [idx - row.seat_first + 1, u32::from(row.seat_count)];
+        Some((self.info(idx), status, place))
     }
 
     /// The chart's bounds on the floor shown, which the first frame fits.

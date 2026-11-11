@@ -112,3 +112,7 @@ pub const MAX_SEAT_DRAW_CALLS: usize = 64;
 /// `SetCamera` or `FlyTo` to a seat fits a square this many of the chart's
 /// seat sizes wide around it (04 §13).
 pub const OBJECT_VIEW_SEATS: f32 = 20.0;
+
+/// The keyboard focus is kept at least this far inside the view, in CSS
+/// pixels, and at most a quarter of it (`11-accessibility.md` §3).
+pub const FOCUS_MARGIN_PX: f64 = 32.0;

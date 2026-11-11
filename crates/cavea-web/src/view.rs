@@ -214,6 +214,29 @@ impl View {
         Ok(self.gestures.takes_wheel(ctrl))
     }
 
+    /// A key pressed while the map has the page's focus: `key` as
+    /// `KeyboardEvent.key`, `mods` bits 0 shift, 1 ctrl, 2 alt, 3 meta
+    /// (11 §3). Returns whether the map took it; if not, it is the page's and
+    /// the caller must not prevent it.
+    pub fn key(&mut self, key: String, mods: u8) -> Result<bool, JsError> {
+        let modifiers = Modifiers {
+            shift: mods & 1 != 0,
+            ctrl: mods & 2 != 0,
+            alt: mods & 4 != 0,
+            meta: mods & 8 != 0,
+        };
+        let taken = self.engine.takes_key(&key, modifiers);
+        self.send(Command::Key { key, modifiers })?;
+        Ok(taken)
+    }
+
+    /// The map gained the page's focus from the keyboard (`true`), or lost
+    /// it: the remembered keyboard focus is shown or hidden.
+    #[wasm_bindgen(js_name = setFocusShown)]
+    pub fn set_focus_shown(&mut self, shown: bool) -> Result<(), JsError> {
+        self.send(Command::SetFocusShown(shown))
+    }
+
     /// `mode` 0 greedy, 1 cooperative, 2 none (04 §14). Sets the canvas's
     /// `touch-action` to match.
     #[wasm_bindgen(js_name = setGestureHandling)]
@@ -459,11 +482,12 @@ impl View {
     }
 
     /// One seat's details and status as JSON (`ObjectInfo` plus `status`: 0
-    /// available, 1 unavailable), or `undefined` for an unknown label.
+    /// available, 1 unavailable, and `place`: its position in its row and
+    /// the row's seats), or `undefined` for an unknown label.
     pub fn object(&mut self, label: &str) -> Option<String> {
-        let (info, status) = self.engine.object(label)?;
+        let (info, status, place) = self.engine.object(label)?;
         let mut json = String::new();
-        crate::events::object_with_status(&mut json, &info, status);
+        crate::events::object_with_status(&mut json, &info, status, place);
         Some(json)
     }
 

@@ -4,9 +4,10 @@
 //! `SetCamera` and `FlyTo` (bounds, section, seat), `SetGestureHandling`,
 //! `SetReducedMotion`, `Select`, `Deselect`, `ClearSelection`, `HoldResult`,
 //! `SetRules`, `SetSessionMode`, `SetGlyphAtlas`, `SetText`, `SetMessage`,
-//! `Tick`, `ContextLost` and `ContextRestored`; every other command is
-//! answered with an `Unsupported` error event. Taps, hover and selection
-//! are in [`select`], seat state in [`state`].
+//! `Key`, `SetFocusShown`, `Tick`, `ContextLost` and `ContextRestored`; every
+//! other command is answered with an `Unsupported` error event. Taps, hover
+//! and selection are in [`select`], seat state in [`state`], the keyboard in
+//! [`keys`].
 //!
 //! Frames (04 §18): input, camera commands and resizes are queued and applied
 //! at the start of the next `Tick`. A frame is drawn only when something is
@@ -48,6 +49,7 @@ use crate::{
     },
 };
 
+mod keys;
 mod select;
 mod state;
 use select::SelectState;
@@ -240,7 +242,13 @@ pub struct Engine<B: GpuBackend> {
     /// The last mouse or pen position over the canvas, hit-tested again when
     /// the camera moves.
     hover_at: Option<[f64; 2]>,
+    /// The keyboard focus, kept while hidden (`keys`).
     focus: Option<u32>,
+    /// Whether the focus ring is drawn and `ObjectFocus` reports the focus.
+    focus_shown: bool,
+    /// The camera and the focused seat's visual state `ObjectFocus` last
+    /// reported, to report again when either changes.
+    focus_seen: Option<(Option<Camera>, u8)>,
     dirty: bool,
     frame_requested: bool,
     context_lost: bool,
@@ -296,6 +304,8 @@ impl<B: GpuBackend> Engine<B> {
             hover: None,
             hover_at: None,
             focus: None,
+            focus_shown: false,
+            focus_seen: None,
             dirty: false,
             frame_requested: false,
             context_lost: false,
@@ -422,6 +432,8 @@ impl<B: GpuBackend> Engine<B> {
                 pixels,
             } => self.set_text(id, [width, height, px], &pixels),
             Command::SetMessage { key, text } => self.set_message(&key, text),
+            Command::Key { key, modifiers } => self.key(&key, modifiers),
+            Command::SetFocusShown(shown) => self.show_focus(shown),
             Command::Tick { time_ms } => self.frame(time_ms),
             Command::ContextLost => self.lose_context(),
             Command::ContextRestored => self.restore_context(),
@@ -857,6 +869,7 @@ impl<B: GpuBackend> Engine<B> {
             }
             self.dirty |= moved || lod_changed;
         }
+        self.refocus();
         if !self.animations.is_empty() || self.recogniser.wants_tick() {
             self.want_frame();
         }
@@ -1478,7 +1491,7 @@ impl<B: GpuBackend> Engine<B> {
         let mut n = 0;
         let rings = [
             (self.hover, visual::RING_HOVER),
-            (self.focus, visual::RING_FOCUS),
+            (self.focus.filter(|_| self.focus_shown), visual::RING_FOCUS),
         ];
         for (idx, ring) in rings {
             let Some(seat) = idx

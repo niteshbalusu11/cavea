@@ -12,12 +12,12 @@ use crate::{
 
 /// Section `S`: rows `A` and `B` of ten seats of size 40 (pitch 55, 95).
 /// Seat `idx` 0 is `S-A-1`, 10 is `S-B-1`.
-const HALL: &str = r##"{"schema":1,"name":"Hall","settings":{"seatSize":40},"nextOid":100,
+pub(super) const HALL: &str = r##"{"schema":1,"name":"Hall","settings":{"seatSize":40},"nextOid":100,
   "categories":[{"key":"a","label":"Stalls","color":"#2563EB"}],
   "nodes":[{"id":1,"type":"section","label":"S","category":"a","children":[
     {"id":2,"type":"rowBlock","rows":[{"rid":3,"seats":10,"oids":[[10,10]]},{"rid":4,"seats":10,"oids":[[30,10]]}]}]}]}"##;
 
-fn hall() -> E {
+pub(super) fn hall() -> E {
     let mut e = Engine::new(Fake::default());
     e.handle(Command::LoadChart { ccf: compile(HALL) });
     resize(&mut e, W, H, 1.0, 3.0);
@@ -25,12 +25,12 @@ fn hall() -> E {
     e
 }
 
-fn seat_pos(e: &E, idx: u32) -> [f64; 2] {
+pub(super) fn seat_pos(e: &E, idx: u32) -> [f64; 2] {
     let [x, y] = e.scene.as_ref().unwrap().scene.pos[idx as usize];
     cam(e).to_screen([f64::from(x), f64::from(y)], e.viewport.unwrap().css)
 }
 
-fn click(e: &mut E, ty: PointerType, [x, y]: [f64; 2], t: f64) -> Vec<Event> {
+pub(super) fn click(e: &mut E, ty: PointerType, [x, y]: [f64; 2], t: f64) -> Vec<Event> {
     let at = [x as f32, y as f32];
     ptr(e, Down, 1, ty, at, t);
     ptr(e, Up, 1, ty, at, t + 10.0);
@@ -51,7 +51,7 @@ fn visuals(e: &E) -> String {
 }
 
 /// The selection events, one line each.
-fn summary(events: &[Event]) -> Vec<String> {
+pub(super) fn summary(events: &[Event]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| {
@@ -537,12 +537,12 @@ fn a_tap_is_one_frame_and_one_sub_range_upload() {
 }
 
 /// The chart's seat size on screen, in CSS pixels.
-fn seat_px(e: &E) -> f64 {
+pub(super) fn seat_px(e: &E) -> f64 {
     f64::from(e.scene.as_ref().unwrap().scene.seat_size) * cam(e).zoom
 }
 
 /// A 3,000-seat stadium (seats 44 cu), whose fit shows seats of about 3 px.
-fn bowl() -> E {
+pub(super) fn bowl() -> E {
     let mut e = Engine::new(Fake::default());
     e.handle(Command::LoadChart { ccf: stadium(3000) });
     resize(&mut e, W, H, 1.0, 3.0);
