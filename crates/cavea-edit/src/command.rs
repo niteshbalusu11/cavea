@@ -229,8 +229,10 @@ impl Document {
                 {
                     return Err(CommandError::Placement);
                 }
-                let (mut ids, mut seats) = (0, 0);
-                census(&node, &mut ids, &mut seats)?;
+                // The chart's objects so far count against the limit too.
+                let mut objects = self.slots.values().map(|s| own_objects(&s.node)).sum();
+                let mut ids = 0;
+                census(&node, &mut ids, &mut objects)?;
                 if !reparses(&node) {
                     return Err(CommandError::InvalidValue("node"));
                 }
@@ -627,42 +629,52 @@ fn reparses(node: &Node) -> bool {
         .is_ok_and(|back| back == *node)
 }
 
-/// Counts the ids a node needs and its seat positions, checking the limits
-/// before anything is allocated.
-fn census(node: &Node, ids: &mut u64, seats: &mut u64) -> Result<()> {
-    *ids += 1;
-    let mut row = |n: u32, ids: &mut u64| {
-        if n > MAX_SEATS_PER_ROW {
-            return Err(CommandError::Limit("seats per row"));
-        }
-        *ids += u64::from(n);
-        *seats += u64::from(n);
-        Ok(())
-    };
-    match node {
-        Node::Section(s) => {
-            for c in &s.children {
-                census(c, ids, seats)?;
-            }
-        }
-        Node::RowBlock(b) => {
-            for r in &b.rows {
-                *ids += 1;
-                row(r.seats, ids)?;
-            }
-        }
-        Node::Row(r) => row(r.seats, ids)?,
-        Node::Table(t) => {
-            row(t.seats, ids)?;
-            *ids += u64::from(t.table_oid.is_some());
-        }
-        Node::Booth(_) | Node::Area(_) => *ids += 1,
-        Node::Shape(_) | Node::Text(_) | Node::Icon(_) | Node::Image(_) => {}
+/// Counts the ids a node needs and its bookable objects (see
+/// [`own_objects`]), with its children, checking the per-row limit before
+/// anything is allocated. Stops counting once over the chart limit.
+fn census(node: &Node, ids: &mut u64, objects: &mut u64) -> Result<()> {
+    if *objects > u64::from(MAX_OBJECTS) {
+        return Err(CommandError::Limit("objects"));
     }
-    if *seats > u64::from(MAX_OBJECTS) {
+    let widest = match node {
+        Node::RowBlock(b) => b.rows.iter().map(|r| r.seats).max().unwrap_or(0),
+        Node::Row(r) => r.seats,
+        Node::Table(t) => t.seats,
+        _ => 0,
+    };
+    if widest > MAX_SEATS_PER_ROW {
+        return Err(CommandError::Limit("seats per row"));
+    }
+    let own = own_objects(node);
+    // One id for the node, one per block row, one per object.
+    let block_rows = match node {
+        Node::RowBlock(b) => b.rows.len() as u64,
+        _ => 0,
+    };
+    *ids += 1 + block_rows + own;
+    *objects += own;
+    if let Node::Section(s) = node {
+        for c in &s.children {
+            census(c, ids, objects)?;
+        }
+    }
+    if *objects > u64::from(MAX_OBJECTS) {
         return Err(CommandError::Limit("objects"));
     }
     Ok(())
+}
+
+/// Bookable objects a node holds itself, children aside, as 02 §14 counts
+/// them: seat positions (removed ones included), a table booked whole,
+/// booths and areas.
+fn own_objects(node: &Node) -> u64 {
+    match node {
+        Node::RowBlock(b) => b.rows.iter().map(|r| u64::from(r.seats)).sum(),
+        Node::Row(r) => r.seats.into(),
+        Node::Table(t) => u64::from(t.seats) + u64::from(t.table_oid.is_some()),
+        Node::Booth(_) | Node::Area(_) => 1,
+        Node::Section(_) | Node::Shape(_) | Node::Text(_) | Node::Icon(_) | Node::Image(_) => 0,
+    }
 }
 
 /// Gives the node fresh ids from `next` in document order: node id, then each

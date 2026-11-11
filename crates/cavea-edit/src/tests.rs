@@ -550,6 +550,35 @@ fn refusals() {
         assert_eq!(state(&editor), before);
         assert_eq!(json(&editor.document().save()), saved);
     }
+    // A chart at the object limit takes no more: a booth inside a new section
+    // counts as one.
+    let rows = vec![r#"{"rid":0,"seats":4000,"oids":[[1,4000]]}"#; 250].join(",");
+    let mut full = Editor::load(ChartDocument {
+        nodes: vec![*node(&format!(
+            r#"{{"id":1,"type":"rowBlock","rows":[{rows}]}}"#
+        ))],
+        ..sample("small.json")
+    })
+    .expect("load");
+    let full_before = json(&full.document().save());
+    let section = node(
+        r#"{"id":0,"type":"section","children":[{"id":0,"type":"booth","size":[1,1],"oid":0}]}"#,
+    );
+    let create = Command::CreateNode {
+        parent: None,
+        index: 0,
+        node: section,
+    };
+    assert_eq!(full.apply(create), Err(CommandError::Limit("objects")));
+    assert_eq!(json(&full.document().save()), full_before);
+    let shape = node(r#"{"id":0,"type":"shape","kind":"rect","size":[1,1]}"#);
+    full.apply(Command::CreateNode {
+        parent: None,
+        index: 0,
+        node: shape,
+    })
+    .expect("decoration");
+
     // The op layer refuses a cycle even where commands could not reach one.
     let mut doc = Document::load(sample("full.json")).expect("load");
     let op = crate::op::Op::Place {
