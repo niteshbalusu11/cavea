@@ -143,7 +143,8 @@ pub(crate) fn handles(view: &View<'_>, sel: &Selection, pivot: Option<P>) -> Vec
         Some(Node::RowBlock(b)) => {
             out.extend(sides.map(|(s, at)| handle(HandleKind::Side(s), at)));
             // After the sides, which win where they meet on a small block.
-            let curved = b.rows.first().is_some_and(|r| r.seats > 1);
+            // Two positions have no middle to move.
+            let curved = b.rows.first().is_some_and(|r| r.seats > 2);
             let middle = front_middle(view, id).filter(|_| curved);
             if let Some(at) = middle.and_then(|p| view.index.to_world(id, p)) {
                 let (sin, cos) = b.rotation.to_radians().sin_cos();
@@ -629,14 +630,35 @@ fn front_middle(view: &View<'_>, id: u32) -> Option<P> {
     Some([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0])
 }
 
-/// Where the front row's first and last positions lie along it, and its
-/// middle (03 §2.4: `s = a + offset + k × seatPitch`; row 0 is never
-/// staggered).
-fn front_span(b: &RowBlock) -> Option<(f64, f64, f64)> {
-    let row = b.rows.first()?;
-    let length = f64::from(row.seats.saturating_sub(1)) * b.seat_pitch;
-    let s0 = -align(b) * length + row.offset;
-    Some((s0, s0 + length / 2.0, s0 + length))
+/// Where the front row's positions lie along it (03 §2.4: `s = a + offset
+/// + k × seatPitch`; row 0 is never staggered): its first, its middle one
+/// or two (where the handle is, `front_middle`), and its last.
+#[derive(Debug, Clone, Copy)]
+struct Span {
+    first: f64,
+    middle: [f64; 2],
+    last: f64,
+    /// A bulge's weight at the middle, `1 − (2t − 1)²` (03 §2.4).
+    weight: f64,
+}
+
+fn front_span(b: &RowBlock) -> Option<Span> {
+    let n = b.rows.first()?.seats;
+    let offset = b.rows.first()?.offset;
+    let last = n.saturating_sub(1);
+    let first = -align(b) * f64::from(last) * b.seat_pitch + offset;
+    let at = |k: u32| first + f64::from(k) * b.seat_pitch;
+    let (ma, mb) = (last / 2, (n / 2).min(last));
+    let w = |k: u32| {
+        let t = f64::from(k) / f64::from(last.max(1));
+        1.0 - (2.0 * t - 1.0).powi(2)
+    };
+    Some(Span {
+        first,
+        middle: [at(ma), at(mb)],
+        last: at(last),
+        weight: (w(ma) + w(mb)) / 2.0,
+    })
 }
 
 /// The y of the front row's position at `s` on an arc of curvature `k`
@@ -651,17 +673,18 @@ fn arc_y(k: f64, s: f64) -> f64 {
 
 /// On an arc of curvature `k`: how far the front row's middle lies behind
 /// (+y) the midpoint of its ends, and that midpoint's y.
-fn arc_depth(k: f64, (s0, sm, s1): (f64, f64, f64)) -> (f64, f64) {
-    let ends = (arc_y(k, s0) + arc_y(k, s1)) / 2.0;
-    (arc_y(k, sm) - ends, ends)
+fn arc_depth(k: f64, s: Span) -> (f64, f64) {
+    let ends = (arc_y(k, s.first) + arc_y(k, s.last)) / 2.0;
+    let middle = (arc_y(k, s.middle[0]) + arc_y(k, s.middle[1])) / 2.0;
+    (middle - ends, ends)
 }
 
 /// The curvature in (0, π / reach] whose front row has depth `target`
 /// (above 0), the farthest seat staying within half a turn of the apex:
 /// the first crossing of 64 samples, refined by bisection, else the
 /// sample of greatest depth (the depth is not monotonic up to half a turn).
-fn curvature(span: (f64, f64, f64), target: f64) -> Option<f64> {
-    let reach = span.0.abs().max(span.2.abs());
+fn curvature(span: Span, target: f64) -> Option<f64> {
+    let reach = span.first.abs().max(span.last.abs());
     if !(reach > 0.0 && reach.is_finite()) {
         return None;
     }
@@ -709,7 +732,7 @@ fn curve(b: &RowBlock, id: u32, d: P) -> Step {
         _ => 0.0,
     };
     let start = match b.curve {
-        Curve::Bulge { amount } => amount,
+        Curve::Bulge { amount } => amount * span.weight,
         _ => arc_depth(k0, span).0,
     };
     let to = start + d[1];
@@ -717,7 +740,14 @@ fn curve(b: &RowBlock, id: u32, d: P) -> Step {
         return Step::Base;
     }
     let (curve, k, depth) = match b.curve {
-        Curve::Bulge { .. } => (Curve::Bulge { amount: to }, None, to),
+        Curve::Bulge { .. } if span.weight > 0.0 => (
+            Curve::Bulge {
+                amount: to / span.weight,
+            },
+            None,
+            to,
+        ),
+        Curve::Bulge { .. } => return Step::Keep,
         _ if to.abs() < 0.5 => (Curve::None {}, Some(0.0), 0.0),
         _ => {
             let Some(k) = curvature(span, to.abs()).map(|k| k.copysign(to)) else {

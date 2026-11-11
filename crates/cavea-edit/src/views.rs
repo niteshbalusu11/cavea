@@ -169,14 +169,16 @@ pub(crate) fn status(doc: &Document) -> StatusView {
         if hidden(id) || doc.parent(id).is_some_and(hidden) {
             continue;
         }
-        let present = |n: u32, removed: usize| u64::from(n).saturating_sub(removed as u64);
+        // A position listed twice, or past the row's end, removes no more:
+        // the compiler reads `removed` as a set of positions.
+        let present = |n: u32, removed: &[u32]| {
+            let gone: std::collections::BTreeSet<u32> =
+                removed.iter().copied().filter(|&p| p < n).collect();
+            u64::from(n) - gone.len() as u64
+        };
         seats += match doc.node(id) {
-            Some(Node::RowBlock(b)) => b
-                .rows
-                .iter()
-                .map(|r| present(r.seats, r.removed.len()))
-                .sum(),
-            Some(Node::Row(r)) => present(r.seats, r.removed.len()),
+            Some(Node::RowBlock(b)) => b.rows.iter().map(|r| present(r.seats, &r.removed)).sum(),
+            Some(Node::Row(r)) => present(r.seats, &r.removed),
             _ => 0,
         };
     }

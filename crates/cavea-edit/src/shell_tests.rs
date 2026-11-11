@@ -547,8 +547,9 @@ fn curve_handle() {
     let Curve::Arc { radius } = b.curve else {
         panic!("arc: {:?}", b.curve)
     };
-    // A front row 250 cu long along the arc with a 40 cu sagitta.
-    let sag = radius * (1.0 - (125.0 / radius).cos());
+    // Six seats 50 cu apart: the middle two at ±25 cu along the arc lie
+    // 40 cu behind the ends at ±125.
+    let sag = radius * ((25.0 / radius).cos() - (125.0 / radius).cos());
     assert!((sag - 40.0).abs() < 1e-9, "{radius}: {sag}");
     let (l1, r1) = ends(&t);
     assert!(
@@ -574,7 +575,12 @@ fn curve_handle() {
     let Some(Node::RowBlock(b)) = t.s.document().node(10) else {
         panic!("block")
     };
-    assert_eq!(b.curve, Curve::Bulge { amount: -15.0 });
+    // The middle seats (t = 0.4, 0.6) are displaced 0.96 of the amount:
+    // from 9.6 cu they follow the pointer 25 cu forward.
+    let Curve::Bulge { amount } = b.curve else {
+        panic!("bulge: {:?}", b.curve)
+    };
+    assert!((amount * 0.96 - (9.6 - 25.0)).abs() < 1e-9, "{amount}");
     // Left-aligned with an offset, and a drag past the deepest arc a row
     // can make: the midpoint of the front row's ends stays where it was,
     // and its middle follows the pointer as far as the arc can go.
@@ -610,6 +616,46 @@ fn curve_handle() {
         } else {
             assert!(moved > 10.0 && moved < travel, "{align:?}: {moved}");
         }
+    }
+}
+
+/// On an even front row the handle, between the two middle seats, follows
+/// the pointer too; the status bar counts a removed position once.
+#[test]
+fn curve_handle_even_rows_and_status() {
+    let doc = serde_json::json!({ "schema": 1, "name": "e", "nextOid": 100,
+        "nodes": [{ "id": 1, "type": "rowBlock", "seatPitch": 100,
+            "rows": [{ "rid": 2, "seats": 4, "oids": [[3, 4]] },
+                     { "rid": 7, "seats": 3, "oids": [[8, 3]], "removed": [0, 0] }] }] });
+    let mut t = T::new(serde_json::from_value(doc).expect("doc"));
+    assert_eq!(t.s.status().seats, 4 + 2);
+    t.s.select(Level::Top, [1]);
+    let handle = |t: &T| {
+        let o = t.s.overlay();
+        let h = o
+            .handles
+            .iter()
+            .find(|h| h.kind == HandleKind::Curve)
+            .copied();
+        h.map(|h| h.at[1]).expect("curve handle")
+    };
+    for curve in [Curve::None {}, Curve::Bulge { amount: 5.0 }] {
+        t.s.set_field(&Field::Curve(curve)).expect("curve");
+        let y0 = handle(&t);
+        let o = t.s.overlay();
+        let h = o
+            .handles
+            .iter()
+            .find(|h| h.kind == HandleKind::Curve)
+            .copied()
+            .expect("handle");
+        let at = [h.at[0] + h.offset[0], h.at[1] + h.offset[1]];
+        t.drag(&[at, [at[0], at[1] + 80.0]]);
+        assert!(
+            (handle(&t) - y0 - 80.0).abs() < 1e-6,
+            "{curve:?}: {}",
+            handle(&t) - y0
+        );
     }
 }
 
