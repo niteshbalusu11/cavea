@@ -11,6 +11,8 @@ anyhow.workspace = true
 # `query` adds serde_urlencoded, for the problem+json `Query` extractor. `ws`
 # adds tokio-tungstenite and tungstenite for the realtime WebSocket (08 §8).
 axum = { workspace = true, features = ["tokio", "http1", "json", "matched-path", "query", "ws"] }
+# The SSE stream's base64 `data:` lines; already in the tree through sqlx-postgres.
+base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
 # Brotli (quality 11) of each published chart's public artefact (03 §4.6); the
 # workspace's version, already built for xtask.
 brotli.workspace = true
@@ -29,6 +31,8 @@ getrandom = { version = "0.4.3", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive"] }
 # `raw_value` (already on through axum's `json`) takes a draft as uploaded.
 serde_json = { workspace = true, features = ["raw_value"] }
+# The SSE response body's frame type; already in the tree through axum.
+http-body = "1.1.0"
 # SHA-256 of API keys and the admin key; already in the tree through sqlx-postgres.
 sha2 = { version = "0.11.1", default-features = false }
 # Runtime queries only (no `macros`: they need a database or offline data at

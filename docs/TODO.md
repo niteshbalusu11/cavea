@@ -219,8 +219,8 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **RT-004** Fan-out of shared pre-encoded frames (08 §4.5)
 - [x] **RT-005** Slow-consumer detection and RESYNC (08 §8.3)
 - [x] **RT-006** Ping, pong and idle timeouts (08 §8.3)
-- [ ] **RT-007** SSE transport (08 §8.4)
-- [ ] **RT-008** Polling with `after_seq` (08 §8.4)
+- [x] **RT-007** SSE transport (08 §8.4)
+- [x] **RT-008** Polling with `after_seq` (08 §8.4)
 - [x] **RT-009** HTTP snapshot with ETag and cache headers (08 §8.5)
 - [x] **RT-010** PRIVATE frames for the caller's holds (08 §8.1)
 

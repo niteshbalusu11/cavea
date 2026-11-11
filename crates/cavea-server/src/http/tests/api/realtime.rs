@@ -2,8 +2,11 @@
 //! provider, over a listening socket where the transport needs one (08 §8).
 
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::time::Duration;
 
+use axum::body::HttpBody as _;
+use base64::Engine as _;
 use cavea_format::wire::{self, CloseReason, Subscribe, types};
 use futures_util::{SinkExt as _, StreamExt as _};
 use tokio::net::{TcpListener, TcpStream};
@@ -15,7 +18,7 @@ use tokio_tungstenite::tungstenite::{self, Message};
 
 use super::*;
 use crate::config::CorsOrigins;
-use crate::realtime::{Realtime, Timing, tests::Client};
+use crate::realtime::{Realtime, Timing, Transport, tests::Client};
 
 /// A server on a socket, sharing its state with `app` (for HTTP calls through
 /// the router).
@@ -27,6 +30,14 @@ struct Server {
     stop: Option<oneshot::Sender<()>>,
     done: tokio::task::JoinHandle<std::io::Result<()>>,
 }
+
+/// PING (an SSE comment) every 200 ms.
+const FAST: Timing = Timing {
+    ping: Duration::from_millis(200),
+    idle: Duration::from_secs(60),
+    handshake: Duration::from_secs(10),
+    stall: Duration::from_secs(30),
+};
 
 /// The protocol's timers, with a handshake short enough to wait out.
 const QUICK_HANDSHAKE: Timing = Timing {
@@ -265,7 +276,7 @@ async fn websocket_follows_the_event() {
             (&public.codes, public.seq),
             (&committed.codes, committed.seq)
         );
-        assert_eq!(server.realtime.subscribers(), 2);
+        assert_eq!(server.realtime.subscribers(Transport::WebSocket), 2);
 
         // Resuming from a buffered seq: only the DELTAs since.
         let (mut resumed, mut client) = follow(addr, &a, start_seq, None).await;
@@ -309,7 +320,7 @@ async fn websocket_follows_the_event() {
 
         drop((watcher, buyer, resumed, stale));
         server.settled(id).await;
-        assert_eq!(server.realtime.subscribers(), 0);
+        assert_eq!(server.realtime.subscribers(Transport::WebSocket), 0);
         let closes: Vec<Value> = logs
             .records()
             .into_iter()
@@ -448,11 +459,12 @@ async fn websocket_refuses_what_breaks_the_rules() {
 }
 
 /// The snapshot is the engine's frame, with its `seq` as `ETag`, conditional
-/// requests and cache headers; an unknown or foreign event is `404`, never
-/// cached; an archived one is still served.
+/// requests and cache headers; `after_seq` answers a DELTA, the SNAPSHOT or
+/// `204`; an unknown or foreign event is `404`, never cached; an archived one
+/// is still served.
 #[tokio::test]
 #[ignore = "needs CAVEA_TEST_DATABASE_URL"]
-async fn snapshot() {
+async fn snapshot_and_polling() {
     let _serial = serial();
     with_db(async move |pool| {
         let (app, seats) = api_with(&pool, Some(ADMIN), ServerClock::System, "test");
@@ -493,10 +505,47 @@ async fn snapshot() {
         let (parts, _) = get(&state, &[(header::IF_NONE_MATCH, "\"0\"")]).await;
         assert_eq!(parts.status, 200);
 
+        // Polling.
+        let before = frame.seq();
+        let (parts, body) = get(&format!("{state}&after_seq={before}"), &[]).await;
+        assert_eq!((parts.status.as_u16(), body.len()), (204, 0));
+        assert_eq!(parts.headers[header::CACHE_CONTROL], cache);
+        let token = public_token(&app, &a, &a.event).await;
+        let seq = public_hold(&app, &a, &token, &[7]).await;
+        let mut delta = None;
+        for _ in 0..100 {
+            let (parts, body) = get(&format!("{state}&after_seq={before}"), &[]).await;
+            if parts.status == 200 {
+                match wire::decode_server(&body, wire::View::Public).unwrap() {
+                    wire::ServerFrame::Delta(d) if d.to_seq == seq => {
+                        delta = Some((
+                            d.from_seq,
+                            d.changes(1_000_000).unwrap().collect::<Vec<_>>(),
+                        ));
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let (from, changes) = delta.expect("a delta");
+        assert_eq!(from, before);
+        assert_eq!(changes, [wire::Change { idx: 7, code: 1 }]);
+        for after in [0, 1_000_000] {
+            let (parts, body) = get(&format!("{state}&after_seq={after}"), &[]).await;
+            assert_eq!(parts.status, 200);
+            assert_eq!(body[0], types::SNAPSHOT, "{after}");
+        }
+
         // Not found, and not cached.
         for uri in [
             format!("/v1/public/events/nope/state?key={}", a.publishable),
             format!("/v1/public/events/{}/state?key={}", a.event, b.publishable),
+            format!(
+                "/v1/public/events/{}/state?key={}&after_seq=1",
+                a.event, b.publishable
+            ),
         ] {
             let (parts, _) = get(&uri, &[]).await;
             assert_eq!(parts.status, 404, "{uri}");
@@ -517,8 +566,249 @@ async fn snapshot() {
     .await;
 }
 
-/// On shutdown every WebSocket subscriber gets CLOSE 3 and its connection is
-/// closed at once; the server exits well inside the deadline.
+/// SSE events, parsed.
+#[derive(Debug, PartialEq, Eq)]
+enum Event {
+    Frame(Option<u64>, Vec<u8>),
+    KeepAlive,
+}
+
+/// Read `body` until `done` holds for the events so far.
+async fn sse(body: &mut Body, events: &mut Vec<Event>, done: impl Fn(&[Event]) -> bool) {
+    let mut text = String::new();
+    while !done(events) {
+        let frame = timeout(
+            Duration::from_secs(5),
+            std::future::poll_fn(|cx| Pin::new(&mut *body).poll_frame(cx)),
+        )
+        .await
+        .unwrap()
+        .expect("the stream ended")
+        .unwrap();
+        text.push_str(std::str::from_utf8(&frame.into_data().unwrap()).unwrap());
+        while let Some(end) = text.find("\n\n") {
+            let event: String = text.drain(..end + 2).collect();
+            if event == ":\n\n" {
+                events.push(Event::KeepAlive);
+                continue;
+            }
+            let (mut id, mut data) = (None, Vec::new());
+            for line in event.lines() {
+                if let Some(seq) = line.strip_prefix("id: ") {
+                    id = Some(seq.parse().unwrap());
+                } else if let Some(b64) = line.strip_prefix("data: ") {
+                    data = base64::engine::general_purpose::STANDARD
+                        .decode(b64)
+                        .unwrap();
+                }
+            }
+            events.push(Event::Frame(id, data));
+        }
+    }
+}
+
+fn frames(events: &[Event]) -> Vec<&[u8]> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Frame(_, f) => Some(f.as_slice()),
+            Event::KeepAlive => None,
+        })
+        .collect()
+}
+
+async fn open_sse(app: &Router, uri: &str, headers: &[(header::HeaderName, &str)]) -> Body {
+    let response = app
+        .clone()
+        .oneshot(request(Method::GET, uri, None, headers, None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "text/event-stream"
+    );
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    response.into_body()
+}
+
+/// SSE carries the WebSocket's frames, base64 in `data:` lines with
+/// `id: <seq>`; it resumes from `Last-Event-ID`, keeps alive with comments,
+/// and closes an archived event with CLOSE 1.
+#[tokio::test]
+#[ignore = "needs CAVEA_TEST_DATABASE_URL"]
+async fn sse_stream() {
+    let _serial = serial();
+    with_db(async move |pool| {
+        let server = start(&pool, FAST, 10, CorsOrigins::Any).await;
+        let (app, addr) = (&server.app, server.addr);
+        let a = Tenant::create(app, "a").await;
+        let id = event_id(&pool, &a.event).await;
+        let uri = format!("/v1/public/events/{}/stream?key={}", a.event, a.publishable);
+
+        // A WebSocket and an SSE stream, both from the same SNAPSHOT.
+        let mut ws = connect(addr, Some(&a.publishable), None).await.unwrap();
+        send(&mut ws, subscribe_frame(&a.event, 0, None)).await;
+        let mut over_ws = vec![next(&mut ws).await.unwrap(), next(&mut ws).await.unwrap()];
+        let mut body = open_sse(app, &uri, &[]).await;
+        let mut events = Vec::new();
+        sse(&mut body, &mut events, |e| frames(e).len() == 2).await;
+        assert_eq!(server.realtime.subscribers(Transport::Sse), 1);
+        let start_seq = match &events[1] {
+            Event::Frame(Some(seq), frame) if frame[0] == types::SNAPSHOT => *seq,
+            other => panic!("{other:?}"),
+        };
+        assert!(matches!(&events[0], Event::Frame(None, f) if f[0] == types::HELLO));
+
+        let token = public_token(app, &a, &a.event).await;
+        let seq = public_hold(app, &a, &token, &[1, 2]).await;
+        let mut client = Client::default();
+        for frame in &over_ws {
+            client.apply(frame);
+        }
+        while client.seq < seq {
+            let frame = next(&mut ws).await.unwrap();
+            client.apply(&frame);
+            over_ws.push(frame);
+        }
+        sse(&mut body, &mut events, |e| {
+            e.iter()
+                .any(|e| matches!(e, Event::Frame(Some(s), _) if *s == seq))
+        })
+        .await;
+        // The same frames in the same order; the HELLOs differ only in their
+        // server time.
+        let over_sse = frames(&events);
+        assert_eq!(over_sse.len(), over_ws.len());
+        assert_eq!(
+            over_sse[1..],
+            over_ws[1..].iter().map(Vec::as_slice).collect::<Vec<_>>()
+        );
+        drop(ws);
+        sse(&mut body, &mut events, |e| e.contains(&Event::KeepAlive)).await;
+        drop(body);
+
+        // Resuming from `Last-Event-ID`.
+        let id_header = start_seq.to_string();
+        let mut body = open_sse(
+            app,
+            &uri,
+            &[(header::HeaderName::from_static("last-event-id"), &id_header)],
+        )
+        .await;
+        let mut events = Vec::new();
+        sse(&mut body, &mut events, |e| {
+            e.iter()
+                .any(|e| matches!(e, Event::Frame(Some(s), _) if *s == seq))
+        })
+        .await;
+        let types: Vec<u8> = frames(&events).iter().map(|f| f[0]).collect();
+        assert!(!types.contains(&types::SNAPSHOT), "{types:?}");
+        drop(body);
+
+        let uri_archived = format!("/v1/events/{}", a.event);
+        let (response, _) = call(app, Method::DELETE, &uri_archived, Some(&a.secret), None).await;
+        assert_eq!(response.status(), 200);
+        let mut body = open_sse(app, &uri, &[]).await;
+        let mut events = Vec::new();
+        sse(&mut body, &mut events, |e| !e.is_empty()).await;
+        assert_eq!(
+            frames(&events),
+            [wire::encode_close(CloseReason::ARCHIVED).as_slice()]
+        );
+        drop(body);
+        server.settled(id).await;
+        server.shutdown().await;
+    })
+    .await;
+}
+
+/// One sequence of commands, observed over a WebSocket, SSE and polling, ends
+/// in the same client state on all three, which is the committed state.
+#[tokio::test]
+#[ignore = "needs CAVEA_TEST_DATABASE_URL"]
+async fn the_three_transports_agree() {
+    let _serial = serial();
+    with_db(async move |pool| {
+        let server = start(&pool, FAST, 10, CorsOrigins::Any).await;
+        let (app, addr) = (&server.app, server.addr);
+        let t = Tenant::create(app, "a").await;
+        let id = event_id(&pool, &t.event).await;
+        let sk = t.secret.as_str();
+
+        let (mut ws, mut over_ws) = follow(addr, &t, 0, None).await;
+        let uri = format!("/v1/public/events/{}/stream?key={}", t.event, t.publishable);
+        let mut body = open_sse(app, &uri, &[]).await;
+        let mut events = Vec::new();
+        let state = format!("/v1/public/events/{}/state?key={}", t.event, t.publishable);
+        let mut polled = http_state(app, &t).await;
+
+        // Holds, releases, bookings and status changes, some within one
+        // publication interval of each other.
+        let mut token = String::new();
+        let mut seq = 0;
+        for step in 0..12u32 {
+            // A buyer's token holds at most 10.
+            if step % 4 == 0 {
+                token = public_token(app, &t, &t.event).await;
+            }
+            let idx = [30 + step, 60 + step];
+            seq = public_hold(app, &t, &token, &idx).await;
+            let uri = format!("/v1/public/events/{}/release", t.event);
+            let body = json!({ "hold_token": token, "objects": { "version": t.hash, "idx": [idx[0]] } });
+            let (response, released) = call(app, Method::POST, &uri, Some(&t.publishable), Some(body)).await;
+            assert_eq!(response.status(), 200, "{released}");
+            let body = json!({ "objects": { "version": t.hash, "idx": [100 + step] }, "status": "blocked" });
+            let uri = format!("/v1/events/{}/change-status", t.event);
+            let (response, _) = call(app, Method::POST, &uri, Some(sk), Some(body)).await;
+            assert_eq!(response.status(), 200);
+            let body = json!({ "objects": { "version": t.hash, "idx": [200 + step] }, "order_ref": format!("o-{step}") });
+            let uri = format!("/v1/events/{}/book", t.event);
+            let (response, booked) = call(app, Method::POST, &uri, Some(sk), Some(body)).await;
+            assert_eq!(response.status(), 200, "{booked}");
+            seq = booked["seq"].as_u64().unwrap().max(seq);
+            if step % 4 == 0 {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            }
+        }
+
+        read_until(&mut ws, &mut over_ws, |c| c.seq == seq).await;
+        let mut over_sse = Client::default();
+        sse(&mut body, &mut events, |e| {
+            e.iter().any(|e| matches!(e, Event::Frame(Some(s), _) if *s == seq))
+        })
+        .await;
+        for frame in frames(&events) {
+            over_sse.apply(frame);
+        }
+        // Every 50 ms, as a client polls every 2 s.
+        for _ in 0..200 {
+            let uri = format!("{state}&after_seq={}", polled.seq);
+            let response = app.clone().oneshot(get_req(&uri)).await.unwrap();
+            if response.status() == 200 {
+                let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+                polled.apply(&bytes);
+            }
+            if polled.seq == seq {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let committed = http_state(app, &t).await;
+        assert_eq!(committed.seq, seq);
+        for (name, client) in [("websocket", &over_ws), ("sse", &over_sse), ("polling", &polled)] {
+            assert_eq!((client.seq, &client.codes), (seq, &committed.codes), "{name}");
+        }
+        assert!(committed.codes.iter().filter(|&&c| c == 1).count() >= 12 * 3);
+        drop((ws, body));
+        server.settled(id).await;
+        server.shutdown().await;
+    })
+    .await;
+}
+
+/// On shutdown every WebSocket and SSE subscriber gets CLOSE 3 and its
+/// connection is closed at once; the server exits well inside the deadline.
 #[tokio::test]
 #[ignore = "needs CAVEA_TEST_DATABASE_URL"]
 async fn shutdown_closes_every_subscriber() {
@@ -534,6 +824,20 @@ async fn shutdown_closes_every_subscriber() {
             read_until(&mut ws, &mut client, |c| c.count(types::SNAPSHOT) == 1).await;
             sockets.push(ws);
         }
+        // SSE over the socket: HTTP/1.0, so the body is the stream as sent.
+        let mut sse = TcpStream::connect(addr).await.unwrap();
+        let request = format!(
+            "GET /v1/public/events/{}/stream?key={} HTTP/1.0\r\n\r\n",
+            t.event, t.publishable
+        );
+        tokio::io::AsyncWriteExt::write_all(&mut sse, request.as_bytes())
+            .await
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while server.realtime.subscribers(Transport::Sse) == 0 {
+            assert!(Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         let realtime = server.realtime.clone();
         let took = server.shutdown().await;
         assert!(took < Duration::from_secs(3), "{took:?}");
@@ -542,6 +846,23 @@ async fn shutdown_closes_every_subscriber() {
         for mut ws in sockets {
             assert_eq!(rest(&mut ws).await.last(), Some(&close));
         }
+        let mut text = String::new();
+        let read = tokio::io::AsyncReadExt::read_to_string(&mut sse, &mut text);
+        timeout(Duration::from_secs(5), read)
+            .await
+            .unwrap()
+            .unwrap();
+        let last = text
+            .lines()
+            .filter_map(|l| l.strip_prefix("data: "))
+            .next_back()
+            .unwrap();
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(last)
+                .unwrap(),
+            close
+        );
     })
     .await;
 }

@@ -73,6 +73,14 @@ fn app(routes: Router<AppState>) -> Router {
 async fn send(app: Router, request: Request<Body>) -> (Response<Body>, Value) {
     let response = app.oneshot(request).await.unwrap();
     let (parts, body) = response.into_parts();
+    // A stream does not end: stop at its head.
+    if parts
+        .headers
+        .get(header::CONTENT_TYPE)
+        .is_some_and(|t| t == "text/event-stream")
+    {
+        return (Response::from_parts(parts, Body::empty()), Value::Null);
+    }
     let bytes = axum::body::to_bytes(body, 1 << 20).await.unwrap();
     let json = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     (Response::from_parts(parts, Body::empty()), json)
