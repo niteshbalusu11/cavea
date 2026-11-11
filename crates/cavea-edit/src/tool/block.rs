@@ -155,7 +155,7 @@ impl Tool for BlockTool {
 
     fn reset(&mut self, cx: &mut Context<'_>) {
         if let Block::Drag { live, .. } = &mut self.state {
-            live.hide(cx);
+            live.cancel(cx);
         }
         self.state = Block::Idle;
         self.entry = Entry::default();
@@ -378,7 +378,7 @@ impl Tool for ArcTool {
 
     fn reset(&mut self, cx: &mut Context<'_>) {
         if let Arc::Span { live, .. } | Arc::Rows { live, .. } = &mut self.state {
-            live.hide(cx);
+            live.cancel(cx);
         }
         self.state = Arc::Idle;
         self.entry = Entry::default();

@@ -354,6 +354,12 @@ fn counts(b: &RowBlock, id: u32, side: Side, d: P, room: u64) -> Step {
         }
         n = ok;
     }
+    // Rows added or removed at the front change the parity of the kept
+    // rows, and so their stagger (03 §2.4): a staggered block takes them in
+    // pairs, so every kept seat stays put.
+    if side == Side::Top && b.stagger != 0.0 {
+        n -= n % 2;
+    }
     if n == 0 {
         return Step::Base;
     }

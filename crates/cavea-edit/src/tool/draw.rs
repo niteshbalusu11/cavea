@@ -74,10 +74,11 @@ impl Spot {
 }
 
 /// A change shown live: a gesture holding the result of one command on the
-/// state at the gesture's start. Showing another command cancels the
-/// gesture (which hands back its ids) and applies the new one in a fresh
-/// one, so the document always holds exactly one command's result, with the
-/// same ids each time, whatever path the pointer took.
+/// state at the gesture's start. Showing another command rewinds the
+/// gesture to its start, id counter included, and applies the new one in
+/// it, so the document always holds exactly one command's result, with the
+/// same ids each time, whatever path the pointer took. Cancelling keeps the
+/// ids taken.
 #[derive(Debug, Default)]
 pub(crate) struct Live {
     shown: Option<Box<Command>>,
@@ -93,11 +94,13 @@ impl Live {
             return true;
         }
         let last = self.shown.take();
-        self.hide(cx);
-        if cx.editor.begin_gesture().is_err() {
-            return false;
+        self.clear(cx);
+        if !self.open {
+            if cx.editor.begin_gesture().is_err() {
+                return false;
+            }
+            self.open = true;
         }
-        self.open = true;
         if let Ok(applied) = cx.editor.apply(command.clone()) {
             self.created = applied.created.first().copied();
             self.shown = Some(Box::new(command));
@@ -112,8 +115,17 @@ impl Live {
         false
     }
 
-    /// Back to the state at the start, the gesture still to come.
-    pub(crate) fn hide(&mut self, cx: &mut Context<'_>) {
+    /// Shows the state at the start; the gesture stays open.
+    pub(crate) fn clear(&mut self, cx: &mut Context<'_>) {
+        if self.open {
+            let _ = cx.editor.rewind_gesture();
+        }
+        (self.shown, self.created) = (None, None);
+    }
+
+    /// Abandons the drawing: the state at the start, no undo entry. The ids
+    /// it took stay taken.
+    pub(crate) fn cancel(&mut self, cx: &mut Context<'_>) {
         if self.open {
             let _ = cx.editor.cancel_gesture();
         }

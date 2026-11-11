@@ -73,10 +73,19 @@ fn counts(rows: u32, widest: u32) -> Result<()> {
 }
 
 /// Seats of row `i` of an arc block whose front row has `seats`.
+/// `u32::MAX` for a row past the per-row limit.
 pub(crate) fn arc_row_seats(seats: u32, radius: f64, row_pitch: f64, i: u32) -> u32 {
+    if seats <= 1 {
+        return 1;
+    }
     let ratio = 1.0 + f64::from(i) * row_pitch / radius;
     // The small allowance keeps rounding from losing a seat the angle holds.
-    (f64::from(seats.saturating_sub(1)) * ratio + 1e-9).floor() as u32 + 1
+    let gaps = (f64::from(seats - 1) * ratio + 1e-9).floor();
+    if gaps.is_finite() && gaps < f64::from(MAX_SEATS_PER_ROW) {
+        gaps as u32 + 1
+    } else {
+        u32::MAX
+    }
 }
 
 /// The most seats a front row of `radius` holds: the ends at least a pitch

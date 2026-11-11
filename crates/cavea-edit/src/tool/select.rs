@@ -109,7 +109,7 @@ impl Tool for SelectTool {
             State::Moving { .. } | State::Rotating { .. } => {
                 let _ = cx.editor.cancel_gesture();
             }
-            State::Resizing { mut live, .. } => live.hide(cx),
+            State::Resizing { mut live, .. } => live.cancel(cx),
             State::Pivot { before } => self.pivot = before,
             State::Pressed { before, .. } | State::Marquee { before, .. } => {
                 *cx.selection = before;
@@ -384,7 +384,7 @@ impl SelectTool {
                 let d = [q[0] - start[0], q[1] - start[1]];
                 match handles::resize(base, *id, *kind, d, q, p.mods, *room) {
                     Step::Base => {
-                        live.hide(cx);
+                        live.clear(cx);
                         *readout = None;
                     }
                     Step::Show(command, shown) => {

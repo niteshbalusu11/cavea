@@ -243,9 +243,10 @@ fn row_block_numeric_entry_and_escape() {
     t.to([200.0, 200.0], NONE);
     t.key(Key::Escape);
     t.up([200.0, 200.0], NONE);
-    // Nothing left, and the ids the preview took are handed back.
+    // Nothing left. The preview kept the same ids however often it changed
+    // (2 rows of 4: 11 ids), and they stay taken (07 §9).
     assert_eq!(t.state(), start);
-    assert_eq!(t.s.document().save().next_oid, saved);
+    assert_eq!(t.s.document().save().next_oid, saved + 11);
     assert_eq!(t.s.editor().undo_len(), 0);
     // Typed rows × seats replace the dragged ones; a bare `x6` keeps rows.
     t.down([0.0, 0.0], NONE);
@@ -256,7 +257,7 @@ fn row_block_numeric_entry_and_escape() {
     t.to([900.0, 900.0], NONE);
     t.up([900.0, 900.0], NONE);
     let b = block(&t.node(t.selected())).clone();
-    assert_eq!(b.id, 1000, "the escaped block's ids came back");
+    assert_eq!(b.id, 1011, "the escaped block's ids are not reused");
     assert_eq!((b.rows.len(), b.rows[0].seats), (4, 6));
     assert_eq!(b.origin, [165.0, 47.5]);
     t.down([0.0, 1_000.0], NONE);
@@ -587,6 +588,56 @@ fn resize_row_blocks() {
         t.s.undo().expect("undo");
     }
     assert_eq!(counts(&t), (3, vec![4; 3]));
+}
+
+/// A staggered block's front takes rows in pairs, so the kept rows keep
+/// their parity and their seats stay put.
+#[test]
+fn resize_staggered_front() {
+    let mut t = T::new(empty());
+    let id = t.s.insert(None, &straight(2, 3)).expect("block");
+    let stagger = Property::Stagger(0.5);
+    t.s.apply(Command::SetProperty {
+        id,
+        property: stagger,
+    })
+    .expect("stagger");
+    t.s.select(Level::Top, [id]);
+    let before = t.state();
+    t.by(HandleKind::Side(Side::Top), [0.0, -95.0], NONE);
+    assert_eq!(t.state(), before);
+    let seats = t.seats(id);
+    t.by(HandleKind::Side(Side::Top), [0.0, -190.0], NONE);
+    assert_eq!(block(&t.node(id)).rows.len(), 4);
+    assert_eq!(kept(&seats, &t.seats(id), 1e-9), 6);
+}
+
+/// A cancelled gesture's ids are never handed out again, even to a node
+/// made right after it; and a draft whose numbers would overflow a count
+/// is refused, not a panic.
+#[test]
+fn cancelled_ids_and_overflowing_drafts() {
+    let mut e = Editor::load(empty()).expect("load");
+    let create = || Command::CreateNode {
+        parent: None,
+        index: 0,
+        node: Box::new(straight(1, 2).node(None, None).expect("node")),
+    };
+    e.begin_gesture().expect("begin");
+    let first = e.apply(create()).expect("create").created;
+    e.cancel_gesture().expect("cancel");
+    let second = e.apply(create()).expect("create").created;
+    assert_ne!(first, second);
+    let huge = Draft::ArcBlock {
+        center: [0.0, 0.0],
+        radius: 55.0,
+        direction: 0.0,
+        rows: 2,
+        seats: 2,
+        seat_pitch: 55.0,
+        row_pitch: 1e300,
+    };
+    assert!(huge.node(None, None).is_err());
 }
 
 #[test]
