@@ -1743,6 +1743,12 @@ export type SelectionView = {
   level: Level;
   /** Items selected: nodes, rows or seat positions by level. */
   count: number;
+  /**
+   * The selected items themselves (node ids, `rid`s or oids by level),
+   * ascending, the first [`SELECTION_IDS`] of them: cut short when
+   * `count` is larger.
+   */
+  ids: number[];
   /** At a node level, how many of each kind, in [`NodeKind`] order. */
   kinds: KindCount[];
   /** Selected nodes that are locked, and hidden (node levels). */

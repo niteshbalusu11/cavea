@@ -944,3 +944,30 @@ fn measure_shell() {
         changed.len()
     );
 }
+
+/// The selection view lists the selected ids, ascending, at most
+/// `SELECTION_IDS` of them, and follows the selection (07 §2.3, §3).
+#[test]
+fn selection_view_lists_ids() {
+    let nodes: Vec<_> = (0..1_500u32)
+        .map(|i| serde_json::json!({ "id": 3_000 - 2 * i, "type": "shape", "kind": "rect", "size": [10, 10] }))
+        .collect();
+    let doc = serde_json::from_value(serde_json::json!({
+        "schema": 1, "name": "t", "nextOid": 4_000, "nodes": nodes,
+    }))
+    .expect("chart");
+    let mut s = Session::load(doc).expect("load");
+    assert!(s.selection_view().ids.is_empty());
+    s.select_all();
+    let v = s.selection_view();
+    assert_eq!(v.count, 1_500);
+    let first: Vec<u32> = (0..views::SELECTION_IDS as u32).map(|i| 2 + 2 * i).collect();
+    assert_eq!(v.ids, first);
+    s.select(Level::Top, vec![600, 8, 42]);
+    assert_eq!(s.selection_view().ids, vec![8, 42, 600]);
+    s.delete().expect("delete");
+    assert!(s.selection_view().ids.is_empty());
+    s.undo().expect("undo");
+    s.select(Level::Top, vec![9_999, 10]);
+    assert_eq!(s.selection_view().ids, vec![10], "only what exists");
+}

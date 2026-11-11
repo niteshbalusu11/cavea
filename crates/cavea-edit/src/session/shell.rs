@@ -125,6 +125,7 @@ impl Session {
         SelectionView {
             level: sel.level(),
             count: u32::try_from(items.len()).unwrap_or(u32::MAX),
+            ids: items.iter().copied().take(views::SELECTION_IDS).collect(),
             kinds,
             locked,
             hidden,
