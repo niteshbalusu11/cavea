@@ -113,6 +113,11 @@ export function LayersPanel(props: { editor: Editor }) {
     const rows = subjects(row);
     const ids = rows.map((r) => r.id);
     const moving = new Set(ids);
+    // Sections are top-level only (07 §5.5): with one in the selection, the
+    // move goes between top-level rows, never into a section.
+    const top = rows.some((r) => r.kind === "section");
+    /** A row the move passes over: a moving one, or a child for a top move. */
+    const passed = (r: LayerRow) => moving.has(r.id) || (top && r.depth > 0);
     // The end of the moving rows in the direction of the move.
     const edge = rows.reduce(
       (e, r) => (dir < 0 ? (r.index < e.index ? r : e) : r.index > e.index ? r : e),
@@ -120,10 +125,7 @@ export function LayersPanel(props: { editor: Editor }) {
     );
     if (dir < 0) {
       let prev = rowAt(edge.index - 1);
-      while (
-        prev !== undefined &&
-        (moving.has(prev.id) || (edge.kind === "section" && prev.depth > 0))
-      ) {
+      while (prev !== undefined && passed(prev)) {
         prev = rowAt(prev.index - 1);
       }
       if (prev === undefined) return;
@@ -133,16 +135,17 @@ export function LayersPanel(props: { editor: Editor }) {
       );
     }
     let next = rowAt(edge.index + 1 + span(edge));
-    while (next !== undefined && moving.has(next.id)) next = rowAt(next.index + 1 + span(next));
+    while (next !== undefined && passed(next)) {
+      next = rowAt(next.index + 1 + span(next));
+    }
     if (next === undefined) {
       // The last child of the last section leaves it, after the section.
       const parent = edge.depth > 0 ? parentOf(edge.index) : undefined;
       if (parent !== undefined) move(ids, { kind: "after", id: parent.id });
       return;
     }
-    if (edge.kind !== "section" && next.depth < edge.depth)
-      return move(ids, { kind: "before", id: next.id });
-    if (edge.kind !== "section" && next.kind === "section" && next.expanded === true) {
+    if (!top && next.depth < edge.depth) return move(ids, { kind: "before", id: next.id });
+    if (!top && next.kind === "section" && next.expanded === true) {
       const child = rowAt(next.index + 1);
       return move(
         ids,
