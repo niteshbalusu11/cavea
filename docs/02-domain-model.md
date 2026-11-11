@@ -213,6 +213,9 @@ The engine must uphold these at every sequence number. Tests in `13-testing-benc
 | Sections per chart | 65,535 |
 | Seats per row | 4,095 |
 | Label length | 64 bytes UTF-8 |
+| Points per explicit section outline | 4,096 |
+| Points in all explicit section outlines of a chart | 262,144 |
+| `MESH` vertices per chart | 262,144 |
 | Objects per command | 1,000 (publishable: the token limit) |
 | Custom statuses per workspace | 12 |
 | Channels per event | 4,095 |

@@ -102,6 +102,10 @@ pub enum Detail {
     },
     /// A world position that does not fit the compiled format (±2²⁹ cu).
     OutOfRange,
+    /// Geometry that cannot be drawn: a self-intersecting or flat outline.
+    Geometry {
+        problem: &'static str,
+    },
     /// More than the limit of this kind.
     TooMany {
         what: &'static str,
@@ -161,6 +165,7 @@ impl fmt::Display for Finding {
             Detail::DuplicateId { id, first } => write!(f, "id {id} is also used in node {first}"),
             Detail::InvalidValue { field } => write!(f, "invalid {field}"),
             Detail::OutOfRange => f.write_str("position outside ±2^29 chart units"),
+            Detail::Geometry { problem } => f.write_str(problem),
             Detail::TooMany { what, limit } => write!(f, "more than {limit} {what}"),
             Detail::UnsupportedNode { kind } => write!(f, "{kind} nodes are not compiled yet"),
         }

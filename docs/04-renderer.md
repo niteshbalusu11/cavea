@@ -191,7 +191,7 @@ Programs:
 | Program | Vertex inputs | Fragment work |
 |---|---|---|
 | `shape` | Corner from vertex id; per-instance position, size, angle, shape, category, visual, fx | Signed-distance shape, fill, stroke, anti-aliasing |
-| `mesh` | Position, colour | Flat colour × layer alpha |
+| `mesh` | Position, colour | Flat colour × tint × layer alpha; the tint is the section's for section fills, white otherwise (`03-chart-format.md` §4.2.3) |
 | `glyph` | Corner; per-instance position, size, atlas rectangle, colour index | MSDF median, anti-aliased edge |
 | `text` | Same as `glyph` | Alpha from R8 bitmap atlas |
 | `image` | Corner; rectangle | Texture × opacity |

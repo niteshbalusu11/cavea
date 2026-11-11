@@ -11,6 +11,8 @@ mod detmath;
 pub mod document;
 pub mod expand;
 pub mod finding;
+mod geometry;
+mod tessellate;
 
 pub use compile::{CompileError, Compiled, RANK_ALGO, SCHEMA, Stats, compile, write_full_label};
 pub use document::ChartDocument;

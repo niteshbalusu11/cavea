@@ -67,15 +67,15 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **FMT-007** Arc and bulge curves (03 §2.4)
 - [x] **FMT-008** Stagger, skew, removed seats, per-seat overrides, `oid` runs (03 §2.4)
 - [x] **FMT-009** Free-form single row along a polyline or curve (03 §2.6)
-- [ ] **FMT-010** Sections: child transforms, automatic outline as concave hull (03 §2.3); child transforms done, outline open
+- [x] **FMT-010** Sections: child transforms, automatic outline as concave hull (03 §2.3)
 - [x] **FMT-011** Row segmentation at gaps and removed seats (03 §3.1 step 5)
 - [x] **FMT-012** Label templating and uniqueness check (03 §3.1 steps 6–7)
 - [ ] **FMT-013** Validation errors E001–E010 with node ids (03 §3.2)
 - [ ] **FMT-014** Validation warnings W101–W110 (03 §3.2)
 - [x] **FMT-015** Seat rank computation, versioned (03 §3.3)
 - [x] **FMT-016** `idx` ordering and chunking to at most 4,096 seats (03 §3.1 steps 9–10)
-- [ ] **FMT-017** Section label anchor by pole of inaccessibility and maximum font size (03 §3.1 step 11)
-- [ ] **FMT-018** Tessellate shapes, outlines and table shapes with `lyon` (03 §3.1 step 12)
+- [x] **FMT-017** Section label anchor by pole of inaccessibility and maximum font size (03 §3.1 step 11)
+- [ ] **FMT-018** Tessellate shapes, outlines and table shapes with `lyon` (03 §3.1 step 12); section outlines done, shapes with FMT-019, table shapes with tables
 - [ ] **FMT-019** Decoration nodes: shape, text, icon, image (03 §2.7)
 - [x] **FMT-020** CCF writer: header, directory, all chunks and encodings (03 §4.1, §4.2)
 - [x] **FMT-021** CCF reader: validated, single pass, no panics (03 §4.4)
