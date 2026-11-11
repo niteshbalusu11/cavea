@@ -2,12 +2,7 @@
 // `browser.ts`, a fake in tests. The load sequence is 04 §4: the WASM, chart,
 // state and atlas start together; the first frame waits only for the WASM
 // and the chart; state that arrives first is applied once the chart is in.
-import {
-  staticState,
-  type AdapterContext,
-  type HoldResult,
-  type Snapshot,
-} from "./adapter.ts";
+import { staticState, type AdapterContext, type HoldResult, type Snapshot } from "./adapter.ts";
 import { createA11y, type A11y } from "./a11y.ts";
 import { CaveaError, isDevelopment, permanent, warner, type CaveaErrorCode } from "./errors.ts";
 import type { ChartInfo, ObjectInfo, RendererEvent } from "./events.ts";
