@@ -1,0 +1,60 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "UNLICENSED"
+publish = false
+repository = "https://github.com/niteshbalusu11/cavea"
+
+[workspace.dependencies]
+# workspace crates
+cavea-core = { path = "crates/cavea-core" }
+cavea-format = { path = "crates/cavea-format" }
+cavea-compiler = { path = "crates/cavea-compiler" }
+cavea-render = { path = "crates/cavea-render" }
+cavea-edit = { path = "crates/cavea-edit" }
+cavea-engine = { path = "crates/cavea-engine" }
+cavea-testkit = { path = "crates/cavea-testkit" }
+
+# third party
+anyhow = "1"
+axum = "0.8.9"
+brotli = "9"
+tokio = { version = "1.54", features = ["macros", "rt-multi-thread", "net", "signal"] }
+tower = "0.5.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+serde_json = "1"
+# The CLI support crate must match the wasm-bindgen version exactly.
+wasm-bindgen = "=0.2.130"
+wasm-bindgen-cli-support = "=0.2.130"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+
+[profile.dev]
+# Keep debug builds quick to link; full debug info is rarely needed.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+# Size-tuned profile for the browser WASM (cavea-web, later cavea-edit).
+# Built by `cargo xtask build-web`.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"
+debug = false
+incremental = false

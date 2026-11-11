@@ -217,7 +217,7 @@ Specified in `11-accessibility.md` §9.
 
 | Stage | Contents | Budget |
 |---|---|---|
-| Every pull request | Format, lint, unit tests, short property and simulation runs, WASM build with size gate, micro-benchmarks, end-to-end smoke, authorisation matrix, dependency audit | About 10 minutes |
+| Every pull request | In CI: format, lint, type checks and builds, including the WASM build with size gate. Run locally by the author before filing: unit tests, short property and simulation runs, micro-benchmarks, end-to-end smoke, authorisation matrix | About 10 minutes |
 | Nightly | Long simulation, fuzzing, full golden images, L2 for two minutes, full end-to-end | About 2 hours |
 | Every release | Device benchmarks, L1–L5, chaos, upgrade test from the previous release with data, compatibility matrix, manual accessibility matrix | About a day |
 

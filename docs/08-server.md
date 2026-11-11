@@ -721,6 +721,7 @@ Live reports read the actor. CSV exports stream from PostgreSQL.
 |---|---|---|
 | `CAVEA_DATABASE_URL` | — | PostgreSQL connection string (required) |
 | `CAVEA_LISTEN` | `0.0.0.0:8080` | |
+| `CAVEA_LOG` | `info` | Log filter, in `tracing` directive syntax such as `info,cavea_server=debug` |
 | `CAVEA_PUBLIC_URL` | — | External base URL, used in chart URLs and webhooks |
 | `CAVEA_LICENCE` | — | Licence file path or contents |
 | `CAVEA_ADMIN_KEY` | — | Bootstrap admin key |

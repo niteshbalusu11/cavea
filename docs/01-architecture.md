@@ -223,5 +223,5 @@ Drawing 100,000 seats is one instanced draw call, so the GPU is not the constrai
 
 ### Supply chain
 
-- `cargo-deny` and `cargo-audit` in CI; npm packages published with provenance.
+- Lockfiles are committed and CI installs from them (`--locked`, `--frozen-lockfile`). `cargo-deny` and `cargo-audit` are not CI jobs; CI is kept to format, lint, type and build checks (`AGENTS.md`). npm packages are published with provenance.
 - New dependencies in `cavea-core`, `cavea-format` and `cavea-web` need a size and necessity justification in the pull request.

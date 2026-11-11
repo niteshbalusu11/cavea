@@ -21,11 +21,36 @@ Layout and dependency rules are in `docs/01-architecture.md` §3. `cavea-core` a
 
 ## Commands
 
-The scaffold task fills this section in with the exact commands. Until then:
+Run everything from the repository root. Prefix every cargo command with `CARGO_BUILD_JOBS=8` (shown once here, implied below).
 
-- Rust: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
-- TypeScript: `bun install`, then the `lint`, `format:check`, `typecheck`, `build` and `test` scripts in the root `package.json`
-- Database: `docker compose -f deploy/compose.yaml up -d`
+Toolchains: Rust is pinned in `rust-toolchain.toml` (with the `wasm32-unknown-unknown` target); bun is pinned in `package.json` (`packageManager`). `wasm-opt` (binaryen) is optional; without it `build-web` warns and reports unoptimised sizes.
+
+**Rust**
+
+- `CARGO_BUILD_JOBS=8 cargo fmt --all --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo build --workspace`
+- `cargo test --workspace`
+- `cargo xtask check-deps`: enforces the dependency rule in `docs/01-architecture.md` §3
+- `cargo xtask build-web`: builds `cavea-web` for wasm32 with the `wasm-release` profile, writes the bindings to `packages/renderer/wasm/` (gitignored), runs `wasm-opt` if present, and prints raw and brotli sizes
+- `CAVEA_LISTEN=127.0.0.1:<port> cargo run -p cavea-server`: the server; `GET /healthz` answers `ok`. Settings are `CAVEA_` environment variables (`docs/08-server.md` §13)
+
+**TypeScript** (run `cargo xtask build-web` first; `typecheck`, `build` and `test` need the WASM output)
+
+- `bun install` (CI uses `bun install --frozen-lockfile`)
+- `bun run lint`: oxlint, warnings denied (`.oxlintrc.json`)
+- `bun run format` / `bun run format:check`: oxfmt (`.oxfmtrc.json`; Markdown is not formatted)
+- `bun run typecheck`: `tsc --noEmit` in every workspace package
+- `bun run build`: builds every workspace package that has a `build` script
+- `bun run test`: `bun test`
+- `bun run dev --port <port>` in `apps/console`: the console dev server
+
+**Database**
+
+- `docker compose -f deploy/compose.yaml up -d --wait`: PostgreSQL 18 on `127.0.0.1:${CAVEA_PG_PORT:-5432}`, user, password and database all `cavea`
+- `docker compose -f deploy/compose.yaml down`
+
+CI (`.github/workflows/ci.yml`) runs the Rust checks, `check-deps` and `build-web`, then the TypeScript `lint`, `format:check`, `typecheck` and `build`. It runs no tests.
 
 ## Quality gates
 

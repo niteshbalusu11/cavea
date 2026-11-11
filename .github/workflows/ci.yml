@@ -1,0 +1,70 @@
+# Format, lint, type and build checks only. Test suites run locally before a
+# pull request is filed (see AGENTS.md, "Continuous integration").
+name: CI
+
+on:
+  pull_request:
+    paths-ignore: ["docs/**", "**/*.md"]
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "**/*.md"]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      # Installs the toolchain, components and targets pinned in rust-toolchain.toml.
+      - run: rustup toolchain install
+      # Caches ~/.cargo and target/, keyed on the toolchain and Cargo.lock.
+      # Only main writes the cache so pull requests never evict it.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo build --workspace --locked
+      - run: cargo xtask check-deps
+      # The wasm32 build of cavea-web plus bindings; the web job consumes the output.
+      - run: cargo xtask build-web
+      - uses: actions/upload-artifact@v7
+        with:
+          name: renderer-wasm
+          path: packages/renderer/wasm/
+          retention-days: 1
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: rust
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/cache@v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v8
+        with:
+          name: renderer-wasm
+          path: packages/renderer/wasm/
+      - run: bun run lint
+      - run: bun run format:check
+      - run: bun run typecheck
+      - run: bun run build

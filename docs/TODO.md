@@ -27,8 +27,8 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 ### Foundation
 
-- [ ] **FND-001** Create the monorepo skeleton: cargo workspace, bun workspace, directory layout, `CLAUDE.md` and `AGENTS.md` (01 §3)
-- [ ] **FND-002** Basic CI with caching: `cargo fmt`, `clippy`, tests, WASM build; oxc lint and format, strict `tsc` (01 §4, 13 §12)
+- [x] **FND-001** Create the monorepo skeleton: cargo workspace, bun workspace, directory layout, `CLAUDE.md` and `AGENTS.md` (01 §3)
+- [x] **FND-002** Basic CI with caching: `cargo fmt`, `clippy`, tests, WASM build; oxc lint and format, strict `tsc` (01 §4, 13 §12)
 
 ### Rendering spike
 
@@ -48,12 +48,12 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 ### Foundation
 
-- [ ] **FND-003** Scaffold crates `cavea-core`, `cavea-format`, `cavea-compiler`, `cavea-render`, `cavea-web`, `cavea-cli`, `cavea-testkit` with the dependency rule enforced (01 §2, §3)
-- [ ] **FND-004** `cargo xtask build-web`: build, `wasm-opt`, brotli, emit size report (01 §6)
+- [x] **FND-003** Scaffold crates `cavea-core`, `cavea-format`, `cavea-compiler`, `cavea-render`, `cavea-web`, `cavea-cli`, `cavea-testkit` with the dependency rule enforced (01 §2, §3)
+- [x] **FND-004** `cargo xtask build-web`: build, `wasm-opt`, brotli, emit size report (01 §6)
 - [ ] **FND-005** Payload size gate in CI with a hard cap and a +3% warning (13 §6.3)
-- [ ] **FND-006** Release profile tuning for WASM: LTO, `panic = "abort"`, optimisation level, allocator choice; measure each (01 §5)
+- [x] **FND-006** Release profile tuning for WASM: LTO, `panic = "abort"`, optimisation level, allocator choice; measure each (01 §5)
 - [ ] **FND-007** Generate TypeScript types from Rust for options, events and payloads (05 §3, §5)
-- [ ] **FND-008** Workspace lint configuration: moderate clippy set, strict `tsc`, oxc rules (01 §4)
+- [x] **FND-008** Workspace lint configuration: moderate clippy set, strict `tsc`, oxc rules (01 §4)
 - [ ] **FND-009** Changelog tooling and commit conventions (01 §6)
 - [ ] **FND-010** Nix development environment: `flake.nix` with every non-trivial tool, `.envrc` using the flake, so `direnv allow` loads everything (ORCHESTRATION §5, §10)
 
