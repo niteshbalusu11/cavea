@@ -15,7 +15,10 @@ export function describe(e: ApiError): string {
     case "timeout":
       return msg("error.timeout");
     case "unexpected":
-      return e.status === 0 ? msg("error.bug") : msg("error.unexpected", { status: e.status });
+      if (e.status === 0) return msg("error.bug");
+      // A proxy's answer for a server behind it that is down or slow.
+      if (e.status === 502 || e.status === 503 || e.status === 504) return msg("error.network");
+      return msg("error.unexpected", { status: e.status });
     case "rate_limited":
       return e.retryAfter === null
         ? msg("error.rateLimited")

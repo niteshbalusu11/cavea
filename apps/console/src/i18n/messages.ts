@@ -749,6 +749,7 @@ const consoleScreens = {
   "charts.sortName": "Name",
   "charts.showArchived": "Show archived",
   "charts.count": "{n} charts",
+  "charts.countOne": "1 chart",
   "charts.noMatch": "No chart matches “{query}”.",
   "charts.clearSearch": "Clear the search",
   "charts.noThumbnail": "No preview yet",

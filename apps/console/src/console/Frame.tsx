@@ -164,7 +164,7 @@ function WorkspaceSwitcher(props: { me: ConsoleMe }) {
               >
                 <For each={props.me.workspaces}>
                   {(w) => (
-                    <DropdownMenu.RadioItem value={w.id} class={menuItem}>
+                    <DropdownMenu.RadioItem value={w.id} class={menuItem} closeOnSelect>
                       <span class="w-4">
                         <DropdownMenu.ItemIndicator>
                           <Icon name="check" />

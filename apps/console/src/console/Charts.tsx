@@ -11,7 +11,7 @@ import type { Chart, ChartDocument } from "../api/generated.ts";
 import { allows } from "../api/permissions.ts";
 import { asApiError, componentSignal, createQuery } from "../api/query.ts";
 import { formatNumber, msg } from "../i18n/messages.ts";
-import { workspace } from "../session.ts";
+import { loadSession, workspace } from "../session.ts";
 import { Button, buttonClass, Tip } from "../ui/controls.tsx";
 import { Field, fieldInputClass, FormError } from "../ui/form.tsx";
 import { Icon } from "../ui/Icon.tsx";
@@ -278,7 +278,7 @@ export function Charts() {
                 onInput={(e) => setSearch(e.currentTarget.value)}
               />
             </div>
-            <label class="flex items-center gap-2 text-base text-fg">
+            <label class="flex items-center gap-2 text-base whitespace-nowrap text-fg">
               {msg("charts.sort")}
               <select
                 class={`${fieldInputClass} w-auto`}
@@ -299,7 +299,9 @@ export function Charts() {
               {msg("charts.showArchived")}
             </label>
             <p class="ml-auto text-sm text-muted" role="status">
-              {msg("charts.count", { n: shown().length })}
+              {shown().length === 1
+                ? msg("charts.countOne")
+                : msg("charts.count", { n: shown().length })}
             </p>
           </div>
           <Show
@@ -503,7 +505,8 @@ function ChartForm(props: { draft: Draft; onClose: () => void; onCreated: (c: Ch
       } else if (error.reason === "document") {
         setFailure({ text: msg("charts.badDocument", { message: error.message }) });
       } else {
-        if (error.code === "forbidden") report(error);
+        // The role may have changed since `me` was read: follow it.
+        if (error.code === "forbidden") void loadSession();
         const detail = reference(error);
         setFailure(
           detail === undefined ? { text: describe(error) } : { text: describe(error), detail },

@@ -45,8 +45,9 @@ test("a role is offered exactly the operations its permissions allow", () => {
   }
 });
 
+const can = (role: Role, op: OperationId) => allows({ permissions: permissionsOf(role) }, op);
+
 test("the cells of 09 §2 the console shows today", () => {
-  const can = (role: Role, op: OperationId) => allows({ permissions: permissionsOf(role) }, op);
   expect(ROLES.filter((r) => can(r, "listCharts"))).toEqual(ROLES);
   expect(ROLES.filter((r) => can(r, "createChart"))).toEqual(["owner", "admin", "editor"]);
   expect(ROLES.filter((r) => can(r, "archiveChart"))).toEqual(["owner", "admin"]);
