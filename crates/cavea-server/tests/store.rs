@@ -791,6 +791,21 @@ async fn migration_rows(pool: &PgPool) -> Vec<i64> {
         .unwrap()
 }
 
+/// The pool opens every connection at start and keeps them (13 §7.4): a
+/// pool that grew on demand opened PostgreSQL connections inside the first
+/// burst of requests, which put the snapshot route's p99 at 9 to 12 ms on a
+/// fresh process.
+#[tokio::test]
+#[ignore = "needs PostgreSQL: set CAVEA_TEST_DATABASE_URL, pass --include-ignored"]
+async fn the_pool_opens_every_connection_at_start() {
+    with_db(|options| async move {
+        let pool = store::connect(options, 3).await.unwrap();
+        assert_eq!(pool.size(), 3);
+        assert_eq!(pool.num_idle(), 3);
+    })
+    .await;
+}
+
 #[tokio::test]
 #[ignore = "needs PostgreSQL: set CAVEA_TEST_DATABASE_URL, pass --include-ignored"]
 async fn migrations_apply_once_and_refuse_an_unknown_schema() {

@@ -1146,7 +1146,7 @@ Admin key and workspaces:
 | `CAVEA_PUBLIC_URL` | — | External base URL such as `https://seats.example.com` (`http://` or `https://`, kept without a trailing slash). The first-run setup link starts with it (09 §2); without it the link is a path. The server warns at start when it is not HTTPS. Later: webhooks |
 | `CAVEA_LICENCE` | — | Licence file path or contents |
 | `CAVEA_ADMIN_KEY` | none | The operator's key for `/v1/workspaces`: 32 to 512 printable ASCII characters. Unset, those endpoints refuse every request (§11) |
-| `CAVEA_DB_POOL` | 16 | Connection pool size |
+| `CAVEA_DB_POOL` | 16 | Connection pool size: every connection is opened at start and kept (one that reaches its lifetime or idle timeout is replaced in the background), so no request waits for a new one |
 | `CAVEA_DELTA_INTERVAL_MS` | 100 | Not read yet: the engine's interval is fixed at 100 ms (§8.3) |
 | `CAVEA_SNAPSHOT_MAX_AGE` | 1 | Seconds a shared cache may keep the public snapshot (`max-age`, §8.5) |
 | `CAVEA_RT_MAX_CONNECTIONS` | 60000 | Realtime connections the node holds open at most; beyond, the upgrade is `503 overloaded` (§8.2) |
