@@ -9,8 +9,9 @@ use cavea_render::{
     backend::glow::GlowBackend,
     backing_size,
     protocol::{
-        BuiltinTheme, Command, Event, GestureHandling, HoldOutcome, Modifiers, ObjectFailure,
-        ObjectRef, PointerKind, PointerType, SessionMode, StatusChange, ThemeToken,
+        Bounds, BuiltinTheme, CameraTarget, Command, Event, GestureHandling, HoldOutcome,
+        Modifiers, ObjectFailure, ObjectRef, PointerKind, PointerType, SessionMode, StatusChange,
+        ThemeToken,
     },
     tuning::{MAX_DPR_OTHER, MAX_DPR_TOUCH},
 };
@@ -387,6 +388,42 @@ impl View {
         let mut json = String::new();
         crate::events::object_with_status(&mut json, &info, status);
         Some(json)
+    }
+
+    /// Per section in chart order, its seats not drawn unavailable.
+    #[wasm_bindgen(js_name = sectionsOpen)]
+    pub fn sections_open(&self) -> Vec<u32> {
+        self.engine.sections_open().to_vec()
+    }
+
+    /// Moves the camera to a chart rectangle (`x`, `y`, `width`, `height`),
+    /// or with `label` to that section (`section`) or seat, animated unless
+    /// `instant`. Without a rectangle or label, to the whole chart.
+    #[wasm_bindgen(js_name = flyTo)]
+    pub fn fly_to(
+        &mut self,
+        rect: Option<Vec<f32>>,
+        label: Option<String>,
+        section: bool,
+        instant: bool,
+    ) -> Result<(), JsError> {
+        let target = match (rect.as_deref(), label) {
+            (Some(&[x, y, width, height]), _) => CameraTarget::Bounds(Bounds {
+                x,
+                y,
+                width,
+                height,
+            }),
+            (Some(_), _) => return Err(JsError::new("expected x, y, width, height")),
+            (None, Some(label)) if section => CameraTarget::Section(label),
+            (None, Some(label)) => CameraTarget::Object(ObjectRef::Label(label)),
+            (None, None) => CameraTarget::Bounds(self.engine.chart_bounds().ok_or_else(no_chart)?),
+        };
+        let duration_ms = instant.then_some(0);
+        self.send(Command::FlyTo {
+            target,
+            duration_ms,
+        })
     }
 
     /// `max` (1 to 100, default 100) and `min` (default 0) selection (02 §12).

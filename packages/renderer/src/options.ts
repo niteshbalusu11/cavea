@@ -12,6 +12,14 @@ export type Theme =
   | "auto"
   | { base?: ThemeName | "auto"; tokens: Record<string, string | number> };
 
+/** A rectangle in chart units. */
+export interface Bounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 /** One object, as callbacks and methods report it (05 §5). */
 export interface SeatObject {
   /** Full label, for example `"Orchestra-C-12"`. */
@@ -58,6 +66,8 @@ export interface SeatMapOptions {
   mode?: "picker";
   /** Default `greedy`. */
   gestureHandling?: GestureHandling;
+  /** `fit` (default), a section label, or bounds. */
+  initialView?: "fit" | string | Bounds;
   /** Default 2 on touch devices, 3 otherwise. */
   maxDpr?: number;
   /** Default `auto`: follow `prefers-reduced-motion`. */
@@ -93,7 +103,7 @@ export interface SeatMapOptions {
 /** Options of 05 §3 and callbacks of §5 not built yet: ignored, with a development warning. */
 const LATER = new Set(
   (
-    "pricing formatPrice floor spotlight zoomToSelect sectionDrillDown initialView ui colorblind locale " +
+    "pricing formatPrice floor spotlight zoomToSelect sectionDrillDown ui colorblind locale " +
     "messages dir fallback worker onSectionEnter onFloorChange onHoldExpiring onHoldExpired onMetrics"
   ).split(" "),
 );
@@ -109,6 +119,14 @@ const isBytes = (v: unknown): boolean => v instanceof ArrayBuffer || v instanceo
 const isInt = (v: unknown, min: number, max: number): boolean =>
   Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
 const finite = (v: unknown): boolean => typeof v === "number" && Number.isFinite(v);
+export const isBounds = (v: unknown): v is Bounds =>
+  isObject(v) &&
+  finite(v["x"]) &&
+  finite(v["y"]) &&
+  (v["width"] as number) > 0 &&
+  (v["height"] as number) > 0 &&
+  finite(v["width"]) &&
+  finite(v["height"]);
 const THEMES = ["light", "dark", "high-contrast", "auto"];
 export const isTheme = (v: unknown): v is Theme =>
   THEMES.includes(v as string) ||
@@ -129,6 +147,7 @@ const CHECKS: Record<string, (v: unknown) => boolean> = {
   selection: isObject,
   mode: (v) => typeof v === "string",
   gestureHandling: (v) => ["greedy", "cooperative", "none"].includes(v as string),
+  initialView: (v) => typeof v === "string" || isBounds(v),
   maxDpr: (v) => finite(v) && (v as number) > 0,
   reducedMotion: (v) => v === "auto" || typeof v === "boolean",
   theme: isTheme,
