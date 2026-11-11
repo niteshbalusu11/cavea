@@ -6,11 +6,14 @@
 // props (`innerHTML={…}`), so this test reads every source file of the
 // console for any of them. The surfaces it covers today: chart names and
 // keys (`console/Charts.tsx`), workspace names and the user's email
-// (`console/Frame.tsx`, `console/Account.tsx`), sign-in and setup
-// (`console/SignIn.tsx`, `console/Setup.tsx`), the server's problem details
-// (`console/errors.ts`, `ui/form.tsx`), and the designer's chart content
-// (`designer/`). Events, keys, members, orders and the list view are not
-// built yet; their screens are covered by this scan when they are.
+// (`console/Frame.tsx`, `console/Account.tsx`), event names and keys
+// (`console/Events.tsx`), API key names and origins
+// (`console/Developers.tsx`), members' emails, invitations and the audit log
+// (`console/Settings.tsx`, `console/Invite.tsx`), sign-in and setup, the
+// server's problem details (`console/errors.ts`, `console/refusals.ts`,
+// `ui/form.tsx`), and the designer's chart content (`designer/`). Order
+// references (the event manager) are not shown anywhere yet; a new screen is
+// read by this scan when it lands.
 import { expect, test } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -54,6 +57,10 @@ test("no source of the console turns a string into markup or code (12 §3 T7)", 
     "console/Charts.tsx",
     "console/Frame.tsx",
     "console/Account.tsx",
+    "console/Events.tsx",
+    "console/Developers.tsx",
+    "console/Settings.tsx",
+    "console/Invite.tsx",
     "console/errors.ts",
     "ui/form.tsx",
   ]) {
