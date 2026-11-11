@@ -16,7 +16,8 @@ use crate::draft::{MIN_SIZE, normalise};
 use crate::index::{P, Place, Quad, Rect};
 use crate::selection::{Level, Selection, View, pickable};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Side {
     Top,
     Right,
@@ -24,7 +25,8 @@ pub enum Side {
     Left,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Corner {
     TopLeft,
     TopRight,
@@ -32,7 +34,9 @@ pub enum Corner {
     BottomLeft,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// In JSON `"rotate"`, `{"side": "top"}`, `{"end": 1}`, and so on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum HandleKind {
     /// Drag to rotate about the pivot.
     Rotate,
@@ -47,7 +51,8 @@ pub enum HandleKind {
 }
 
 /// A handle: drawn at `at` (chart units) moved by `offset` CSS pixels.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Handle {
     pub kind: HandleKind,
     pub at: [f64; 2],

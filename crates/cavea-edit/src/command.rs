@@ -323,8 +323,11 @@ pub enum ChartProperty {
     Settings(Settings),
 }
 
-/// Why a command, undo or redo was refused. The document is unchanged.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Why a command, undo or redo was refused. The document is unchanged. In
+/// JSON `{"code": "missingNode", "data": 12}`, `{"code": "placement"}`,
+/// `{"code": "cycle", "data": {"id": 3, "parent": 9}}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "code", content = "data", rename_all = "camelCase")]
 pub enum CommandError {
     MissingNode(u32),
     NotASection(u32),

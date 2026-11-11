@@ -36,7 +36,7 @@ Desktop browsers only. Minimum viewport 1280 × 720. Tablets are P2.
 - **Commands** are serialisable values (`MoveNodes`, `SetProperty`, `CreateRowBlock`, …). Each has an inverse, computed when it is applied.
 - **Tools** are state machines in Rust that turn pointer and key input into commands, with a live preview while dragging.
 - **View models** are small, purpose-built snapshots (selection summary, inspector fields, layer tree page, validation list). The chrome pulls them: once per animation frame it asks `Session::changed` which are out of date and re-reads only those (§2.3, shell views; D-40).
-- TypeScript types for commands and view models are generated from the Rust definitions.
+- TypeScript types for commands and view models are generated from the Rust definitions (§2.4, D-41).
 
 ### 2.1 Document model
 
@@ -122,6 +122,16 @@ A tool is a state machine implementing one small interface:
 - **Import and export** (§12).
 
 Tools have no clock and do no I/O, and every order they produce comes from sorted sets, so the same input gives the same document, selection and overlay. A new tool is a type implementing the interface and a `ToolId` the session maps to it.
+
+### 2.4 The module boundary
+
+The edit core reaches the browser as one WebAssembly module, `crates/cavea-designer` (built by `cargo xtask build-designer` into `packages/designer-core/wasm/`), wrapped by the private package `@cavea/designer-core`. `cavea-edit` itself has no `wasm-bindgen` and builds and tests natively; the canvas (`cavea-render` and a WebGL2 canvas, DSN-004, DSN-005) joins the same module as a second exported type beside the session.
+
+- **One export, one table.** The module exports one class, `Designer`, holding at most one `Session`: `import(text)` opens chart document JSON (§12) as a new session, keeping the open one if refused; `call(method, args)` runs one call. Every call is a line of the table in `crates/cavea-designer/src/calls.rs`, `fn name(s, arg: Type, …) -> Result | Error { body }`, from which a macro builds the dispatcher. All of §2.3's calls and views are in it, with `export`.
+- **Values cross as JSON text.** A call's arguments are a JSON array in the table's order, read by serde as the Rust types read them (unknown fields refused where the type says so); its reply is `{"ok": value}` or `{"err": failure}`. Views are small and the boundary costs about 0.5 µs a call (§14), so no binary encoding is used, the overlay and `input` included.
+- **Errors are values.** A failure is tagged by `kind`: `command` (the edit core's `CommandError`, `{"code": …, "data": …}`; nothing changed), `import` (`ImportError`, `{"code": …}`), `arguments` (the arguments do not match the call: their count, a type, a number out of range or not finite, an unknown field; serde's message; nothing changed), `unknownCall`, `noChart`, and `encode` (a reply serde could not write: a bug). Nothing in the module panics on any input. It is built with `panic = "abort"` and installs no panic hook: a panic is a bug in the edit core, reaches JavaScript as a `WebAssembly.RuntimeError`, and the package reports it as `panic`, after which every session of that module throws `panic` (its memory may be inconsistent) until the module is loaded again. The package adds `disposed` for a call on a session it has freed. There are no callbacks into JavaScript, so a call cannot be re-entered.
+- **Generated types.** `cargo xtask types` writes `packages/designer-core/src/generated/calls.ts` from the Rust source: a TypeScript type for every type reachable from the table (commands, views, input, overlay, cursor, errors), the `CallTable` type and the `Calls` class with one method per call (camelCase), which `Session` extends; and `schema.json`, the same model as data, which the boundary test checks every reply against. A type deriving `Serialize` is described as serde writes it (a field skipped when empty is optional and never `null`), one deriving only `Deserialize` as serde reads it. A Rust test in `xtask` and `cargo xtask types --check` fail when the committed files are stale.
+- **The package.** `loadDesigner(options)` instantiates the module (the bindings are imported from a URL resolved at run time, so the package type-checks without the build) and returns a `Designer` whose `open(text)` makes a `Session`. A refused call throws a `DesignerError` whose `failure` is the value above. The shell's frame loop: once per animation frame, `changed()` and re-read the views it names; in idle time, `validate(budget)` until `done`; `dispose()` when the chart closes.
 
 ## 3. Layout
 
@@ -503,6 +513,8 @@ const designer = mountDesigner(el, {
 | Autosave of a large document | Serialised in the edit core; compressed before upload |
 
 Targets are in `01-architecture.md` §5.
+
+Across the module boundary (§2.4), measured 2026-11-11 under bun 1.4.2 on the same machine (bun's JavaScript engine, not a browser; `CAVEA_MEASURE=1 bun test packages/designer-core`) on `stadium-100k`: a call that does nothing (`cursor()`) 0.47 µs, `changed()` 0.67 µs, `input()` of a pointer move 3.2 µs and `changed()` after it 3.9 µs, `overlay()` with nothing selected 1.5 µs and with one block of a section 0.18 ms (0.17 natively), `export()` 1.7 ms. With all 190 top-level nodes selected `overlay()` takes 52 ms, 44 ms of it natively in the edit core: it computes the automatic outline of each of the 180 selected sections on every call.
 
 Measured locally, 2026-11-11, native release build on an AMD Ryzen 9 7900X (`cargo test --release -p cavea-edit measure_shell -- --ignored --nocapture`), not in a browser. On `stadium-100k` (370 nodes): `changed()` 0.0002 ms with nothing changed and 0.0008 ms after a selection change; the views at most 0.17 ms (the overlay 0.17, categories 0.16, the whole layers tree 0.15, status 0.035, selection 0.03, inspector 0.014); a layers window of 50 rows 0.007 ms at the top, middle or end; moving 100 blocks into one section 0.29 ms and its undo 0.23 ms; the inspector view of 180 blocks 0.013 ms, setting their seat pitch 4.4 ms and each step of a scrub of their row pitch 4.5 ms (the index re-expands the 180 blocks, 60,000 seats); import 8.9 ms and export 1.2 ms of the 399 KB document. On 5,000 top-level single rows: a window of 50 rows 0.003 to 0.007 ms anywhere, reordering 100 of them 0.71 ms, the first window after it, which rebuilds the list, 0.23 ms.
 

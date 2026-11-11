@@ -76,21 +76,24 @@ pub mod tuning {
 }
 
 /// Held modifier keys. `ctrl` is Cmd on macOS.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Modifiers {
     pub shift: bool,
     pub alt: bool,
     pub ctrl: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Button {
     Primary,
     Middle,
     Secondary,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum PointerKind {
     Mouse,
     Touch,
@@ -100,7 +103,8 @@ pub enum PointerKind {
 /// One pointer event: where, in chart units and in CSS pixels, at what zoom
 /// (CSS pixels per chart unit), with which button and modifiers, and when (in
 /// milliseconds, from any fixed start).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Pointer {
     pub world: P,
     pub screen: P,
@@ -142,7 +146,9 @@ impl Pointer {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// In JSON `"escape"`, `"arrowLeft"`, …, or `{"char": "a"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Key {
     Escape,
     Enter,
@@ -158,8 +164,11 @@ pub enum Key {
 }
 
 /// What a tool receives. A pointer up or move without a press, a second
-/// press during a drag and a cancel at any time are all expected.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// press during a drag and a cancel at any time are all expected. In JSON
+/// `{"kind": "pointerDown", "data": {…}}`, `{"kind": "pointerCancel"}`,
+/// `{"kind": "keyDown", "data": ["escape", {…}]}`.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
+#[serde(tag = "kind", content = "data", rename_all = "camelCase")]
 pub enum Input {
     PointerDown(Pointer),
     PointerMove(Pointer),
@@ -210,7 +219,8 @@ pub enum ToolId {
 
 /// What the canvas draws over the chart, in chart coordinates; sizes in
 /// screen pixels come from [`tuning`].
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Overlay {
     /// One outline per selected item, following its rotation.
     pub outlines: Vec<Quad>,
@@ -243,8 +253,15 @@ pub struct Overlay {
 }
 
 /// The numbers a gesture shows while it runs (07 §4). Lengths in chart
-/// units, angles in degrees, clockwise.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// units, angles in degrees, clockwise. In JSON `{"kind": "block", "data":
+/// {…}}`.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum Readout {
     /// A row block: rows, seats in its widest row, and pitches.
     Block {
@@ -292,7 +309,8 @@ pub enum Readout {
 /// Text being typed (07 §2.3): the chrome shows a field at `at` (world)
 /// holding `text`, and sends each change with `Session::set_text`. `node`
 /// is the text node being edited, once it exists.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TextField {
     pub node: Option<u32>,
     pub at: [f64; 2],

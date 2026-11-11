@@ -26,7 +26,8 @@ pub const MAX_COPIES: u32 = 1_000;
 pub const MAX_NEW_NODES: u64 = 65_535;
 
 /// Which edge or centre line `align` brings the nodes to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum AlignTo {
     Left,
     Centre,
@@ -37,7 +38,8 @@ pub enum AlignTo {
 }
 
 /// Where `order` moves the nodes among their siblings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Order {
     /// One step up, past the next sibling not selected.
     Forward,
@@ -49,7 +51,10 @@ pub enum Order {
 /// How each copy of an array duplicate is placed relative to the one
 /// before: moved by a world vector, or turned about a world point by an
 /// angle in degrees.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// In JSON `{"kind": "offset", "data": [x, y]}` or `{"kind": "around",
+/// "data": {"centre": [x, y], "angle": 30}}`.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
+#[serde(tag = "kind", content = "data", rename_all = "camelCase")]
 pub enum ArrayStep {
     Offset(P),
     Around { centre: P, angle: f64 },
