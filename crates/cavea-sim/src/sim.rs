@@ -1179,6 +1179,15 @@ impl Sim {
         };
         req.hi = ev.replay.seq;
         let logged = ev.logged.get(&req.request.actor).copied();
+        // 13 §3.2: a caller whose batch failed, or was written but lost its
+        // reply, gets an error, never a success.
+        let dead =
+            self.failed.contains(&req.request.actor) || self.lost.contains(&req.request.actor);
+        ensure!(
+            !dead || reply == Err(Failure::Unavailable),
+            "failed batch acknowledged",
+            "r{id} got {reply:?} from a batch that did not commit for it"
+        );
         match &reply {
             Ok(o) => {
                 let s = outcome_seq(o);
