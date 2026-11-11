@@ -22,8 +22,16 @@ export interface AttachOptions {
    * event and the map carries on without labels.
    */
   glyphAtlas?: Promise<Uint8Array>;
-  /** Called after every frame the host runs, with its time. */
-  onFrame?: (time: number) => void;
+  /**
+   * Called after every frame the host runs, with its time and, with
+   * `timeFrames`, the milliseconds the frame's work took (the view's frame,
+   * text drawing and event delivery; GPU time is not counted), else 0.
+   */
+  onFrame?: (time: number, ms: number) => void;
+  /** Time each frame for `onFrame`; off, the frame loop reads no clock. */
+  timeFrames?: boolean;
+  /** The WebGL context was lost (`false`) or restored (`true`), 04 §20.2. */
+  onContext?: (restored: boolean) => void;
   /** Called when the page is hidden (`false`) or shown again (`true`). */
   onVisibility?: (visible: boolean) => void;
   /**
@@ -72,6 +80,8 @@ export function attach(
   const cleanup: Array<() => void> = [];
   let handle = 0;
   let detached = false;
+  /** While the context is lost no frame is run. */
+  let lost = false;
   const rasteriser = createRasteriser();
 
   /** Runs a view call; a throw becomes an `error` event, never the page's. */
@@ -100,16 +110,17 @@ export function attach(
       options.onEvents?.(events);
     }
     // A listener may have detached the host and freed the view.
-    if (!detached && view.needFrame && handle === 0 && !document.hidden) {
+    if (!detached && !lost && view.needFrame && handle === 0 && !document.hidden) {
       handle = requestAnimationFrame(frame);
     }
   }
 
   function frame(time: number): void {
     handle = 0;
+    const start = options.timeFrames === true ? performance.now() : 0;
     guard(() => view.frame(time));
-    options.onFrame?.(time);
     update();
+    options.onFrame?.(time, start === 0 ? 0 : performance.now() - start);
   }
 
   function listen<K extends keyof HTMLElementEventMap>(
@@ -205,6 +216,30 @@ export function attach(
     },
     false,
   );
+
+  // Not passive: preventing the default is what lets the browser restore
+  // the context. The view stops drawing; restored, it makes everything again
+  // from the engine's copies and redraws. (The DOM types lack these events.)
+  const onLost = (event: Event): void => {
+    event.preventDefault();
+    lost = true;
+    cancelAnimationFrame(handle);
+    handle = 0;
+    guard(() => view.contextLost());
+    options.onContext?.(false);
+  };
+  const onRestored = (): void => {
+    lost = false;
+    guard(() => view.contextRestored());
+    options.onContext?.(true);
+    update();
+  };
+  canvas.addEventListener("webglcontextlost", onLost);
+  canvas.addEventListener("webglcontextrestored", onRestored);
+  cleanup.push(() => {
+    canvas.removeEventListener("webglcontextlost", onLost);
+    canvas.removeEventListener("webglcontextrestored", onRestored);
+  });
 
   const onVisibility = (): void => {
     if (document.hidden) {

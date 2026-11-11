@@ -181,6 +181,18 @@ impl Labels {
         self.buffer
     }
 
+    /// Destroys the buffer and forgets every slot, so chunks are built again
+    /// on need: a lost context.
+    pub fn release(&mut self, backend: &mut impl GpuBackend) {
+        if let Some(id) = self.buffer.take() {
+            backend.destroy(crate::backend::ResourceId::Buffer(id));
+        }
+        *self = Self {
+            built: self.built,
+            ..Self::default()
+        };
+    }
+
     /// Seats of chunk `c` whose labels the baked atlas cannot draw, if its
     /// labels are built.
     pub fn skipped(&self, c: u32) -> &[u32] {

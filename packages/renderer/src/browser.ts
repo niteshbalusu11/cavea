@@ -90,5 +90,7 @@ export function browserEnv(): Env {
       return () => query.removeEventListener("change", changed);
     },
     holdTimeoutMs: HOLD_TIMEOUT_MS,
+    contextLostMs: 5_000,
+    metricsMs: 1_000,
   };
 }

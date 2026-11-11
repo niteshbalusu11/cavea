@@ -24,7 +24,7 @@ fn one(range: Range<u32>) -> Vec<Range<u32>> {
 /// objects STAGE (centred, always shown) and Left (left-aligned, turned
 /// 90°, from zoom 0.5), an exit and a bar icon. Upper: section Upper, a
 /// text and a lift icon.
-fn chart(display: &str) -> Vec<u8> {
+pub(super) fn chart(display: &str) -> Vec<u8> {
     compile(&format!(
         r##"{{"schema":1,"name":"Labels","settings":{{"seatSize":10,"rowLabelDisplay":"{display}"}},"nextOid":900,
   "categories":[{{"key":"a","label":"A","color":"#2563EB"}}],
@@ -49,7 +49,7 @@ fn chart(display: &str) -> Vec<u8> {
 
 /// The chart with the glyph atlas after its first frames, at the fit zoom,
 /// with the text they asked for.
-fn labelled(display: &str) -> E {
+pub(super) fn labelled(display: &str) -> E {
     let mut e = Engine::new(Fake::default());
     e.handle(Command::LoadChart {
         ccf: chart(display),
@@ -61,7 +61,7 @@ fn labelled(display: &str) -> E {
 }
 
 /// The text requests among `events`: id, text, px.
-fn requests(events: &[Event]) -> Vec<(u32, String, u16)> {
+pub(super) fn requests(events: &[Event]) -> Vec<(u32, String, u16)> {
     let request = |e: &Event| match e {
         Event::TextRequest { id, text, px, .. } => Some((*id, text.clone(), *px)),
         _ => None,
@@ -71,7 +71,7 @@ fn requests(events: &[Event]) -> Vec<(u32, String, u16)> {
 
 /// The fake rasteriser: answers each request with a raster 0.6 em a
 /// character wide and 1.25 em tall, fully covered.
-fn answer(e: &mut E, asked: &[(u32, String, u16)]) {
+pub(super) fn answer(e: &mut E, asked: &[(u32, String, u16)]) {
     for (id, text, px) in asked {
         let px = u32::from(*px);
         let width = (text.chars().count() as u32 * px * 3).div_ceil(5) + 4;
@@ -88,7 +88,7 @@ fn answer(e: &mut E, asked: &[(u32, String, u16)]) {
 }
 
 /// Ticks at `t` and answers what was asked, until nothing more is asked.
-fn rasterise(e: &mut E, t: f64) -> Vec<(u32, String, u16)> {
+pub(super) fn rasterise(e: &mut E, t: f64) -> Vec<(u32, String, u16)> {
     let mut all = Vec::new();
     for i in 0..20 {
         let asked = requests(&tick(e, t + f64::from(i)));
@@ -103,7 +103,7 @@ fn rasterise(e: &mut E, t: f64) -> Vec<(u32, String, u16)> {
 }
 
 /// Puts the camera on `centre` with the default seat `s` CSS pixels large.
-fn look(e: &mut E, centre: [f64; 2], s: f64) {
+pub(super) fn look(e: &mut E, centre: [f64; 2], s: f64) {
     let seat = f64::from(e.scene.as_ref().unwrap().scene.seat_size);
     e.camera = Some(Camera {
         centre,
@@ -146,12 +146,12 @@ fn draws_since(e: &E, from: usize) -> Vec<(Pipeline, Vec<Range<u32>>, f32)> {
     draws.map(|(p, _, r, a)| (*p, r.clone(), *a)).collect()
 }
 
-fn view_section(e: &mut E, section: usize, s: f64) {
+pub(super) fn view_section(e: &mut E, section: usize, s: f64) {
     let centre = centre_of(e, section);
     look(e, centre, s);
 }
 
-fn centre_of(e: &E, section: usize) -> [f64; 2] {
+pub(super) fn centre_of(e: &E, section: usize) -> [f64; 2] {
     let b = e.scene.as_ref().unwrap().scene.chart.sections[section].bounds;
     [f64::from(b[0] + b[2]) / 8.0, f64::from(b[1] + b[3]) / 8.0]
 }
@@ -515,8 +515,7 @@ fn seat_icons_follow_state_and_flags_and_nothing_is_uploaded_for_them() {
     });
     tick(&mut e, 64.0);
     // (The mesh's vertices carry the section tints, 04 §10.)
-    let loaded = e.scene.as_ref().unwrap();
-    let state = [loaded.dynamic_buf.0, loaded.mesh.unwrap()[0].0];
+    let state = [gpu(&e).dynamic_buf.0, gpu(&e).mesh.unwrap()[0].0];
     let written: Vec<u32> = e.backend.buffer_writes[writes..]
         .iter()
         .map(|w| w.0)

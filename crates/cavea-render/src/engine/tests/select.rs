@@ -519,7 +519,7 @@ fn hostile_selection_commands_are_bounded() {
 #[test]
 fn a_tap_is_one_frame_and_one_sub_range_upload() {
     let mut e = hall();
-    let dynamic = e.scene.as_ref().unwrap().dynamic_buf.0;
+    let dynamic = gpu(&e).dynamic_buf.0;
     let (writes, draws) = (e.backend.buffer_writes.len(), e.backend.draws.len());
     let at = seat_pos(&e, 5);
     let events = click(&mut e, TOUCH, at, 1000.0);

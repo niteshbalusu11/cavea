@@ -137,6 +137,9 @@ impl GpuBackend for NoGpu {
     }
     fn end_frame(&mut self) {}
     fn destroy(&mut self, _: ResourceId) {}
+    fn restore(&mut self) -> Result<(), BackendError> {
+        Ok(())
+    }
 }
 
 /// Runs the benchmarks in `names` (all for none), in [`NAMES`] order.

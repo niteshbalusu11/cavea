@@ -18,7 +18,7 @@ fn shown(e: &mut E, ccf: Vec<u8>) -> u32 {
     e.handle(Command::LoadChart { ccf });
     resize(e, W, H, 1.0, 3.0);
     tick(e, 0.0);
-    e.scene.as_ref().unwrap().dynamic_buf.0
+    gpu(e).dynamic_buf.0
 }
 
 fn status(e: &E) -> &[u8] {

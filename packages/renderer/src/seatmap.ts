@@ -17,6 +17,7 @@ import {
   isTheme,
   validateOptions,
   type Bounds,
+  type Metrics,
   type SeatMapOptions,
   type SeatObject,
   type Selection,
@@ -42,6 +43,10 @@ export interface Env {
   darkScheme(listener: (dark: boolean) => void): () => void;
   /** After this long without an answer, a hold or release counts as failed. */
   holdTimeoutMs: number;
+  /** A lost context not restored within this long is reported (05 §9: 5 s). */
+  contextLostMs: number;
+  /** `onMetrics` fires at most once in this long (04 §24: 1 s). */
+  metricsMs: number;
 }
 
 export type ObjectStatus = "available" | "unavailable" | "selected";
@@ -78,6 +83,10 @@ type Callbacks = {
     SeatMapOptions[K]
   >;
 };
+
+/** Frames in `onMetrics`' window (04 §24). */
+const METRICS_FRAMES = 120;
+const LEVELS: Metrics["level"][] = ["overview", "crossFade", "seats", "detail"];
 
 /** Starts `promise`'s work now; a synchronous throw becomes a rejection. */
 function attempt<T>(start: () => T | Promise<T>): Promise<T> {
@@ -556,6 +565,66 @@ export async function createMap(
       animate,
     );
 
+  let lostTimer: ReturnType<typeof setTimeout> | undefined;
+  function onContext(restored: boolean): void {
+    clearTimeout(lostTimer);
+    timers.delete(lostTimer as ReturnType<typeof setTimeout>);
+    if (!restored) {
+      lostTimer = setTimeout(
+        () =>
+          report(
+            new CaveaError(
+              "context_lost",
+              `the WebGL context was lost for ${env.contextLostMs} ms`,
+            ),
+          ),
+        env.contextLostMs,
+      );
+      timers.add(lostTimer);
+    }
+  }
+
+  /** Frame times of the last `METRICS_FRAMES` frames, a ring; kept only with `onMetrics`. */
+  const frameMs = new Float64Array(METRICS_FRAMES);
+  let framesTimed = 0;
+  let sentAt = -Infinity;
+  let metricsTimer: ReturnType<typeof setTimeout> | undefined;
+  function sendMetrics(): void {
+    timers.delete(metricsTimer as ReturnType<typeof setTimeout>);
+    metricsTimer = undefined;
+    const stats = view?.frameStats();
+    if (stats === undefined || framesTimed === 0) {
+      return;
+    }
+    sentAt = performance.now();
+    const sorted = frameMs.slice(0, Math.min(framesTimed, METRICS_FRAMES));
+    // oxlint-disable-next-line unicorn/no-array-sort -- sorts its own copy; the target lacks toSorted
+    sorted.sort();
+    const at = (q: number): number =>
+      sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] ?? 0;
+    call("onMetrics", {
+      frames: sorted.length,
+      frameMs: { median: at(0.5), p95: at(0.95), max: at(1) },
+      drawCalls: stats[0] ?? 0,
+      visibleSeats: stats[1] ?? 0,
+      level: LEVELS[stats[2] ?? -1] ?? null,
+      backend: "webgl2",
+      pixelRatio: stats[3] ?? 1,
+      marks: { ...marks },
+    });
+  }
+  /** Keeps a frame's time; sends at most once a second, the last frames included. */
+  function timeFrame(ms: number): void {
+    frameMs[framesTimed++ % METRICS_FRAMES] = ms;
+    if (metricsTimer === undefined) {
+      metricsTimer = setTimeout(
+        sendMetrics,
+        Math.max(0, sentAt + env.metricsMs - performance.now()),
+      );
+      timers.add(metricsTimer);
+    }
+  }
+
   function teardown(): void {
     destroyed = true;
     for (const timer of timers) {
@@ -609,6 +678,7 @@ export async function createMap(
       attempt(() => makeView(canvas)),
       "webgl_unavailable",
     );
+    mark("gpu_ready");
     view = v;
     v.setRules(max, min);
     if (adapter.hold === undefined) {
@@ -618,11 +688,20 @@ export async function createMap(
       gestureHandling: options.gestureHandling ?? "greedy",
       glyphAtlas: atlas,
       onEvents,
-      onFrame: () => {
+      onFrame: (_time, ms) => {
         if (chart !== undefined && marks["first_frame"] === undefined) {
           mark("first_frame");
         }
+        // The first frame drawn with the first state applied.
+        if (marks["state_ready"] !== undefined && marks["interactive"] === undefined) {
+          mark("interactive");
+        }
+        if (options.onMetrics !== undefined) {
+          timeFrame(ms);
+        }
       },
+      onContext,
+      timeFrames: options.onMetrics !== undefined,
       onVisibility: (visible) => {
         engine(() => (visible ? adapter.resume?.() : adapter.pause?.()), "state_failed");
         if (visible) {

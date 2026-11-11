@@ -205,7 +205,7 @@ fn a_chunk_is_built_once_and_states_themes_and_pans_upload_nothing_to_it() {
     assert_eq!(label_writes(&e, writes), 0);
     assert_eq!(e.label_stats().built, 1);
     // The dynamic buffer, which the labels read their ink from, did change.
-    let dynamic = e.scene.as_ref().unwrap().dynamic_buf.0;
+    let dynamic = gpu(&e).dynamic_buf.0;
     assert!(
         e.backend.buffer_writes[writes..]
             .iter()

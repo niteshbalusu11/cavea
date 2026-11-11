@@ -24,61 +24,78 @@ struct Program {
 /// Bytes per `MESH` vertex: x, y as `f32`, then RGBA8.
 const MESH_STRIDE: i32 = 12;
 
-pub struct GlowBackend {
-    gl: glow::Context,
-    caps: Caps,
+/// What the backend makes on a context, and makes again after a loss.
+struct Programs {
     shape: Program,
     mesh: Program,
     glyph: Program,
     text: Program,
-    /// The uniform buffer every program reads at binding point 0.
+    /// The uniform buffer every program reads at binding point 0, and the
+    /// glyph metrics at 1.
     globals: glow::Buffer,
+    font: glow::Buffer,
+}
+
+pub struct GlowBackend {
+    gl: glow::Context,
+    caps: Caps,
+    programs: Programs,
     buffers: Vec<Option<(glow::Buffer, u32, BufferKind)>>,
     textures: Vec<Option<(glow::Texture, TextureDesc)>>,
+}
+
+/// Sets the fixed state and compiles the pipelines.
+fn compile(gl: &glow::Context) -> Result<Programs, BackendError> {
+    // SAFETY: see the module documentation.
+    unsafe {
+        gl.enable(glow::BLEND);
+        // Premultiplied alpha (04 §8).
+        gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+        gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+        let shape = shape_program(gl)?;
+        let mesh = mesh_program(gl)?;
+        let glyph = glyph_program(gl)?;
+        let text = text_program(gl)?;
+        // The glyph metrics never change: one block at binding point 1.
+        let font = gl.create_buffer().map_err(BackendError::Create)?;
+        gl.bind_buffer(glow::UNIFORM_BUFFER, Some(font));
+        gl.buffer_data_u8_slice(glow::UNIFORM_BUFFER, &text::font_block(), glow::STATIC_DRAW);
+        gl.bind_buffer_base(glow::UNIFORM_BUFFER, 1, Some(font));
+        let globals = gl.create_buffer().map_err(BackendError::Create)?;
+        gl.bind_buffer(glow::UNIFORM_BUFFER, Some(globals));
+        gl.buffer_data_size(
+            glow::UNIFORM_BUFFER,
+            super::Uniforms::STD140_SIZE as i32,
+            glow::DYNAMIC_DRAW,
+        );
+        gl.bind_buffer_base(glow::UNIFORM_BUFFER, 0, Some(globals));
+        Ok(Programs {
+            shape,
+            mesh,
+            glyph,
+            text,
+            globals,
+            font,
+        })
+    }
 }
 
 impl GlowBackend {
     /// Takes over a GL context and compiles the pipelines.
     pub fn new(gl: glow::Context) -> Result<Self, BackendError> {
         // SAFETY: see the module documentation.
-        unsafe {
-            gl.enable(glow::BLEND);
-            // Premultiplied alpha (04 §8).
-            gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
-            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
-            let caps = Caps {
-                max_texture_size: u32::try_from(gl.get_parameter_i32(glow::MAX_TEXTURE_SIZE))
-                    .unwrap_or(0),
-            };
-            let shape = shape_program(&gl)?;
-            let mesh = mesh_program(&gl)?;
-            let glyph = glyph_program(&gl)?;
-            let text = text_program(&gl)?;
-            // The glyph metrics never change: one block at binding point 1.
-            let font = gl.create_buffer().map_err(BackendError::Create)?;
-            gl.bind_buffer(glow::UNIFORM_BUFFER, Some(font));
-            gl.buffer_data_u8_slice(glow::UNIFORM_BUFFER, &text::font_block(), glow::STATIC_DRAW);
-            gl.bind_buffer_base(glow::UNIFORM_BUFFER, 1, Some(font));
-            let globals = gl.create_buffer().map_err(BackendError::Create)?;
-            gl.bind_buffer(glow::UNIFORM_BUFFER, Some(globals));
-            gl.buffer_data_size(
-                glow::UNIFORM_BUFFER,
-                super::Uniforms::STD140_SIZE as i32,
-                glow::DYNAMIC_DRAW,
-            );
-            gl.bind_buffer_base(glow::UNIFORM_BUFFER, 0, Some(globals));
-            Ok(Self {
-                gl,
-                caps,
-                shape,
-                mesh,
-                glyph,
-                text,
-                globals,
-                buffers: Vec::new(),
-                textures: Vec::new(),
-            })
-        }
+        let side = unsafe { gl.get_parameter_i32(glow::MAX_TEXTURE_SIZE) };
+        let caps = Caps {
+            max_texture_size: u32::try_from(side).unwrap_or(0),
+        };
+        let programs = compile(&gl)?;
+        Ok(Self {
+            gl,
+            caps,
+            programs,
+            buffers: Vec::new(),
+            textures: Vec::new(),
+        })
     }
 
     fn buffer(&self, id: Option<BufferId>) -> Result<(glow::Buffer, u32), BackendError> {
@@ -93,7 +110,7 @@ impl GlowBackend {
         // SAFETY: see the module documentation; the block is STD140_SIZE bytes.
         unsafe {
             self.gl
-                .bind_buffer(glow::UNIFORM_BUFFER, Some(self.globals));
+                .bind_buffer(glow::UNIFORM_BUFFER, Some(self.programs.globals));
             self.gl
                 .buffer_sub_data_u8_slice(glow::UNIFORM_BUFFER, 0, &call.uniforms.to_std140());
         }
@@ -129,8 +146,8 @@ impl GlowBackend {
         // so the offsets and counts below fit in i32 and inside the buffers.
         unsafe {
             self.uniforms(call);
-            gl.use_program(Some(self.shape.program));
-            gl.bind_vertex_array(Some(self.shape.vao));
+            gl.use_program(Some(self.programs.shape.program));
+            gl.bind_vertex_array(Some(self.programs.shape.vao));
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(palette));
             for range in call.ranges {
@@ -222,8 +239,8 @@ impl GlowBackend {
         // so the offsets and counts below fit in i32 and inside the buffers.
         unsafe {
             self.uniforms(call);
-            gl.use_program(Some(self.glyph.program));
-            gl.bind_vertex_array(Some(self.glyph.vao));
+            gl.use_program(Some(self.programs.glyph.program));
+            gl.bind_vertex_array(Some(self.programs.glyph.vao));
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(atlas));
             gl.active_texture(glow::TEXTURE1);
@@ -297,8 +314,8 @@ impl GlowBackend {
         // so the offsets and counts below fit in i32 and inside the buffer.
         unsafe {
             self.uniforms(call);
-            gl.use_program(Some(self.text.program));
-            gl.bind_vertex_array(Some(self.text.vao));
+            gl.use_program(Some(self.programs.text.program));
+            gl.bind_vertex_array(Some(self.programs.text.vao));
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(atlas));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
@@ -338,8 +355,8 @@ impl GlowBackend {
         // and WebGL checks each index against the vertex buffer.
         unsafe {
             self.uniforms(call);
-            gl.use_program(Some(self.mesh.program));
-            gl.bind_vertex_array(Some(self.mesh.vao));
+            gl.use_program(Some(self.programs.mesh.program));
+            gl.bind_vertex_array(Some(self.programs.mesh.vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vertex_buf));
             gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, MESH_STRIDE, 0);
             gl.vertex_attrib_pointer_f32(1, 4, glow::UNSIGNED_BYTE, true, MESH_STRIDE, 8);
@@ -672,6 +689,36 @@ impl GpuBackend for GlowBackend {
 
     fn end_frame(&mut self) {
         // The browser presents when control returns to the event loop.
+    }
+
+    fn restore(&mut self) -> Result<(), BackendError> {
+        let gl = &self.gl;
+        // SAFETY: see the module documentation. Every object below was made
+        // on this context before it was lost: WebGL ignores them or flags
+        // an error, which is cleared before anything is made.
+        unsafe {
+            let p = &self.programs;
+            for program in [&p.shape, &p.mesh, &p.glyph, &p.text] {
+                gl.delete_program(program.program);
+                gl.delete_vertex_array(program.vao);
+            }
+            gl.delete_buffer(p.globals);
+            gl.delete_buffer(p.font);
+            for (buffer, ..) in self.buffers.iter_mut().filter_map(Option::take) {
+                gl.delete_buffer(buffer);
+            }
+            for (texture, _) in self.textures.iter_mut().filter_map(Option::take) {
+                gl.delete_texture(texture);
+            }
+            // The error flags are few; a context lost again flags forever.
+            for _ in 0..8 {
+                if gl.get_error() == glow::NO_ERROR {
+                    break;
+                }
+            }
+        }
+        self.programs = compile(gl)?;
+        Ok(())
     }
 
     fn destroy(&mut self, id: ResourceId) {

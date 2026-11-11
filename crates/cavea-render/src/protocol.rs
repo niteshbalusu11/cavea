@@ -381,27 +381,6 @@ pub enum Lod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mark {
-    InitStart,
-    WasmReady,
-    ChartFetched,
-    ChartDecoded,
-    GpuReady,
-    FirstFrame,
-    StateReady,
-    Interactive,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct FrameStats {
-    pub median_ms: f32,
-    pub p95_ms: f32,
-    pub max_ms: f32,
-    pub draw_calls: u32,
-    pub visible_seats: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
     /// The GPU backend failed.
     Gpu,
@@ -477,10 +456,6 @@ pub enum Event {
         px: u16,
         weight: u16,
         font: String,
-    },
-    Metrics {
-        marks: Vec<(Mark, f64)>,
-        frames: FrameStats,
     },
     Error {
         code: ErrorCode,

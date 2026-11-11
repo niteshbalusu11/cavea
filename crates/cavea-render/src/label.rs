@@ -472,7 +472,11 @@ impl MapLabels {
             let scale = em / f32::from(raster.px.max(1));
             // Turned, the square that holds every turn of its box.
             let bbox = if t.angle == 0 {
-                around([pos[0] + (w / 2.0 - ax) * scale, pos[1]], w * scale, h * scale)
+                around(
+                    [pos[0] + (w / 2.0 - ax) * scale, pos[1]],
+                    w * scale,
+                    h * scale,
+                )
             } else {
                 let r = (ax.max(w - ax).powi(2) + h * h / 4.0).sqrt() * scale;
                 around(pos, 2.0 * r, 2.0 * r)
@@ -574,7 +578,9 @@ impl MapLabels {
         let cell = cell.max(extent / GRID_SIDE as f32).max(f32::MIN_POSITIVE);
         // `as` saturates: NaN and negative become 0.
         let at = |v: f32, origin: f32| (((v - origin) / cell) as usize).min(GRID_SIDE);
-        let words = (GRID_SIDE + 1).div_ceil(64).min(at(max[0], min[0]) / 64 + 1);
+        let words = (GRID_SIDE + 1)
+            .div_ceil(64)
+            .min(at(max[0], min[0]) / 64 + 1);
         self.grid.clear();
         self.grid.resize(words * (at(max[1], min[1]) + 1), 0);
         self.text_bytes.clear();
@@ -724,11 +730,7 @@ fn vertex(usage: BufferUsage) -> BufferDesc {
 }
 
 /// Two vertex buffers, the first rewritten in place; neither if one fails.
-fn pair(
-    backend: &mut impl GpuBackend,
-    a: &[u8],
-    b: &[u8],
-) -> Result<[BufferId; 2], BackendError> {
+fn pair(backend: &mut impl GpuBackend, a: &[u8], b: &[u8]) -> Result<[BufferId; 2], BackendError> {
     let a = backend.create_buffer(vertex(BufferUsage::Dynamic), a)?;
     match backend.create_buffer(vertex(BufferUsage::Static), b) {
         Ok(b) => Ok([a, b]),

@@ -257,4 +257,8 @@ pub trait GpuBackend {
     fn draw(&mut self, call: &DrawCall<'_>) -> Result<(), BackendError>;
     fn end_frame(&mut self);
     fn destroy(&mut self, id: ResourceId);
+    /// The context was lost and is back (04 §20.2): compile the pipelines
+    /// again. Every resource of the lost context is gone and its id unknown;
+    /// ids are not reused, so a stale one never names a new resource.
+    fn restore(&mut self) -> Result<(), BackendError>;
 }

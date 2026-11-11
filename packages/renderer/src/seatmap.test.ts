@@ -11,7 +11,7 @@ import {
 import { CaveaError, warner } from "./errors.ts";
 import type { ObjectInfo, RendererEvent } from "./events.ts";
 import type { AttachOptions } from "./host.ts";
-import { validateOptions, type SeatMapOptions } from "./options.ts";
+import { validateOptions, type Metrics, type SeatMapOptions } from "./options.ts";
 import { createMap, type Env } from "./seatmap.ts";
 import type { EngineView } from "./view.ts";
 
@@ -154,6 +154,8 @@ function fakeEnv() {
       };
     },
     holdTimeoutMs: 30,
+    contextLostMs: 30,
+    metricsMs: 40,
   };
   return {
     env,
@@ -683,6 +685,63 @@ describe("hold expiry", () => {
     map.destroy();
     await sleep(40);
     expect(calls).toEqual([]);
+  });
+});
+
+describe("context and metrics", () => {
+  test("a lost context restored in time reports nothing; one that stays lost does", async () => {
+    const errors: string[] = [];
+    const f = await loaded({ onError: (e) => errors.push(e.code) });
+    f.attached()?.onContext?.(false);
+    await sleep(10);
+    f.attached()?.onContext?.(true);
+    await sleep(40);
+    expect(errors).toEqual([]);
+    f.attached()?.onContext?.(false);
+    await sleep(40);
+    expect(errors).toEqual(["context_lost"]);
+    // Destroyed while lost: the timer goes with the map.
+    f.attached()?.onContext?.(false);
+    f.map.destroy();
+    await sleep(40);
+    expect(errors).toEqual(["context_lost"]);
+  });
+
+  test("onMetrics: at most once per interval, over the frames drawn, and nothing while idle", async () => {
+    const sent: Metrics[] = [];
+    const f = await loaded({ onMetrics: (m) => sent.push(m) });
+    f.view.answers["frameStats"] = () => Float64Array.of(7, 1200, 3, 2);
+    expect(f.attached()?.timeFrames).toBe(true);
+    for (const ms of [4, 1, 3, 2, 50]) {
+      f.attached()?.onFrame?.(0, ms);
+    }
+    await sleep(5);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      frames: 5,
+      frameMs: { median: 3, p95: 50, max: 50 },
+      drawCalls: 7,
+      visibleSeats: 1200,
+      level: "detail",
+      backend: "webgl2",
+      pixelRatio: 2,
+    });
+    expect(sent[0]?.marks["gpu_ready"]).toBeNumber();
+    expect(sent[0]?.marks["interactive"]).toBeNumber();
+    // Frames within the interval wait for its end; none after, none sent.
+    f.attached()?.onFrame?.(0, 6);
+    await sleep(5);
+    expect(sent).toHaveLength(1);
+    await sleep(60);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.frames).toBe(6);
+    await sleep(60);
+    expect(sent).toHaveLength(2);
+  });
+
+  test("without onMetrics frames are not timed", async () => {
+    const f = await loaded();
+    expect(f.attached()?.timeFrames).toBe(false);
   });
 });
 

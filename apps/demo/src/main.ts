@@ -14,7 +14,9 @@
 // (light, dark, high-contrast, auto; default auto), `gestures=greedy|
 // cooperative|none` (cooperative puts the map in a scrolling page),
 // `reducedMotion=1|0`, `camera=x:y:width:height` (initial view in chart
-// units), `max` and `min` (selection rules, default 4 and 0).
+// units), `max` and `min` (selection rules, default 4 and 0), `meter=1` (a
+// frame-time meter and the timing marks, from `onMetrics`: it updates only
+// when the map draws, so an idle map stays idle).
 //
 // Fake host: `sold` (fraction of seats unavailable at start, in runs; default
 // 0.3) or `mark=start:count` (exactly that `idx` range); `stateDelay=ms`
@@ -40,6 +42,7 @@ import {
   loadRenderer,
   type AdapterContext,
   type GestureHandling,
+  type Metrics,
   type SeatMap,
   type SeatMapOptions,
   type Snapshot,
@@ -101,6 +104,16 @@ const crowdMs = num("crowd", 0);
 const crowdSize = num("crowdSize", 20);
 const snipe = params.get("snipe") === "1";
 const server = params.get("server");
+const meter = params.get("meter") === "1" ? document.createElement("pre") : undefined;
+if (meter !== undefined) {
+  meter.id = "meter";
+  meter.style.cssText =
+    "position:fixed;right:8px;top:8px;margin:0;padding:6px 8px;font:12px/1.4 ui-monospace,monospace;" +
+    "background:rgb(0 0 0/.75);color:#fff;border-radius:4px;pointer-events:none;z-index:10";
+  meter.textContent = "meter: no frame yet";
+  document.body.append(meter);
+}
+const fixed = (v: number): string => v.toFixed(2);
 document.body.dataset["theme"] = theme as string;
 if (gestures === "cooperative") {
   document.body.classList.add("scrolling");
@@ -322,6 +335,18 @@ const options: SeatMapOptions = {
     showSelection();
   },
   onCameraChange: log("cameraChange"),
+  ...(meter === undefined
+    ? {}
+    : {
+        onMetrics(m: Metrics) {
+          const marks = Object.entries(m.marks)
+            .map(([name, at]) => `${name.padEnd(13)} ${at.toFixed(1)} ms`)
+            .join("\n");
+          meter.textContent =
+            `frame ms over ${m.frames}: median ${fixed(m.frameMs.median)}, p95 ${fixed(m.frameMs.p95)}, max ${fixed(m.frameMs.max)}\n` +
+            `draw calls ${m.drawCalls}, seats ${m.visibleSeats}, ${m.level ?? "none"}, ${m.backend} at ${m.pixelRatio}x\n${marks}`;
+        },
+      }),
   onError(error) {
     log("error")(error.code, error.message);
     report(`error ${error.code}: ${error.message}`);

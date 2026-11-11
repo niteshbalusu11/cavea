@@ -44,8 +44,7 @@ fn loaded(bytes: Vec<u8>) -> E {
 
 /// The static, dynamic and palette resource ids of the loaded chart.
 fn ids(e: &E) -> (u32, u32, u32) {
-    let l = e.scene.as_ref().unwrap();
-    (l.static_buf.0, l.dynamic_buf.0, l.palette.0)
+    (gpu(e).static_buf.0, gpu(e).dynamic_buf.0, gpu(e).palette.0)
 }
 
 fn palette(e: &E) -> &[u8] {
@@ -216,8 +215,8 @@ fn a_bad_chart_is_an_error_and_leaves_the_engine_as_it_was() {
 fn loading_a_second_chart_releases_the_first() {
     let mut e = loaded(compile(ARC));
     let (s, d, p) = ids(&e);
-    let [o1, o2] = e.scene.as_ref().unwrap().overlay;
-    let [m1, m2] = e.scene.as_ref().unwrap().mesh.unwrap();
+    let [o1, o2] = gpu(&e).overlay;
+    let [m1, m2] = gpu(&e).mesh.unwrap();
     // The row labels' buffers, made by its first frame.
     let labels = e.scene.as_ref().unwrap().map_labels.row_buffers();
     let labels = labels.into_iter().flatten().map(ResourceId::Buffer);
@@ -225,11 +224,11 @@ fn loading_a_second_chart_releases_the_first() {
     let mut expected = vec![
         ResourceId::Buffer(BufferId(s)),
         ResourceId::Buffer(BufferId(d)),
-        ResourceId::Texture(TextureId(p)),
         ResourceId::Buffer(o1),
         ResourceId::Buffer(o2),
         ResourceId::Buffer(m1),
         ResourceId::Buffer(m2),
+        ResourceId::Texture(TextureId(p)),
     ];
     expected.extend(labels);
     assert_eq!(e.backend.destroyed, expected);
@@ -254,7 +253,7 @@ fn deltas_between_frames_upload_one_merged_range() {
     tick(&mut e, 16.0);
     // One upload per frame, covering the merged dirty range 5..13 (and one
     // of the section's tint, which the changes moved).
-    let [vertices, _] = e.scene.as_ref().unwrap().mesh.unwrap();
+    let [vertices, _] = gpu(&e).mesh.unwrap();
     let seat_writes: Vec<_> = e.backend.buffer_writes[writes..]
         .iter()
         .filter(|w| w.0 != vertices.0)
@@ -369,7 +368,7 @@ fn themes_rewrite_the_palette_and_clear_colour_and_no_instance_data() {
     assert_eq!(e.backend.clears.last(), Some(&expected.clear()));
     assert_eq!(e.backend.dims.last(), Some(&0.5));
     // No instance data was touched by any of it, only the section tints.
-    let [vertices, _] = e.scene.as_ref().unwrap().mesh.unwrap();
+    let [vertices, _] = gpu(&e).mesh.unwrap();
     assert!(
         e.backend.buffer_writes[first..]
             .iter()
@@ -469,7 +468,7 @@ fn check_ranges(e: &E, ranges: &[Range<u32>]) {
     let c = cam(e);
     let a = c.to_world([0.0, 0.0], SIZE);
     let b = c.to_world([SIZE.width, SIZE.height], SIZE);
-    let statics = &e.backend.buffers[&loaded.static_buf.0];
+    let statics = &e.backend.buffers[&gpu(e).static_buf.0];
     for i in active.clone() {
         let s = &statics[i as usize * 12..][..12];
         let f = |o: usize| f64::from(f32::from_le_bytes(s[o..o + 4].try_into().unwrap()));

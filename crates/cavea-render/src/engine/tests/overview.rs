@@ -291,7 +291,7 @@ fn tints(e: &E, s: usize) -> Vec<[u8; 4]> {
     let loaded = e.scene.as_ref().unwrap();
     let chart = &loaded.scene.chart;
     let section = &chart.sections[s];
-    let bytes = &e.backend.buffers[&loaded.mesh.unwrap()[0].0];
+    let bytes = &e.backend.buffers[&gpu(e).mesh.unwrap()[0].0];
     let indices = &chart.mesh.indices[section.mesh_first as usize..][..section.mesh_count as usize];
     indices
         .iter()
@@ -350,7 +350,7 @@ fn tints_are_rewritten_only_for_changed_sections_once_per_frame() {
     snapshot(&mut e, 1, &[]);
     tick(&mut e, 32.0);
     let loaded = e.scene.as_ref().unwrap();
-    let vertices = loaded.mesh.unwrap()[0].0;
+    let vertices = gpu(&e).mesh.unwrap()[0].0;
     let chart = &loaded.scene.chart;
     // A section's outline vertices are one span, in section order.
     let span = |s: usize| {
