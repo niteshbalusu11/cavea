@@ -37,8 +37,7 @@ impl Rng {
 /// Generates valid chart documents: floors with and without focal points,
 /// rotated sections, row blocks with every curve, skew, stagger, removed
 /// seats, overrides and label schemes, free-form rows, rows outside sections,
-/// explicit and automatic outlines, and decoration nodes (which this slice
-/// skips).
+/// explicit and automatic outlines, and decoration nodes of every kind.
 struct Gen {
     r: Rng,
     next: u32,
@@ -78,6 +77,9 @@ impl Gen {
             if g.r.chance(50) {
                 let node = g.bookable(&format!(r#""floor":{fl},"category":"c1","#));
                 nodes.push(node);
+            }
+            for _ in 0..g.r.int(0, 2) {
+                nodes.push(g.decoration(&format!(r#""floor":{fl},"#)));
             }
         }
         let cats: Vec<String> = (0..4)
@@ -122,11 +124,8 @@ impl Gen {
             };
             children.push(self.bookable(category));
         }
-        if self.r.chance(30) {
-            let shape = self.id();
-            children.push(format!(
-                r#"{{"id":{shape},"type":"shape","kind":"rect","size":[10,10]}}"#
-            ));
+        for _ in 0..self.r.int(0, 2) {
+            children.push(self.decoration(""));
         }
         if self.r.chance(10) {
             let hidden = self.bookable(r#""hidden":true,"#);
@@ -151,6 +150,57 @@ impl Gen {
             r#"{{"id":{id},"type":"section","floor":{floor},{label}{outline}{place},"category":"c0","priority":{priority},"children":[{}]}}"#,
             children.join(",")
         )
+    }
+
+    /// A valid shape of any kind, with or without fill and stroke (polygons
+    /// star-shaped, so simple).
+    fn decoration(&mut self, extra: &str) -> String {
+        let id = self.id();
+        let place = self.place();
+        let color = |r: &mut Rng| format!(r##""#{:06X}""##, r.int(0, 0xFF_FFFF));
+        let paint = |r: &mut Rng| [color(r), "null".into()][usize::from(r.chance(40))].clone();
+        let (fill, stroke) = (paint(&mut self.r), paint(&mut self.r));
+        let style = format!(
+            r#""style":{{"fill":{fill},"stroke":{stroke},"strokeWidth":{},"opacity":{}}},"layer":"{}""#,
+            self.r.real(0.0, 20.0),
+            self.r.real(0.0, 1.0),
+            self.r.pick(&["below", "above"])
+        );
+        let (w, h) = (self.r.real(1.0, 800.0), self.r.real(1.0, 800.0));
+        let body = match self.r.int(0, 4) {
+            0 => format!(
+                r#""type":"shape","kind":"rect","size":[{w},{h}],"cornerRadius":{},{style}"#,
+                self.r.real(0.0, 300.0)
+            ),
+            1 => format!(r#""type":"shape","kind":"ellipse","size":[{w},{h}],{style}"#),
+            2 => {
+                let n = self.r.int(3, 12);
+                let pts: Vec<String> = (0..n)
+                    .map(|k| {
+                        let (s, c) = (k as f64 * core::f64::consts::TAU / n as f64).sin_cos();
+                        let r = self.r.real(50.0, 500.0);
+                        format!("[{},{}]", r * c, r * s)
+                    })
+                    .collect();
+                format!(
+                    r#""type":"shape","kind":"polygon","points":[{}],{style}"#,
+                    pts.join(",")
+                )
+            }
+            3 => format!(
+                r#""type":"shape","kind":"path","d":"M0 0 C {a} -{b} {c} -{b} {w} 0 Q {e} {f} {w} {h} L 0 {h} Z m {g} {g} h 1 v 1 h -1 z",{style}"#,
+                a = w / 3.0,
+                b = self.r.real(0.0, 200.0),
+                c = 2.0 * w / 3.0,
+                e = w + self.r.real(1.0, 200.0),
+                f = h / 2.0,
+                g = w.min(h) / 3.0,
+            ),
+            _ => format!(
+                r#""type":"shape","kind":"line","points":[[0,0],[{w},{h}],[{w},0]],{style}"#
+            ),
+        };
+        format!(r#"{{"id":{id},{extra}{place},{body}}}"#)
     }
 
     fn seat_labels(&mut self) -> String {
@@ -553,10 +603,20 @@ const FIXED: &str = r##"{"schema":1,"name":"fixed","nextOid":9000,
        "seatLabels":{"scheme":"alpha","direction":"center-out"}}]},
     {"id":30,"type":"section","floor":1,"label":"Box","origin":[-900.5,300],"rotation":-20.25,"category":"a",
      "outline":{"points":[[-50,-60],[700,-60],[760,200],[300,320],[-50,200]]},
-     "children":[{"id":31,"type":"row","path":{"kind":"polyline","points":[[0,0],[600,0]]},"seats":11,"oids":[[900,11]],"label":"Z"}]}]}"##;
+     "children":[{"id":31,"type":"row","path":{"kind":"polyline","points":[[0,0],[600,0]]},"seats":11,"oids":[[900,11]],"label":"Z"},
+       {"id":40,"type":"shape","kind":"rect","origin":[300,100],"rotation":7.3,"size":[400.5,120.25],"cornerRadius":33.3,
+        "style":{"fill":"#1F2937","stroke":"#F9FAFB","strokeWidth":6.5,"opacity":0.85}},
+       {"id":41,"type":"shape","kind":"ellipse","origin":[100,-20],"size":[90.1,40.7],"style":{"fill":"#10B981","stroke":"#065F46","strokeWidth":3},"layer":"above"}]},
+    {"id":50,"type":"shape","kind":"polygon","floor":2,"origin":[-300,700],"rotation":33,"points":[[0,0],[300,10],[280,200],[120,90],[10,180]],
+     "style":{"fill":"#B45309","stroke":"#78350F","strokeWidth":8}},
+    {"id":51,"type":"shape","kind":"line","origin":[-1000,-1000],"rotation":-12,"points":[[0,0],[500,40],[520,400],[900,410]],"style":{"stroke":"#111827","strokeWidth":12.5},"layer":"above"},
+    {"id":52,"type":"shape","kind":"path","floor":2,"rotation":151,"d":"M0 0 C 100 -80 300 -80 400 0 S 700 80 800 0 L 800 300 Q 400 500 0 300 Z m 300 100 h 200 v 60 h -200 z",
+     "style":{"fill":"#374151","stroke":"#9CA3AF","strokeWidth":10,"opacity":0.6}}]}"##;
 
 /// The same document gives the same bytes, here and in the wasm32 build. It
-/// covers rotated sections with automatic and explicit outlines. A
+/// covers rotated sections with automatic and explicit outlines, and every
+/// shape kind with fill and stroke, inside a rotated section and at the top
+/// level, on two floors. A
 /// change to the stored hash changes every compiled chart. To run it in
 /// wasm32 (a failing test traps):
 ///
@@ -577,8 +637,16 @@ fn compiled_bytes_are_deterministic() {
             .iter()
             .all(|s| s.mesh_count > 0 && s.label_size > 0)
     );
+    use cavea_format::Layer::{Above, Below};
+    let draws: Vec<_> = chart
+        .mesh
+        .draws
+        .iter()
+        .map(|d| (d.floor, d.layer))
+        .collect();
+    assert_eq!(draws, [(0, Below), (0, Above), (1, Below)]);
     let hex: String = a.public_hash.iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!(hex, "7f91b50fbc271147f29a10dc7e04d8da");
+    assert_eq!(hex, "45674153e02ad0c8c7b3f602f1bb3c99");
 }
 
 /// One row of 10: position 3 removed, and position 7 nudged 30 cu right, so
@@ -1008,6 +1076,248 @@ fn bad_outlines_name_their_sections() {
     );
 }
 
+/// A document on floors 1 and 2 with these nodes.
+fn deco_doc(nodes: &str) -> String {
+    format!(
+        r#"{{"schema":1,"name":"d","nextOid":99999,"floors":[{{"id":1,"name":"F1"}},{{"id":2,"name":"F2"}}],"nodes":[{nodes}]}}"#
+    )
+}
+
+/// The world-to-own-space map of a node at `origin`, `rotation` inside a
+/// section at `so`, `sr`, with the platform's trigonometry.
+fn to_own(so: [f64; 2], sr: f64, origin: [f64; 2], rotation: f64) -> impl Fn([f64; 2]) -> [f64; 2] {
+    let back = |p: [f64; 2], o: [f64; 2], deg: f64| {
+        let (s, c) = deg.to_radians().sin_cos();
+        let (x, y) = (p[0] - o[0], p[1] - o[1]);
+        [x * c + y * s, -x * s + y * c]
+    };
+    move |p| back(back(p, so, sr), origin, rotation)
+}
+
+/// Each shape kind, filled or stroked, inside a rotated section: its
+/// triangles cover its true area, less at most the flattening tolerance
+/// along its outline, and stay inside its true bounds; colour and opacity
+/// are baked into its vertices.
+#[test]
+fn shapes_cover_their_true_area_and_stay_in_bounds() {
+    use std::f64::consts::PI;
+    let tol = crate::shape::TOLERANCE;
+    // (shape fields, true area, how much less flattening may cover, own box)
+    let cases = [
+        (
+            r#""kind":"rect","size":[300,100],"cornerRadius":20"#,
+            30_000.0 - (4.0 - PI) * 400.0,
+            800.0 * tol,
+            [-150.0, -50.0, 150.0, 50.0],
+        ),
+        (
+            r#""kind":"rect","size":[300,100]"#,
+            30_000.0,
+            0.0,
+            [-150.0, -50.0, 150.0, 50.0],
+        ),
+        (
+            r#""kind":"ellipse","size":[200,100]"#,
+            PI * 5000.0,
+            2.0 * PI * 100.0 * tol,
+            [-100.0, -50.0, 100.0, 50.0],
+        ),
+        (
+            r#""kind":"polygon","points":[[0,0],[200,0],[200,50],[50,50],[50,150],[0,150]]"#,
+            15_000.0,
+            0.0,
+            [0.0, 0.0, 200.0, 150.0],
+        ),
+        // A ring: the inner square is a hole, whichever way it turns.
+        (
+            r#""kind":"path","d":"M0 0 H100 V100 H0 Z M25 25 V75 H75 V25 Z""#,
+            7_500.0,
+            0.0,
+            [0.0, 0.0, 100.0, 100.0],
+        ),
+        (
+            r#""kind":"path","d":"M0 0 Q 50 100 100 0 Z""#,
+            10_000.0 / 3.0,
+            300.0 * tol,
+            [0.0, 0.0, 100.0, 50.0],
+        ),
+    ];
+    let own = to_own([1000.0, -500.0], 30.0, [40.0, 20.0], 15.0);
+    let check = |fields: &str, style: &str, area: f64, slack: f64, b: [f64; 4]| {
+        let json = deco_doc(&format!(
+            r#"{{"id":1,"type":"section","origin":[1000,-500],"rotation":30,"children":[{{"id":2,"type":"shape","origin":[40,20],"rotation":15,{fields},"style":{style}}}]}}"#
+        ));
+        let c = decode_both(&compile_json(&json).unwrap_or_else(|e| panic!("{fields}: {e}")));
+        assert_mesh_partition(&c);
+        let [d] = c.mesh.draws[..] else {
+            panic!("{fields}")
+        };
+        let got = tri_area(&c, d.index_first, d.index_count);
+        assert!(
+            got <= area + 0.05 && got >= area - slack - 0.05,
+            "{fields}: {got} vs {area}"
+        );
+        for &i in &c.mesh.indices[d.index_first as usize..(d.index_first + d.index_count) as usize]
+        {
+            let v = c.mesh.vertices[i as usize];
+            let [x, y] = own(v.pos.map(f64::from));
+            let inside =
+                x >= b[0] - 0.01 && x <= b[2] + 0.01 && y >= b[1] - 0.01 && y <= b[3] + 0.01;
+            assert!(inside, "{fields}: {x} {y}");
+            assert_eq!(v.color, [0x12, 0x34, 0x56, 128]);
+        }
+        c
+    };
+    for (fields, area, slack, b) in cases {
+        check(
+            fields,
+            r##"{"fill":"#123456","opacity":0.5}"##,
+            area,
+            slack,
+            b,
+        );
+    }
+    // A stroked line has the stroke's width and butt ends, and a line takes
+    // no fill.
+    check(
+        r#""kind":"line","points":[[0,0],[100,0]]"#,
+        r##"{"fill":"#000000","stroke":"#123456","strokeWidth":10,"opacity":0.5}"##,
+        1000.0,
+        0.0,
+        [0.0, -5.0, 100.0, 5.0],
+    );
+    // A stroked rectangle: a mitred frame, 5 cu either side of its edges,
+    // drawn after its fill.
+    let c = check(
+        r#""kind":"rect","size":[300,100]"#,
+        r##"{"stroke":"#123456","strokeWidth":10,"opacity":0.5}"##,
+        310.0 * 110.0 - 290.0 * 90.0,
+        0.0,
+        [-155.0, -55.0, 155.0, 55.0],
+    );
+    let json = deco_doc(
+        r##"{"id":2,"type":"shape","kind":"rect","size":[300,100],"style":{"fill":"#000000","stroke":"#FFFFFF","strokeWidth":10}}"##,
+    );
+    let both = decode_both(&compile_json(&json).unwrap());
+    let colors: Vec<_> = both
+        .mesh
+        .indices
+        .iter()
+        .map(|&i| both.mesh.vertices[i as usize].color)
+        .collect();
+    assert_eq!(colors.len(), 6 + c.mesh.indices.len());
+    assert!(
+        colors[..6].iter().all(|&k| k == [0, 0, 0, 255])
+            && colors[6..].iter().all(|&k| k == [255; 4])
+    );
+}
+
+/// Shapes land in their floor's draw ranges, below or above the seats, in
+/// a section or at the top level; floor bounds cover them, and the chart's
+/// cover its floors.
+#[test]
+fn shapes_go_to_their_floor_and_layer() {
+    let json = deco_doc(
+        r##"{"id":10,"type":"section","floor":2,"origin":[5000,0],"rotation":90,"children":[
+             {"id":11,"type":"shape","kind":"rect","size":[10,10],"style":{"fill":"#000004"},"layer":"above"}]},
+           {"id":20,"type":"shape","kind":"ellipse","size":[30,20],"style":{"fill":"#000001"}},
+           {"id":21,"type":"shape","kind":"rect","floor":2,"origin":[-20000,0],"size":[100,100],"style":{"fill":"#000003"}},
+           {"id":22,"type":"shape","kind":"path","floor":1,"d":"M0 0 L100 0 L100 100","style":{"stroke":"#000002","strokeWidth":4},"layer":"above"}"##,
+    );
+    let c = decode_both(&compile_json(&json).unwrap());
+    assert_mesh_partition(&c);
+    let draws: Vec<_> = c.mesh.draws.iter().map(|d| (d.floor, d.layer)).collect();
+    use cavea_format::Layer::{Above, Below};
+    assert_eq!(draws, [(0, Below), (0, Above), (1, Below), (1, Above)]);
+    for (k, d) in c.mesh.draws.iter().enumerate() {
+        let range =
+            &c.mesh.indices[d.index_first as usize..(d.index_first + d.index_count) as usize];
+        assert!(!range.is_empty());
+        assert!(
+            range
+                .iter()
+                .all(|&i| c.mesh.vertices[i as usize].color == [0, 0, k as u8 + 1, 255])
+        );
+    }
+    // Floor 1: the ellipse and the path, whose stroke reaches x = 102.
+    // Floor 2: the far rectangle and the rotated one at (5000, 0).
+    let [f1, f2] = [c.floors[0].bounds, c.floors[1].bounds];
+    assert_eq!(f1, [-60, -40, 408, 400]);
+    assert_eq!(f2, [-80_200, -200, 20_020, 200]);
+    assert_eq!(c.meta.bounds, [-80_200, -200, 20_020, 400]);
+}
+
+/// Every refusal is a finding naming the decoration node.
+#[test]
+fn bad_decoration_names_its_node() {
+    let points = |n: usize| {
+        (0..n)
+            .map(|k| format!("[{k},{}]", k % 2))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let json = deco_doc(&format!(
+        r##"{{"id":1,"type":"shape","kind":"path","d":"M0 0 A 5 5 0 0 1 10 0","style":{{"stroke":"#000000","strokeWidth":1}}}},
+           {{"id":2,"type":"shape","kind":"path","d":"M0 0 L"}},
+           {{"id":4,"type":"shape","kind":"rect","size":[1,1],"style":{{"fill":"#12345"}}}},
+           {{"id":7,"type":"shape","kind":"rect","size":[0,10]}},
+           {{"id":8,"type":"shape","kind":"polygon","points":[[0,0],[10,0]]}},
+           {{"id":9,"type":"shape","kind":"polygon","points":[[0,0],[10,10],[10,0],[0,20]],"style":{{"fill":"#000000"}}}},
+           {{"id":10,"type":"section","floor":1,"children":[{{"id":11,"type":"shape","floor":2,"kind":"rect","size":[1,1]}}]}},
+           {{"id":13,"type":"shape","kind":"polygon","points":[{many}]}},
+           {{"id":14,"type":"shape","kind":"line","points":[[0,0],[1,0]],"style":{{"stroke":"#000000","strokeWidth":-1}}}},
+           {{"id":15,"type":"shape","kind":"ellipse","size":[1,1],"style":{{"opacity":2}}}},
+           {{"id":17,"type":"shape","kind":"rect","origin":[1e9,0],"size":[1,1]}},
+           {{"id":18,"type":"shape","floor":99,"kind":"rect","size":[1,1]}},
+           {{"id":19,"type":"shape","kind":"rect"}},
+           {{"id":21,"type":"shape","kind":"path","d":"M0 0 L10 0","style":{{"fill":"#000000"}}}}"##,
+        many = points(4097),
+    ));
+    let mut got: Vec<_> = findings(&json)
+        .into_iter()
+        .map(|f| (f.node, f.code, f.detail))
+        .collect();
+    got.sort_by_key(|g| g.0);
+    let geometry = |problem| Detail::Geometry { problem };
+    let invalid = |field| Detail::InvalidValue { field };
+    let want = [
+        (
+            1,
+            Code::E005,
+            geometry("elliptical arcs (A) in path data are not supported"),
+        ),
+        (2, Code::E005, geometry("invalid path data")),
+        (4, Code::E005, invalid("fill")),
+        (7, Code::E005, geometry("zero size")),
+        (8, Code::E005, geometry("zero size")),
+        (9, Code::E005, geometry("self-intersecting fill")),
+        (
+            11,
+            Code::E007,
+            Detail::FloorConflict {
+                floor: 2,
+                section_floor: 1,
+            },
+        ),
+        (
+            13,
+            Code::E006,
+            Detail::TooMany {
+                what: "shape points",
+                limit: 4096,
+            },
+        ),
+        (14, Code::E005, invalid("strokeWidth")),
+        (15, Code::E005, invalid("opacity")),
+        (17, Code::E005, Detail::OutOfRange),
+        (18, Code::E007, Detail::UnknownFloor { floor: 99 }),
+        (19, Code::E005, invalid("size")),
+        (21, Code::E005, geometry("zero size")),
+    ]
+    .map(|(n, code, detail)| (Some(n), code, detail));
+    assert_eq!(got, want);
+}
+
 /// Structurally random documents, nonsense included: compiling never panics,
 /// and whatever compiles decodes.
 #[test]
@@ -1084,6 +1394,17 @@ fn mutate(doc: &mut ChartDocument, r: &mut Rng) {
     }
 }
 
+/// Path data a hostile document might hold.
+const BAD_PATHS: [&str; 7] = [
+    "M0 0 A1 1 0 0 1 2 2",
+    "M",
+    "M0 0 L1e308 0 L-1e308 0 Z",
+    "M0 0 C 0 0 0 0 0 0 Z",
+    "M0 0 L 10 10 L 10 0 L 0 10 Z",
+    "M0 0 C 1e300 1e300 -1e300 -1e300 5 5",
+    "m1 1 l1 1 z m0 0 z q",
+];
+
 fn mutate_node(node: &mut Node, r: &mut Rng, w: f64, n: u32) {
     // A zigzag that crosses itself many times.
     let zigzag = |n: u32| -> Vec<[f64; 2]> {
@@ -1134,6 +1455,33 @@ fn mutate_node(node: &mut Node, r: &mut Rng, w: f64, n: u32) {
             10 => b.category = None,
             _ => b.floor = Some(n),
         },
+        Node::Shape(shape) => match r.int(0, 11) {
+            0 => shape.origin = [w, 0.0],
+            1 => shape.rotation = w,
+            2 => shape.size = Some([w, 10.0]),
+            3 => {
+                shape.kind = doc::ShapeKind::Polygon;
+                shape.points = Some(zigzag(n + 3));
+                shape.style.fill = Some("#000000".into());
+            }
+            4 => {
+                shape.kind = doc::ShapeKind::Path;
+                shape.d = Some(BAD_PATHS[(n % 7) as usize].into());
+            }
+            5 => shape.style.stroke_width = w.abs(),
+            6 => shape.style.opacity = w,
+            7 => shape.style.fill = Some("nope".into()),
+            8 => shape.corner_radius = Some(w),
+            9 => shape.floor = Some(n),
+            10 => {
+                // A thick stroke along a path that crosses itself everywhere.
+                shape.kind = doc::ShapeKind::Line;
+                shape.points = Some(zigzag(4096));
+                shape.style.stroke = Some("#000000".into());
+                shape.style.stroke_width = 1e3;
+            }
+            _ => shape.points = Some(zigzag(5000)),
+        },
         Node::Row(row) => match r.int(0, 5) {
             0 => row.seat_pitch = w,
             1 => row.label = Some(String::new()),
@@ -1180,6 +1528,17 @@ fn compile_100k_timing() {
             rows.join(",")
         ));
     }
+    // A realistic handful of decoration: a stage, its edge and four labels.
+    nodes.push(
+        r##"{"id":500,"type":"shape","kind":"rect","origin":[30000,-3000],"size":[12000,2500],"cornerRadius":200,
+            "style":{"fill":"#1F2937","stroke":"#F9FAFB","strokeWidth":40}},
+          {"id":501,"type":"shape","kind":"path","d":"M18000 -1500 C 24000 -500 36000 -500 42000 -1500","style":{"stroke":"#9CA3AF","strokeWidth":30},"layer":"above"},
+          {"id":502,"type":"text","text":"STAGE","origin":[30000,-3000],"size":600,"color":"#F9FAFB"},
+          {"id":503,"type":"text","text":"Lower bowl","origin":[30000,1000],"size":300,"color":"#111827"},
+          {"id":504,"type":"text","text":"Upper bowl","origin":[30000,28000],"size":300,"color":"#111827"},
+          {"id":505,"type":"icon","icon":"exit","origin":[0,0],"size":200}"##
+            .to_string(),
+    );
     let json = format!(
         r##"{{"schema":1,"name":"100k","nextOid":999999,"categories":[{{"key":"a","label":"A","color":"#000000"}}],
           "floors":[{{"id":1,"name":"F","focalPoint":[30000,-2000]}}],"nodes":[{}]}}"##,

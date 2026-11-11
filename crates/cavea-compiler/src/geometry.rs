@@ -509,6 +509,81 @@ pub(crate) fn is_simple(poly: &[P]) -> bool {
     true
 }
 
+/// Twice the signed area of a closed ring, positive when it turns clockwise
+/// on screen (y down). Taken relative to the first point: differences of
+/// values `f32` holds are exact in `f64`, so far from the origin nothing
+/// cancels.
+pub(crate) fn area2(ring: &[P]) -> f64 {
+    let Some(&o) = ring.first() else {
+        return 0.0;
+    };
+    let n = ring.len();
+    (0..n)
+        .map(|i| {
+            let (a, b) = (sub(ring[i], o), sub(ring[(i + 1) % n], o));
+            a[0] * b[1] - b[0] * a[1]
+        })
+        .sum()
+}
+
+/// True if every ring is simple ([`is_simple`]) and no two rings meet.
+pub(crate) fn rings_simple(rings: &[Vec<P>]) -> bool {
+    fn edges(r: &[P]) -> impl Iterator<Item = (P, P)> + '_ {
+        let n = r.len();
+        (0..n).map(move |i| (r[i], r[(i + 1) % n]))
+    }
+    let bbox = |(a, b): (P, P)| {
+        [
+            a[0].min(b[0]),
+            a[1].min(b[1]),
+            a[0].max(b[0]),
+            a[1].max(b[1]),
+        ]
+    };
+    for (i, ring) in rings.iter().enumerate() {
+        if !is_simple(ring) {
+            return false;
+        }
+        for other in rings.iter().skip(i + 1) {
+            for e in edges(ring) {
+                let p = bbox(e);
+                for f in edges(other) {
+                    let q = bbox(f);
+                    if p[0] <= q[2]
+                        && q[0] <= p[2]
+                        && p[1] <= q[3]
+                        && q[1] <= p[3]
+                        && segments_meet(e.0, e.1, f.0, f.1)
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
+/// Twice the area the even-odd rule fills for rings that pass
+/// [`rings_simple`]: each ring's area, counted negative when it lies inside
+/// an odd number of the others.
+pub(crate) fn even_odd_area2(rings: &[Vec<P>]) -> f64 {
+    rings
+        .iter()
+        .enumerate()
+        .map(|(i, ring)| {
+            let p = ring.first().copied().unwrap_or_default();
+            let depth = rings
+                .iter()
+                .enumerate()
+                .filter(|&(j, other)| j != i && contains(other, p))
+                .count();
+            let a = area2(ring).abs();
+            if depth % 2 == 0 { a } else { -a }
+        })
+        .sum()
+}
+
 /// True if `p` is inside the polygon (crossing rule).
 fn contains(poly: &[P], p: P) -> bool {
     let n = poly.len();

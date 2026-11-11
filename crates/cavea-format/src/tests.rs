@@ -313,29 +313,34 @@ fn gen_chart(seed: u64, rows: u32, max_row: u16) -> Chart {
             }
         })
         .collect();
-    let draws = (0..r.below(4))
-        .map(|_| {
-            let (index_first, index_count) = range(&mut r);
-            Draw {
-                layer: if r.chance(50) {
-                    Layer::Below
-                } else {
-                    Layer::Above
-                },
-                index_first,
-                index_count,
+    // Sorted by (floor, layer), end to end.
+    let mut draws = Vec::new();
+    let mut next = r.below(ni + 1);
+    for floor in 0..floors.len() as u32 {
+        for layer in [Layer::Below, Layer::Above] {
+            if r.chance(40) {
+                let index_count = r.below(ni - next + 1);
+                draws.push(Draw {
+                    floor,
+                    layer,
+                    index_first: next,
+                    index_count,
+                });
+                next += index_count;
             }
-        })
-        .collect();
+        }
+    }
     let vertices = (0..nverts)
         .map(|_| Vertex {
             pos: [r.i32() as f32 / 7.0, -0.0],
             color: [r.below(256) as u8, 0, 0, 255],
         })
         .collect();
-    let texts = (0..r.below(4))
+    let nfl = floors.len() as u32;
+    let texts = (0..if nfl == 0 { 0 } else { r.below(4) })
         .map(|_| Text {
             text: s(&mut r),
+            floor: r.below(nfl),
             pos: pt(&mut r),
             size: 480,
             angle: r.below(65536) as u16,
@@ -345,17 +350,19 @@ fn gen_chart(seed: u64, rows: u32, max_row: u16) -> Chart {
             min_zoom: r.below(100) as f32 / 8.0,
         })
         .collect();
-    let icons = (0..r.below(4))
+    let icons = (0..if nfl == 0 { 0 } else { r.below(4) })
         .map(|_| Icon {
             key: s(&mut r),
+            floor: r.below(nfl),
             pos: pt(&mut r),
             size: 320,
             angle: 0,
         })
         .collect();
-    let images = (0..r.below(3))
+    let images = (0..if nfl == 0 { 0 } else { r.below(3) })
         .map(|_| Image {
             asset: s(&mut r),
+            floor: r.below(nfl),
             bounds: bx(&mut r),
             angle: 0,
             opacity: 128,
@@ -549,6 +556,39 @@ fn hostile_inputs_give_typed_errors() {
         let mut c = chart.clone();
         f(&mut c);
         write(&c, Artefact::Full).unwrap()
+    };
+    // A floor index one past the last floor, and records to place there.
+    let nf = chart.floors.len() as u32;
+    let text = Text {
+        text: 0,
+        floor: 0,
+        pos: [0, 0],
+        size: 4,
+        angle: 0,
+        color: [0; 4],
+        align: TextAlign::Left,
+        weight: 400,
+        min_zoom: 0.0,
+    };
+    let icon = Icon {
+        key: 0,
+        floor: 0,
+        pos: [0, 0],
+        size: 4,
+        angle: 0,
+    };
+    let image = Image {
+        asset: 0,
+        floor: 0,
+        bounds: [0; 4],
+        angle: 0,
+        opacity: 255,
+    };
+    let draw = |floor, layer, index_first| Draw {
+        floor,
+        layer,
+        index_first,
+        index_count: 0,
     };
     let mut rows = chunks_of(&good);
     rows.retain(|c| c.0 != SCAT);
@@ -814,12 +854,66 @@ fn hostile_inputs_give_typed_errors() {
         (
             "non-finite float",
             bad_chart(&|c| {
-                let mut t = chart.texts.first().copied().unwrap();
-                t.min_zoom = f32::INFINITY;
-                c.texts.push(t);
+                c.texts.push(Text {
+                    min_zoom: f32::INFINITY,
+                    ..text
+                })
             }),
             Some(TEXT),
             BadValue,
+        ),
+        (
+            "text on an unknown floor",
+            bad_chart(&|c| c.texts.push(Text { floor: nf, ..text })),
+            Some(TEXT),
+            BadReference,
+        ),
+        (
+            "icon on an unknown floor",
+            bad_chart(&|c| c.icons.push(Icon { floor: nf, ..icon })),
+            Some(ICON),
+            BadReference,
+        ),
+        (
+            "image on an unknown floor",
+            bad_chart(&|c| c.images.push(Image { floor: nf, ..image })),
+            Some(IMGS),
+            BadReference,
+        ),
+        (
+            "draw range on an unknown floor",
+            bad_chart(&|c| c.mesh.draws = vec![draw(nf, Layer::Below, 0)]),
+            Some(MESH),
+            BadReference,
+        ),
+        (
+            "draw ranges out of order",
+            bad_chart(&|c| c.mesh.draws = vec![draw(0, Layer::Above, 0), draw(0, Layer::Below, 0)]),
+            Some(MESH),
+            BadRange,
+        ),
+        (
+            "draw ranges not end to end",
+            bad_chart(&|c| {
+                let n = c.mesh.indices.len() as u32;
+                c.mesh.vertices.push(Vertex {
+                    pos: [0.0; 2],
+                    color: [0; 4],
+                });
+                c.mesh.indices.extend([0; 6]);
+                c.mesh.draws = vec![
+                    Draw {
+                        index_count: 3,
+                        ..draw(0, Layer::Below, n)
+                    },
+                    Draw {
+                        index_count: 2,
+                        ..draw(0, Layer::Above, n + 4)
+                    },
+                ];
+            }),
+            Some(MESH),
+            BadRange,
         ),
     ];
     for (name, file, chunk, kind) in cases {
@@ -841,9 +935,28 @@ fn mutated_files_never_panic() {
             Artefact::Public
         };
         let good = encode(&chart, artefact).unwrap();
+        // Payload spans of the chunks that carry floors and draw ranges.
+        let spans: Vec<(usize, usize)> = (0..good.len().min(32 + 16 * 32))
+            .step_by(16)
+            .skip(2)
+            .filter_map(|at| {
+                let entry = good.get(at..at + 16)?;
+                let tag: Tag = entry[..4].try_into().ok()?;
+                let word = |i: usize| u32::from_le_bytes(entry[i..i + 4].try_into().unwrap());
+                [MESH, TEXT, ICON, IMGS]
+                    .contains(&tag)
+                    .then(|| (word(8) as usize, word(12) as usize))
+            })
+            .filter(|&(_, len)| len > 1)
+            .collect();
         for _ in 0..400 {
             let mut f = good.clone();
-            match r.below(4) {
+            match r.below(5) {
+                4 if !spans.is_empty() => {
+                    // Rewrite a byte inside a decoration chunk.
+                    let (at, len) = spans[r.below(spans.len() as u32) as usize];
+                    f[at + r.below(len as u32) as usize] = r.next() as u8;
+                }
                 0 => {
                     for _ in 0..1 + r.below(4) {
                         let at = r.below(f.len() as u32) as usize;

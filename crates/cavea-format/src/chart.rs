@@ -262,8 +262,11 @@ records! {
         color: Rgba,
     }
 
-    /// `MESH` draw range.
+    /// `MESH` draw range of decoration: one floor's triangles in one layer.
+    /// Draw ranges are sorted by floor, then layer, at most one per pair, and
+    /// each starts where the previous one ends.
     Draw {
+        floor: u32,
         layer: Layer,
         index_first: u32,
         index_count: u32,
@@ -272,6 +275,7 @@ records! {
     /// `TEXT`.
     Text {
         text: u32,
+        floor: u32,
         pos: Point,
         /// Quarter cu.
         size: u16,
@@ -287,6 +291,7 @@ records! {
     Icon {
         /// Icon key string: `entrance`, `exit`, …
         key: u32,
+        floor: u32,
         pos: Point,
         size: u16,
         angle: u16,
@@ -296,6 +301,7 @@ records! {
     Image {
         /// Asset hash string.
         asset: u32,
+        floor: u32,
         bounds: Bounds,
         angle: u16,
         opacity: u8,
@@ -630,25 +636,47 @@ impl Chart {
                 .all(|&i| (i as usize) < mesh.vertices.len()),
             BadReference
         );
+        let floor_ok = |f: u32| (f as usize) < self.floors.len();
         ensure!(
             tags::MESH,
-            mesh.draws
-                .iter()
-                .all(|d| within(d.index_first, d.index_count, indices)),
-            BadRange
+            mesh.draws.iter().all(|d| floor_ok(d.floor)),
+            BadReference
         );
+        // Sorted by (floor, layer), at most one per pair, end to end.
+        let mut prev: Option<&crate::Draw> = None;
+        for d in &mesh.draws {
+            let ordered = prev.is_none_or(|p| {
+                (p.floor, p.layer as u8) < (d.floor, d.layer as u8)
+                    && u64::from(p.index_first) + u64::from(p.index_count)
+                        == u64::from(d.index_first)
+            });
+            ensure!(
+                tags::MESH,
+                ordered && within(d.index_first, d.index_count, indices),
+                BadRange
+            );
+            prev = Some(d);
+        }
         for t in &self.texts {
-            ensure!(tags::TEXT, str_ok(t.text), BadReference);
+            ensure!(
+                tags::TEXT,
+                str_ok(t.text) && floor_ok(t.floor),
+                BadReference
+            );
             ensure!(tags::TEXT, t.min_zoom.is_finite(), BadValue);
         }
         ensure!(
             tags::ICON,
-            self.icons.iter().all(|i| str_ok(i.key)),
+            self.icons
+                .iter()
+                .all(|i| str_ok(i.key) && floor_ok(i.floor)),
             BadReference
         );
         ensure!(
             tags::IMGS,
-            self.images.iter().all(|i| str_ok(i.asset)),
+            self.images
+                .iter()
+                .all(|i| str_ok(i.asset) && floor_ok(i.floor)),
             BadReference
         );
 
