@@ -26,6 +26,8 @@ pub enum Kind {
     Book,
     Block,
     Unblock,
+    /// The backend releasing a booking (a cancellation).
+    Unbook,
 }
 
 /// One acknowledged command.
@@ -149,7 +151,7 @@ pub fn check(h: &History) -> Vec<Violation> {
                         bad(
                             "double_hold",
                             format!(
-                                "object {o}: held by party {p} at seq {seq} and by party {} at seq {}",
+                                "idx {o}: held by party {p} at seq {seq} and by party {} at seq {}",
                                 a.party, a.seq
                             ),
                         );
@@ -162,7 +164,7 @@ pub fn check(h: &History) -> Vec<Violation> {
                     bad(
                         "double_hold",
                         format!(
-                            "object {o}: {other:?} at seq {seq}, held by party {} at seq {}",
+                            "idx {o}: {other:?} at seq {seq}, held by party {} at seq {}",
                             a.party, a.seq
                         ),
                     );
@@ -186,11 +188,16 @@ pub fn check(h: &History) -> Vec<Violation> {
                     owner.remove(&o);
                     continue;
                 }
+                (Kind::Unbook, Some((Owner::Booked(p), _, start))) => {
+                    close(o, p, start, a.recv_ms);
+                    owner.remove(&o);
+                    continue;
+                }
                 (kind, current) => {
                     bad(
                         "transition",
                         format!(
-                            "object {o}: {kind:?} by party {} at seq {} while {current:?}",
+                            "idx {o}: {kind:?} by party {} at seq {} while {current:?}",
                             a.party, a.seq
                         ),
                     );
@@ -231,7 +238,7 @@ pub fn check(h: &History) -> Vec<Violation> {
                 bad(
                     "wrong_refusal",
                     format!(
-                        "object {o}: refused to party {} as not free, but no one else held it",
+                        "idx {o}: refused to party {} as not free, but no one else held it",
                         r.party
                     ),
                 );
@@ -318,6 +325,14 @@ mod tests {
             ack(BACKEND, Kind::Block, 1, &[7], 100),
             ack(BACKEND, Kind::Unblock, 2, &[7], 200),
             ack(2, Kind::Hold, 3, &[7], 300),
+        ]);
+        assert!(checks(&h).is_empty());
+        // Booked, the booking cancelled, then held by another.
+        let h = history(vec![
+            ack(1, Kind::Hold, 3, &[7], 1_000),
+            ack(1, Kind::Book, 4, &[7], 1_200),
+            ack(BACKEND, Kind::Unbook, 5, &[7], 1_500),
+            ack(2, Kind::Hold, 6, &[7], 2_000),
         ]);
         assert!(checks(&h).is_empty());
         // Two acknowledgements of one seq.

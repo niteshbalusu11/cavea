@@ -63,6 +63,9 @@ pub struct Config {
     pub book_share: f64,
     pub retry_book_share: f64,
     pub blocks_per_sec: f64,
+    /// The backend cancels each booking this long after making it; zero
+    /// keeps bookings.
+    pub unbook_after: Duration,
     pub hold_ttl: u64,
     pub max_objects: u32,
     pub source: Source,
@@ -130,6 +133,7 @@ struct Shared {
     in_flight: AtomicI64,
     open: AtomicI64,
     order: AtomicU64,
+    unbooks: AtomicI64,
     stop: watch::Receiver<bool>,
 }
 
@@ -448,6 +452,7 @@ async fn prepare(
         in_flight: AtomicI64::new(0),
         open: AtomicI64::new(0),
         order: AtomicU64::new(0),
+        unbooks: AtomicI64::new(0),
         stop,
     };
     Ok((Arc::new(shared), workspace, snapshot))
@@ -903,6 +908,10 @@ async fn book(
                             );
                         }
                         let seq = v["seq"].as_u64().unwrap_or(0);
+                        if !sh.cfg.unbook_after.is_zero() {
+                            sh.unbooks.fetch_add(1, Relaxed);
+                            tokio::spawn(unbook(sh.clone(), objects.clone(), n));
+                        }
                         sh.record(|h| {
                             h.acks.push(Ack {
                                 party,
@@ -936,6 +945,58 @@ async fn book(
         }
     }
     true
+}
+
+/// A cancellation: the backend releases a booking `unbook_after` after
+/// making it, so that a sustained run does not fill the event.
+async fn unbook(sh: Arc<Shared>, objects: Vec<u32>, n: u64) {
+    sleep(sh.cfg.unbook_after).await;
+    let t = Instant::now();
+    let send = now_ms();
+    let path = format!("/v1/events/{}/release", query_escape(&sh.event));
+    let body = json!({ "objects": sh.objects(&objects) });
+    let reply = match sh
+        .http(BACKEND_ADDRESS + BACKEND_WORKERS + 2 + n % 64)
+        .await
+    {
+        Ok(mut c) => call(&mut c, "POST", &path, &sh.sk, &[], Some(&body)).await,
+        Err(e) => Err(e),
+    };
+    match reply {
+        Ok((200, v)) => {
+            sh.op("unbook", t, Ok(()));
+            let mut got = sh.idx_of(&v["objects"]);
+            got.sort_unstable();
+            if got != objects {
+                sh.violation(
+                    "unbook_reply",
+                    format!("booking {n}: released {got:?}, booked {objects:?}"),
+                );
+            }
+            let seq = v["seq"].as_u64().unwrap_or(0);
+            sh.record(|h| {
+                h.acks.push(Ack {
+                    party: BACKEND,
+                    kind: Kind::Unbook,
+                    seq,
+                    objects: got,
+                    send_ms: send,
+                    recv_ms: now_ms(),
+                })
+            });
+        }
+        Ok((s, v)) => {
+            sh.op("unbook", t, Err(code(&v)));
+            if !matches!((s, code(&v).as_str()), (503, "overloaded" | "unavailable")) {
+                sh.violation(
+                    "unbook_reply",
+                    format!("booking {n}: HTTP {s} {}", code(&v)),
+                );
+            }
+        }
+        Err(_) => sh.op("unbook", t, Err("transport".into())),
+    }
+    sh.unbooks.fetch_sub(1, Relaxed);
 }
 
 async fn change(sh: &Arc<Shared>, c: &mut Conn, idx: u32, status: &str) -> Option<(u64, i64, i64)> {
@@ -1220,6 +1281,10 @@ pub async fn run(cfg: Config) -> Result<Outcome> {
     let _ = done_tx.send(true);
     let _ = blocker_task.await;
     let _ = backend_task.await;
+    let deadline = Instant::now() + sh.cfg.unbook_after + REQUEST_TIMEOUT;
+    while sh.unbooks.load(Relaxed) > 0 && Instant::now() < deadline {
+        sleep(Duration::from_millis(50)).await;
+    }
     sleep(sh.cfg.quiet).await;
     let converged = converge(&sh).await;
     let _ = stop_tx.send(true);
