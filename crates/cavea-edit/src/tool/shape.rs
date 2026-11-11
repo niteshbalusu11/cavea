@@ -1,13 +1,17 @@
 //! The shape tools (`docs/07-designer.md` §4): rectangle and ellipse by
 //! dragging, a line by dragging or two clicks, a polygon by clicking its
-//! corners.
+//! corners; and the section tool, which drags a box or clicks a polygon the
+//! same way (§5.5).
 
 use super::draw::{Live, Spot, dist, finish, px, select, snap15};
+use super::snap;
 use super::{Button, Context, Cursor, Input, Key, Overlay, Pointer, Readout, Tool};
 use crate::command::Command;
 use crate::draft::{Draft, MAX_POINTS, MIN_SIZE, closes, extends};
-use crate::index::P;
-use crate::selection::{Selection, View};
+use crate::index::{P, Rect, Select};
+use crate::section;
+use crate::selection::{Level, Selection, View};
+use cavea_compiler::document::Node;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShapeKindTool {
@@ -15,6 +19,7 @@ pub(crate) enum ShapeKindTool {
     Ellipse,
     Line,
     Polygon,
+    Section,
 }
 
 #[derive(Debug)]
@@ -35,6 +40,7 @@ enum State {
         down: Pointer,
         spot: Spot,
         a: P,
+        b: P,
         dragged: bool,
         clicks: bool,
         readout: Option<Readout>,
@@ -90,21 +96,30 @@ impl ShapeTool {
     }
 
     fn moved(&mut self, cx: &mut Context<'_>, p: Pointer) {
+        let kind = self.kind;
         let (draft, readout) = match &mut self.state {
             State::Drag {
                 down,
                 spot,
                 a,
+                b,
                 dragged,
                 clicks,
+                live,
                 ..
             } => {
                 *dragged |= p.dragged_from(down);
-                if !*dragged && !*clicks {
+                let at = match kind {
+                    ShapeKindTool::Line if !p.mods.shift => {
+                        snap::line_end(cx, &p, down.world, live.created())
+                    }
+                    _ => snap::point(cx, &p, live.created()),
+                };
+                *b = spot.local(cx, at);
+                if (!*dragged && !*clicks) || self.kind == ShapeKindTool::Section {
                     return;
                 }
-                let b = spot.local(cx, p.world);
-                let a = *a;
+                let (a, b) = (*a, *b);
                 self.draft(a, b, p.mods.shift)
             }
             State::Polygon {
@@ -112,7 +127,8 @@ impl ShapeTool {
                 points,
                 pointer,
             } => {
-                let q = spot.local(cx, p.world);
+                let at = snap::point(cx, &p, None);
+                let q = spot.local(cx, at);
                 *pointer = Some(match points.last() {
                     Some(&last) if p.mods.shift => snap15(last, q),
                     _ => q,
@@ -144,8 +160,9 @@ impl ShapeTool {
             pointer,
         } = &mut self.state
         else {
-            let spot = Spot::at(cx, &p);
-            let q = spot.local(cx, p.world);
+            let spot = self.spot(cx, &p);
+            let at = snap::point(cx, &p, None);
+            let q = spot.local(cx, at);
             self.state = State::Polygon {
                 spot,
                 points: vec![q],
@@ -153,7 +170,8 @@ impl ShapeTool {
             };
             return;
         };
-        let mut q = spot.local(cx, p.world);
+        let at = snap::point(cx, &p, None);
+        let mut q = spot.local(cx, at);
         if let (Some(&last), true) = (points.last(), p.mods.shift) {
             q = snap15(last, q);
         }
@@ -176,6 +194,17 @@ impl ShapeTool {
         if !closes(points) {
             return;
         }
+        if self.kind == ShapeKindTool::Section {
+            let points = points.clone();
+            let (view, _) = cx.split(0.0);
+            let inside = |id: &u32| {
+                let quad = view.index.quad(*id);
+                let section = matches!(view.doc.node(*id), Some(Node::Section(_)));
+                !section && quad.is_some_and(|q| q.iter().all(|&c| within(&points, c)))
+            };
+            let ids: Vec<u32> = view.all(Level::Top).into_iter().filter(inside).collect();
+            return self.group(cx, &ids, Some(points));
+        }
         let draft = Draft::Polygon {
             points: points.clone(),
         };
@@ -190,6 +219,60 @@ impl ShapeTool {
         }
         self.state = State::Idle;
     }
+
+    /// Where the node goes: a section always at the top level.
+    fn spot(&self, cx: &Context<'_>, p: &Pointer) -> Spot {
+        match self.kind {
+            ShapeKindTool::Section => Spot::new(cx.editor.document(), None, cx.floor),
+            _ => Spot::at(cx, p),
+        }
+    }
+
+    /// The section tool's box: a section holding the top-level nodes it
+    /// contains (sections aside), or, holding none, an empty section with
+    /// the box as its outline.
+    fn section_box(&mut self, cx: &mut Context<'_>, a: P, b: P) {
+        let r = Rect::new(a, b);
+        let (view, _) = cx.split(0.0);
+        let ids = view.select(Level::Top, r, Select::Contain);
+        let doc = view.doc;
+        let ids: Vec<u32> = ids
+            .into_iter()
+            .filter(|&id| !matches!(doc.node(id), Some(Node::Section(_))))
+            .collect();
+        let size = [r.max[0] - r.min[0], r.max[1] - r.min[1]];
+        if !ids.is_empty() {
+            self.group(cx, &ids, None);
+        } else if size.iter().all(|&v| v >= MIN_SIZE) {
+            self.group(cx, &[], Some(r.corners().to_vec()));
+        }
+    }
+
+    fn group(&mut self, cx: &mut Context<'_>, ids: &[u32], outline: Option<Vec<P>>) {
+        let floor = Spot::new(cx.editor.document(), None, cx.floor).floor;
+        let made = section::group(cx.editor, cx.index, ids, outline, (cx.category, floor));
+        if let Ok(id) = made {
+            select(cx.selection, cx.editor.document(), Level::Top, id);
+        }
+        self.state = State::Idle;
+    }
+}
+
+/// Whether `p` is inside the polygon `poly` (even-odd; a point on an edge may
+/// fall either way).
+fn within(poly: &[P], p: P) -> bool {
+    let mut inside = false;
+    let mut j = poly.len().wrapping_sub(1);
+    for (i, &a) in poly.iter().enumerate() {
+        if let Some(&b) = poly.get(j)
+            && (a[1] > p[1]) != (b[1] > p[1])
+            && p[0] < a[0] + (p[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1])
+        {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
 }
 
 impl Tool for ShapeTool {
@@ -201,7 +284,9 @@ impl Tool for ShapeTool {
             }
             Input::PointerDown(p) if p.button == Button::Primary => {
                 self.held = true;
-                if self.kind == ShapeKindTool::Polygon {
+                if self.kind == ShapeKindTool::Polygon
+                    || matches!(self.state, State::Polygon { .. })
+                {
                     return self.click_polygon(cx, p);
                 }
                 match &mut self.state {
@@ -216,12 +301,14 @@ impl Tool for ShapeTool {
                         (self.state, self.held) = (State::Swallow, true);
                     }
                     _ => {
-                        let spot = Spot::at(cx, &p);
-                        let a = spot.local(cx, p.world);
+                        let spot = self.spot(cx, &p);
+                        let at = snap::point(cx, &p, None);
+                        let a = spot.local(cx, at);
                         self.state = State::Drag {
-                            down: p,
+                            down: Pointer { world: at, ..p },
                             spot,
                             a,
+                            b: a,
                             dragged: false,
                             clicks: false,
                             readout: None,
@@ -235,6 +322,23 @@ impl Tool for ShapeTool {
                 self.held = false;
                 self.moved(cx, p);
                 match &mut self.state {
+                    &mut State::Drag {
+                        dragged: true,
+                        a,
+                        b,
+                        ..
+                    } if self.kind == ShapeKindTool::Section => self.section_box(cx, a, b),
+                    // A section's click without a drag starts its polygon.
+                    State::Drag { a, spot, .. } if self.kind == ShapeKindTool::Section => {
+                        (self.state, self.held) = (
+                            State::Polygon {
+                                spot: *spot,
+                                points: vec![*a],
+                                pointer: Some(*a),
+                            },
+                            false,
+                        );
+                    }
                     State::Drag {
                         dragged: true,
                         spot,
@@ -282,6 +386,11 @@ impl Tool for ShapeTool {
 
     fn overlay(&self, view: &View<'_>, _: &Selection, out: &mut Overlay) {
         match &self.state {
+            State::Drag { a, b, dragged, .. } if self.kind == ShapeKindTool::Section => {
+                if *dragged {
+                    out.marquee = Some(Rect::new(*a, *b));
+                }
+            }
             State::Drag { readout, .. } => out.readout = *readout,
             State::Polygon {
                 spot,

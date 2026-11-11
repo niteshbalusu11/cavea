@@ -331,9 +331,12 @@ pub(crate) fn closes(points: &[P]) -> bool {
 }
 
 /// Whether `points` is a valid polygon (03 §2.7, §3.1.1): simple, at least
-/// three distinct corners, not flat. Quadratic in the points.
-fn simple(points: &[P]) -> bool {
-    (1..points.len()).all(|i| extends(&points[..i], points[i])) && closes(points)
+/// three distinct corners, not flat, at most [`MAX_POINTS`]. Quadratic in
+/// the points.
+pub(crate) fn simple(points: &[P]) -> bool {
+    points.len() <= MAX_POINTS
+        && (1..points.len()).all(|i| extends(&points[..i], points[i]))
+        && closes(points)
 }
 
 impl Draft {

@@ -4,6 +4,7 @@
 use cavea_compiler::ChartDocument;
 use cavea_compiler::document::Node;
 
+use super::draw_tests::unsnapped;
 use crate::tests::{Rng, command};
 use crate::*;
 
@@ -58,7 +59,7 @@ struct Trace {
 impl Trace {
     fn new() -> Self {
         Self {
-            s: Session::load(chart()).expect("load"),
+            s: Session::load(chart()).map(unsnapped).expect("load"),
             time: 0.0,
         }
     }

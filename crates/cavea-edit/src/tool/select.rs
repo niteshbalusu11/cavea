@@ -7,6 +7,7 @@ use std::mem::take;
 
 use super::draw::{Live, budget};
 use super::handles::{self, HandleKind, Step};
+use super::snap;
 use super::text::TextEdit;
 use super::{
     Button, Context, Cursor, Input, Key, Modifiers, Overlay, Pointer, Readout, Tool, tuning,
@@ -57,6 +58,9 @@ enum State {
         start: P,
         nodes: Vec<(u32, P, f64)>,
         parent: Option<u32>,
+        snap: Option<snap::Moving>,
+        /// The last move shown, in the world.
+        moved: P,
     },
     /// Pressed on a handle: a drag takes the handle, a release without one
     /// is an ordinary click there.
@@ -74,6 +78,8 @@ enum State {
         nodes: Vec<(u32, P, f64)>,
         parent: Option<u32>,
         angle: f64,
+        /// The turn that faces one row block to the focal point.
+        facing: Option<f64>,
     },
     /// Resizing one node with a handle: the node and its place at the start,
     /// the press in its own space, and the seats the chart may still take.
@@ -196,12 +202,14 @@ impl SelectTool {
                     return State::Swallow;
                 }
                 let start = (p.world[1] - pivot[1]).atan2(p.world[0] - pivot[0]);
+                let facing = snap::facing(cx, &ids, pivot);
                 State::Rotating {
                     pivot,
                     start: start.to_degrees(),
                     nodes,
                     parent,
                     angle: 0.0,
+                    facing,
                 }
             }
             kind => {
@@ -356,8 +364,15 @@ impl SelectTool {
                 start,
                 nodes,
                 parent,
+                snap,
+                moved,
             } => {
-                let delta = snap_translation([p.world[0] - start[0], p.world[1] - start[1]]);
+                let raw = [p.world[0] - start[0], p.world[1] - start[1]];
+                let delta = match snap {
+                    Some(m) => snap::translation(cx, &p, m, raw),
+                    None => raw,
+                };
+                *moved = delta;
                 let v = cx.index.to_parent(*parent, delta);
                 let nodes = nodes
                     .iter()
@@ -378,8 +393,9 @@ impl SelectTool {
                 }
             }
             State::Pivot { .. } => {
+                let at = snap::point(cx, &p, None);
                 let sel = &cx.selection;
-                self.pivot = Some((sel.level(), sel.items().clone(), p.world));
+                self.pivot = Some((sel.level(), sel.items().clone(), at));
             }
             State::Rotating {
                 pivot,
@@ -387,13 +403,14 @@ impl SelectTool {
                 nodes,
                 parent,
                 angle,
+                facing,
             } => {
                 let now = (p.world[1] - pivot[1]).atan2(p.world[0] - pivot[0]);
                 let mut a = crate::draft::normalise(now.to_degrees() - *start);
                 if p.mods.shift {
                     a = (a / 15.0).round() * 15.0;
                 }
-                *angle = snap_angle(a);
+                *angle = snap::angle(cx, &p, (*pivot, *start), a, *facing);
                 let centre = cx.index.to_local(*parent, *pivot);
                 let command = handles::rotate(nodes, centre, *angle);
                 let _ = cx.editor.apply(command);
@@ -408,7 +425,7 @@ impl SelectTool {
                 readout,
                 live,
             } => {
-                let q = place.invert(p.world);
+                let q = place.invert(snap::point(cx, &p, Some(*id)));
                 let d = [q[0] - start[0], q[1] - start[1]];
                 match handles::resize(base, *id, *kind, d, q, p.mods, *room) {
                     Step::Base => {
@@ -444,10 +461,9 @@ impl SelectTool {
                 }
                 self.last_click = Some((p.time, p.screen));
             }
-            State::Moving { start, .. } => {
+            State::Moving { moved: delta, .. } => {
                 let _ = cx.editor.end_gesture();
                 // A moved pivot moves with its selection.
-                let delta = snap_translation([p.world[0] - start[0], p.world[1] - start[1]]);
                 if let Some((_, _, at)) = &mut self.pivot {
                     *at = [at[0] + delta[0], at[1] + delta[1]];
                 }
@@ -514,16 +530,6 @@ fn locate(view: &View<'_>, mut level: Level, point: P) -> (Level, Option<u32>) {
     }
 }
 
-/// Where snapping (DSN-030) will adjust a proposed move.
-fn snap_translation(delta: P) -> P {
-    delta
-}
-
-/// Where snapping (DSN-030) will adjust a proposed rotation, in degrees.
-fn snap_angle(angle: f64) -> f64 {
-    angle
-}
-
 /// Opens a gesture for dragging the selected nodes that can be picked.
 fn start_move(cx: &mut Context<'_>, start: P, parent: Option<u32>) -> State {
     let doc = cx.editor.document();
@@ -540,10 +546,13 @@ fn start_move(cx: &mut Context<'_>, start: P, parent: Option<u32>) -> State {
     if nodes.is_empty() || cx.editor.begin_gesture().is_err() {
         return State::Swallow;
     }
+    let ids: Vec<u32> = nodes.iter().map(|n| n.0).collect();
     State::Moving {
         start,
+        snap: snap::Moving::new(cx, &ids, parent),
         nodes,
         parent,
+        moved: [0.0; 2],
     }
 }
 

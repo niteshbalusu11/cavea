@@ -7,6 +7,7 @@
 use cavea_compiler::document::Node;
 
 use super::draw::{Live, Spot, finish};
+use super::snap;
 use super::{Button, Context, Cursor, Input, Key, Overlay, TextField, Tool};
 use crate::command::{Command, Property};
 use crate::draft::Draft;
@@ -144,7 +145,10 @@ impl Tool for TextTool {
                     .filter(|&id| matches!(view.doc.node(id), Some(Node::Text(_))));
                 self.edit = match hit {
                     Some(id) => TextEdit::edit(cx, id, level),
-                    None => Some(TextEdit::new(cx, Spot::at(cx, &p), p.world)),
+                    None => {
+                        let at = snap::point(cx, &p, None);
+                        Some(TextEdit::new(cx, Spot::at(cx, &p), at))
+                    }
                 };
                 self.swallow = true;
             }

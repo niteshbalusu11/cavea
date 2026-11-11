@@ -451,6 +451,15 @@ impl SpatialIndex {
         true
     }
 
+    /// Every node, at any depth, whose world bounds touch `rect`, with them,
+    /// in id order: snapping's neighbours.
+    pub(crate) fn near(&self, rect: Rect) -> impl Iterator<Item = (u32, Rect)> + '_ {
+        let touching = move |b: &Rect| b.intersects(&rect);
+        self.items
+            .iter()
+            .filter_map(move |(&id, i)| i.bounds.filter(touching).map(|b| (id, b)))
+    }
+
     /// Snap anchors of every node, at any depth, whose bounds touch `rect`
     /// (the region around the viewport or the dragged selection), except the
     /// nodes in `exclude` (sorted). In id order.

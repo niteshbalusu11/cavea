@@ -16,6 +16,7 @@ mod handles;
 mod row;
 mod select;
 mod shape;
+pub(crate) mod snap;
 mod text;
 
 pub(crate) use block::{ArcTool, BlockTool};
@@ -24,6 +25,7 @@ pub use handles::{Corner, Handle, HandleKind, Side};
 pub(crate) use row::RowTool;
 pub(crate) use select::{SelectTool, select_all, step_in};
 pub(crate) use shape::{ShapeKindTool, ShapeTool};
+pub use snap::{Guide, SnapSettings};
 pub(crate) use text::TextTool;
 
 #[cfg(test)]
@@ -53,6 +55,11 @@ pub mod tuning {
     pub const HANDLE_TOUCH: f64 = 14.0;
     /// How far the rotate handle sits outside the selection frame.
     pub const ROTATE_OFFSET: f64 = 24.0;
+    /// How near a snap target must be to pull a position onto it.
+    pub const SNAP: f64 = 6.0;
+    /// How far around the pointer or the dragged selection snapping looks
+    /// for other nodes: about a viewport.
+    pub const SNAP_REACH: f64 = 1_000.0;
     /// The most seats a drag may preview in one block (a count, not a
     /// size): it bounds the work of one pointer move. Typed numbers are
     /// limited only by `02-domain-model.md` §14.
@@ -176,6 +183,7 @@ pub enum ToolId {
     Polygon,
     Line,
     Text,
+    Section,
 }
 
 /// What the canvas draws over the chart, in chart coordinates; sizes in
@@ -199,6 +207,11 @@ pub struct Overlay {
     pub entry: String,
     /// A text field the chrome should show while text is typed.
     pub text: Option<TextField>,
+    /// What the last pointer event snapped to (§5.2).
+    pub guides: Vec<Guide>,
+    /// The outlines of the selected sections, and of the section whose
+    /// children are selected, automatic or explicit.
+    pub sections: Vec<Vec<P>>,
 }
 
 /// The numbers a gesture shows while it runs (07 §4). Lengths in chart
@@ -260,6 +273,7 @@ pub(crate) struct Context<'a> {
     pub(crate) floor: Option<u32>,
     /// The active category, which new seats take (07 §7).
     pub(crate) category: Option<&'a str>,
+    pub(crate) snap: &'a mut snap::Snap,
 }
 
 impl Context<'_> {

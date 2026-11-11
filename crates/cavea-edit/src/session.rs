@@ -5,16 +5,20 @@
 
 use cavea_compiler::ChartDocument;
 
+use crate::command::Property;
 use crate::command::{Command, CommandError};
 use crate::document::{Document, LoadError};
 use crate::draft::Draft;
 use crate::editor::{Applied, Editor};
 use crate::index::{Rect, SpatialIndex};
+use crate::section;
 use crate::selection::{self, Level, Selection};
+use crate::tool::snap::{Snap, SnapSettings};
 use crate::tool::{
     self, ArcTool, BlockTool, Context, Cursor, Input, Overlay, RowTool, SelectTool, ShapeKindTool,
     ShapeTool, TextTool, Tool, ToolId,
 };
+use cavea_compiler::document::{Node, Outline, Points};
 
 #[derive(Debug)]
 pub struct Session {
@@ -26,6 +30,7 @@ pub struct Session {
     category: Option<String>,
     tool: Box<dyn Tool>,
     tool_id: ToolId,
+    snap: Snap,
 }
 
 impl Session {
@@ -45,6 +50,7 @@ impl Session {
             category,
             tool: Box::new(SelectTool::default()),
             tool_id: ToolId::Select,
+            snap: Snap::default(),
         };
         session.settle();
         Ok(session)
@@ -89,6 +95,7 @@ impl Session {
             ToolId::Polygon => Box::new(ShapeTool::new(ShapeKindTool::Polygon)),
             ToolId::Line => Box::new(ShapeTool::new(ShapeKindTool::Line)),
             ToolId::Text => Box::new(TextTool::default()),
+            ToolId::Section => Box::new(ShapeTool::new(ShapeKindTool::Section)),
         };
         self.tool_id = id;
     }
@@ -130,6 +137,50 @@ impl Session {
         id
     }
 
+    /// Creates a top-level section around top-level nodes `ids`, which keep
+    /// their place on the canvas, with an explicit `outline` (world points)
+    /// or an automatic one, as one undo entry, and selects it (07 §5.5).
+    pub fn group(
+        &mut self,
+        ids: &[u32],
+        outline: Option<Vec<[f64; 2]>>,
+    ) -> Result<u32, CommandError> {
+        self.reset_tool();
+        let spot = tool::Spot::new(self.editor.document(), None, self.floor);
+        let style = (self.category.as_deref(), spot.floor);
+        let id = section::group(&mut self.editor, &self.index, ids, outline, style);
+        self.settle();
+        if let Ok(id) = id {
+            self.selection.set(self.editor.document(), Level::Top, [id]);
+        }
+        id
+    }
+
+    /// Dissolves a section: its children return to the top level in place,
+    /// as one undo entry.
+    pub fn dissolve(&mut self, section: u32) -> Result<(), CommandError> {
+        self.reset_tool();
+        let result = section::dissolve(&mut self.editor, section);
+        self.settle();
+        result
+    }
+
+    /// Replaces a section's automatic outline with explicit points equal to
+    /// the outline the compiler computes now (07 §5.5), as one `setProperty`.
+    pub fn convert_outline(&mut self, id: u32) -> Result<Applied, CommandError> {
+        let auto = matches!(
+            self.document().node(id),
+            Some(Node::Section(s)) if s.outline == Outline::Auto
+        );
+        let points = section::outline(self.document(), &self.index, id)
+            .filter(|p| auto && !p.is_empty())
+            .ok_or(CommandError::InvalidValue("outline"))?;
+        self.apply(Command::SetProperty {
+            id,
+            property: Property::Outline(Outline::Points(Points { points })),
+        })
+    }
+
     /// Passes input to the active tool. A pointer event that is not finite,
     /// or has a zoom of 0 or less, is dropped, except that such a release
     /// cancels: the drag it would have ended does not stay open.
@@ -139,7 +190,21 @@ impl Session {
             Input::PointerDown(p) | Input::PointerMove(p) if !p.valid() => return,
             _ => {}
         }
+        self.snap.guides.clear();
         self.with_tool(|tool, cx| tool.input(cx, &input));
+        if matches!(input, Input::PointerUp(_) | Input::PointerCancel) {
+            self.snap.guides.clear();
+        }
+    }
+
+    pub fn snap_settings(&self) -> SnapSettings {
+        self.snap.settings
+    }
+
+    /// Turns each kind of snapping on or off, and sets the grid step (a
+    /// step that is not finite and above 0 turns the grid off).
+    pub fn set_snap(&mut self, settings: SnapSettings) {
+        self.snap.settings = settings;
     }
 
     /// Applies a command from outside the canvas (the inspector, a panel).
@@ -225,13 +290,44 @@ impl Session {
         let mut out = Overlay {
             outlines,
             frame,
+            sections: self.section_outlines(),
+            guides: self.snap.guides.clone(),
             ..Overlay::default()
         };
         self.tool.overlay(&view, &self.selection, &mut out);
         out
     }
 
+    /// The outlines, in the world, of the selected sections and of the one
+    /// whose children are selected.
+    fn section_outlines(&self) -> Vec<Vec<[f64; 2]>> {
+        let doc = self.document();
+        let held = match self.selection.level() {
+            Level::Section(s) => Some(s),
+            _ => None,
+        };
+        let top = matches!(self.selection.level(), Level::Top);
+        let ids = held.into_iter().chain(
+            top.then(|| self.selection.items().iter().copied())
+                .into_iter()
+                .flatten(),
+        );
+        ids.filter_map(|id| {
+            let points = match doc.node(id) {
+                Some(Node::Section(s)) => match &s.outline {
+                    Outline::Points(p) => p.points.clone(),
+                    Outline::Auto => section::outline(doc, &self.index, id)?,
+                },
+                _ => return None,
+            };
+            points.iter().map(|&p| self.index.to_world(id, p)).collect()
+        })
+        .filter(|p: &Vec<_>| !p.is_empty())
+        .collect()
+    }
+
     fn reset_tool(&mut self) {
+        self.snap.guides.clear();
         self.with_tool(|tool, cx| tool.reset(cx));
     }
 
@@ -242,6 +338,7 @@ impl Session {
             selection: &mut self.selection,
             floor: self.floor,
             category: self.category.as_deref(),
+            snap: &mut self.snap,
         };
         f(self.tool.as_mut(), &mut cx);
         self.settle();

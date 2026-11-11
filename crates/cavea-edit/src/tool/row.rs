@@ -6,6 +6,7 @@ use cavea_compiler::document::{Node, Path};
 
 use super::block::SEAT_PITCH;
 use super::draw::{Live, Spot, dist, finish, px};
+use super::snap;
 use super::{Button, Context, Cursor, Input, Key, Overlay, Pointer, Readout, Tool, tuning};
 use crate::draft::Draft;
 use crate::index::P;
@@ -63,7 +64,8 @@ impl Tool for RowTool {
                         live,
                     } => {
                         if *dragged {
-                            let b = spot.local(cx, p.world);
+                            let at = snap::point(cx, &p, live.created());
+                            let b = spot.local(cx, at);
                             self.state = State::End {
                                 spot: *spot,
                                 a: *a,
@@ -131,7 +133,8 @@ impl RowTool {
         match &mut self.state {
             State::Idle => {
                 let spot = Spot::at(cx, &p);
-                let a = spot.local(cx, p.world);
+                let at = snap::point(cx, &p, None);
+                let a = spot.local(cx, at);
                 self.state = State::Start {
                     spot,
                     a,
@@ -142,7 +145,8 @@ impl RowTool {
             }
             // The second click places the end.
             State::Start { spot, a, live, .. } => {
-                let b = spot.local(cx, p.world);
+                let at = snap::point(cx, &p, live.created());
+                let b = spot.local(cx, at);
                 self.state = State::End {
                     spot: *spot,
                     a: *a,
@@ -153,8 +157,9 @@ impl RowTool {
             }
             // The third: on the end it keeps the row straight; elsewhere
             // it bends the row through it.
-            State::End { spot, b, .. } => {
-                let m = spot.local(cx, p.world);
+            State::End { spot, b, live, .. } => {
+                let at = snap::point(cx, &p, live.created());
+                let m = spot.local(cx, at);
                 let near = dist(m, *b) <= px(&p, tuning::DOUBLE_CLICK_PX);
                 self.bend(cx, (!near).then_some(m));
                 if let State::End { spot, live, .. } = &mut self.state {
@@ -179,9 +184,10 @@ impl RowTool {
                 if let Some(d) = down {
                     *dragged |= p.dragged_from(d);
                 }
+                let at = snap::point(cx, &p, live.created());
                 let draft = Draft::Row {
                     start: *a,
-                    end: spot.local(cx, p.world),
+                    end: spot.local(cx, at),
                     bend: None,
                     seat_pitch: SEAT_PITCH,
                 };
@@ -191,8 +197,9 @@ impl RowTool {
                     None => live.clear(cx),
                 }
             }
-            State::End { spot, b, .. } => {
-                let m = spot.local(cx, p.world);
+            State::End { spot, b, live, .. } => {
+                let at = snap::point(cx, &p, live.created());
+                let m = spot.local(cx, at);
                 let near = dist(m, *b) <= px(&p, tuning::DOUBLE_CLICK_PX);
                 self.bend(cx, (!near).then_some(m));
             }
