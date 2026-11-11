@@ -28,11 +28,16 @@ pub use migrations::{MigrationError, migrate};
 /// idempotency retention (08 §6.1), which assumes commits time out within it.
 pub const COMMIT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Open the connection pool: `size` connections at most, the first one now so
-/// that an unreachable database stops startup.
+/// Open the connection pool: all `size` connections now, so that an
+/// unreachable database stops startup, and kept open. A pool that grew on
+/// demand would open a connection (TCP, a PostgreSQL backend, SCRAM) inside
+/// each request of the first burst after a start or a quiet spell, and the
+/// opening rush of an on-sale is such a burst (13 §7.4). The pool replaces a
+/// connection that reaches its lifetime or idle timeout in the background.
 pub async fn connect(options: PgConnectOptions, size: u32) -> Result<PgPool, sqlx::Error> {
     PgPoolOptions::new()
         .max_connections(size)
+        .min_connections(size)
         .acquire_timeout(COMMIT_TIMEOUT)
         .connect_with(options)
         .instrument(cavea_telemetry::db_span("connect"))
