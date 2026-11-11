@@ -27,7 +27,7 @@ use tracing::Instrument as _;
 
 use super::auth::{Auth, PublishableKey, has_hex_tail, push_hex, sha256};
 use super::events::{Settings, archived};
-use super::extract::{Json, Path, check_object_count, invalid, invalid_field};
+use super::extract::{Json, Path, Secret, check_object_count, invalid, invalid_field};
 use super::openapi::{Needs, Op, Routes};
 use super::session::{self, Session};
 use super::staff::Staff;
@@ -868,7 +868,7 @@ async fn release_token(
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct HoldBody {
-    hold_token: String,
+    hold_token: Secret,
     objects: Objects,
 }
 
@@ -943,7 +943,7 @@ struct ReleaseBody {
     /// With a token: held objects (all of the token's if `objects` is left
     /// out). Without: booked objects.
     #[serde(default)]
-    hold_token: Option<String>,
+    hold_token: Option<Secret>,
     #[serde(default)]
     objects: Option<Objects>,
 }
@@ -962,7 +962,7 @@ async fn release(
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PublicReleaseBody {
-    hold_token: String,
+    hold_token: Secret,
     #[serde(default)]
     objects: Option<Objects>,
 }
@@ -1031,7 +1031,7 @@ struct BookBody {
     /// Book held objects (all of the token's if `objects` is left out), or,
     /// without a token, free objects directly.
     #[serde(default)]
-    hold_token: Option<String>,
+    hold_token: Option<Secret>,
     #[serde(default)]
     objects: Option<Objects>,
     order_ref: String,

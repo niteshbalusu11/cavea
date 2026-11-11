@@ -177,7 +177,8 @@ async fn insecure_settings_are_named_once_at_start() {
         config.public_url = url.map(|u| u.parse().unwrap());
         assert_eq!(flagged(&config), Vec::<&str>::new(), "{url:?}");
     }
-    let cases: [(&str, fn(&mut Config)); 10] = [
+    type Change = fn(&mut Config);
+    let cases: [(&str, Change); 10] = [
         ("CAVEA_PUBLIC_URL", |c| {
             c.public_url = Some("http://seats.example.com".parse().unwrap());
         }),

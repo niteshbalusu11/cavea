@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use tracing::Instrument as _;
 
 use super::auth::ClientIp;
-use super::extract::{Json, check_text, invalid_field};
+use super::extract::{Json, Secret, check_text, invalid_field};
 use super::openapi::{Needs, Op, Routes};
 use super::staff::{ConsoleUser, clear_cookie, same_origin, session_cookie, set_cookie};
 use super::{ApiError, AppState, Code};
@@ -214,9 +214,9 @@ pub(super) fn new_session() -> Result<SessionId, ApiError> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Setup {
-    token: String,
+    token: Secret,
     email: String,
-    password: String,
+    password: Secret,
     #[serde(default)]
     workspace: Option<FirstWorkspace>,
 }
@@ -255,7 +255,9 @@ async fn setup(
     if body.token.len() > 128 || !setup::valid(&state.db, &body.token).await? {
         return Err(setup_refused());
     }
-    let hash = password::hash_bounded(body.password).await.map_err(busy)?;
+    let hash = password::hash_bounded(body.password.into_inner())
+        .await
+        .map_err(busy)?;
     let id = new_session()?;
     let owner = setup::complete(
         &state.db,
@@ -280,7 +282,7 @@ async fn setup(
 #[serde(deny_unknown_fields)]
 struct SignIn {
     email: String,
-    password: String,
+    password: Secret,
 }
 
 const FIND_USER: &str = "SELECT replace(id::text, '-', ''), password_hash FROM users
@@ -312,7 +314,8 @@ async fn sign_in(
         .await?;
     // A password longer than any that can be set is wrong; hashing it would
     // only be work for whoever sent it.
-    let password = (body.password.chars().count() <= PASSWORD_MAX).then_some(body.password);
+    let password =
+        (body.password.chars().count() <= PASSWORD_MAX).then_some(body.password.into_inner());
     let stored = user.as_ref().and_then(|(_, hash)| hash.clone());
     let verified = match password {
         Some(password) => password::verify_bounded(password, stored.clone())
@@ -399,8 +402,8 @@ async fn me(State(state): State<AppState>, console: ConsoleUser) -> Result<Respo
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PasswordChange {
-    current_password: String,
-    new_password: String,
+    current_password: Secret,
+    new_password: Secret,
 }
 
 const CREDENTIALS: &str = "SELECT email, password_hash FROM users WHERE id = $1::uuid";
@@ -439,8 +442,8 @@ async fn change_password(
         .await?;
     let now = now_ms(&state);
     state.sign_in.check(&email, addr, now).map_err(backoff)?;
-    let current =
-        (body.current_password.chars().count() <= PASSWORD_MAX).then_some(body.current_password);
+    let current = (body.current_password.chars().count() <= PASSWORD_MAX)
+        .then_some(body.current_password.into_inner());
     let verified = match current {
         Some(current) => password::verify_bounded(current, stored.clone())
             .await
@@ -453,7 +456,7 @@ async fn change_password(
             .with_message("The current password is wrong.")
             .with_detail("reason", "credentials"));
     }
-    let hash = password::hash_bounded(body.new_password)
+    let hash = password::hash_bounded(body.new_password.into_inner())
         .await
         .map_err(busy)?;
     let id = new_session()?;

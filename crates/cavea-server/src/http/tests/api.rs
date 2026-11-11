@@ -1623,6 +1623,7 @@ mod limits;
 mod members;
 mod objects;
 mod realtime;
+mod scrub;
 mod seats;
 mod session;
 mod verify;
