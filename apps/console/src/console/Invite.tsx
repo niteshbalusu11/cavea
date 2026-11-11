@@ -122,6 +122,8 @@ function Accept(props: { token: string; onSpent: () => void }) {
           break;
         case "otherEmail":
         case "signIn":
+          setPassword("");
+          setConfirm("");
           setProblem(refusal.kind);
           break;
         case "password":
@@ -149,7 +151,7 @@ function Accept(props: { token: string; onSpent: () => void }) {
     <Card title={msg("accept.title")}>
       <Show when={problem() === "otherEmail"}>
         <div role="alert" class="mb-4 rounded-md bg-warning-soft px-3 py-2 text-base text-fg">
-          {msg("accept.otherEmail", { email: me()?.user.email ?? "" })}
+          <p>{msg("accept.otherEmail", { email: me()?.user.email ?? "" })}</p>
           <Button
             class="mt-2 h-8"
             onClick={() => {
@@ -163,7 +165,7 @@ function Accept(props: { token: string; onSpent: () => void }) {
       </Show>
       <Show when={problem() === "signIn"}>
         <div role="alert" class="mb-4 rounded-md bg-warning-soft px-3 py-2 text-base text-fg">
-          {msg("accept.hasAccount")}
+          <p>{msg("accept.hasAccount")}</p>
           <A href={signInFor(here(location))} class="mt-2 block text-base text-accent underline">
             {msg("accept.toSignIn")}
           </A>

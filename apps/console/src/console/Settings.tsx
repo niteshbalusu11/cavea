@@ -442,7 +442,7 @@ function MemberRow(props: {
           }
         >
           <select
-            class={`${fieldInputClass} w-40`}
+            class={`${fieldInputClass} max-w-48`}
             aria-label={msg("members.roleOf", { email: props.member.user.email })}
             value={props.member.role}
             onChange={(e) => {
@@ -470,6 +470,11 @@ function MemberRow(props: {
 }
 
 type InviteErrors = Partial<Record<InviteField, string | null>>;
+
+/** The link as a whole URL: the server gives a path alone when it has no
+ * `CAVEA_PUBLIC_URL`, and the console's origin is the server's. */
+export const absolute = (link: string): string =>
+  link.startsWith("/") ? `${window.location.origin}${link}` : link;
 
 /** Invites an email with a role, then shows the link once. */
 function InviteDialog(props: { onClose: () => void; onCreated: () => void }) {
@@ -576,7 +581,7 @@ function InviteDialog(props: { onClose: () => void; onCreated: () => void }) {
           onClose={close}
         >
           <div class="mt-4">
-            <CopyField label={msg("invite.link")} value={c().link} />
+            <CopyField label={msg("invite.link")} value={absolute(c().link)} />
           </div>
         </Confirm>
       )}
