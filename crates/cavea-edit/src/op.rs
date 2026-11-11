@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::mem::{Discriminant, discriminant, replace};
 
-use cavea_compiler::document::{Category, Floor, Node, SeatOverride};
+use cavea_compiler::document::{BlockRow, Category, Floor, Node, SeatOverride};
 
 use crate::command::{ChartProperty, CommandError, Property};
 use crate::document::{Document, each_node, node_id};
@@ -46,6 +46,20 @@ pub(crate) enum Op {
     Categories(Vec<Category>),
     Floors(Vec<Floor>),
     NextOid(u32),
+    InsertRow {
+        id: u32,
+        index: usize,
+        row: BlockRow,
+    },
+    RemoveRow {
+        id: u32,
+        rid: u32,
+    },
+    /// Replaces the row with the same `rid`.
+    SetRow {
+        id: u32,
+        row: BlockRow,
+    },
     Override {
         id: u32,
         oid: u32,
@@ -64,6 +78,7 @@ pub(crate) enum Key {
     Categories,
     Floors,
     NextOid,
+    Row(u32, u32),
     Override(u32, u32),
 }
 
@@ -71,12 +86,14 @@ impl Op {
     pub(crate) fn key(&self) -> Option<Key> {
         Some(match self {
             Op::Insert { .. } | Op::Remove { .. } | Op::Place { .. } => return None,
+            Op::InsertRow { .. } | Op::RemoveRow { .. } => return None,
             Op::Transform { id, .. } => Key::Transform(*id),
             Op::Set { id, property } => Key::Set(*id, discriminant(property)),
             Op::Chart(p) => Key::Chart(discriminant(p)),
             Op::Categories(_) => Key::Categories,
             Op::Floors(_) => Key::Floors,
             Op::NextOid(_) => Key::NextOid,
+            Op::SetRow { id, row } => Key::Row(*id, row.rid),
             Op::Override { id, oid, .. } => Key::Override(*id, *oid),
         })
     }
@@ -222,6 +239,48 @@ impl Document {
                 self.chart_stamp = rev;
                 Ok(Op::NextOid(replace(&mut self.next_oid, v)))
             }
+            Op::InsertRow { id, index, row } => {
+                let rid = row.rid;
+                match self.block_rows(id) {
+                    Ok(rows) if index <= rows.len() && rows.iter().all(|r| r.rid != rid) => {
+                        rows.insert(index, row);
+                    }
+                    Ok(_) => {
+                        let e = CommandError::IndexOutOfRange;
+                        return fail(Op::InsertRow { id, index, row }, e);
+                    }
+                    Err(e) => return fail(Op::InsertRow { id, index, row }, e),
+                }
+                self.touch_content(id);
+                Ok(Op::RemoveRow { id, rid })
+            }
+            Op::RemoveRow { id, rid } => {
+                let found = self.block_rows(id).and_then(|rows| {
+                    let i = row_index(rows, id, rid)?;
+                    Ok(rows.remove(i)).map(|row| (i, row))
+                });
+                match found {
+                    Ok((index, row)) => {
+                        self.touch_content(id);
+                        Ok(Op::InsertRow { id, index, row })
+                    }
+                    Err(e) => fail(Op::RemoveRow { id, rid }, e),
+                }
+            }
+            Op::SetRow { id, row } => {
+                let found = self.block_rows(id).and_then(|rows| {
+                    let i = row_index(rows, id, row.rid)?;
+                    rows.get_mut(i).ok_or(CommandError::Internal)
+                });
+                match found {
+                    Ok(slot) => {
+                        let old = replace(slot, row);
+                        self.touch_content(id);
+                        Ok(Op::SetRow { id, row: old })
+                    }
+                    Err(e) => fail(Op::SetRow { id, row }, e),
+                }
+            }
             Op::Override { id, oid, value } => {
                 let old = match self.overrides(id) {
                     Ok(map) => match value {
@@ -356,14 +415,19 @@ impl Document {
         }
     }
 
+    fn block_rows(&mut self, id: u32) -> Result<&mut Vec<BlockRow>, CommandError> {
+        match self.slots.get_mut(&id).map(|s| &mut s.node) {
+            Some(Node::RowBlock(b)) => Ok(&mut b.rows),
+            Some(_) => Err(CommandError::NotARowBlock(id)),
+            None => Err(CommandError::MissingNode(id)),
+        }
+    }
+
     fn overrides(&mut self, id: u32) -> Result<&mut BTreeMap<u32, SeatOverride>, CommandError> {
         match self.slots.get_mut(&id).map(|s| &mut s.node) {
             Some(Node::RowBlock(b)) => Ok(&mut b.seat_overrides),
             Some(Node::Row(r)) => Ok(&mut r.seat_overrides),
-            Some(_) => Err(CommandError::NotApplicable {
-                id,
-                field: "seatOverrides",
-            }),
+            Some(_) => Err(CommandError::NotARowBlock(id)),
             None => Err(CommandError::MissingNode(id)),
         }
     }
@@ -371,6 +435,12 @@ impl Document {
 
 fn fail(op: Op, e: CommandError) -> Result<Op, Failed> {
     Err(Box::new((op, e)))
+}
+
+pub(crate) fn row_index(rows: &[BlockRow], id: u32, rid: u32) -> Result<usize, CommandError> {
+    rows.iter()
+        .position(|r| r.rid == rid)
+        .ok_or(CommandError::MissingRow { id, rid })
 }
 
 fn subtree_ids(node: &Node, out: &mut Vec<u32>) {

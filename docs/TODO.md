@@ -257,7 +257,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [ ] **DSN-004** Live scene: incremental expansion per changed node (04 §25)
 - [ ] **DSN-005** Renderer extensions: chunk transforms and the overlay batcher (04 §25)
 - [ ] **DSN-006** View models and their generated TypeScript types; throttled to one per frame (07 §2, §14)
-- [ ] **DSN-007** Spatial index for snapping and selection (07 §5.2)
+- [x] **DSN-007** Spatial index for snapping and selection (07 §5.2)
 
 ### Shell
 

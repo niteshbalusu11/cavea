@@ -65,6 +65,12 @@ A command is plain data, serialised as JSON tagged by `op` (camelCase field name
 | `addFloor` | `index`, `floor` | Its `id` is assigned: one above the largest; at most 255 |
 | `updateFloor` | `floor` | Replaces the floor with that `id` |
 | `removeFloor` | `id`, `replacement` | Nodes on it move to `replacement`, or to the default floor when it is `null` |
+| `addRows` | `id`, `index`, `count`, `seats` | Inserts rows of fresh `rid`s and oids before row `index` of a row block |
+| `removeRows` | `id`, `rids` | Removes rows with their seats' overrides |
+| `addSeats` | `id`, `rid`, `end` (`start` or `end`), `count` | Adds positions at one end with fresh oids; existing runs are kept (extended when contiguous) and `removed` positions shift with seats added in front. Geometry follows 03 §2.4 literally |
+| `removeSeats` | `id`, `rid`, `end`, `count` | Removes positions at one end with their overrides; undo restores the same oids |
+| `removeSeat`, `restoreSeat` | `id`, `oid` | Adds the seat's position to `removed`, or takes it out; the oid stays |
+| `setSeatOverride` | `id`, `oid`, `value` | Sets or (`null`) clears one seat's override in a row block or row |
 | `composite` | `commands` | Applies them in order as one undo step |
 
 Commands are refused, with a typed error, for: a missing node; a parent that is not a section, is the node or is inside it; a placement that breaks the structure rule; an index out of range; a field the node does not have; a number that is not finite (the saved document must parse again); a node over the limits of `02-domain-model.md` §14 (4,095 seats in a row; 1,000,000 bookable objects in the chart, counting seat positions, booths, areas and tables booked whole, the chart's existing ones included), checked before any id is allocated; a duplicate category key; an unknown category or floor named by a category or floor command. References to unknown categories or floors in node fields are validation findings (E007), not refusals: users make mistakes mid-edit.
@@ -162,6 +168,8 @@ Common to all tools:
 | User guides dragged from the rulers | Cyan lines |
 
 Snapping considers only nodes near the viewport, through a spatial index kept by the edit core.
+
+The index (`SpatialIndex`) caches each node's world bounds, from its expanded seats for row blocks and rows (the expansion is cached per node and redone only when the node's content revision changes) and from its fields otherwise, and is brought up to date from `Document::changes_since`. A chart is a few hundred to a few thousand nodes, so queries scan cached bounds: `hit` (topmost visible node at a point among one level's children: the top level, or an entered section), `select` (visible nodes a box contains or, with Alt, touches, at one level), `anchors` (bounds corners, centres and row ends of nodes touching a region, for snapping) and `seat_at` (seat position nearest a point in seat-edit mode). SVG `path` shapes have no bounds yet: the compiler's path parser is private.
 
 ### 5.3 Row blocks
 
