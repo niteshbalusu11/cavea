@@ -124,8 +124,8 @@ UPDATE events
 
 -- 2. New and changed holds.
 INSERT INTO holds (...) SELECT ... FROM UNNEST(...);
-UPDATE holds SET expires_at = u.expires_at FROM UNNEST(...) u WHERE holds.id = u.id;
-DELETE FROM holds WHERE id = ANY($released_or_expired);
+UPDATE holds SET expires_at = u.expires_at FROM UNNEST(...) u WHERE holds.event_id = $event AND holds.id = u.id;
+DELETE FROM holds WHERE event_id = $event AND id = ANY($released_or_expired);
 
 -- 3. Objects that are no longer in the default state.
 INSERT INTO object_state (event_id, oid, status, hold_id, channel, order_ref, ticket_type, extra, seq)

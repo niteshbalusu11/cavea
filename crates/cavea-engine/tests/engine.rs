@@ -530,3 +530,20 @@ async fn a_full_mailbox_is_refused_as_overloaded() {
         assert!(reply.await.is_ok());
     }
 }
+
+#[tokio::test]
+async fn a_rejected_commit_leaves_the_store_untouched() {
+    let store = MemoryStore::new();
+    store.create_event(EVENT, 1);
+    let mut s = empty_state(4);
+    run(&mut s, create(1, None), T0).unwrap();
+    let mut batch = s.take_batch().unwrap().unwrap();
+    // Valid seq and a new hold, but an extension of a hold the store lacks.
+    batch.holds_extended.push((HoldId(99), T0));
+    let before = store.load_event(EVENT).await.unwrap();
+    assert!(matches!(
+        store.commit_batch(batch).await,
+        Err(StoreError::Inconsistent(_))
+    ));
+    assert_eq!(store.load_event(EVENT).await.unwrap(), before);
+}

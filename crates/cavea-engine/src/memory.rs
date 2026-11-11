@@ -112,16 +112,20 @@ impl SeatStore for MemoryStore {
             return Err(StoreError::Fenced);
         }
         check_seqs(e.seq, &batch)?;
+        // Validate everything before the first write: a commit is all or nothing.
+        let known =
+            |id| e.holds.contains_key(id) || batch.holds_created.iter().any(|h| h.id == *id);
+        if !batch.holds_extended.iter().all(|(id, _)| known(id)) {
+            return Err(StoreError::Inconsistent("extended an unknown hold".into()));
+        }
         e.seq = batch.seq;
         for h in &batch.holds_created {
             e.holds.insert(h.id, h.clone());
         }
         for (id, expires_at) in &batch.holds_extended {
-            let h = e
-                .holds
-                .get_mut(id)
-                .ok_or_else(|| StoreError::Inconsistent("extended an unknown hold".into()))?;
-            h.expires_at = *expires_at;
+            if let Some(h) = e.holds.get_mut(id) {
+                h.expires_at = *expires_at;
+            }
         }
         for id in &batch.holds_deleted {
             e.holds.remove(id);
