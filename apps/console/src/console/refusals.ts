@@ -53,6 +53,21 @@ export function eventRefusal(e: ApiError): FieldRefusal<EventField> {
   }
 }
 
+export type SettingsField = "name" | "holdTtl" | "maxObjects" | "tokens";
+
+/** A refused change of an event's name or settings (`PATCH`), on its
+ * field. `archived` here is the event's, said by the form as a whole
+ * (`eventRefusal` reads it as the chart's, for a new event). */
+export function settingsRefusal(e: ApiError): FieldRefusal<SettingsField> {
+  if (e.reason === "archived") return null;
+  const r = eventRefusal(e);
+  if (r === null) return null;
+  const { field, message } = r;
+  return field === "name" || field === "holdTtl" || field === "maxObjects" || field === "tokens"
+    ? { field, message }
+    : null;
+}
+
 /** A whole number from `min` to `max` in `text`, or `null`. */
 export function wholeNumber(text: string, min: number, max: number): number | null {
   if (!/^\d+$/.test(text.trim())) return null;

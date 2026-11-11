@@ -10,6 +10,7 @@ import type {
   ConsoleWorkspace,
   Event,
   EventList,
+  EventObject,
   InvitationCreated,
   InvitationList,
   Key,
@@ -196,4 +197,46 @@ export const checkWorkspace = (v: unknown) =>
   checkOne<ConsoleWorkspace>(
     v,
     (w) => isRecord(w) && isText(w["id"]) && isText(w["key"]) && isText(w["name"]),
+  );
+
+const STATUSES = new Set(["free", "held", "booked", "blocked"]);
+const isStatus = (v: unknown) =>
+  (isText(v) && STATUSES.has(v)) || (Number.isInteger(v) && Number(v) >= 4 && Number(v) <= 15);
+
+function isObject(v: unknown): boolean {
+  return (
+    isRecord(v) &&
+    isText(v["label"]) &&
+    isNumber(v["oid"]) &&
+    isStatus(v["status"]) &&
+    (v["expires_at"] === undefined || isText(v["expires_at"])) &&
+    (v["order_ref"] === undefined || isText(v["order_ref"]))
+  );
+}
+
+/** A page of objects (`{data, next}`). */
+export const checkObjectPage = (v: unknown) =>
+  checkList<{ data: EventObject[]; next: string | null }>(v, isObject);
+
+/** Objects by label (`{data, unknown}`). */
+export function checkObjectsByLabel(v: unknown): { data: EventObject[]; unknown: string[] } {
+  const ok =
+    isRecord(v) &&
+    Array.isArray(v["data"]) &&
+    v["data"].every(isObject) &&
+    Array.isArray(v["unknown"]) &&
+    v["unknown"].every(isText);
+  if (!ok) throw unreadable();
+  return v as unknown as { data: EventObject[]; unknown: string[] };
+}
+
+/** A seat command's answer (`{seq, objects}`). */
+export const checkSeatReply = (v: unknown) =>
+  checkOne<{ seq: number; objects: { label: string; oid: number }[] }>(
+    v,
+    (r) =>
+      isRecord(r) &&
+      isNumber(r["seq"]) &&
+      Array.isArray(r["objects"]) &&
+      r["objects"].every((o) => isRecord(o) && isText(o["label"])),
   );

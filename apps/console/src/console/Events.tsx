@@ -272,7 +272,12 @@ function EventRow(props: { event: Event; chartName: string; onArchive: () => voi
   return (
     <tr>
       <td class={td}>
-        <span class="block font-medium">{props.event.name ?? props.event.key}</span>
+        <A
+          href={`/events/${encodeURIComponent(props.event.key)}`}
+          class="block font-medium text-accent underline"
+        >
+          {props.event.name ?? props.event.key}
+        </A>
         <span class="block font-mono text-sm text-muted">{props.event.key}</span>
       </td>
       <td class={td}>

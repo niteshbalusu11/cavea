@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@cavea/designer-core": "workspace:*",
+    "@cavea/renderer": "workspace:*",
     "@kobalte/core": "0.13.14",
     "@solidjs/router": "1.0.1",
     "solid-js": "1.9.19"

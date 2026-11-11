@@ -14,10 +14,15 @@ export { choice as themeChoice };
 
 const media = window.matchMedia("(prefers-color-scheme: dark)");
 
+const [resolved, setResolved] = createSignal<"light" | "dark">("light");
+/** The theme applied: the choice, or the system's. */
+export { resolved as resolvedTheme };
+
 function apply(): void {
   const c = choice();
   const dark = c === "dark" || (c === "system" && media.matches);
   document.documentElement.dataset["theme"] = dark ? "dark" : "light";
+  setResolved(dark ? "dark" : "light");
 }
 
 export function setThemeChoice(c: ThemeChoice): void {

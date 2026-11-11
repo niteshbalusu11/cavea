@@ -5,7 +5,7 @@
 // workspace switcher sits under the logo when there is more than one.
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { A, Navigate, useLocation, useNavigate } from "@solidjs/router";
-import { For, Match, Show, Switch, type JSX, type ParentProps } from "solid-js";
+import { For, Match, Show, Switch, type Accessor, type JSX, type ParentProps } from "solid-js";
 import type { ConsoleMe } from "../api/generated.ts";
 import type { Permission } from "../api/permissions.ts";
 import { componentSignal } from "../api/query.ts";
@@ -44,6 +44,13 @@ export const may = (permission: Permission): boolean =>
   workspace()?.permissions.includes(permission) === true;
 
 export function Frame(props: ParentProps) {
+  return <SignedIn>{(m) => <Shell me={m()}>{props.children}</Shell>}</SignedIn>;
+}
+
+/** `children` for a signed-in person; otherwise the session's loading or
+ * failed state, or sign-in and back here. For the frame and for the
+ * full-window tools that need a session (the event manager). */
+export function SignedIn(props: { children: (me: Accessor<ConsoleMe>) => JSX.Element }) {
   const location = useLocation();
   const back = () => {
     const s = session();
@@ -61,7 +68,7 @@ export function Frame(props: ParentProps) {
       <Match when={session().kind === "signedOut"}>
         <Navigate href={back()} />
       </Match>
-      <Match when={me()}>{(m) => <Shell me={m()}>{props.children}</Shell>}</Match>
+      <Match when={me()}>{(m) => props.children(m)}</Match>
     </Switch>
   );
 }

@@ -15,6 +15,7 @@ import {
   memberRefusal,
   parseOrigins,
   roleChoices,
+  settingsRefusal,
 } from "./refusals.ts";
 
 function problem(
@@ -31,6 +32,7 @@ const field = (name: string) =>
 
 const on = (e: ApiError) => eventRefusal(e)?.field ?? null;
 const kind = (e: ApiError) => acceptRefusal(e)?.kind ?? null;
+const at = (e: ApiError) => settingsRefusal(e)?.field ?? null;
 
 test("an event's refusals land on their fields", () => {
   expect(on(problem(409, "already_exists"))).toBe("key");
@@ -50,6 +52,18 @@ test("an event's refusals land on their fields", () => {
   expect(eventRefusal(field("settings.hold_ttl_seconds"))?.message).toBe(
     "Enter a whole number from 60 to 7,200.",
   );
+});
+
+test("a refused settings change lands on its field; archived is the event's, not a chart's", () => {
+  expect(at(field("name"))).toBe("name");
+  expect(at(field("settings.hold_ttl_seconds"))).toBe("holdTtl");
+  expect(at(field("settings.max_objects"))).toBe("maxObjects");
+  expect(at(field("settings.max_tokens_per_sub"))).toBe("tokens");
+  expect(at(problem(400, "invalid_request", { reason: "archived" }))).toBeNull();
+  // A create's fields that a change cannot have.
+  expect(at(field("key"))).toBeNull();
+  expect(at(problem(409, "already_exists"))).toBeNull();
+  expect(at(problem(403, "forbidden", { reason: "role" }))).toBeNull();
 });
 
 test("a key's and an invitation's refusals land on their fields", () => {

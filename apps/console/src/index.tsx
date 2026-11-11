@@ -1,5 +1,5 @@
 import { Navigate, Route, Router } from "@solidjs/router";
-import { For, type JSX } from "solid-js";
+import { For, lazy, type JSX } from "solid-js";
 import { render } from "solid-js/web";
 import { Account } from "./console/Account.tsx";
 import { ChartDetail } from "./console/ChartDetail.tsx";
@@ -33,12 +33,16 @@ if (root === null) {
 }
 
 // Two kinds of layout: the console frame, and full-window tools (the
-// designer; later the event manager). A server-backed chart is another
+// designer, the event page with its manager). A server-backed chart is another
 // route with another `ChartSource` for the same designer (DSN-035).
 // Routes are under `BASE`, Vite's `base` (CON-015). The server logs the
 // setup link as `/console/setup`: under the root in development, that path
 // is the setup page too.
 const [charts, ...others] = SECTIONS;
+/** The event page loads the renderer: only when an event is opened. */
+const EventPage = lazy(async () => ({
+  default: (await import("./console/manager/EventPage.tsx")).EventPage,
+}));
 /** The sections built so far; the others say they are not built yet. */
 const SCREENS: Record<string, () => JSX.Element> = {
   "/events": Events,
@@ -54,6 +58,7 @@ render(
         <Route path="/sign-in" component={SignIn} />
         <Route path={INVITE_PATHS} component={Invite} />
         <Route path="/designer/local" component={() => <DesignerPage source={localSource} />} />
+        <Route path={["/events/:event", "/events/:event/settings"]} component={EventPage} />
         <Route path="/" component={Frame}>
           <Route
             path="/charts"

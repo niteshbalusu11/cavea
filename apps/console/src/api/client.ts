@@ -72,7 +72,8 @@ const SAFE = new Set(["GET", "HEAD", "OPTIONS"]);
 
 interface Parts {
   path?: Record<string, string>;
-  query?: Record<string, string | number | boolean | undefined>;
+  /** An array is the parameter repeated (`label=A&label=B`). */
+  query?: Record<string, string | number | boolean | readonly string[] | undefined>;
   headers?: Record<string, string | undefined>;
   body?: unknown;
 }
@@ -147,7 +148,8 @@ function target(template: string, parts: Parts): string {
   });
   const query = new URLSearchParams();
   for (const [name, value] of Object.entries(parts.query ?? {})) {
-    if (value !== undefined) query.set(name, String(value));
+    if (Array.isArray(value)) for (const v of value) query.append(name, String(v));
+    else if (value !== undefined) query.set(name, String(value));
   }
   const search = query.toString();
   return search === "" ? path : `${path}?${search}`;
