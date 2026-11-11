@@ -26,6 +26,16 @@
       bunVersion = nixpkgs.lib.removePrefix "bun@" packageJson.packageManager;
     in
     {
+      # The renderer's golden images (`cargo xtask golden`, docs/13 §6.1) are
+      # pictures from this Chromium's software rasteriser (SwiftShader) with
+      # dynamic text in this font only: both pinned by flake.lock, so a
+      # baseline changes only when this revision does. Built on demand
+      # (`nix build .#chromium`), never part of the dev shell.
+      packages = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: {
+        chromium = nixpkgs.legacyPackages.${system}.chromium;
+        golden-fonts = nixpkgs.legacyPackages.${system}.dejavu_fonts;
+      });
+
       devShells = forAllSystems (
         pkgs:
         let
