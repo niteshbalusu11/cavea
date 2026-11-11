@@ -252,6 +252,11 @@ impl GpuBackend for GlowBackend {
             self.gl.bind_buffer(target, Some(buffer));
             self.gl.buffer_data_u8_slice(target, data, usage);
             self.gl.bind_buffer(target, None);
+            // Storage allocation fails only through the error flag (OUT_OF_MEMORY).
+            if self.gl.get_error() != glow::NO_ERROR {
+                self.gl.delete_buffer(buffer);
+                return Err(BackendError::Create("buffer storage".to_owned()));
+            }
             buffer
         };
         self.buffers.push(Some((buffer, len, desc.kind)));
@@ -334,6 +339,10 @@ impl GpuBackend for GlowBackend {
                 glow::PixelUnpackData::Slice(data),
             );
             gl.bind_texture(glow::TEXTURE_2D, None);
+            if gl.get_error() != glow::NO_ERROR {
+                gl.delete_texture(texture);
+                return Err(BackendError::Create("texture storage".to_owned()));
+            }
             texture
         };
         self.textures.push(Some((texture, desc)));

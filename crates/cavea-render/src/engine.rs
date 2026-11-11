@@ -205,6 +205,9 @@ impl<B: GpuBackend> Engine<B> {
                 height: max[1] - min[1] + size,
             }
         };
+        if !valid_bounds(&bounds) {
+            return Err(invalid("seat positions span more than f32 can hold"));
+        }
         let rows = u32::from(cat.iter().copied().max().unwrap_or(0)) + 2;
         if rows > self.backend.caps().max_texture_size {
             return Err(invalid("too many categories for the palette texture"));
@@ -330,41 +333,58 @@ impl<B: GpuBackend> Engine<B> {
             },
             CLEAR,
         );
-        if let Err(error) = self.draw_seats(viewport, ((time_ms - start) / 1000.0) as f32) {
-            self.error(ErrorCode::Gpu, error.to_string());
+        if let Err((code, message)) = self.draw_seats(viewport, ((time_ms - start) / 1000.0) as f32)
+        {
+            self.error(code, message);
         }
         self.backend.end_frame();
     }
 
-    fn draw_seats(&mut self, viewport: Viewport, time: f32) -> Result<(), BackendError> {
+    fn draw_seats(&mut self, viewport: Viewport, time: f32) -> Result<(), (ErrorCode, String)> {
+        let gpu = |error: BackendError| (ErrorCode::Gpu, error.to_string());
         let Some(scene) = &mut self.scene else {
             return Ok(());
         };
         if let Some(range) = scene.dirty.take() {
             let bytes = seat::encode_dynamic(&scene.cat, &scene.visual, &scene.fx, range.clone());
             let offset = u32::try_from(range.start * seat::DYNAMIC_STRIDE)
-                .map_err(|_| BackendError::InvalidData)?;
+                .map_err(|_| gpu(BackendError::InvalidData))?;
             self.backend
-                .update_buffer(scene.dynamic_buf, offset, &bytes)?;
+                .update_buffer(scene.dynamic_buf, offset, &bytes)
+                .map_err(gpu)?;
         }
-        let count = u32::try_from(scene.cat.len()).map_err(|_| BackendError::InvalidData)?;
+        let count = u32::try_from(scene.cat.len()).map_err(|_| gpu(BackendError::InvalidData))?;
         if count == 0 {
             return Ok(());
         }
         let bounds = self.camera.unwrap_or(scene.bounds);
+        let uniforms = fit_uniforms(bounds, viewport, time);
+        // Extreme but finite bounds (a huge offset, a tiny size) can still overflow.
+        if !uniforms.view.iter().flatten().all(|v| v.is_finite()) || !uniforms.px_per_cu.is_finite()
+        {
+            return Err((
+                ErrorCode::InvalidInput,
+                "camera transform is not finite".to_owned(),
+            ));
+        }
         let call = DrawCall {
             pipeline: Pipeline::Shape,
             buffers: [Some(scene.static_buf), Some(scene.dynamic_buf)],
             texture: Some(scene.palette),
-            uniforms: fit_uniforms(bounds, viewport, time),
+            uniforms,
             instances: 0..count,
         };
-        self.backend.draw(&call)
+        self.backend.draw(&call).map_err(gpu)
     }
 }
 
+/// Finite, non-empty, and with finite far edges, so the centre is finite too.
 fn valid_bounds(b: &Bounds) -> bool {
-    [b.x, b.y, b.width, b.height].iter().all(|v| v.is_finite()) && b.width > 0.0 && b.height > 0.0
+    [b.x, b.y, b.width, b.height, b.x + b.width, b.y + b.height]
+        .iter()
+        .all(|v| v.is_finite())
+        && b.width > 0.0
+        && b.height > 0.0
 }
 
 /// Uniforms that fit `bounds` into the viewport with padding (04 §13 `fit`).
