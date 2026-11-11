@@ -151,7 +151,7 @@ All figures are **targets** until `13-testing-benchmarks.md` reports measurement
 
 Renderer payload measured locally, 2026-11-10 (REN-003), not a device result: the minimal renderer (WebGL2 context, `glow` backend, `shape` program, engine skeleton; no text, font atlas, gestures or chart decoding yet) is **37,298 B brotli**: 5,944 B of JavaScript glue and 31,354 B of WASM after `wasm-opt -Oz` (binaryen 132), as `cargo xtask build-web` reports. Without `wasm-opt` the WASM is 40,221 B. The `wasm-release` profile uses `opt-level = 3`, which beat `"s"` (32,846 B) and `"z"` (32,604 B) after `wasm-opt`. The default allocator is kept: `lol_alloc` saved 0.9 KB, which does not justify a dependency and an `unsafe` global allocator.
 
-With the web SDK (WEB-001 to WEB-005) and `caveaServer` (WEB-020 to WEB-025), measured locally 2026-11-11: **109,446 B brotli**: 15,241 B for the minified bundle of `@cavea/renderer` (the SDK, the server adapter and the wasm-bindgen glue), 84,743 B of WASM and 9,462 B of glyph atlas (`13-testing-benchmarks.md` §6.3).
+With the web SDK (WEB-001 to WEB-005) and `caveaServer` (WEB-020 to WEB-025), measured locally 2026-11-11: **109,658 B brotli**: 15,453 B for the minified bundle of `@cavea/renderer` (the SDK, the server adapter and the wasm-bindgen glue), 84,743 B of WASM and 9,462 B of glyph atlas (`13-testing-benchmarks.md` §6.3).
 
 "Chart-ready" means the first frame in which the buyer can select a seat, measured from the start of renderer initialisation with a cold cache, excluding the host page.
 
