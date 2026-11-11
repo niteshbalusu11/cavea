@@ -7,6 +7,8 @@
 // one task, then the drawing buffer is read before the browser presents it.
 // So nothing depends on wall-clock time, on animation (reduced motion: every
 // camera move is instant) or on how many frames came before the read.
+// Background images are fetched and decoded before that task, and each
+// request is answered at once, as text is.
 import init, { View } from "../../packages/renderer/wasm/cavea_web.js";
 import { loadGlyphAtlas } from "../../packages/renderer/src/atlas.ts";
 import { takeEvents, type RendererEvent } from "../../packages/renderer/src/events.ts";
@@ -35,6 +37,8 @@ export interface Panel {
   hover?: [number, number];
   /** Keys pressed with the keyboard focus shown: the focus ring. */
   keys?: string[];
+  /** Hashes of the background images the chart asks for, served at `assets/<hash>`. */
+  images?: string[];
 }
 
 export interface Rendered {
@@ -51,6 +55,15 @@ const FRAME_MS = 1000 / 60;
 
 let loaded: Promise<Uint8Array> | undefined;
 const charts = new Map<string, Promise<Uint8Array>>();
+/** Decoded background images by hash; every image the server has is loaded. */
+const bitmaps = new Map<string, Promise<ImageBitmap | undefined>>();
+
+async function bitmap(hash: string): Promise<ImageBitmap | undefined> {
+  const response = await fetch(`assets/${hash}`);
+  return response.ok
+    ? createImageBitmap(await response.blob(), { premultiplyAlpha: "premultiply" })
+    : undefined;
+}
 
 async function bytes(url: string): Promise<Uint8Array> {
   const response = await fetch(url);
@@ -71,6 +84,15 @@ async function render(panel: Panel): Promise<Rendered> {
     charts.set(panel.chart, chart);
   }
   const ccf = await chart;
+  for (const hash of panel.images ?? []) {
+    if (!bitmaps.has(hash)) {
+      bitmaps.set(hash, bitmap(hash));
+    }
+  }
+  const decoded = new Map<string, ImageBitmap | undefined>();
+  for (const hash of panel.images ?? []) {
+    decoded.set(hash, await bitmaps.get(hash));
+  }
 
   // From here on, one task: the drawing buffer is not presented (and so not
   // cleared) before it is read.
@@ -96,6 +118,13 @@ async function render(panel: Panel): Promise<Rendered> {
       for (const event of takeEvents(view)) {
         if (event.type === "textRequest") {
           view.setText(event.id, ...rasteriser.draw(event));
+          text = true;
+        } else if (event.type === "imageRequest") {
+          const image = decoded.get(event.asset);
+          if (image === undefined) {
+            throw new Error(`image ${event.asset} is not in the panel's images`);
+          }
+          view.setImage(event.id, image);
           text = true;
         } else {
           log.push(event);

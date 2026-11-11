@@ -17,7 +17,8 @@ use cavea_render::{
 };
 use wasm_bindgen::{JsCast as _, JsError, JsValue, prelude::wasm_bindgen};
 use web_sys::{
-    HtmlCanvasElement, WebGl2RenderingContext, WebGlContextAttributes, WebGlPowerPreference,
+    HtmlCanvasElement, ImageBitmap, WebGl2RenderingContext, WebGlContextAttributes,
+    WebGlPowerPreference,
 };
 
 #[wasm_bindgen]
@@ -66,8 +67,8 @@ impl View {
         if context.is_context_lost() {
             return Err(JsError::new("WebGL2 context is lost"));
         }
-        let backend = GlowBackend::new(glow::Context::from_webgl2_context(context.clone()))
-            .map_err(|e| JsError::new(&e.to_string()))?;
+        let backend =
+            GlowBackend::web(context.clone()).map_err(|e| JsError::new(&e.to_string()))?;
         let mut view = View {
             engine: Engine::new(backend),
             canvas,
@@ -296,6 +297,19 @@ impl View {
         })
     }
 
+    /// The host's answer to an `imageRequest` event (04 §7): the decoded
+    /// image, within the request's limits, or `undefined` when it could not
+    /// be loaded. Uploaded at once; the host may close the bitmap after.
+    /// Drawn from the next frame. Throws for an image over the limits.
+    #[wasm_bindgen(js_name = setImage)]
+    pub fn set_image(&mut self, id: u32, image: Option<ImageBitmap>) -> Result<(), JsError> {
+        if self.context.is_context_lost() {
+            self.engine.handle(Command::ContextLost);
+        }
+        self.engine.set_image(id, image.as_ref());
+        self.drain()
+    }
+
     /// A built-in string the map draws, from the message catalogue:
     /// `soldOut` (default "Sold out").
     #[wasm_bindgen(js_name = setMessage)]
@@ -307,12 +321,7 @@ impl View {
     /// overrides as name and value pairs, flattened (04 §19).
     #[wasm_bindgen(js_name = setTheme)]
     pub fn set_theme(&mut self, name: &str, tokens: Vec<String>) -> Result<(), JsError> {
-        let base = match name {
-            "light" => BuiltinTheme::Light,
-            "dark" => BuiltinTheme::Dark,
-            "high-contrast" => BuiltinTheme::HighContrast,
-            _ => return Err(JsError::new("unknown theme")),
-        };
+        let base = BuiltinTheme::from_name(name).ok_or_else(|| JsError::new("unknown theme"))?;
         let mut tokens = tokens.into_iter();
         let mut pairs = Vec::new();
         while let (Some(name), Some(value)) = (tokens.next(), tokens.next()) {

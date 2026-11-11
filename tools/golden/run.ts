@@ -49,6 +49,12 @@ interface ChartSpec {
   rowPrefix?: string;
   /** Seat label scheme for the second section's rows. */
   seatScheme?: string;
+  /**
+   * A background image node added to the document: the file beside the
+   * cases, served under `hash` (any 32 lowercase hex digits), with the
+   * image node's own fields (`origin`, `size`, `rotation`, `opacity`).
+   */
+  image?: { file: string; hash: string; node: Record<string, unknown> };
 }
 
 interface Case {
@@ -87,10 +93,13 @@ await mkdir(join(work, "charts"), { recursive: true });
 
 // Charts: a preset's document, changed as the case file says, compiled.
 type Doc = {
+  nextOid: number;
   settings: Record<string, unknown>;
   nodes: Array<Record<string, unknown> & { type: string }>;
 };
 const used = new Set(chosen.flatMap((c) => c.panels.map((p) => p.chart)));
+/** Background images by served path. */
+const imageFiles: Record<string, string> = {};
 for (const name of used) {
   const spec = cases.charts[name];
   if (spec === undefined) {
@@ -128,6 +137,17 @@ for (const name of used) {
       text["text"] = spec.text;
     }
   }
+  if (spec.image !== undefined) {
+    // First, so it is drawn under everything (it is anyway: pass 2).
+    doc.nodes.unshift({
+      ...spec.image.node,
+      id: doc.nextOid++,
+      type: "image",
+      asset: spec.image.hash,
+      role: "background",
+    });
+    imageFiles[`/assets/${spec.image.hash}`] = join(GOLDEN, spec.image.file);
+  }
   const docPath = join(work, `${name}.json`);
   await writeFile(docPath, JSON.stringify(doc));
   const dir = join(work, `compiled-${name}`);
@@ -154,6 +174,7 @@ const script = await built.outputs[0].text();
 const files: Record<string, string> = {
   "/wasm/cavea_web_bg.wasm": join(ROOT, "packages/renderer/wasm/cavea_web_bg.wasm"),
   "/glyphs.png": join(ROOT, "packages/renderer/assets/glyphs.png"),
+  ...imageFiles,
 };
 const server = Bun.serve({
   port: 0,

@@ -52,7 +52,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **FND-004** `cargo xtask build-web`: build, `wasm-opt`, brotli, emit size report (01 §6)
 - [x] **FND-005** Payload size gate in CI with a hard cap and a +3% warning (13 §6.3): `cargo xtask build-web` fails above +3% over the committed baseline
 - [x] **FND-006** Release profile tuning for WASM: LTO, `panic = "abort"`, optimisation level, allocator choice; measure each (01 §5)
-- [ ] **FND-007** Generate TypeScript types from Rust for options, events and payloads (05 §3, §5)
+- [x] **FND-007** Generate TypeScript types from Rust for options, events and payloads (05 §3, §5)
 - [x] **FND-008** Workspace lint configuration: moderate clippy set, strict `tsc`, oxc rules (01 §4)
 - [x] **FND-009** Changelog tooling and commit conventions (01 §6)
 - [x] **FND-010** Nix development environment: `flake.nix` with every non-trivial tool, `.envrc` using the flake, so `direnv allow` loads everything (ORCHESTRATION §5, §10)
@@ -97,7 +97,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **REN-017** Seat static and dynamic buffers with the specified layout (04 §6)
 - [x] **REN-018** Palette texture and visual state mapping (04 §9)
 - [x] **REN-019** `mesh` program: decoration layers and section fills (04 §7)
-- [ ] **REN-020** `image` program and lazy background image loading (04 §7)
+- [x] **REN-020** `image` program and lazy background image loading (04 §7)
 - [x] **REN-021** Level-of-detail levels with cross-fade and hysteresis (04 §10)
 - [x] **REN-022** Section availability counters and overview tint (04 §5, §10)
 - [x] **REN-023** Chunk culling and merging of visible ranges; stay under 64 seat draw calls (04 §11)

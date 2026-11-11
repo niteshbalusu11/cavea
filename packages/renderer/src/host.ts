@@ -4,10 +4,13 @@
 // `requestAnimationFrame` time, both on the `performance.now()` clock.
 import { defaultMaxDpr } from "../wasm/cavea_web.js";
 import { takeEvents, type RendererEvent } from "./events.ts";
+import { createImageLoader, type ImageSource } from "./images.ts";
 import { createRasteriser } from "./text.ts";
 import type { EngineView } from "./view.ts";
 
-export type GestureHandling = "greedy" | "cooperative" | "none";
+import type { GestureHandling } from "./generated/engine.ts";
+
+export type { GestureHandling };
 
 export interface AttachOptions {
   /** Default `"greedy"`. */
@@ -22,6 +25,12 @@ export interface AttachOptions {
    * event and the map carries on without labels.
    */
   glyphAtlas?: Promise<Uint8Array>;
+  /**
+   * Where background images come from, by content hash. They load after
+   * the first frame; one that fails is reported as an `error` event with
+   * code `image` and the map carries on without it.
+   */
+  images?: ImageSource;
   /**
    * Called after every frame the host runs, with its time and, with
    * `timeFrames`, the milliseconds the frame's work took (the view's frame,
@@ -83,6 +92,21 @@ export function attach(
   /** While the context is lost no frame is run. */
   let lost = false;
   const rasteriser = createRasteriser();
+  const images = createImageLoader(
+    options.images,
+    // A throw (an image the view refuses) goes to the loader, which reports
+    // it as `image`, like any other failed image.
+    (id, image) => {
+      if (!detached) {
+        try {
+          view.setImage(id, image);
+        } finally {
+          update();
+        }
+      }
+    },
+    (error) => options.onEvents?.([{ type: "error", code: "image", message: String(error) }]),
+  );
 
   /** Runs a view call; a throw becomes an `error` event, never the page's. */
   function guard(call: () => unknown): void {
@@ -98,12 +122,16 @@ export function attach(
       return;
     }
     // Taken even without a listener, so they do not pile up in the view.
-    // Text the engine asks for is drawn here, between frames (04 §12).
+    // Text the engine asks for is drawn here, between frames (04 §12);
+    // images start loading (04 §7).
     const events = takeEvents(view).filter((event) => {
-      if (event.type !== "textRequest") {
+      if (event.type === "textRequest") {
+        guard(() => view.setText(event.id, ...rasteriser.draw(event)));
+      } else if (event.type === "imageRequest") {
+        images.request(event);
+      } else {
         return true;
       }
-      guard(() => view.setText(event.id, ...rasteriser.draw(event)));
       return false;
     });
     if (events.length > 0) {
@@ -352,6 +380,7 @@ export function attach(
         off();
       }
       rasteriser.release();
+      images.release();
     },
   };
 }

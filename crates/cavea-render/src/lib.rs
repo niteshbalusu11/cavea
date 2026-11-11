@@ -17,6 +17,7 @@ pub mod focus;
 pub mod gesture;
 pub mod hit;
 pub mod host;
+pub mod image;
 pub mod label;
 #[cfg(feature = "designer")]
 pub mod live;

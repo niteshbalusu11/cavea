@@ -6,6 +6,7 @@
     "bun.lock",
     "crates/*/samples/**",
     "packages/designer-core/src/generated/**",
+    "packages/renderer/src/generated/**",
     "apps/console/src/api/generated.ts",
     "crates/cavea-server/openapi.json"
   ]

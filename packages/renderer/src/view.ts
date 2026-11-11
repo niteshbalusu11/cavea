@@ -9,6 +9,8 @@ export interface EngineView {
   setGlyphAtlas(rgba: Uint8Array): void;
   /** The raster for a `textRequest`: width, height, em in device pixels, coverage bytes. */
   setText(id: number, width: number, height: number, px: number, pixels: Uint8Array): void;
+  /** The answer to an `imageRequest`: the decoded image, or `undefined` when it failed. */
+  setImage(id: number, image: ImageBitmap | undefined): void;
   /** A built-in string the map draws (`soldOut`). */
   setMessage(key: string, text: string): void;
   /** One SNAPSHOT, DELTA or PRIVATE frame; `false` for frames it does not take. */

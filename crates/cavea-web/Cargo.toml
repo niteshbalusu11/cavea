@@ -31,6 +31,8 @@ cavea-format.workspace = true
 cavea-compiler.workspace = true
 cavea-testkit.workspace = true
 serde_json.workspace = true
+# The JSON the WASM writes, as types `cargo xtask types` reads (`schema`).
+serde.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 cavea-render = { workspace = true, features = ["glow"] }
@@ -40,6 +42,7 @@ web-sys = { workspace = true, features = [
   "CssStyleDeclaration",
   "HtmlCanvasElement",
   "HtmlElement",
+  "ImageBitmap",
   "WebGl2RenderingContext",
   "WebGlContextAttributes",
   "WebGlPowerPreference",

@@ -13,7 +13,7 @@ use super::{
     BackendError, BufferDesc, BufferId, BufferKind, BufferUsage, Caps, DrawCall, GpuBackend,
     Pipeline, Rect, ResourceId, Sampling, Target, TextureDesc, TextureFormat, TextureId,
 };
-use crate::{label::TEXT_STRIDE, seat, shaders, text};
+use crate::{image, label::TEXT_STRIDE, seat, shaders, text};
 
 /// A linked program and its attribute layout.
 struct Program {
@@ -30,6 +30,7 @@ struct Programs {
     mesh: Program,
     glyph: Program,
     text: Program,
+    image: Program,
     /// The uniform buffer every program reads at binding point 0, and the
     /// glyph metrics at 1.
     globals: glow::Buffer,
@@ -42,12 +43,16 @@ pub struct GlowBackend {
     programs: Programs,
     buffers: Vec<Option<(glow::Buffer, u32, BufferKind)>>,
     textures: Vec<Option<(glow::Texture, TextureDesc)>>,
+    /// The same context as `web_sys` sees it, for uploads `glow` would
+    /// panic on (`GlowBackend::web`); none, and no images, otherwise.
+    #[cfg(target_arch = "wasm32")]
+    web: Option<web_sys::WebGl2RenderingContext>,
 }
 
 /// Sets the fixed state and compiles the pipelines; on a failure, deletes
 /// what it made (a restore may fail and be tried again).
 fn compile(gl: &glow::Context) -> Result<Programs, BackendError> {
-    let mut made = Vec::with_capacity(4);
+    let mut made = Vec::with_capacity(5);
     let mut buffers = Vec::with_capacity(2);
     let result = compile_into(gl, &mut made, &mut buffers);
     // SAFETY: see the module documentation.
@@ -65,17 +70,30 @@ fn compile(gl: &glow::Context) -> Result<Programs, BackendError> {
     result?;
     let mut made = made.into_iter();
     match (
-        made.next(),
-        made.next(),
-        made.next(),
-        made.next(),
+        [
+            made.next(),
+            made.next(),
+            made.next(),
+            made.next(),
+            made.next(),
+        ],
         &buffers[..],
     ) {
-        (Some(shape), Some(mesh), Some(glyph), Some(text), &[font, globals]) => Ok(Programs {
+        (
+            [
+                Some(shape),
+                Some(mesh),
+                Some(glyph),
+                Some(text),
+                Some(image),
+            ],
+            &[font, globals],
+        ) => Ok(Programs {
             shape,
             mesh,
             glyph,
             text,
+            image,
             globals,
             font,
         }),
@@ -83,7 +101,7 @@ fn compile(gl: &glow::Context) -> Result<Programs, BackendError> {
     }
 }
 
-/// The pipelines in `made` (shape, mesh, glyph, text) and the uniform
+/// The pipelines in `made` (shape, mesh, glyph, text, image) and the uniform
 /// buffers in `buffers` (font, globals), each pushed as soon as it exists.
 fn compile_into(
     gl: &glow::Context,
@@ -96,7 +114,13 @@ fn compile_into(
         // Premultiplied alpha (04 §8).
         gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
         gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
-        for make in [shape_program, mesh_program, glyph_program, text_program] {
+        for make in [
+            shape_program,
+            mesh_program,
+            glyph_program,
+            text_program,
+            image_program,
+        ] {
             made.push(make(gl)?);
         }
         // The glyph metrics never change: one block at binding point 1.
@@ -133,7 +157,18 @@ impl GlowBackend {
             programs,
             buffers: Vec::new(),
             textures: Vec::new(),
+            #[cfg(target_arch = "wasm32")]
+            web: None,
         })
+    }
+
+    /// Takes over a WebGL2 context, keeping it to upload images from the
+    /// browser's decoded `ImageBitmap`s (`create_image_texture`).
+    #[cfg(target_arch = "wasm32")]
+    pub fn web(context: web_sys::WebGl2RenderingContext) -> Result<Self, BackendError> {
+        let mut backend = Self::new(glow::Context::from_webgl2_context(context.clone()))?;
+        backend.web = Some(context);
+        Ok(backend)
     }
 
     fn buffer(&self, id: Option<BufferId>) -> Result<(glow::Buffer, u32), BackendError> {
@@ -375,6 +410,53 @@ impl GlowBackend {
         Ok(())
     }
 
+    /// Background images: per range, the instances from its start; a
+    /// triangle strip of four vertices each, from the one texture.
+    fn draw_image(&self, call: &DrawCall<'_>) -> Result<(), BackendError> {
+        let (buffer, len) = self.buffer(call.buffers[0])?;
+        let picture = self
+            .texture(call.textures[0].ok_or(BackendError::UnknownResource)?)?
+            .0;
+        let stride = image::STRIDE as u64;
+        for range in call.ranges {
+            if range.start > range.end
+                || u64::from(range.end) * stride > u64::from(len)
+                || i32::try_from(u64::from(range.end) * stride).is_err()
+            {
+                return Err(BackendError::InvalidData);
+            }
+        }
+        let stride = image::STRIDE as i32;
+        let gl = &self.gl;
+        // SAFETY: see the module documentation; every range was checked above,
+        // so the offsets and counts below fit in i32 and inside the buffer.
+        unsafe {
+            self.uniforms(call);
+            gl.use_program(Some(self.programs.image.program));
+            gl.bind_vertex_array(Some(self.programs.image.vao));
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(picture));
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
+            for range in call.ranges {
+                let base = (range.start as usize * image::STRIDE) as i32;
+                for (location, size, offset) in [(0, 2, 0), (1, 2, 8), (2, 1, 16), (3, 1, 20)] {
+                    gl.vertex_attrib_pointer_f32(
+                        location,
+                        size,
+                        glow::FLOAT,
+                        false,
+                        stride,
+                        base + offset,
+                    );
+                }
+                let count = (range.end - range.start) as i32;
+                gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, count);
+            }
+            gl.bind_vertex_array(None);
+        }
+        Ok(())
+    }
+
     /// Indexed triangles: each range is a range of the index buffer.
     fn draw_mesh(&self, call: &DrawCall<'_>) -> Result<(), BackendError> {
         let [vertex_id, index_id] = call.buffers;
@@ -493,6 +575,16 @@ fn text_program(gl: &glow::Context) -> Result<Program, BackendError> {
     unsafe { program(gl, sources, &blocks, &samplers, 7, true) }
 }
 
+/// The `image` program: the globals at binding point 0 (vertex stage only),
+/// the image on unit 0.
+fn image_program(gl: &glow::Context) -> Result<Program, BackendError> {
+    let sources = [shaders::IMAGE_VERT, shaders::IMAGE_FRAG];
+    let blocks = [(shaders::IMAGE_VERT_GLOBALS, 0)];
+    let samplers = [(shaders::IMAGE_FRAG_PICTURE, 0)];
+    // SAFETY: see the module documentation.
+    unsafe { program(gl, sources, &blocks, &samplers, 4, true) }
+}
+
 /// The `mesh` program reads its uniforms in the vertex stage only.
 fn mesh_program(gl: &glow::Context) -> Result<Program, BackendError> {
     let sources = [shaders::MESH_VERT, shaders::MESH_FRAG];
@@ -564,6 +656,78 @@ const fn gl_format(format: TextureFormat) -> (i32, u32) {
 }
 
 impl GpuBackend for GlowBackend {
+    #[cfg(target_arch = "wasm32")]
+    type Image = web_sys::ImageBitmap;
+    /// Natively there is no host image to upload.
+    #[cfg(not(target_arch = "wasm32"))]
+    type Image = std::convert::Infallible;
+
+    #[cfg(target_arch = "wasm32")]
+    fn image_size(image: &Self::Image) -> [u32; 2] {
+        [image.width(), image.height()]
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn image_size(image: &Self::Image) -> [u32; 2] {
+        match *image {}
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn create_image_texture(&mut self, image: &Self::Image) -> Result<TextureId, BackendError> {
+        let web = self
+            .web
+            .as_ref()
+            .ok_or(BackendError::Unsupported(Pipeline::Image))?;
+        let [width, height] = Self::image_size(image);
+        if width == 0 || height == 0 || width.max(height) > self.caps.max_texture_size {
+            return Err(BackendError::InvalidData);
+        }
+        let id = u32::try_from(self.textures.len()).map_err(|_| BackendError::InvalidData)?;
+        let gl = &self.gl;
+        // SAFETY: see the module documentation; the upload goes through
+        // `web_sys`, which reports a refused image (a closed bitmap) as an
+        // error instead of the panic `glow`'s wrapper would make of it.
+        let texture = unsafe {
+            let texture = gl.create_texture().map_err(BackendError::Create)?;
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            for (parameter, value) in [
+                (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
+                (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
+                (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+                (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+            ] {
+                gl.tex_parameter_i32(glow::TEXTURE_2D, parameter, value as i32);
+            }
+            let uploaded = web.tex_image_2d_with_u32_and_u32_and_image_bitmap(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA8 as i32,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                image,
+            );
+            gl.bind_texture(glow::TEXTURE_2D, None);
+            if uploaded.is_err() || gl.get_error() != glow::NO_ERROR {
+                gl.delete_texture(texture);
+                return Err(BackendError::Create("image texture".to_owned()));
+            }
+            texture
+        };
+        let desc = TextureDesc {
+            width,
+            height,
+            format: TextureFormat::Rgba8,
+            sampling: Sampling::Linear,
+        };
+        self.textures.push(Some((texture, desc)));
+        Ok(TextureId(id))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn create_image_texture(&mut self, image: &Self::Image) -> Result<TextureId, BackendError> {
+        match *image {}
+    }
+
     fn caps(&self) -> Caps {
         self.caps
     }
@@ -740,7 +904,7 @@ impl GpuBackend for GlowBackend {
             Pipeline::Mesh => self.draw_mesh(call),
             Pipeline::Glyph => self.draw_glyph(call),
             Pipeline::Text => self.draw_text(call),
-            other => Err(BackendError::Unsupported(other)),
+            Pipeline::Image => self.draw_image(call),
         }
     }
 
@@ -755,7 +919,7 @@ impl GpuBackend for GlowBackend {
         // an error, which is cleared before anything is made.
         unsafe {
             let p = &self.programs;
-            for program in [&p.shape, &p.mesh, &p.glyph, &p.text] {
+            for program in [&p.shape, &p.mesh, &p.glyph, &p.text, &p.image] {
                 gl.delete_program(program.program);
                 gl.delete_vertex_array(program.vao);
             }

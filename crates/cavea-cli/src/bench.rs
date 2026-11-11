@@ -109,6 +109,14 @@ impl Rng {
 struct NoGpu(u32);
 
 impl GpuBackend for NoGpu {
+    type Image = [u32; 2];
+    fn image_size(image: &[u32; 2]) -> [u32; 2] {
+        *image
+    }
+    fn create_image_texture(&mut self, _: &[u32; 2]) -> Result<TextureId, BackendError> {
+        self.0 += 1;
+        Ok(TextureId(self.0))
+    }
     fn caps(&self) -> Caps {
         Caps {
             max_texture_size: 4096,

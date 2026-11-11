@@ -844,6 +844,7 @@ export function serverAdapter(input: CaveaServerOptions, platform: () => Platfor
       start(s);
       return { url: `${root}${(await eventInfo()).chart.url}` };
     },
+    image: (hash) => `${root}/v1/public/assets/${hash}`,
     async connect(c) {
       ctx = c;
       start(c.signal);

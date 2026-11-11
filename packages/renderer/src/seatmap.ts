@@ -6,6 +6,7 @@ import { staticState, type AdapterContext, type HoldResult, type Snapshot } from
 import { createA11y, type A11y } from "./a11y.ts";
 import { CaveaError, isDevelopment, permanent, warner, type CaveaErrorCode } from "./errors.ts";
 import type { ChartInfo, ObjectInfo, RendererEvent } from "./events.ts";
+import type { ObjectDetails } from "./generated/engine.ts";
 import type { AttachOptions, Attached } from "./host.ts";
 import { localeDirection, translator } from "./messages.ts";
 import {
@@ -375,7 +376,7 @@ export async function createMap(
     label: string,
   ): (ObjectInfo & { status: number; place?: [number, number] }) | undefined {
     const json = view?.object(label);
-    return json === undefined ? undefined : (JSON.parse(json) as ObjectInfo & { status: number });
+    return json === undefined ? undefined : (JSON.parse(json) as ObjectDetails);
   }
 
   function lookup(label: string): SeatObject {
@@ -707,7 +708,11 @@ export async function createMap(
       case "error":
         report(
           new CaveaError(
-            event.code === "glyphAtlas" ? "glyph_atlas_failed" : "engine_failed",
+            event.code === "glyphAtlas"
+              ? "glyph_atlas_failed"
+              : event.code === "image"
+                ? "image_failed"
+                : "engine_failed",
             event.message,
           ),
         );
@@ -1161,6 +1166,10 @@ export async function createMap(
     };
     if (options.maxDpr !== undefined) {
       attachOptions.maxDpr = options.maxDpr;
+    }
+    const image = options.assets?.image ?? adapter.image?.bind(adapter);
+    if (image !== undefined) {
+      attachOptions.images = image;
     }
     if (typeof options.reducedMotion === "boolean") {
       attachOptions.reducedMotion = options.reducedMotion;
