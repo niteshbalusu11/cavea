@@ -139,7 +139,7 @@ Plus per-row, per-segment, per-section, per-chunk and per-floor tables: the deco
 
 Derived at load (`cavea_render::overview::Sections`):
 
-- **Section counters.** Per section, its *open* seats: those not drawn unavailable (visual state other than 1, §9), so available seats and the buyer's own selection (pending or held, and a seat given up whose release is not yet confirmed, §17) count as open. They are counted at load and on every snapshot (one pass over the rows' seat ranges), and updated in the same pass that changes a seat's visual state (delta, selection), by ±1 through the seat's row (`ROWS` section): no search. Only what the overview tint uses is built: per-category counters wait for filters and the "from" price. Cost measured locally (release build, AMD Ryzen 9 7900X, synthetic 100,000-seat stadium): a 9,502-change delta applies in 0.108 to 0.112 ms with them, against 0.107 ms without; a snapshot in 0.080 ms against 0.054 ms.
+- **Section counters.** Per section, its *open* seats: those not drawn unavailable (visual state other than 1, §9), so available seats and the buyer's own selection (pending or held, and a seat given up whose release is not yet confirmed, §17) count as open. They are counted at load and on every snapshot (one pass over the rows' seat ranges), and updated in the same pass that changes a seat's visual state (delta, selection), by ±1 through the seat's row (`ROWS` section): no search. Only what the overview tint uses is built: per-category counters wait for filters and the "from" price. Cost measured locally (release build, AMD Ryzen 9 7900X, synthetic 100,000-seat stadium): a 9,502-change delta applies in 0.108 to 0.114 ms with them, against 0.107 ms without; a snapshot in 0.061 to 0.084 ms against 0.054 ms; loading the chart to its first frame takes 1.4 to 1.6 ms against 1.3 ms.
 - **Dominant category** per section: the category most of its seats have, the lower index on a tie; none for a section without seats. Computed once at load in one pass over the seats; the compiled chart does not carry it.
 - A neighbour table is not needed: seats within a row are stored in physical order, and `RSEG` marks the breaks.
 
@@ -191,7 +191,7 @@ Five shader programs. Draw order, back to front:
 | 11 | Decoration, upper layer and icons | `mesh`, `glyph` | — | Always |
 | 12 | Overlays: hover ring, focus ring, selection box | `shape` | Instanced quad | When present |
 
-Mesh passes draw only the active floor's ranges: its `below` draw range (pass 3), the outline ranges of its sections (pass 4: the active floor's sections are consecutive in `SECT`, so their outlines are one index range and **all section fills are one draw call**) and its `above` draw range (pass 11). So a frame draws at most three mesh calls. Mesh draws are not culled: the whole mesh is small (39,552 bytes for the synthetic 100,000-seat stadium's 24 section outlines, measured locally), the GPU clips off-screen triangles, and splitting the fill range by visibility would add draw calls. Tinting by vertex colour rather than one draw per section with a tint uniform keeps it one call and adds no vertex attribute; the cost is a vertex sub-range upload when a tint changes (§10).
+Mesh passes draw only the active floor's ranges: its `below` draw range (pass 3), the outline ranges of its sections (pass 4: the active floor's sections are consecutive in `SECT`, so their outlines are one index range and **all section fills are one draw call**) and its `above` draw range (pass 11). So a frame draws at most three mesh calls. Mesh draws are not culled: the whole mesh is small (106,896 bytes for the `stadium-100k` preset's 180 section outlines and pitch, measured locally), the GPU clips off-screen triangles, and splitting the fill range by visibility would add draw calls. Tinting by vertex colour rather than one draw per section with a tint uniform keeps it one call and adds no vertex attribute; the cost is a vertex sub-range upload when a tint changes (§10).
 
 The hover and focus rings are drawn in screen space (CSS pixels), so they are the same width at any zoom: for each, a halo in the background colour from the seat's edge out 2 px, then the ring 2 px wide outside it (`RING_WIDTH_PX`), together the two-tone ring of `11-accessibility.md` §3. Each is a `shape` instance of the seat's shape and angle (a chair's ring is a rounded square) whose fill is transparent and whose stroke is the ring; at most four instances, uploaded only when they change. The focus ring is drawn over the hover ring.
 
@@ -276,7 +276,7 @@ Let `s` be the seat size in CSS pixels at the current zoom.
 - **Updates.** A counter change marks its section's tint stale; at the next frame each stale tint is computed once and written into that section's outline vertex colours, and the vertex range written is uploaded once. A delta at overview therefore redraws one frame however many changes it carries. A theme change marks every tint stale.
 - **Taps in overview.** Section drill-down (a tap flies the camera to the tapped section) is REN-053. Until then a tap at overview is handled as at any level: it hits the nearest seat within the tolerance (§15), which is too small to select at overview, so zoom-to-select flies the camera to make seats 32 px about it; a tap off every seat does nothing. REN-053 replaces this at overview only.
 - **Pulses** (§17) start only while seats are drawn (opacity above 0); a pulse running when the camera reaches overview ends at its time.
-- Measured on the demo (Chromium 157, SwiftShader software rendering, 1000 × 800 CSS px, the synthetic 100,000-seat stadium with a pitch below and a band above): 3 draw calls at overview (lower decoration, section fills, upper decoration), 9 to 14 in the cross-fade, 5 to 9 at seats and detail (two decoration calls plus the visible seat ranges and any overlay).
+- Measured on the demo (Chromium 157, SwiftShader software rendering, 1000 × 800 CSS px, zooming from fit to detail): with the `stadium-100k` preset (180 sections, a pitch below the seats) and a band added above them, 3 draw calls at overview (lower decoration, section fills, upper decoration), 5 to 7 in the cross-fade, 5 at seats, 4 at detail; with the 24-section synthetic stadium, 3, 9 to 14, 5 to 9 and 5 to 6.
 
 ## 11. Culling and draw calls
 
@@ -501,7 +501,7 @@ At 100,000 seats:
 | GPU seat buffers | 1.6 MB |
 | Label buffers (64 chunks) | ≤ 6 MB |
 | Text and glyph atlases | ≤ 5 MB |
-| Meshes | ≤ 2 MB (the synthetic 100,000-seat stadium: 1,672 vertices and 4,872 indices, 39,552 bytes on the GPU and the same decoded on the CPU, measured locally) |
+| Meshes | ≤ 2 MB (the `stadium-100k` preset: 4,636 vertices and 12,816 indices, 106,896 bytes on the GPU and the same decoded on the CPU, measured locally) |
 | WASM code and heap overhead | ≤ 4 MB |
 
 This leaves wide margin under the 40 MB budget. Background images are the only large variable; they are capped and optional.
