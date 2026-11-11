@@ -217,9 +217,9 @@ fn loading_a_second_chart_releases_the_first() {
     let (s, d, p) = ids(&e);
     let [o1, o2] = gpu(&e).overlay;
     let [m1, m2] = gpu(&e).mesh.unwrap();
-    // The row labels' buffers, made by its first frame.
-    let labels = e.scene.as_ref().unwrap().map_labels.row_buffers();
-    let labels = labels.into_iter().flatten().map(ResourceId::Buffer);
+    // The row labels' buffer, made by its first frame.
+    let labels = e.scene.as_ref().unwrap().map_labels.text_buffer();
+    let labels = labels.into_iter().map(ResourceId::Buffer);
     load(&mut e, two_seats([0.0, 0.0], [10.0, 10.0]));
     let mut expected = vec![
         ResourceId::Buffer(BufferId(s)),

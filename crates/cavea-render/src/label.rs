@@ -30,19 +30,17 @@ use crate::{
     scene::Scene,
     seat::{DYNAMIC_STRIDE, SeatDynamic, SeatStatic},
     text::{
-        CAP_HEIGHT_EM, LABEL_FIT, LABEL_MIN_EM_PX, LABEL_STRIDE, Labels,
+        CAP_HEIGHT_EM, LABEL_FIT, LABEL_MIN_EM_PX, Labels,
         atlas::{Key, Raster, Source, TextAtlas, bucket},
-        label_em, label_instance, layout,
+        label_em,
     },
     theme::{PALETTE_WIDTH, Rgba, Theme, visual},
 };
 
 /// Bytes per `text` instance (`shaders/text.wgsl`).
 pub const TEXT_STRIDE: usize = 36;
-/// `text` instances, and row labels from the baked atlas, in one build at
-/// most.
+/// `text` instances in one build at most.
 pub const MAX_TEXT_INSTANCES: usize = 2048;
-pub const MAX_ROW_LABELS: usize = 4096;
 /// Row labels show from this default seat size on screen (CSS pixels).
 pub const ROW_LABEL_SEAT_PX: f64 = 8.0;
 /// A row label's box fits a circle this fraction of its row's seat size: a
@@ -98,9 +96,8 @@ struct Cand {
 enum Kind {
     Section,
     Seat,
+    /// Text objects and row labels.
     Text,
-    /// A row label from the baked atlas: a `glyph` instance in `bytes`.
-    Glyph,
 }
 
 /// A `text` instance (`shaders/text.wgsl`).
@@ -150,24 +147,17 @@ pub struct MapLabels {
     /// The collision grid, a bit per cell, rows of whole words.
     grid: Vec<u64>,
     text_bytes: Vec<u8>,
-    row_bytes: Vec<u8>,
-    /// What the buffers hold, so a build that changes nothing uploads
-    /// nothing (a theme change leaves baked row labels as they are).
+    /// What the buffer holds, so a build that changes nothing uploads
+    /// nothing.
     text_held: Vec<u8>,
-    row_held: Vec<u8>,
     text_buf: Option<BufferId>,
-    /// Baked row label instances, and constant "seat" entries that give
-    /// them the palette's muted ink.
-    row_bufs: Option<[BufferId; 2]>,
     /// Decoration icons: `shape` instances, static then dynamic bytes, made
     /// at load; their buffers on first draw.
     icon_bytes: [Vec<u8>; 2],
     icon_bufs: Option<[BufferId; 2]>,
     /// Ranges of the text buffer: section labels, seat labels, then text
-    /// objects and row labels from the dynamic atlas.
+    /// objects and row labels.
     pub ranges: [Range<u32>; 3],
-    /// Baked row labels.
-    pub rows: u32,
     /// Builds since the chart loaded, for tests and the demo.
     pub builds: u32,
 }
@@ -177,20 +167,14 @@ impl MapLabels {
         self.text_buf
     }
 
-    pub fn row_buffers(&self) -> Option<[BufferId; 2]> {
-        self.row_bufs
-    }
-
     /// Destroys every GPU buffer and forgets what they held, so the next
     /// build makes and fills them again: a new chart, or a lost context.
     pub fn release(&mut self, backend: &mut impl GpuBackend) {
-        let rows = self.row_bufs.take().into_iter().flatten();
         let icons = self.icon_bufs.take().into_iter().flatten();
-        for id in self.text_buf.take().into_iter().chain(rows).chain(icons) {
+        for id in self.text_buf.take().into_iter().chain(icons) {
             backend.destroy(ResourceId::Buffer(id));
         }
         self.text_held.clear();
-        self.row_held.clear();
         self.built.clear();
     }
 
@@ -501,8 +485,8 @@ impl MapLabels {
         }
 
         // Row labels at the ends the chart asks for, for the rows of the
-        // chunks in view (a row across two chunks once): from the baked
-        // atlas when it holds every character, otherwise the dynamic one.
+        // chunks in view (a row across two chunks once), upright, in the
+        // muted text colour.
         let (start, end) = match chart.meta.row_label_display {
             RowLabelDisplay::None => (false, false),
             RowLabelDisplay::Start => (true, false),
@@ -526,31 +510,19 @@ impl MapLabels {
                 let label = strings.get(row.label).unwrap_or_default();
                 // Sized as a seat label of a seat `ROW_LABEL_FIT / LABEL_FIT`
                 // times the row's.
-                let seat_cu = f32::from(row.seat_size) * 0.25 * ROW_LABEL_FIT / LABEL_FIT;
+                let fit = f32::from(row.seat_size) * 0.25 * ROW_LABEL_FIT;
+                let px = label_em(fit / LABEL_FIT, 2, 1.0) * zoom;
                 let ends = [(start, row.label_start), (end, row.label_end)];
-                for (_, at) in ends.into_iter().filter(|e| e.0 && !label.is_empty()) {
-                    let pos = at.map(|v| v as f32 * 0.25);
-                    let mut bytes = [0; TEXT_STRIDE];
-                    let (kind, width, em) = if let Some((_, _, n, width)) = layout(label) {
-                        let glyphs = label_instance(label, pos, seat_cu).unwrap_or_default();
-                        if let Some(head) = bytes.get_mut(..LABEL_STRIDE) {
-                            head.copy_from_slice(&glyphs);
-                        }
-                        (Kind::Glyph, width, label_em(seat_cu, n, width))
-                    } else {
-                        let px = label_em(seat_cu, 2, 1.0) * zoom;
-                        let Some(raster) = ask(Source::String(row.label), LABEL_WEIGHT, px, label)
-                        else {
-                            continue;
-                        };
-                        let fit = seat_cu * LABEL_FIT;
-                        let (instance, em) = centred(pos, fit, raster, theme.fg_muted);
-                        bytes = instance;
-                        (Kind::Text, em_size(raster).0, em)
+                for (_, at) in ends.into_iter().filter(|e| e.0) {
+                    let Some(raster) = ask(Source::String(row.label), LABEL_WEIGHT, px, label)
+                    else {
+                        continue;
                     };
+                    let pos = at.map(|v| v as f32 * 0.25);
+                    let (bytes, em) = centred(pos, fit, raster, theme.fg_muted);
                     self.cands.push(Cand {
-                        bbox: Some(around(pos, width * em, CAP_HEIGHT_EM * em)),
-                        kind,
+                        bbox: Some(around(pos, em_size(raster).0 * em, CAP_HEIGHT_EM * em)),
+                        kind: Kind::Text,
                         bytes,
                         second: None,
                     });
@@ -560,7 +532,7 @@ impl MapLabels {
         }
 
         self.place(scene.seat_size / 2.0);
-        self.upload(backend, chart.categories.len())?;
+        self.upload(backend)?;
         Ok(atlas.capped)
     }
 
@@ -584,17 +556,10 @@ impl MapLabels {
         self.grid.clear();
         self.grid.resize(words * (at(max[1], min[1]) + 1), 0);
         self.text_bytes.clear();
-        self.row_bytes.clear();
         let mut kept = [0u32; 3];
         for cand in &self.cands {
-            let glyph = cand.kind == Kind::Glyph;
-            let full = if glyph {
-                self.row_bytes.len() >= MAX_ROW_LABELS * LABEL_STRIDE
-            } else {
-                self.text_bytes.len() + 2 * TEXT_STRIDE > MAX_TEXT_INSTANCES * TEXT_STRIDE
-            };
-            if full {
-                continue;
+            if self.text_bytes.len() + 2 * TEXT_STRIDE > MAX_TEXT_INSTANCES * TEXT_STRIDE {
+                break;
             }
             if let Some(b) = cand.bbox {
                 let [x0, x1] = [at(b[0], min[0]), at(b[2], min[0])];
@@ -616,11 +581,6 @@ impl MapLabels {
                     }
                 }
             }
-            if glyph {
-                let bytes = cand.bytes.get(..LABEL_STRIDE).unwrap_or_default();
-                self.row_bytes.extend_from_slice(bytes);
-                continue;
-            }
             for bytes in [Some(cand.bytes), cand.second].into_iter().flatten() {
                 self.text_bytes.extend_from_slice(&bytes);
                 if let Some(n) = kept.get_mut(cand.kind as usize) {
@@ -630,15 +590,10 @@ impl MapLabels {
         }
         let [s, seats, texts] = kept;
         self.ranges = [0..s, s..s + seats, s + seats..s + seats + texts];
-        self.rows = (self.row_bytes.len() / LABEL_STRIDE) as u32;
     }
 
-    /// Uploads the instances, making the buffers on first need.
-    fn upload(
-        &mut self,
-        backend: &mut impl GpuBackend,
-        categories: usize,
-    ) -> Result<(), BackendError> {
+    /// Uploads the instances, making the buffer on first need.
+    fn upload(&mut self, backend: &mut impl GpuBackend) -> Result<(), BackendError> {
         if !self.text_bytes.is_empty() && self.text_bytes != self.text_held {
             let buffer = match self.text_buf {
                 Some(b) => b,
@@ -650,21 +605,6 @@ impl MapLabels {
             };
             backend.update_buffer(buffer, 0, &self.text_bytes)?;
             self.text_held.clone_from(&self.text_bytes);
-        }
-        if !self.row_bytes.is_empty() && self.row_bytes != self.row_held {
-            let [buffer, _] = match self.row_bufs {
-                Some(b) => b,
-                None => {
-                    let zeros = vec![0; MAX_ROW_LABELS * LABEL_STRIDE];
-                    let cat = u16::try_from(categories).unwrap_or(u16::MAX);
-                    let visual = visual::UNAVAILABLE;
-                    let entry = SeatDynamic { cat, visual, fx: 0 }.encode();
-                    let entries = entry.repeat(MAX_ROW_LABELS);
-                    *self.row_bufs.insert(pair(backend, &zeros, &entries)?)
-                }
-            };
-            backend.update_buffer(buffer, 0, &self.row_bytes)?;
-            self.row_held.clone_from(&self.row_bytes);
         }
         Ok(())
     }
@@ -729,9 +669,9 @@ fn vertex(usage: BufferUsage) -> BufferDesc {
     }
 }
 
-/// Two vertex buffers, the first rewritten in place; neither if one fails.
+/// Two vertex buffers written once; neither if one fails.
 fn pair(backend: &mut impl GpuBackend, a: &[u8], b: &[u8]) -> Result<[BufferId; 2], BackendError> {
-    let a = backend.create_buffer(vertex(BufferUsage::Dynamic), a)?;
+    let a = backend.create_buffer(vertex(BufferUsage::Static), a)?;
     match backend.create_buffer(vertex(BufferUsage::Static), b) {
         Ok(b) => Ok([a, b]),
         Err(e) => {

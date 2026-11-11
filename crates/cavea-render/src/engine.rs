@@ -132,7 +132,7 @@ pub struct LabelStats {
     /// Chunks whose label buffers are kept.
     pub cached: u32,
     /// Label draw calls in the last frame drawn: seat labels from the baked
-    /// atlas, then every draw of the dynamic atlas and of row labels.
+    /// atlas, then every draw of the dynamic atlas.
     pub draws: u32,
     pub text_draws: u32,
     /// The dynamic atlas: bytes of texture, strings rasterised since load.
@@ -1217,7 +1217,8 @@ impl<B: GpuBackend> Engine<B> {
         self.draw_labels(camera, viewport, time)?;
         self.draw_text(camera, viewport, time)?;
         draw_mesh(self, above, 1.0)?;
-        self.draw_icons(camera, viewport, time)
+        let uniforms = self.world_uniforms(camera, viewport, time, 1.0)?;
+        self.draw_icons(uniforms)
     }
 
     /// Seat labels from the dynamic atlas (with pass 9's), then pass 10
@@ -1233,9 +1234,6 @@ impl<B: GpuBackend> Engine<B> {
         let seat_px = self.seat_px().unwrap_or(0.0);
         let uniforms = self.world_uniforms(camera, viewport, time, 1.0)?;
         let Some(loaded) = &mut self.scene else {
-            return Ok(());
-        };
-        let Some(palette) = loaded.gpu.as_ref().map(|g| g.palette) else {
             return Ok(());
         };
         let size = viewport.css;
@@ -1293,25 +1291,6 @@ impl<B: GpuBackend> Engine<B> {
             submit(backend, engine, &call)
         };
         draw_text(&mut self.draws, &mut self.backend, seats, 1.0)?;
-        let glyphs = self.atlas.as_ref().and_then(|a| a.texture);
-        if let (Some([rows, entries]), Some(glyphs)) = (labels.row_buffers(), glyphs)
-            && labels.rows > 0
-        {
-            let range = 0..labels.rows;
-            let call = DrawCall {
-                pipeline: Pipeline::Glyph,
-                buffers: [Some(rows), Some(entries)],
-                textures: [Some(glyphs), Some(palette)],
-                uniforms: Uniforms {
-                    stroke_min_px: LABEL_MIN_EM_PX * viewport.ratio,
-                    ..uniforms
-                },
-                ranges: std::slice::from_ref(&range),
-                bases: &[0],
-            };
-            submit(&mut self.backend, &mut self.draws, &call)?;
-            self.draws[1] += 1;
-        }
         draw_text(
             &mut self.draws,
             &mut self.backend,
@@ -1328,13 +1307,7 @@ impl<B: GpuBackend> Engine<B> {
 
     /// Pass 11's icons (04 §7): the active floor's decoration icons, drawn
     /// by the `shape` program at every level.
-    fn draw_icons(
-        &mut self,
-        camera: Camera,
-        viewport: Viewport,
-        time: f32,
-    ) -> Result<(), (ErrorCode, String)> {
-        let uniforms = self.world_uniforms(camera, viewport, time, 1.0)?;
+    fn draw_icons(&mut self, uniforms: Uniforms) -> Result<(), (ErrorCode, String)> {
         let Some(loaded) = &mut self.scene else {
             return Ok(());
         };
@@ -1702,7 +1675,7 @@ impl<B: GpuBackend> Drop for Engine<B> {
 }
 
 /// Draws `call`, counting its GPU draw calls (one per range): all, and those
-/// of the dynamic atlas (row labels are counted by their caller).
+/// of the dynamic atlas.
 fn submit(
     backend: &mut impl GpuBackend,
     counts: &mut [u32; 2],

@@ -297,6 +297,27 @@ fn section_labels_show_at_overview_and_cross_fade_at_their_anchor_within_the_cla
     assert!(rasterise(&mut e, 700.0).iter().any(|a| a.1 == "Épuisé"));
 }
 
+/// The row labels placed (`text` instances in the muted colour): centre and
+/// box in chart units, by the raster's width and the capital height.
+fn rows(e: &E) -> Vec<([f32; 2], [f32; 4])> {
+    let muted = e.theme.fg_muted;
+    let buffer = &e.backend.buffers[&labels(e).text_buffer().unwrap().0];
+    let range = labels(e).ranges[2].clone();
+    range
+        .filter_map(|i| {
+            let b = &buffer[i as usize * TEXT_STRIDE..][..TEXT_STRIDE];
+            let f = |at: usize| f32::from_le_bytes(b[at..at + 4].try_into().unwrap());
+            let u = |at: usize| f32::from(u16::from_le_bytes(b[at..at + 2].try_into().unwrap()));
+            let (w, h) = (
+                u(16) / u(24) * f(8) / 2.0,
+                crate::text::CAP_HEIGHT_EM * f(8) / 2.0,
+            );
+            let [x, y] = [f(0), f(4)];
+            (b[32..36] == muted).then_some(([x, y], [x - w, y - h, x + w, y + h]))
+        })
+        .collect()
+}
+
 #[test]
 fn row_labels_show_from_8_px_seats_at_the_ends_the_chart_asks_for() {
     for (display, ends) in [("both", 2), ("start", 1), ("end", 1), ("none", 0)] {
@@ -304,38 +325,23 @@ fn row_labels_show_from_8_px_seats_at_the_ends_the_chart_asks_for() {
         let centre = centre_of(&e, 0);
         look(&mut e, centre, 7.5);
         rasterise(&mut e, 16.0);
-        assert_eq!(labels(&e).rows, 0, "{display}: none below 8 px");
+        assert!(rows(&e).is_empty(), "{display}: none below 8 px");
         look(&mut e, centre, 8.0);
         let asked = rasterise(&mut e, 100.0);
-        // Rows A to D of North (and of South, if in view) come from the
-        // baked atlas; South's `Ä` is asked of the host.
-        let rows = labels(&e).rows;
-        assert!(
-            rows >= 4 * ends && rows.is_multiple_of(ends.max(1)),
-            "{display}: {rows}"
-        );
+        // Rows A to D of North at least; `Ä` too when South is in view.
+        let placed = rows(&e);
+        assert!(placed.len() >= 4 * ends, "{display}: {}", placed.len());
         let asked_a = asked.iter().any(|a| a.1 == "Ä");
         assert_eq!(asked_a, ends > 0 && e.visible.len() > 1, "{display}");
-        if ends > 0 {
-            let draw = e
-                .backend
-                .text_draws
-                .iter()
-                .rev()
-                .find(|d| d.0 == Pipeline::Glyph);
-            assert_eq!(draw.map(|d| d.2.clone()), Some(one(0..rows)));
-            // Each instance sits at a compiled row end.
-            let chart = &e.scene.as_ref().unwrap().scene.chart;
-            let buffer = &e.backend.buffers[&labels(&e).row_buffers().unwrap()[0].0];
-            let first = f32::from_le_bytes(buffer[0..4].try_into().unwrap());
-            let row = &chart.rows[0];
-            let at = if display == "end" {
-                row.label_end
-            } else {
-                row.label_start
-            };
-            assert_eq!(first, at[0] as f32 * 0.25);
-        }
+        // Each sits at a compiled row end: row A's first.
+        let chart = &e.scene.as_ref().unwrap().scene.chart;
+        let at = match display {
+            "end" => Some(chart.rows[0].label_end),
+            "none" => None,
+            _ => Some(chart.rows[0].label_start),
+        };
+        let first = placed.first().map(|p| p.0);
+        assert_eq!(first, at.map(|a| a.map(|v| v as f32 * 0.25)), "{display}");
     }
 }
 
@@ -372,19 +378,9 @@ fn collision_keeps_the_priority_order_no_overlap_and_ignores_small_pans() {
     look(&mut e, centre, 9.0);
     rasterise(&mut e, 16.0);
     let row = e.scene.as_ref().unwrap().scene.chart.rows[0];
-    let rows = labels(&e).rows;
-    assert!(rows > 0);
-    // No two placed row labels overlap (their boxes, from the instances).
-    let buffer = &e.backend.buffers[&labels(&e).row_buffers().unwrap()[0].0];
-    let boxes: Vec<[f32; 4]> = (0..rows as usize)
-        .map(|i| {
-            let b = &buffer[i * LABEL_STRIDE..][..LABEL_STRIDE];
-            let f = |at: usize| f32::from_le_bytes(b[at..at + 4].try_into().unwrap());
-            let n = b[12..16].iter().filter(|&&c| c != 0).count() as f32;
-            let (half_w, half_h) = (0.3 * n * f(8), 0.36 * f(8));
-            [f(0) - half_w, f(4) - half_h, f(0) + half_w, f(4) + half_h]
-        })
-        .collect();
+    let boxes: Vec<[f32; 4]> = rows(&e).into_iter().map(|r| r.1).collect();
+    assert!(!boxes.is_empty());
+    // No two placed row labels overlap.
     for (i, a) in boxes.iter().enumerate() {
         for b in &boxes[i + 1..] {
             let overlap = a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
@@ -393,7 +389,7 @@ fn collision_keeps_the_priority_order_no_overlap_and_ignores_small_pans() {
     }
     // The same view in another engine, or reached again after a pan away,
     // places the same labels: the order is the chart's, never a hash map's.
-    let placed = |e: &E| e.backend.buffers[&labels(e).row_buffers().unwrap()[0].0].clone();
+    let placed = |e: &E| rows(e);
     let mut other = labelled("both");
     look(&mut other, centre, 9.0);
     rasterise(&mut other, 16.0);
@@ -438,8 +434,10 @@ fn collision_keeps_the_priority_order_no_overlap_and_ignores_small_pans() {
     tick(&mut e, 0.0);
     look(&mut e, [f64::from(x), f64::from(y)], 9.0);
     rasterise(&mut e, 16.0);
-    assert_eq!(labels(&e).ranges[2].len(), 1, "the text object");
-    assert_eq!(labels(&e).rows, 1, "row B only");
+    let placed = rows(&e);
+    assert_eq!(labels(&e).ranges[2].len(), 1 + placed.len());
+    assert_eq!(placed.len(), 1, "row B only");
+    assert_ne!(placed[0].0, [x, y]);
 }
 
 #[test]
@@ -556,7 +554,7 @@ fn seat_labels_outside_the_baked_atlas_come_from_the_dynamic_one_a_few_a_frame()
         .map(|i| format!(r#""{}":{{"label":"№{i}"}}"#, 100 + i))
         .collect();
     let json = format!(
-        r##"{{"schema":1,"name":"N","settings":{{"seatSize":40}},"nextOid":200,
+        r##"{{"schema":1,"name":"N","settings":{{"seatSize":40,"rowLabelDisplay":"none"}},"nextOid":200,
   "categories":[{{"key":"a","label":"A","color":"#2563EB"}}],
   "nodes":[{{"id":1,"type":"rowBlock","category":"a","rows":[{{"rid":2,"seats":40,"oids":[[100,40]]}}],
      "seatOverrides":{{{}}}}}]}}"##,
@@ -771,10 +769,10 @@ fn measure_map_labels() {
         e.scene.as_mut().unwrap().map_labels = l;
         let atlas = &e.scene.as_ref().unwrap().text_atlas;
         println!(
-            "{name}: a frame in {frame:.1} µs, {} draw calls; a build in {build:.3} ms of {cands} candidates, collision {place:.3} ms, {} text and {} row labels placed (CPU, test backend); atlas {} KiB, {} strings",
+            "{name}: a frame in {frame:.1} µs, {} draw calls; a build in {build:.3} ms of {cands} candidates, collision {place:.3} ms, {} labels placed, {} of them rows (CPU, test backend); atlas {} KiB, {} strings",
             e.label_stats().frame_draws,
             labels(&e).ranges[2].end,
-            labels(&e).rows,
+            rows(&e).len(),
             atlas.bytes() / 1024,
             atlas.rasterised,
         );
