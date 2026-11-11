@@ -16,7 +16,11 @@ brotli.workspace = true
 # Parses, validates and compiles chart drafts (03 §3); its dependencies are
 # already in the workspace.
 cavea-compiler.workspace = true
+# The object limit, and the full-artefact decoder and label composition for
+# the chart provider; both already built for cavea-compiler.
+cavea-core.workspace = true
 cavea-engine.workspace = true
+cavea-format.workspace = true
 cavea-telemetry.workspace = true
 # The secure random source for API keys; already in the tree through sqlx-postgres.
 getrandom = { version = "0.4.3", default-features = false }
@@ -42,7 +46,6 @@ tokio = { workspace = true, features = ["time", "sync"] }
 tracing.workspace = true
 
 [dev-dependencies]
-cavea-format.workspace = true
 cavea-testkit.workspace = true
 tower = { workspace = true, features = ["util"] }
 tracing-subscriber.workspace = true

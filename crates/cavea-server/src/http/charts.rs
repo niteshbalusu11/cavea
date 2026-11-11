@@ -63,7 +63,7 @@ macro_rules! chart_columns {
     };
 }
 
-type VersionRow = (String, i32, String, String, String);
+pub(super) type VersionRow = (String, i32, String, String, String);
 
 type ChartRow = (
     String,
@@ -81,7 +81,7 @@ type ChartRow = (
 
 /// A published chart version as the API shows it.
 #[derive(Debug, Serialize)]
-struct Version {
+pub(super) struct Version {
     /// `cv_` and 32 hex digits.
     id: String,
     number: i32,
@@ -94,7 +94,7 @@ struct Version {
 }
 
 impl Version {
-    fn new((id, number, hash, stats, created_at): VersionRow) -> Result<Self, ApiError> {
+    pub(super) fn new((id, number, hash, stats, created_at): VersionRow) -> Result<Self, ApiError> {
         Ok(Self {
             id: format!("cv_{id}"),
             number,

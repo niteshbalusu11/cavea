@@ -194,7 +194,11 @@ Load:
 
 Concurrent requests for an event that is not loaded share one load; a failed load is reported to all of them (§4.6).
 
-Eviction: an actor with no subscribers, no outstanding holds and no command for 10 minutes stops: it takes no more commands, commits what it accepted and releases its lease. It is checked once per 10 minutes on the engine clock, so it stops between 10 and 20 minutes after the last command, hold expiry or departing subscriber. A subscriber keeps the actor with a keep-alive guard from the registry. A command after eviction loads the event again. At startup the server loads every event that has rows in `holds`.
+Eviction: an actor with no subscribers, no outstanding holds and no command for 10 minutes stops: it takes no more commands, commits what it accepted and releases its lease. It is checked once per 10 minutes on the engine clock, so it stops between 10 and 20 minutes after the last command, hold expiry or departing subscriber. A subscriber keeps the actor with a keep-alive guard from the registry. A command after eviction loads the event again.
+
+At startup the server loads every event that has rows in `holds`, archived events included, earliest expiry first and one at a time, in the background once it is listening: readiness is not delayed, and a request for an event not loaded yet loads it itself (sharing any load in progress). A load costs one acquire, the chart (once per version, cached) and one snapshot read, a few milliseconds, so thousands of events take seconds; a hold that falls due meanwhile expires as soon as its event loads, late by at most that time. A load that fails is logged and left to the event's next request.
+
+The chart provider reads a version's `full_ccf`, decodes it on a blocking thread and composes every object's full label as the compiler did (03 §3.1 step 6). Views are cached per version and shared by every event on it; the cache keeps the most recently used versions up to 4,000,000 objects in all (about 400 MB). A stored artefact that does not decode, or whose labels or `oid`s are missing or repeated, fails the load (`503 unavailable` to the caller) and is logged as an error.
 
 ### 4.8 Ownership and failover
 
@@ -489,13 +493,20 @@ Secret key unless marked.
 - **Archive:** sets `archived_at`; archiving again returns the chart unchanged. The draft can no longer be saved or published (`400`, `reason: "archived"`); it can still be read and validated. The key stays taken. Versions are untouched and their public files are still served: events pinned to them keep working, and browsers and CDNs cache those files for a year regardless.
 - **Who:** `draft_updated_by` and `chart_versions.created_by` are left empty until console users exist (09 §2): an API key is not a user.
 
+`{event}` is the customer's event key. Event rules:
+
+- **Event object:** `{key, name, chart, version, settings, archived_at, created_at}`, plus `counts` from `GET /v1/events/{event}` only. `chart` is the chart's key; `version` is the pinned version object, whose `url` is the public chart file; `name` may be `null`.
+- **Creating:** the event pins one immutable version (D-11): the chart's published version, or `version` (a version number of that chart). An unknown chart is `404` (`missing: "chart"`), an unknown version number `404` (`missing: "version"`), a chart with no published version and no `version` `400` (`reason: "unpublished"`), an archived chart `400` (`reason: "archived"`), whatever the version. A key already used in the workspace, by an archived event too, is `409 already_exists`.
+- **Settings:** `hold_ttl_seconds` (60 to 7,200, default 900): the lifetime of a hold token created or extended without `ttl_seconds`; `max_objects` (1 to 100, default 10): the per-token object limit for publishable keys (02 §5). Unknown fields are refused. The stored settings are what was set; responses show every setting with its effective value. `PATCH` changes what it is given: `name` (`null` clears it) and the whole `settings` object (a setting left out goes back to its default); new settings apply to tokens created or extended afterwards.
+- **Counts:** `{free, held, booked, blocked, custom: {"<code>": n}}`, from the committed rows of `object_state`; free is the version's object count less the rest. Committed state is exactly what was acknowledged, and reading it does not load the event's actor (there is no read command yet). A hold past its expiry counts as held until its expiry commits, at once for a loaded event. The list has no counts: they cost a scan per event.
+- **Archive:** sets `archived_at`; archiving again returns the event unchanged. An archived event is read-only: seat operations, token creation, extension and release, and `PATCH` are `400` (`reason: "archived"`); reads still work. Outstanding holds are left to expire on schedule (they are at most 2 hours long), bookings stay, and the loaded actor evicts itself once it holds nothing (§4.7). A command checked before the archive committed may still apply. The key stays taken.
 **Events**
 
 | Method and path | Purpose |
 |---|---|
-| `GET /v1/events` | List |
-| `POST /v1/events` | Create (`key`, `chart`, optional `version`, `settings`) |
-| `GET /v1/events/{event}` | Metadata, settings, counts by status |
+| `GET /v1/events` | List event objects, archived ones included; the cursor is an event key |
+| `POST /v1/events` | Create (`key`, `chart`, optional `version`, `name`, `settings`); `201` with the event object |
+| `GET /v1/events/{event}` | The event object with `counts` |
 | `PATCH /v1/events/{event}` | Change name or settings |
 | `POST /v1/events/{event}/upgrade` | Move to a newer chart version |
 | `DELETE /v1/events/{event}` | Archive |
@@ -507,7 +518,7 @@ Secret key unless marked.
 
 | Method and path | Purpose |
 |---|---|
-| `POST /v1/hold-tokens` | Create a hold token (`event`, optional `ttl_seconds`, `max_objects`) |
+| `POST /v1/hold-tokens` | Create a hold token (`event`, optional `ttl_seconds`, `max_objects`); `201` |
 | `GET /v1/hold-tokens/{token}` | Expiry and held objects |
 | `POST /v1/hold-tokens/{token}/extend` | New expiry |
 | `DELETE /v1/hold-tokens/{token}` | Release everything it holds |
@@ -517,6 +528,13 @@ Secret key unless marked.
 | `POST /v1/events/{event}/change-status` | Block, unblock, set a custom status |
 | `POST /v1/events/{event}/best-available` | Choose and hold |
 | `GET /v1/events/{event}/objects` | Status of given labels, or a filtered page |
+
+Seat rules (secret-key routes; the public ones are SRV-015):
+
+- **Hold tokens:** `ht_` and 64 lowercase hex digits from the operating system's secure random source, returned once by `POST /v1/hold-tokens` as `{hold_token, event, seq, expires_at, max_objects}`. Only the SHA-256 is stored and given to the engine. `ttl_seconds` defaults to the event's `hold_ttl_seconds`; `max_objects` defaults to none (secret-key tokens are unlimited). `GET /v1/hold-tokens/{token}` returns `{event, expires_at, max_objects, objects}` as committed. `POST …/extend` takes `{ttl_seconds}` (optional, the event's default) and returns `{seq, expires_at}`. `DELETE` releases everything the token holds and returns `{seq, objects}`; the token stays valid until it expires.
+- **Finding a token's event:** by the token's hash in `holds` (unique), joined to `events` and scoped to the key's workspace: one index probe. A token of another workspace, an expired one and one that never existed are all `404` (`missing: "hold_token"`); a path that is not a token is `404` without a query. The token in the path is never logged: request spans record the route template.
+- **Objects:** an array of labels, or `{"version": "<hash>", "idx": [..]}` with the public hash of the event's pinned version; another hash is `409 version_conflict` with the pinned hash in `details.version`. At most 1,000.
+- **Requests and replies:** `hold` takes `{hold_token, objects}` and returns `{seq, expires_at, objects}`; `release` takes `{hold_token, objects?}` (held objects, all of the token's when `objects` is left out; an empty list is `invalid_field`) and returns `{seq, objects}`. `objects` in a reply is `[{label, oid}]` in `idx` order; refusals list failing objects as `{label, oid, reason}`. Book, change-status, release of booked objects and `Idempotency-Key` handling are the next slice (SRV-013, SRV-017).
 
 **Reports and log**
 
@@ -584,7 +602,7 @@ Refusal (nothing was held):
 { "type": "https://docs.cavea.example/errors/object_not_free",
   "code": "object_not_free", "status": 409,
   "title": "One or more objects are not free",
-  "details": { "objects": [ { "label": "Orchestra-C-13", "reason": "not_free" } ] } }
+  "details": { "objects": [ { "label": "Orchestra-C-13", "oid": 4113, "reason": "not_free" } ] } }
 ```
 
 Book after payment:
@@ -683,11 +701,11 @@ Refused (nothing was published):
 | 401 | `unauthorized` | Missing or invalid key |
 | 403 | `forbidden` | Key lacks permission, or origin not allowed |
 | 404 | `not_found` | Unknown chart, event, object, token, key or workspace |
-| 409 | `already_exists` | A workspace or chart (later: event) with this key already exists |
+| 409 | `already_exists` | A workspace, chart or event with this key already exists |
 | 409 | `object_not_free` | At least one object is not free |
 | 409 | `object_not_held_by_token` | Book or release named an object the token does not hold |
 | 409 | `object_status_conflict` | An object's status does not allow the change: release without a token of an object that is not booked, or change-status to free of a held or booked object |
-| 409 | `version_conflict` | Draft etag mismatch; `details.draft_etag` is the current one |
+| 409 | `version_conflict` | Draft etag mismatch (`details.draft_etag` is the current one), or objects named by `idx` in a chart version that is not the event's (`details.version` is the event's) |
 | 409 | `upgrade_conflict` | Non-free objects missing from the new chart version |
 | 409 | `idempotency_mismatch` | Key reused with a different body |
 | 410 | `hold_token_expired` | Not returned by the actor, which deletes an expired token before processing any command at or after its expiry (§7.3); the token is then `not_found` |
@@ -714,7 +732,7 @@ Every error is `application/problem+json` with exactly these members:
 ```
 
 - `code` and `status` always pair as in the table. `message` is for humans and may change; match on `code`.
-- `details` is always an object, empty when there is nothing to add. Engine refusals fill it: `invalid_request` has `reason`; `not_found` has `missing` (`hold_token` or `objects`, with `objects` listing the unresolved references as `{"label"}` or `{"idx"}`); the three object conflicts list `{"idx", "reason"}` per object (`not_free`, `not_held_by_token`, `not_booked`, `not_blocked`); `forbidden` from the engine means the key's kind may not issue the command (`02-domain-model.md` §4.3); `hold_limit_exceeded` has `limit` and `requested`.
+- `details` is always an object, empty when there is nothing to add. Engine refusals fill it: `invalid_request` has `reason`; `not_found` has `missing` (`hold_token` or `objects`, with `objects` listing the unresolved references as `{"label"}` or `{"idx"}`); the three object conflicts list `{"idx", "reason"}` per object (the seat routes name each by `{"label", "oid", "reason"}` instead) (`not_free`, `not_held_by_token`, `not_booked`, `not_blocked`); `forbidden` from the engine means the key's kind may not issue the command (`02-domain-model.md` §4.3); `hold_limit_exceeded` has `limit` and `requested`.
 - `request_id` equals the `Cavea-Request-Id` header.
 - An unknown path, and a known path with the wrong method, are `404 not_found`. A body that is not JSON, lacks `Content-Type: application/json`, does not match the expected shape, is over the size limit or nests too deeply is `400 invalid_request` with `details.reason` one of `json_syntax`, `content_type`, `json_data`, `body_too_large`, `json_depth` (with `limit`), `body_unreadable`. A malformed path parameter is `reason: "path"`, a malformed query parameter or cursor `reason: "query"`, an invalid body field `reason: "invalid_field"` with `field`, and too many objects `reason: "too_many_objects"`. For charts: a missing or malformed `If-Match` is `reason: "if_match"`, a draft that is not a storable chart document `reason: "document"`, and a change to an archived chart `reason: "archived"`. An identifier in the path that cannot exist, or belongs to another workspace, is `404`.
 - `401 unauthorized` has `details.reason`: `missing` (no `Authorization`), `malformed` (not `Bearer <token>`), `invalid` (unknown or revoked key, or not the admin key). `403 forbidden` from authentication has `reason`: `key_kind` (the wrong kind of credential for the route), `origin` (§11), or `self_revocation`.
@@ -973,7 +991,7 @@ Admin key and workspaces:
 - **Minimum:** 1 vCPU, 512 MB, PostgreSQL 15. **Recommended for on-sales:** 4 vCPU, 8 GB, PostgreSQL on fast storage in the same network.
 - **PostgreSQL:** `synchronous_commit = on`. Backups and point-in-time recovery are the customer's responsibility; the docs give a recipe.
 - **TLS:** terminate at the customer's proxy or load balancer. WebSocket upgrade must be allowed.
-- **Shutdown:** on SIGTERM, stop accepting commands, flush pending batches, send CLOSE to subscribers, release leases, exit within 20 s.
+- **Shutdown:** on SIGTERM, stop accepting commands, flush pending batches, send CLOSE to subscribers, release leases, exit within 20 s. The server stops accepting connections and gives requests in flight up to 10 s to finish (their commands reach their actors); then the registry stops every actor, each committing what it accepted and releasing its lease, within what is left of the 20 s. Realtime subscribers do not exist yet.
 - **Upgrade:** replace the image and restart. Migrations run automatically; a migration that cannot run online is called out in the release notes.
 - **Reference files:** `deploy/compose.yaml`, `deploy/helm/`, a systemd unit.
 

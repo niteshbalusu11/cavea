@@ -161,6 +161,7 @@ The engine enforces the "Who may issue it" column itself: each command carries t
 
 - Publishing a draft creates a new immutable chart version. Nothing ever changes a published version.
 - An event is pinned to exactly one chart version. Its state arrays are indexed by that version's `idx`.
+- An event is created on a chart's published version by default, or on a named one; an archived chart takes no new events. Archiving an event makes it read-only: no further seat operations, holds left to expire, bookings kept (`08-server.md` §6.2).
 - **Upgrading** an event to a newer version is an explicit command. The server maps state by `oid`. If a non-free object no longer exists in the new version, the upgrade is refused and the conflicts are listed.
 - **Safe mode** in the designer (default when a chart has events with non-free objects) warns before any change that deletes or relabels such an object.
 

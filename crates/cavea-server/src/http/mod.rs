@@ -10,11 +10,14 @@ macro_rules! rfc3339 {
 }
 
 pub mod auth;
+#[macro_use]
 mod charts;
 mod error;
+mod events;
 pub mod extract;
 mod keys;
 mod public;
+mod seats;
 mod workspaces;
 
 use std::sync::Arc;
@@ -27,19 +30,21 @@ use serde::Serialize;
 use sqlx::PgPool;
 
 use crate::config::Config;
+use crate::seats::Seats;
 
 pub use auth::{AdminKey, AdminKeyAuth, Auth, PublishableKey, SecretKey};
 pub use error::{ApiError, Code};
 pub use extract::{Json, Path, Query};
 
-/// Shared with every handler through `State<AppState>`. Cheap to clone. Later
-/// slices add the actor registry here.
+/// Shared with every handler through `State<AppState>`. Cheap to clone.
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
     /// The PostgreSQL pool (`CAVEA_DB_POOL` connections). Wrap each call in
     /// `cavea_telemetry::db_span`.
     pub db: PgPool,
+    /// The actor registry and chart cache: seat commands go through it.
+    pub seats: Seats,
 }
 
 /// The whole HTTP surface.
@@ -53,6 +58,8 @@ fn routes() -> Router<AppState> {
         .merge(workspaces::routes())
         .merge(keys::routes())
         .merge(charts::routes())
+        .merge(events::routes())
+        .merge(seats::routes())
         .merge(public::routes())
 }
 

@@ -14,6 +14,7 @@ use sqlx::{AssertSqlSafe, ConnectOptions as _, Connection as _, Executor as _, P
 use super::*;
 use crate::http::auth::PublishableKey;
 use crate::http::{AdminKey, routes};
+use crate::seats::{Seats, ServerClock};
 use crate::store;
 
 /// Obviously fake; at least 32 characters.
@@ -63,13 +64,22 @@ where
 /// The real routes, plus `GET /test/public` standing in for the public
 /// endpoints (SRV-015) until they exist.
 fn api(pool: &PgPool, admin: Option<&str>) -> Router {
+    api_with(pool, admin, ServerClock::System, "test").0
+}
+
+/// [`api`] on a given engine clock and node id, with its registry.
+fn api_with(pool: &PgPool, admin: Option<&str>, clock: ServerClock, node: &str) -> (Router, Seats) {
     let mut state = state();
     state.db = pool.clone();
-    Arc::make_mut(&mut state.config).admin_key = admin.map(|a| a.parse::<AdminKey>().unwrap());
+    let config = Arc::make_mut(&mut state.config);
+    config.admin_key = admin.map(|a| a.parse::<AdminKey>().unwrap());
+    config.node_id = node.to_owned();
+    state.seats = Seats::new(pool.clone(), &state.config, clock);
+    let seats = state.seats.clone();
     let public = get(|PublishableKey(auth): PublishableKey| async move {
         axum::Json(json!({ "workspace": auth.workspace().to_string() }))
     });
-    finish(routes().route("/test/public", public), state)
+    (finish(routes().route("/test/public", public), state), seats)
 }
 
 async fn call(
@@ -149,6 +159,10 @@ struct Tenant {
     document: String,
     /// The public hash of that version: `{hash}` in a route table.
     hash: String,
+    /// An event on `chart`: `{event}` in a route table.
+    event: String,
+    /// A hold token on `event`: `{token}` in a route table.
+    token: String,
 }
 
 impl Tenant {
@@ -188,7 +202,24 @@ impl Tenant {
         let uri = format!("/v1/charts/{chart}/publish");
         let (response, version) = call(app, Method::POST, &uri, Some(&secret), None).await;
         assert_eq!(response.status(), 201, "{version}");
+        let event = format!("event-{key}");
+        let body = json!({ "key": event, "chart": chart });
+        let (response, created) =
+            call(app, Method::POST, "/v1/events", Some(&secret), Some(body)).await;
+        assert_eq!(response.status(), 201, "{created}");
+        let body = json!({ "event": event });
+        let (response, token) = call(
+            app,
+            Method::POST,
+            "/v1/hold-tokens",
+            Some(&secret),
+            Some(body),
+        )
+        .await;
+        assert_eq!(response.status(), 201, "{token}");
         Self {
+            event,
+            token: token["hold_token"].as_str().unwrap().to_owned(),
             chart,
             document,
             hash: version["hash"].as_str().unwrap().to_owned(),
@@ -203,8 +234,8 @@ impl Tenant {
     }
 
     /// Every credential this tenant holds: none may appear in any log.
-    fn secrets(&self) -> [&str; 3] {
-        [&self.secret, &self.publishable, &self.revoked]
+    fn secrets(&self) -> [&str; 4] {
+        [&self.secret, &self.publishable, &self.revoked, &self.token]
     }
 
     /// Every identifier of this tenant: none may appear in a response to
@@ -219,6 +250,8 @@ impl Tenant {
             &self.publishable[..11],
             &self.chart,
             &self.hash,
+            &self.event,
+            &self.token,
         ]
     }
 
@@ -228,6 +261,8 @@ impl Tenant {
             .replace("{key}", &self.spare_id)
             .replace("{chart}", &self.chart)
             .replace("{hash}", &self.hash)
+            .replace("{event}", &self.event)
+            .replace("{token}", &self.token)
             .replace("{document}", &self.document)
     }
 }
@@ -600,6 +635,71 @@ const ROUTES: &[(Method, &str, Needs, u16, Option<&str>)] = &[
         200,
         None,
     ),
+    (Method::GET, "/v1/events", Needs::Secret, 200, None),
+    (
+        Method::POST,
+        "/v1/events",
+        Needs::Secret,
+        201,
+        Some(r#"{"key":"new-event","chart":"{chart}"}"#),
+    ),
+    (Method::GET, "/v1/events/{event}", Needs::Secret, 200, None),
+    (
+        Method::PATCH,
+        "/v1/events/{event}",
+        Needs::Secret,
+        200,
+        Some(r#"{"name":"renamed"}"#),
+    ),
+    (
+        Method::POST,
+        "/v1/hold-tokens",
+        Needs::Secret,
+        201,
+        Some(r#"{"event":"{event}"}"#),
+    ),
+    (
+        Method::GET,
+        "/v1/hold-tokens/{token}",
+        Needs::Secret,
+        200,
+        None,
+    ),
+    (
+        Method::POST,
+        "/v1/hold-tokens/{token}/extend",
+        Needs::Secret,
+        200,
+        Some("{}"),
+    ),
+    (
+        Method::POST,
+        "/v1/events/{event}/hold",
+        Needs::Secret,
+        200,
+        Some(r#"{"hold_token":"{token}","objects":{"version":"{hash}","idx":[0]}}"#),
+    ),
+    (
+        Method::POST,
+        "/v1/events/{event}/release",
+        Needs::Secret,
+        200,
+        Some(r#"{"hold_token":"{token}"}"#),
+    ),
+    (
+        Method::DELETE,
+        "/v1/hold-tokens/{token}",
+        Needs::Secret,
+        200,
+        None,
+    ),
+    (
+        Method::DELETE,
+        "/v1/events/{event}",
+        Needs::Secret,
+        200,
+        None,
+    ),
     (
         Method::DELETE,
         "/v1/charts/{chart}",
@@ -608,6 +708,9 @@ const ROUTES: &[(Method, &str, Needs, u16, Option<&str>)] = &[
         None,
     ),
 ];
+
+/// Placeholders that name an identifier of the tenant under test.
+const IDENTIFIERS: [&str; 5] = ["{key}", "{chart}", "{hash}", "{event}", "{token}"];
 
 /// T5: every route, called with each wrong kind of credential, is refused;
 /// called with workspace B's key of the right kind and workspace A's
@@ -625,6 +728,9 @@ async fn tenant_isolation() {
         let a = Tenant::create(&app, "a").await;
         let b = Tenant::create(&app, "b").await;
         for (method, template, needs, ok, body) in ROUTES {
+            let names_identifier = IDENTIFIERS
+                .iter()
+                .any(|p| template.contains(p) || body.is_some_and(|b| b.contains(p)));
             let body = body.map(|b| serde_json::from_str::<Value>(&a.path(b)).unwrap());
             let path = a.path(template);
             // `If-Match: *` for the routes that need one; the others ignore it.
@@ -651,7 +757,7 @@ async fn tenant_isolation() {
             }
             if *needs != Needs::Admin {
                 let (response, foreign) = call(credential(&b, *needs)).await;
-                if template.contains('{') {
+                if names_identifier {
                     assert_problem(&response, &foreign, Code::NotFound);
                 } else {
                     assert_eq!(
@@ -679,3 +785,4 @@ async fn tenant_isolation() {
 }
 
 mod charts;
+mod seats;
