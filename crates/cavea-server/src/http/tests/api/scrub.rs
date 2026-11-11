@@ -5,7 +5,10 @@
 //! CSRF tokens, invitation links); once with recognisable wrong secrets in
 //! every place one can go (bearer, cookie, CSRF, session and hold-token
 //! headers, the query string, identifier paths, passwords and tokens in
-//! bodies). Unknown paths carry one too. None of them may appear in the
+//! bodies), refused by the extractors; and, with the credential valid, with
+//! each secret past it wrong (hold tokens in paths, bodies and the header,
+//! passwords, setup and invitation tokens, session tokens), so that each is
+//! refused by its own check inside the handler. Unknown paths carry one too. None of them may appear in the
 //! output. The request span records the route template and never the path or
 //! query (`cavea_telemetry::http`), so a path or query cannot leak by
 //! construction; this test is the proof that nothing else does either. The
@@ -118,8 +121,9 @@ async fn secrets_never_reach_the_logs() {
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
+        let mut downstream = 0;
         for (n, (method, template, ok, body)) in ROUTES.iter().enumerate() {
-            let (needs, _) = op_of(method, template);
+            let (needs, takes_session) = op_of(method, template);
             members.restore(&pool, &a).await;
             let path = members.path(&a.path(template)).replace("{asset}", &asset);
             let body = body.map(|b| {
@@ -178,6 +182,57 @@ async fn secrets_never_reach_the_logs() {
                 }
                 Needs::Nothing => (path.clone(), None),
             };
+            // The credential valid, the secrets past it wrong: each refused
+            // by its own check, after the extractors, so a handler that
+            // logged what it refused would show. Before the success, which
+            // may end the session.
+            let swapped_path = path_ok.replace(&a.token, &hold_token);
+            let swapped_body = body.as_deref().map(|b| {
+                b.replace(&a.token, &hold_token)
+                    .replace(PASSWORD, &password)
+                    .replace("not-a-real-password-1", &password)
+                    .replace("\"0000\"", &format!("\"{token}\""))
+            });
+            let fresh = canary(&format!("idempotency-wrong-{n}"));
+            secrets.push(fresh.clone());
+            let swapped_headers: Vec<(header::HeaderName, String)> = headers
+                .iter()
+                .map(|(name, value)| match name.as_str() {
+                    "cavea-hold-token" => (name.clone(), hold_token.clone()),
+                    "idempotency-key" => (name.clone(), fresh.clone()),
+                    _ => (name.clone(), value.clone()),
+                })
+                .collect();
+            if swapped_path != path_ok || swapped_body != body || *template == HEADER_TOKEN {
+                let request = build(
+                    &swapped_path,
+                    authorization.clone(),
+                    &swapped_headers,
+                    swapped_body.as_deref(),
+                );
+                let (response, answer) = send(app.clone(), request).await;
+                let status = response.status().as_u16();
+                assert!(
+                    [401, 403, 404].contains(&status),
+                    "{method} {template} with a wrong secret: {answer}"
+                );
+                downstream += 1;
+            }
+            if takes_session {
+                let mut with_session = headers.clone();
+                with_session.push((SESSION, session_token.clone()));
+                let request = build(
+                    &path_ok,
+                    authorization.clone(),
+                    &with_session,
+                    body.as_deref(),
+                );
+                let (response, answer) = send(app.clone(), request).await;
+                assert_problem(&response, &answer, Code::Unauthorized);
+                assert_eq!(answer["details"]["reason"], "session_token", "{template}");
+                downstream += 1;
+            }
+
             let request = build(&path_ok, authorization, &headers, body.as_deref());
             let (response, answer) = send(app.clone(), request).await;
             assert_eq!(
@@ -253,6 +308,9 @@ async fn secrets_never_reach_the_logs() {
                 members.sign_in(&pool).await;
             }
         }
+        // Hold tokens in paths, bodies and the header; passwords; setup and
+        // invitation tokens; session tokens.
+        assert!(downstream >= 15, "{downstream}");
         // Unknown paths, with a secret in them.
         for uri in [
             format!("/v1/hold-tokens/{hold_token}/nope"),
