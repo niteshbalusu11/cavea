@@ -50,24 +50,60 @@ pub struct Scene {
 impl Scene {
     pub fn decode(ccf: &[u8]) -> Result<Self, cavea_format::Error> {
         let mut chart = cavea_format::decode(ccf, Artefact::Public)?;
+        let seats = chart.seat_pos.len();
         // The element types have the same size and alignment, so the standard
         // library collects in place into the decoded array's buffer.
         let pos: Vec<[f32; 2]> = std::mem::take(&mut chart.seat_pos)
             .into_iter()
             .map(|[x, y]| [x as f32 * 0.25, y as f32 * 0.25])
             .collect();
-        Ok(Self::assemble(chart, pos))
+        let mut row = Vec::with_capacity(seats);
+        for (r, record) in (0u32..).zip(&chart.rows) {
+            row.extend(std::iter::repeat_n(r, usize::from(record.seat_count)));
+        }
+        let seat_size = (f32::from(chart.meta.seat_size) * 0.25).max(0.25);
+        let max_half = chart
+            .rows
+            .iter()
+            .map(|r| f32::from(r.seat_size.div_ceil(2)) * 0.25)
+            .fold(seat_size / 2.0, f32::max);
+        let (active, floor_box) = chart.floors.first().map_or((0..0, [0; 4]), |f| {
+            (f.seat_first..f.seat_first + f.seat_count, f.bounds)
+        });
+        let loose_rows = (0u32..)
+            .zip(&chart.rows)
+            .filter(|(_, r)| r.section == NONE && active.contains(&r.seat_first))
+            .map(|(i, _)| i)
+            .collect();
+        let [x0, y0, x1, y1] = floor_box.map(|v| v as f32 * 0.25);
+        let bounds = Bounds {
+            x: x0 - max_half,
+            y: y0 - max_half,
+            width: x1 - x0 + 2.0 * max_half,
+            height: y1 - y0 + 2.0 * max_half,
+        };
+        Ok(Self {
+            chart,
+            pos,
+            row,
+            status: vec![0; seats],
+            visual: vec![0; seats],
+            fx: vec![0; seats],
+            active,
+            floor: 0,
+            loose_rows,
+            bounds,
+            max_half,
+            seat_size,
+        })
     }
 
     /// A scene of a chart whose positions are already in `pos` (its own
-    /// `seat_pos` empty): the designer's live scene (04 §25). The chart must
-    /// pass [`Chart::check`] with `pos` as its positions.
+    /// `seat_pos` empty): the designer's live scene (04 §25). As
+    /// [`Self::decode`] from here on; kept apart so the buyer's code is
+    /// untouched by the designer's.
     #[cfg(feature = "designer")]
     pub fn from_chart(chart: Chart, pos: Vec<[f32; 2]>) -> Self {
-        Self::assemble(chart, pos)
-    }
-
-    fn assemble(chart: Chart, pos: Vec<[f32; 2]>) -> Self {
         let seats = pos.len();
         let mut row = Vec::with_capacity(seats);
         for (r, record) in (0u32..).zip(&chart.rows) {

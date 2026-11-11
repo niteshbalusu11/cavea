@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Designer canvas proof</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; font: 13px system-ui, sans-serif; }
+      /* The canvas fills the window, as the buyer demo's map does, so a view
+         of the same box matches it; the buttons sit on top. */
+      canvas { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; outline: none; }
+      #bar { position: fixed; top: 0; left: 0; right: 0; z-index: 1; display: flex; flex-wrap: wrap;
+             gap: 4px; padding: 4px; background: #fffc; }
+      #stats { margin-left: auto; font-variant-numeric: tabular-nums; }
+    </style>
+  </head>
+  <body>
+    <div id="bar"></div>
+    <canvas id="canvas" tabindex="0"></canvas>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

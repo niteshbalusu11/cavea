@@ -6,6 +6,8 @@
 // definitions by `cargo xtask types`.
 
 export { DesignerError, loadDesigner, Session } from "./session.ts";
+export { Canvas, createCanvas, fitView, pan, toChart, toScreen, zoomAbout } from "./canvas.ts";
+export type { CanvasOptions, CanvasStats, Point, Theme, View } from "./canvas.ts";
 export type { Designer, DesignerFailure, LoadOptions } from "./session.ts";
 export type { WasmSource } from "./bindings.ts";
 export type * from "./generated/calls.ts";
