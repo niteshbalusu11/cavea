@@ -516,6 +516,12 @@ describe("the designer module", () => {
     const cycle: Record<string, unknown> = {};
     cycle["self"] = cycle;
     expect(args("set_field", [cycle])).toBe("arguments");
+    const hostile = {
+      get value(): never {
+        throw Object.create(null) as never;
+      },
+    };
+    expect(args("set_field", [hostile])).toBe("arguments");
     expect(s.export()).toBe(before);
 
     // A disposed session.

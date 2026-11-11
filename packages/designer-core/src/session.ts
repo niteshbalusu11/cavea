@@ -121,7 +121,8 @@ function encode(args: unknown[]): string {
       return value;
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    // Not `String(error)`: what a getter throws may not convert.
+    const message = error instanceof Error ? error.message : "not representable as JSON";
     throw new DesignerError({ kind: "arguments", message });
   }
 }
