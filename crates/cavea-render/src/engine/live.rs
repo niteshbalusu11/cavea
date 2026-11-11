@@ -374,8 +374,8 @@ impl<B: GpuBackend> Engine<B> {
         loaded
             .map_labels
             .reload_icons(&mut self.backend, &loaded.scene);
-        if shifted && loaded.text_atlas.has_seat_labels() {
-            loaded.text_atlas.reset(&mut self.backend);
+        if shifted {
+            loaded.text_atlas.forget_seat_labels();
         }
         let result = self.live_upload(&mut loaded, &upload);
         self.scene = Some(loaded);

@@ -1050,4 +1050,32 @@ fn dynamic_seat_labels_move_with_their_piece() {
     assert!(!p.engine().moving().is_empty());
     assert_eq!(near(&during, 20_000.0), 0, "none left behind: {during:?}");
     assert_eq!(near(&during, 20_600.0), 12, "all moved: {during:?}");
+
+    // Released, the block is baked and its seats' `idx` shift: the seat
+    // labels' rasters, keyed by `idx`, are asked for again, and nothing
+    // else is (the row labels stay drawn rather than blinking out).
+    s.input(Input::PointerUp(ptr(
+        [from[0] + 600.0, from[1]],
+        1e6 + 32.0,
+    )));
+    assert!(!s.editor().gesture_open());
+    let mut asked = Vec::new();
+    for k in 0..40 {
+        p.draw(&s, 300.0 + f64::from(k));
+        for e in p.take_events() {
+            if let Event::TextRequest { id, text, .. } = e {
+                asked.push(text);
+                p.handle(Command::SetText {
+                    id,
+                    width: 24,
+                    height: 12,
+                    px: 11,
+                    pixels: vec![255; 24 * 12],
+                });
+            }
+        }
+    }
+    assert!(p.engine().moving().is_empty(), "baked");
+    assert!(asked.iter().any(|t| t.starts_with("Sitz ")), "{asked:?}");
+    assert!(asked.iter().all(|t| t.starts_with("Sitz ")), "{asked:?}");
 }
