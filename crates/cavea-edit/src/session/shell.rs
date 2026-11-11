@@ -61,7 +61,9 @@ impl Session {
             ViewName::Title => [doc.chart_stamp, 0, 0, 0, 0, 0, 0, 0],
             ViewName::Floors => [structure, floor, 0, 0, 0, 0, 0, 0],
             ViewName::Status => [rev, 0, 0, 0, 0, 0, 0, 0],
-            ViewName::Selection | ViewName::Inspector => [rev, w.selections, 0, 0, 0, 0, 0, 0],
+            // `fit` depends on the floor shown.
+            ViewName::Selection => [rev, w.selections, floor, 0, 0, 0, 0, 0],
+            ViewName::Inspector => [rev, w.selections, 0, 0, 0, 0, 0, 0],
             ViewName::Layers => [
                 structure,
                 w.selections,

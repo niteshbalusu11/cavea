@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use cavea_compiler::ChartDocument;
-use cavea_compiler::document::{Curve, Node};
+use cavea_compiler::document::{Align, Curve, Node};
 
 use crate::edit_tests::{NONE, T, chart, random_edit, random_selection};
 use crate::tests::Rng;
@@ -575,6 +575,70 @@ fn curve_handle() {
         panic!("block")
     };
     assert_eq!(b.curve, Curve::Bulge { amount: -15.0 });
+    // Left-aligned with an offset, and a drag past the deepest arc a row
+    // can make: the midpoint of the front row's ends stays where it was,
+    // and its middle follows the pointer as far as the arc can go.
+    let mid = |t: &T| {
+        let (a, b) = ends(t);
+        (a[1] + b[1]) / 2.0
+    };
+    for (align, travel, follows) in [
+        // An arc's apex is at x = 0, a left or right-aligned row's end, so
+        // such a row bends less deeply before its far end is half a turn
+        // from the apex: about 26 cu here.
+        (Align::Left, 15.0, true),
+        (Align::Right, -15.0, true),
+        (Align::Left, 60.0, false),
+        (Align::Center, 400.0, false),
+    ] {
+        t.s.set_field(&Field::Curve(Curve::None {}))
+            .expect("straight");
+        t.s.set_field(&Field::Align(align)).expect("align");
+        t.s.select(Level::Rows(10), [11]);
+        t.s.shift_rows(30.0).expect("offset");
+        t.s.select(Level::Top, [10]);
+        let (m0, h0) = (mid(&t), handle(&t));
+        t.drag(&[h0, [h0[0], h0[1] + travel]]);
+        let Some(Node::RowBlock(b)) = t.s.document().node(10) else {
+            panic!("block")
+        };
+        assert!(matches!(b.curve, Curve::Arc { .. }), "{align:?}");
+        assert!((mid(&t) - m0).abs() < 1e-6, "{align:?}: {} {m0}", mid(&t));
+        let moved = handle(&t)[1] - h0[1];
+        if follows {
+            assert!((moved - travel).abs() < 3.0, "{align:?}: {moved}");
+        } else {
+            assert!(moved > 10.0 && moved < travel, "{align:?}: {moved}");
+        }
+    }
+}
+
+/// The views `changed` names follow the floor shown and a tool reset.
+#[test]
+fn changed_follows_floor_and_reset() {
+    let mut doc = chart();
+    doc.floors.push(
+        serde_json::from_value(serde_json::json!({ "id": 2, "name": "Balcony" })).expect("floor"),
+    );
+    let far = serde_json::json!({ "id": 70, "type": "shape", "kind": "rect", "size": [10, 10],
+        "origin": [9000, 9000], "floor": 2 });
+    doc.nodes.push(serde_json::from_value(far).expect("node"));
+    doc.next_oid = 600;
+    let mut t = T::new(doc);
+    let fit = t.s.fit();
+    let _ = t.s.changed();
+    assert!(t.s.set_floor(2));
+    assert!(t.s.changed().contains(&ViewName::Selection));
+    assert_ne!(t.s.fit(), fit);
+    // A box being dragged, then a selection from a panel: the box is gone.
+    assert!(t.s.set_floor(1));
+    t.input(Input::PointerDown, [-3000.0, -3000.0], NONE);
+    t.input(Input::PointerMove, [-2900.0, -2900.0], NONE);
+    assert!(t.s.overlay().marquee.is_some());
+    let _ = t.s.changed();
+    t.s.select(Level::Top, []);
+    assert!(t.s.overlay().marquee.is_none());
+    assert!(t.s.changed().contains(&ViewName::Overlay));
 }
 
 /// Import reads hostile files with typed errors naming what to fix, and

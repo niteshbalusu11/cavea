@@ -629,63 +629,102 @@ fn front_middle(view: &View<'_>, id: u32) -> Option<P> {
     Some([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0])
 }
 
-/// Half the length of the block's front row along itself.
-fn half_length(b: &RowBlock) -> f64 {
-    let seats = b.rows.first().map_or(1, |r| r.seats);
-    f64::from(seats.saturating_sub(1)) * b.seat_pitch / 2.0
+/// Where the front row's first and last positions lie along it, and its
+/// middle (03 §2.4: `s = a + offset + k × seatPitch`; row 0 is never
+/// staggered).
+fn front_span(b: &RowBlock) -> Option<(f64, f64, f64)> {
+    let row = b.rows.first()?;
+    let length = f64::from(row.seats.saturating_sub(1)) * b.seat_pitch;
+    let s0 = -align(b) * length + row.offset;
+    Some((s0, s0 + length / 2.0, s0 + length))
 }
 
-/// How far the front row's middle lies behind (+y) the line through its
-/// ends: a bulge's amount, an arc's sagitta `R (1 − cos(a / R))` over the
-/// half-length `a`, 0 for a straight block.
-pub(crate) fn depth(b: &RowBlock) -> f64 {
-    match b.curve {
-        Curve::None {} => 0.0,
-        Curve::Bulge { amount } => amount,
-        Curve::Arc { radius } => radius * (1.0 - (half_length(b) / radius).cos()),
+/// The y of the front row's position at `s` on an arc of curvature `k`
+/// (`1 / radius`): `R cos(s / R) − R` (03 §2.4), 0 when straight.
+fn arc_y(k: f64, s: f64) -> f64 {
+    if k == 0.0 {
+        0.0
+    } else {
+        ((k * s).cos() - 1.0) / k
     }
 }
 
-/// The arc radius whose front row of half-length `a` has sagitta `depth`:
-/// `a / θ` for the half-angle `θ` in (0, π] solving `a (1 − cos θ) / θ =
-/// |depth|`, found by bisection (the left side grows with `θ`). A sagitta
-/// past half a turn's (`2a / π`) gets half a turn.
-fn radius(a: f64, depth: f64) -> f64 {
-    let sag = |t: f64| a * (1.0 - t.cos()) / t;
-    let target = depth.abs();
-    let (mut lo, mut hi) = (0.0f64, std::f64::consts::PI);
-    if sag(hi) > target {
-        for _ in 0..80 {
-            let mid = (lo + hi) / 2.0;
-            if sag(mid) < target {
-                lo = mid;
-            } else {
-                hi = mid;
+/// On an arc of curvature `k`: how far the front row's middle lies behind
+/// (+y) the midpoint of its ends, and that midpoint's y.
+fn arc_depth(k: f64, (s0, sm, s1): (f64, f64, f64)) -> (f64, f64) {
+    let ends = (arc_y(k, s0) + arc_y(k, s1)) / 2.0;
+    (arc_y(k, sm) - ends, ends)
+}
+
+/// The curvature in (0, π / reach] whose front row has depth `target`
+/// (above 0), the farthest seat staying within half a turn of the apex:
+/// the first crossing of 64 samples, refined by bisection, else the
+/// sample of greatest depth (the depth is not monotonic up to half a turn).
+fn curvature(span: (f64, f64, f64), target: f64) -> Option<f64> {
+    let reach = span.0.abs().max(span.2.abs());
+    if !(reach > 0.0 && reach.is_finite()) {
+        return None;
+    }
+    let max = std::f64::consts::PI / reach;
+    let depth = |k: f64| arc_depth(k, span).0;
+    let mut best = (0.0, 0.0);
+    let mut lo = 0.0;
+    for i in 1..=64 {
+        let k = max * f64::from(i) / 64.0;
+        let d = depth(k);
+        if d >= target {
+            let mut hi = k;
+            for _ in 0..60 {
+                let mid = (lo + hi) / 2.0;
+                if depth(mid) < target {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
             }
+            return Some(hi);
         }
+        if d > best.1 {
+            best = (k, d);
+        }
+        lo = k;
     }
-    (a / hi).copysign(depth)
+    (best.0 > 0.0).then_some(best.0)
 }
 
 /// The curve handle dragged by `d` in the block's own space (07 §5.3): the
-/// front row's middle follows the pointer along the block's y axis and its
-/// ends stay where they were. A bulge changes its amount; a straight block
-/// or an arc becomes the arc of that sagitta, its origin (the apex) moved
-/// by the change of sagitta, and straight again within half a chart unit.
+/// front row's depth, how far its middle lies behind the midpoint of its
+/// ends, becomes its depth at the press plus the pointer's travel along
+/// the block's y axis. A bulge takes it as its amount. A straight block or
+/// an arc becomes the arc of the nearest depth it can have, straight again
+/// within half a chart unit, and its origin moves along y so that the
+/// midpoint of the front row's ends stays where it was: its middle follows
+/// the pointer.
 fn curve(b: &RowBlock, id: u32, d: P) -> Step {
-    let start = depth(b);
+    let Some(span) = front_span(b) else {
+        return Step::Keep;
+    };
+    let k0 = match b.curve {
+        Curve::Arc { radius } => 1.0 / radius,
+        _ => 0.0,
+    };
+    let start = match b.curve {
+        Curve::Bulge { amount } => amount,
+        _ => arc_depth(k0, span).0,
+    };
     let to = start + d[1];
     if !to.is_finite() || d[1] == 0.0 {
         return Step::Base;
     }
-    let a = half_length(b);
-    let (curve, radius) = match b.curve {
-        Curve::Bulge { .. } => (Curve::Bulge { amount: to }, None),
-        _ if to.abs() < 0.5 => (Curve::None {}, None),
-        _ if a <= 0.0 => return Step::Keep,
+    let (curve, k, depth) = match b.curve {
+        Curve::Bulge { .. } => (Curve::Bulge { amount: to }, None, to),
+        _ if to.abs() < 0.5 => (Curve::None {}, Some(0.0), 0.0),
         _ => {
-            let r = radius(a, to);
-            (Curve::Arc { radius: r }, Some(r))
+            let Some(k) = curvature(span, to.abs()).map(|k| k.copysign(to)) else {
+                return Step::Keep;
+            };
+            let curve = Curve::Arc { radius: 1.0 / k };
+            (curve, Some(k), arc_depth(k, span).0)
         }
     };
     let mut changed = b.clone();
@@ -697,11 +736,8 @@ fn curve(b: &RowBlock, id: u32, d: P) -> Step {
         id,
         property: Property::Curve(curve),
     }];
-    if !matches!(b.curve, Curve::Bulge { .. }) {
-        let shift = match curve {
-            Curve::Arc { .. } => to,
-            _ => 0.0,
-        } - start;
+    if let Some(k) = k {
+        let shift = arc_depth(k0, span).1 - arc_depth(k, span).1;
         commands.push(Command::TransformNodes {
             nodes: vec![NodeTransform {
                 id,
@@ -710,7 +746,11 @@ fn curve(b: &RowBlock, id: u32, d: P) -> Step {
             }],
         });
     }
-    let shown = Readout::Curve { depth: to, radius };
+    let radius = match curve {
+        Curve::Arc { radius } => Some(radius),
+        _ => None,
+    };
+    let shown = Readout::Curve { depth, radius };
     Step::Show(Command::Composite { commands }, shown)
 }
 

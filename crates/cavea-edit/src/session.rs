@@ -217,7 +217,6 @@ impl Session {
     /// The whole string of the text field the tool asked for
     /// (`Overlay::text`), on every change.
     pub fn set_text(&mut self, text: &str) {
-        self.watch.inputs += 1;
         self.with_tool(|tool, cx| tool.text(cx, text));
     }
 
@@ -914,7 +913,10 @@ impl Session {
         self.with_tool(|tool, cx| tool.reset(cx));
     }
 
+    /// Runs the tool, whose own state (a marquee, a readout, its cursor) the
+    /// overlay shows: every run counts as an input for `changed`.
     fn with_tool(&mut self, f: impl FnOnce(&mut dyn Tool, &mut Context<'_>)) {
+        self.watch.inputs += 1;
         self.snap.user = self.guides.on(self.floor).to_vec();
         let mut cx = Context {
             editor: &mut self.editor,
