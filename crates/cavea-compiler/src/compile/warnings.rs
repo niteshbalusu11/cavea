@@ -215,8 +215,9 @@ impl<'d> Scene<'_, 'd> {
     }
 
     /// W104: a seat whose centre is not inside its section's explicit world
-    /// outline (a centre on the outline is outside), once per node, by
-    /// section in `SECT` order, then `idx`.
+    /// outline by the crossing rule (a centre exactly on the outline may count
+    /// either way, 03 §3.2), once per node, by section in `SECT` order, then
+    /// `idx`.
     fn outside_outlines(&self, f: &mut Findings) {
         let mut reported = BTreeSet::new();
         for (index, section, outline) in self.explicit {

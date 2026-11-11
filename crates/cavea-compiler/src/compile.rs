@@ -492,6 +492,9 @@ impl<'d> Compiler<'d> {
                 continue;
             }
             self.ids.push((id, id));
+            if is_reference(node) {
+                continue;
+            }
             match node {
                 Node::Section(s) => {
                     sections += 1;
@@ -546,6 +549,9 @@ impl<'d> Compiler<'d> {
         for child in s.children.iter().filter(|c| !is_hidden(c)) {
             let id = node_id(child);
             self.ids.push((id, id));
+            if is_reference(child) {
+                continue;
+            }
             // A child is on its section's floor; naming another is an error.
             if let Some(own) = node_floor(child)
                 && let Some(mine) = self.floor(Some(own), id, f)
@@ -1469,6 +1475,12 @@ fn is_hidden(node: &Node) -> bool {
         Node::Icon(n) => n.hidden,
         Node::Image(n) => n.hidden,
     }
+}
+
+/// A reference image: the designer's only, neither checked nor compiled; its
+/// `id` still counts for E009.
+fn is_reference(node: &Node) -> bool {
+    matches!(node, Node::Image(i) if i.role == doc::ImageRole::Reference)
 }
 
 /// Bookable non-seat objects are not compiled yet and block the compile.

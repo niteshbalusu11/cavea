@@ -6,6 +6,7 @@ use cavea_format::{Artefact, Chart, NONE, decode};
 use super::*;
 use crate::document::Node;
 use crate::finding::Severity;
+use core::f64::consts::TAU;
 
 /// xorshift64*: deterministic, no dependency.
 struct Rng(u64);
@@ -751,6 +752,19 @@ fn text_icons_and_images_reach_the_format() {
     let half = (25.0 * 2f64.sqrt() * 4.0).ceil() as i32;
     assert_eq!(chart.floors[0].bounds, [-2000 - half, -600, 800, 600]);
     assert_eq!(chart.meta.bounds[3], 880);
+
+    // Bounds follow the stored record: a long thin image at the smallest
+    // binary angle (2π / 65,536) reaches 10⁸ · sin θ + 5 · cos θ ≈ 9,592.4 cu
+    // above and below its centre, though its document rotation is smaller.
+    let json = r#"{"schema":1,"name":"i","nextOid":9,"nodes":[{"id":1,"type":"image","asset":"00112233445566778899aabbccddeeff","size":[200000000,10],"rotation":0.004,"role":"background"}]}"#;
+    let chart = decode_both(&compile_json(json).unwrap());
+    assert_eq!(chart.images[0].angle, 1);
+    let reach = 1e8 * (TAU / 65_536.0).sin() + 5.0 * (TAU / 65_536.0).cos();
+    let [_, y0, _, y1] = chart.floors[0].bounds.map(|v| f64::from(v) / 4.0);
+    assert!(
+        y0 <= -reach && y1 >= reach && y1 < reach + 1.0,
+        "{y0} {y1} {reach}"
+    );
 }
 
 /// Each error code on a minimal document that triggers exactly it, naming
@@ -1538,7 +1552,8 @@ fn bad_decoration_names_its_node() {
            {{"id":30,"type":"image","asset":"B3A1B3A1B3A1B3A1B3A1B3A1B3A1B3A1","size":[1,1],"role":"background"}},
            {{"id":31,"type":"image","asset":"{hash}","size":[1,1],"opacity":1.5,"role":"background"}},
            {{"id":32,"type":"image","asset":"{hash}","size":[0.05,10],"role":"background"}},
-           {{"id":33,"type":"image","asset":"not a hash","size":[0,0],"opacity":9,"role":"reference"}},
+           {{"id":33,"type":"image","floor":99,"asset":"not a hash","size":[0,0],"opacity":9,"role":"reference"}},
+           {{"id":35,"type":"section","floor":1,"children":[{{"id":36,"type":"image","floor":2,"asset":"","size":[1,1],"role":"reference"}}]}},
            {{"id":34,"type":"icon","icon":"bar","size":5,"origin":[1e9,0]}}"##,
         many = points(4097),
         hash = "0".repeat(32),
@@ -1599,7 +1614,8 @@ fn bad_decoration_names_its_node() {
         (30, Code::E005, invalid("asset")),
         (31, Code::E005, invalid("opacity")),
         (32, Code::E005, geometry("zero size")),
-        // 33: a reference image is the designer's only and is not compiled.
+        // 33, 36: a reference image is the designer's only: not checked,
+        // not compiled, whatever its floor.
         (34, Code::E005, Detail::OutOfRange),
     ]
     .map(|(n, code, detail)| (Some(n), code, detail));

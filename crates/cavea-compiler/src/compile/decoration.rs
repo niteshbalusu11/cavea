@@ -175,7 +175,7 @@ impl Decorated {
         let s = match deco.node {
             Node::Shape(s) => s,
             Node::Text(t) => {
-                let (world, pos, angle) = placed(deco, t.origin, t.rotation)?;
+                let (_, pos, angle) = placed(deco, t.origin, t.rotation)?;
                 if t.text.is_empty() {
                     return Err((Code::E005, Detail::EmptyText));
                 }
@@ -203,7 +203,8 @@ impl Decorated {
                     doc::Align::Center => (-w / 2.0, ccf::TextAlign::Center),
                     doc::Align::Right => (-w, ccf::TextAlign::Right),
                 };
-                self.cover(deco.floor, &world, [x0, -h / 2.0, x0 + w, h / 2.0])?;
+                let at = quarters(pos);
+                self.cover(deco.floor, at, angle, [x0, -h / 2.0, x0 + w, h / 2.0])?;
                 self.texts.push(ccf::Text {
                     text: strings.get(&t.text),
                     floor,
@@ -219,14 +220,14 @@ impl Decorated {
                 return Ok(());
             }
             Node::Icon(i) => {
-                let (world, pos, angle) = placed(deco, i.origin, i.rotation)?;
+                let (_, pos, angle) = placed(deco, i.origin, i.rotation)?;
                 if !ICONS.contains(&i.icon.as_str()) {
                     let key = i.icon.clone();
                     return Err((Code::E007, Detail::UnknownIcon { key }));
                 }
                 let size = length(i.size)?;
                 let r = f64::from(size) / 8.0;
-                self.cover(deco.floor, &world, [-r, -r, r, r])?;
+                self.cover(deco.floor, quarters(pos), angle, [-r, -r, r, r])?;
                 self.icons.push(ccf::Icon {
                     key: strings.get(&i.icon),
                     floor,
@@ -237,7 +238,7 @@ impl Decorated {
                 return Ok(());
             }
             Node::Image(i) => {
-                let (world, _, angle) = placed(deco, i.origin, i.rotation)?;
+                let (centre, _, angle) = placed(deco, i.origin, i.rotation)?;
                 let hex = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b);
                 if !(i.asset.len() == 32 && i.asset.bytes().all(hex)) {
                     return Err(invalid("asset"));
@@ -248,15 +249,19 @@ impl Decorated {
                     return Err(invalid("size"));
                 }
                 // Unrotated, centred on the position; the angle turns it about
-                // its centre, and the floor's bounds cover the turned box.
-                let [cx, cy] = world([0.0, 0.0]);
+                // its centre, and the floor's bounds cover the stored box
+                // turned by the stored angle.
+                let [cx, cy] = centre;
                 let q = |v: f64| quantise(v).ok_or((Code::E005, Detail::OutOfRange));
                 let (hw, hh) = (w / 2.0, h / 2.0);
                 let bounds = [q(cx - hw)?, q(cy - hh)?, q(cx + hw)?, q(cy + hh)?];
                 if bounds[2] <= bounds[0] || bounds[3] <= bounds[1] {
                     return Err(geometry("zero size"));
                 }
-                self.cover(deco.floor, &world, [-hw, -hh, hw, hh])?;
+                let [x0, y0, x1, y1] = bounds.map(|v| f64::from(v) / 4.0);
+                let (hw, hh) = ((x1 - x0) / 2.0, (y1 - y0) / 2.0);
+                let at = [(x0 + x1) / 2.0, (y0 + y1) / 2.0];
+                self.cover(deco.floor, at, angle, [-hw, -hh, hw, hh])?;
                 self.images.push(ccf::Image {
                     asset: strings.get(&i.asset),
                     floor,
@@ -296,11 +301,13 @@ impl Decorated {
 }
 
 impl Decorated {
-    /// Grows the floor's bounds by the box `[x0, y0, x1, y1]` of a node's own
-    /// space, turned and placed by `world`, rounded outward.
-    fn cover(&mut self, floor: usize, world: &impl Fn(P) -> P, b: [f64; 4]) -> Result<(), Failure> {
+    /// Grows the floor's bounds by the box `[x0, y0, x1, y1]` around `at`,
+    /// turned by the binary `angle`, rounded outward: what a renderer draws
+    /// from the stored record.
+    fn cover(&mut self, floor: usize, at: P, angle: u16, b: [f64; 4]) -> Result<(), Failure> {
+        let place = Place::new(at, f64::from(angle) * 360.0 / 65_536.0).map_err(invalid)?;
         let [x0, y0, x1, y1] = b;
-        let corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(world);
+        let corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|p| place.apply(p));
         let b = outer_box(&corners).ok_or((Code::E005, Detail::OutOfRange))?;
         if let Some(bounds) = self.bounds.get_mut(floor) {
             grow(bounds, b);
@@ -309,25 +316,30 @@ impl Decorated {
     }
 }
 
-/// A text, icon or image's map from its own space to the world, its
-/// quantised position (its origin, placed by its section) and its binary
-/// angle: its rotation plus its section's, reduced exactly to a turn.
+/// A text, icon or image's position in the world (its origin, placed by its
+/// section), that position quantised, and its binary angle: its rotation plus
+/// its section's, reduced exactly to a turn.
 fn placed(
     deco: &Decoration<'_>,
     origin: P,
     rotation: f64,
-) -> Result<(impl Fn(P) -> P, ccf::Point, u16), Failure> {
-    let own = Place::new(origin, rotation).map_err(invalid)?;
-    let parent = deco.parent;
-    let world = move |p: P| parent.apply(own.apply(p));
-    let pos = quantise_point(world([0.0, 0.0])).ok_or((Code::E005, Detail::OutOfRange))?;
+) -> Result<(P, ccf::Point, u16), Failure> {
+    // Checks that the origin and rotation are finite.
+    Place::new(origin, rotation).map_err(invalid)?;
+    let centre = deco.parent.apply(origin);
+    let pos = quantise_point(centre).ok_or((Code::E005, Detail::OutOfRange))?;
     let mut turn = (rotation % 360.0 + deco.turn % 360.0) % 360.0;
     if turn < 0.0 {
         turn += 360.0;
     }
     // 65,536 per turn; exactly 360° is 0.
     let angle = (round_even(turn * 65_536.0 / 360.0) as u32 % 65_536) as u16;
-    Ok((world, pos, angle))
+    Ok((centre, pos, angle))
+}
+
+/// A quantised point in chart units.
+fn quarters([x, y]: ccf::Point) -> P {
+    [f64::from(x) / 4.0, f64::from(y) / 4.0]
 }
 
 /// A size in chart units as a `size`: quarter units from 1 to 65,535.
