@@ -25,7 +25,7 @@ use crate::document::{self as doc, ChartDocument, Node};
 use crate::expand::{ExpandedRow, Expansion, Seat};
 use crate::finding::{Code, Detail, Finding, Findings, expand_code};
 use crate::geometry::{self, OutlineError, P};
-use crate::tessellate::{self, Subpath, TessError};
+use crate::tessellate::{self, TessError};
 
 /// The document schema this compiler reads.
 pub const SCHEMA: u32 = 1;
@@ -248,12 +248,6 @@ fn grow(b: &mut Option<Bounds>, [x0, y0, x1, y1]: Bounds) {
 
 fn point_box([x, y]: Point) -> Bounds {
     [x, y, x, y]
-}
-
-/// A world point in chart units as a `MESH` vertex, if it is within the
-/// quantised range (03 §3.1.1).
-fn mesh_point(p: [f64; 2]) -> Option<[f32; 2]> {
-    quantise_point(p).map(|_| [p[0] as f32, p[1] as f32])
 }
 
 /// A quantised box that contains every point of `pts`: minima rounded down
@@ -890,7 +884,11 @@ impl<'d> Builder<'d> {
                     })
                     .fold(None, |a: Option<f64>, p| Some(a.map_or(p, |a| a.max(p))));
                 let padding = pitch.map_or(DEFAULT_PADDING, |p| p / 2.0);
-                geometry::auto_outline(&self.local, padding)
+                let Some(poly) = geometry::auto_outline(&self.local, padding) else {
+                    f.push(Code::E005, node, Detail::OutOfRange);
+                    return;
+                };
+                poly
             }
             doc::Outline::Points(pts) => {
                 self.outline_points = self.outline_points.saturating_add(pts.points.len());
@@ -904,52 +902,33 @@ impl<'d> Builder<'d> {
                 }
                 match geometry::explicit_outline(&pts.points) {
                     Ok(poly) => poly,
-                    Err(e) => {
-                        let (code, detail) = match e {
-                            OutlineError::NotFinite => {
-                                (Code::E005, Detail::InvalidValue { field: "outline" })
-                            }
-                            OutlineError::TooManyPoints => (
-                                Code::E006,
-                                Detail::TooMany {
-                                    what: "outline points",
-                                    limit: geometry::MAX_POINTS as u32,
-                                },
-                            ),
-                            OutlineError::ZeroSize => (
-                                Code::E005,
-                                Detail::Geometry {
-                                    problem: "zero size",
-                                },
-                            ),
-                            OutlineError::SelfIntersecting => (
-                                Code::E005,
-                                Detail::Geometry {
-                                    problem: "self-intersecting outline",
-                                },
-                            ),
-                        };
-                        f.push(code, node, detail);
-                        return;
-                    }
+                    Err(e) => return f.push(outline_code(e), node, outline_detail(e)),
                 }
             }
         };
         if poly.is_empty() {
             return;
         }
+        // World positions as `MESH` stores them, in `f32`: the outline, its
+        // bounds, anchor and label size all use exactly these points. A
+        // polygon that rounding makes flat or self-touching is refused.
         let place = unit.place;
-        let world: Vec<P> = poly.iter().map(|&p| place.apply(p)).collect();
+        let world = geometry::dedupe(poly.iter().map(|&p| {
+            let [x, y] = place.apply(p);
+            [f64::from(x as f32), f64::from(y as f32)]
+        }));
         let Some(outer) = outer_box(&world) else {
             f.push(Code::E005, node, Detail::OutOfRange);
             return;
         };
+        if let Err(e) = geometry::check(&world) {
+            f.push(outline_code(e), node, outline_detail(e));
+            return;
+        }
         let first = self.outline_indices.len();
-        let paths: [Subpath; 1] = [(poly, true)];
         let tess = tessellate::fill(
-            &paths,
+            &world,
             OUTLINE_COLOR,
-            |p| mesh_point(place.apply(p)),
             &mut self.vertices,
             &mut self.outline_indices,
         );
@@ -957,7 +936,8 @@ impl<'d> Builder<'d> {
             f.push(tess_code(e), node, tess_detail(e));
             return;
         }
-        let anchor = quantise_point(geometry::pole(&world)).unwrap_or_default();
+        let seed = largest_triangle_centroid(&self.vertices, self.outline_indices.get(first..));
+        let anchor = quantise_point(geometry::pole(&world, seed)).unwrap_or_default();
         let chars = s.label.as_deref().map_or(0, |l| l.chars().count());
         let at = [f64::from(anchor[0]) / 4.0, f64::from(anchor[1]) / 4.0];
         let size = geometry::label_size(&world, at, chars);
@@ -1273,10 +1253,53 @@ impl<'d> Builder<'d> {
     }
 }
 
+fn outline_code(e: OutlineError) -> Code {
+    match e {
+        OutlineError::TooManyPoints => Code::E006,
+        _ => Code::E005,
+    }
+}
+
+fn outline_detail(e: OutlineError) -> Detail {
+    match e {
+        OutlineError::NotFinite => Detail::InvalidValue { field: "outline" },
+        OutlineError::TooManyPoints => Detail::TooMany {
+            what: "outline points",
+            limit: geometry::MAX_POINTS as u32,
+        },
+        OutlineError::ZeroSize => Detail::Geometry {
+            problem: "zero size",
+        },
+        OutlineError::SelfIntersecting => Detail::Geometry {
+            problem: "self-intersecting outline",
+        },
+    }
+}
+
+/// The centroid of the largest triangle (the first on a tie): a point
+/// strictly inside the polygon they cover.
+fn largest_triangle_centroid(vertices: &[ccf::Vertex], indices: Option<&[u32]>) -> P {
+    let at = |i: u32| {
+        vertices
+            .get(i as usize)
+            .map_or([0.0; 2], |v| v.pos.map(f64::from))
+    };
+    let mut best = (0.0, [0.0; 2]);
+    for &[i, j, k] in indices.unwrap_or_default().as_chunks::<3>().0 {
+        let (a, b, c) = (at(i), at(j), at(k));
+        let area = ((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])).abs();
+        if area > best.0 {
+            let centroid = [(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0];
+            best = (area, centroid);
+        }
+    }
+    best.1
+}
+
 fn tess_code(e: TessError) -> Code {
     match e {
         TessError::TooManyVertices => Code::E006,
-        TessError::OutOfRange | TessError::Failed => Code::E005,
+        TessError::Failed => Code::E005,
     }
 }
 
@@ -1286,7 +1309,6 @@ fn tess_detail(e: TessError) -> Detail {
             what: "mesh vertices",
             limit: tessellate::MAX_VERTICES as u32,
         },
-        TessError::OutOfRange => Detail::OutOfRange,
         TessError::Failed => Detail::Geometry {
             problem: "cannot be tessellated",
         },

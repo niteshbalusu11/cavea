@@ -33,9 +33,7 @@ pub(crate) enum OutlineError {
     SelfIntersecting,
 }
 
-/// An explicit outline after validation: consecutive repeated points (and a
-/// last point equal to the first) dropped; at least three points not all on
-/// one line, no two edges touching except neighbours at their shared point.
+/// An explicit outline after validation (see [`check`]).
 pub(crate) fn explicit_outline(points: &[[f64; 2]]) -> Result<Vec<P>, OutlineError> {
     if !points.iter().flatten().all(|v| v.is_finite()) {
         return Err(OutlineError::NotFinite);
@@ -43,8 +41,16 @@ pub(crate) fn explicit_outline(points: &[[f64; 2]]) -> Result<Vec<P>, OutlineErr
     if points.len() > MAX_POINTS {
         return Err(OutlineError::TooManyPoints);
     }
-    let mut poly: Vec<P> = Vec::with_capacity(points.len());
-    for &p in points {
+    let poly = dedupe(points.iter().copied());
+    check(&poly)?;
+    Ok(poly)
+}
+
+/// The points with consecutive repeats, and a last point equal to the first,
+/// dropped.
+pub(crate) fn dedupe(points: impl Iterator<Item = P>) -> Vec<P> {
+    let mut poly: Vec<P> = Vec::new();
+    for p in points {
         if poly.last() != Some(&p) {
             poly.push(p);
         }
@@ -52,23 +58,30 @@ pub(crate) fn explicit_outline(points: &[[f64; 2]]) -> Result<Vec<P>, OutlineErr
     while poly.len() > 1 && poly.first() == poly.last() {
         poly.pop();
     }
+    poly
+}
+
+/// A valid outline: at least three points not all on one line, and no two
+/// edges touching except neighbours at their shared point.
+pub(crate) fn check(poly: &[P]) -> Result<(), OutlineError> {
     let collinear = |a: P, b: P| poly.iter().all(|&p| cross(a, b, p) == 0.0);
-    match poly.as_slice() {
+    match poly {
         [a, b, _, ..] if !collinear(*a, *b) => {}
         _ => return Err(OutlineError::ZeroSize),
     }
-    if !is_simple(&poly) {
+    if !is_simple(poly) {
         return Err(OutlineError::SelfIntersecting);
     }
-    Ok(poly)
+    Ok(())
 }
 
 /// The automatic outline of a section's seats, in the section's own space,
 /// with at least `padding` between every seat centre and the outline. Empty
-/// when there are no seats or the extent does not fit `f64`.
-pub(crate) fn auto_outline(seats: &[P], padding: f64) -> Vec<P> {
+/// when there are no seats; `None` when the grid's numbers overflow or the
+/// grid would exceed 2²⁶ cells.
+pub(crate) fn auto_outline(seats: &[P], padding: f64) -> Option<Vec<P>> {
     let Some(&first) = seats.first() else {
-        return Vec::new();
+        return Some(Vec::new());
     };
     let (mut lo, mut hi) = (first, first);
     for s in seats {
@@ -88,7 +101,7 @@ pub(crate) fn auto_outline(seats: &[P], padding: f64) -> Vec<P> {
     let cols = (w / h).ceil() + 2.0 * margin + 1.0;
     let rows = (h_ / h).ceil() + 2.0 * margin + 1.0;
     if !(h.is_finite() && r.is_finite() && cols * rows <= f64::from(1u32 << 26)) {
-        return Vec::new();
+        return None;
     }
     let g = Grid {
         cols: cols as usize,
@@ -110,9 +123,11 @@ pub(crate) fn auto_outline(seats: &[P], padding: f64) -> Vec<P> {
         .unwrap_or_else(|| convex_hull(g.boundary_midpoints(&inside)));
     // Half-cell lattice to section space.
     let half = h / 2.0;
-    poly.iter()
+    let out: Vec<P> = poly
+        .iter()
         .map(|&[x, y]| [g.origin[0] + x * half, g.origin[1] + y * half])
-        .collect()
+        .collect();
+    out.iter().flatten().all(|v| v.is_finite()).then_some(out)
 }
 
 /// A grid of square cells of side `h`; cell (i, j) covers
@@ -564,7 +579,9 @@ impl Ord for Cell {
 /// The pole of inaccessibility: the interior point farthest from the
 /// boundary, by the quadtree search of Mapbox's polylabel, to within
 /// max(0.5 cu, (width + height) / 512), evaluating at most 1,024 cells.
-pub(crate) fn pole(poly: &[P]) -> P {
+/// `seed`, a point strictly inside, is a candidate too, so the result is
+/// always inside.
+pub(crate) fn pole(poly: &[P], seed: P) -> P {
     let Some(&first) = poly.first() else {
         return [0.0, 0.0];
     };
@@ -576,7 +593,7 @@ pub(crate) fn pole(poly: &[P]) -> P {
     let (w, h) = (hi[0] - lo[0], hi[1] - lo[1]);
     let size = w.min(h).max(w.max(h) / 256.0);
     if !(size > 0.0 && size.is_finite()) {
-        return first;
+        return seed;
     }
     let precision = 0.5f64.max((w + h) / 512.0);
     let half = size / 2.0;
@@ -594,11 +611,16 @@ pub(crate) fn pole(poly: &[P]) -> P {
         }
     }
     let mut best = Cell::new(poly, centroid(poly).unwrap_or(first), 0.0, seq);
-    let centre = Cell::new(poly, [lo[0] + w / 2.0, lo[1] + h / 2.0], 0.0, seq + 1);
-    seq += 2;
-    if centre.d > best.d {
-        best = centre;
+    for (i, c) in [[lo[0] + w / 2.0, lo[1] + h / 2.0], seed]
+        .into_iter()
+        .enumerate()
+    {
+        let cell = Cell::new(poly, c, 0.0, seq + 1 + i);
+        if cell.d > best.d {
+            best = cell;
+        }
     }
+    seq += 3;
     while let Some(cell) = heap.pop() {
         if cell.d > best.d {
             best = cell;

@@ -20,50 +20,24 @@ use crate::geometry::P;
 /// Vertices in the whole `MESH` table.
 pub(crate) const MAX_VERTICES: usize = 1 << 18;
 
-/// One subpath: its points and whether it is closed.
-pub(crate) type Subpath = (Vec<P>, bool);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TessError {
-    /// A vertex outside the quantised range (03 §3.1.1).
-    OutOfRange,
     /// [`MAX_VERTICES`] reached.
     TooManyVertices,
     /// `lyon` refused the geometry.
     Failed,
 }
 
-/// Collects `lyon`'s output into the chart's mesh, mapping each vertex from
-/// the tessellation space to world coordinates.
-struct Sink<'a, F> {
+/// Collects `lyon`'s output into the chart's mesh.
+struct Sink<'a> {
     vertices: &'a mut Vec<Vertex>,
     indices: &'a mut Vec<u32>,
-    map: F,
     color: Rgba,
-    error: Option<TessError>,
+    full: bool,
     start: (usize, usize),
 }
 
-impl<F: Fn(P) -> Option<[f32; 2]>> Sink<'_, F> {
-    fn vertex(&mut self, x: f32, y: f32) -> Result<VertexId, GeometryBuilderError> {
-        let Some(pos) = (self.map)([f64::from(x), f64::from(y)]) else {
-            self.error = Some(TessError::OutOfRange);
-            return Err(GeometryBuilderError::InvalidVertex);
-        };
-        if self.vertices.len() >= MAX_VERTICES {
-            self.error = Some(TessError::TooManyVertices);
-            return Err(GeometryBuilderError::TooManyVertices);
-        }
-        let id = self.vertices.len() as u32; // < MAX_VERTICES
-        self.vertices.push(Vertex {
-            pos,
-            color: self.color,
-        });
-        Ok(VertexId(id))
-    }
-}
-
-impl<F: Fn(P) -> Option<[f32; 2]>> GeometryBuilder for Sink<'_, F> {
+impl GeometryBuilder for Sink<'_> {
     fn begin_geometry(&mut self) {
         self.start = (self.vertices.len(), self.indices.len());
     }
@@ -76,73 +50,67 @@ impl<F: Fn(P) -> Option<[f32; 2]>> GeometryBuilder for Sink<'_, F> {
     }
 }
 
-impl<F: Fn(P) -> Option<[f32; 2]>> FillGeometryBuilder for Sink<'_, F> {
+impl FillGeometryBuilder for Sink<'_> {
     fn add_fill_vertex(&mut self, v: FillVertex) -> Result<VertexId, GeometryBuilderError> {
-        let p = v.position();
-        self.vertex(p.x, p.y)
-    }
-}
-
-/// Path events for `lyon`, in `f32` relative to `offset`.
-fn events(paths: &[Subpath], offset: P) -> Vec<PathEvent> {
-    let at = |p: P| point((p[0] - offset[0]) as f32, (p[1] - offset[1]) as f32);
-    let mut out = Vec::new();
-    for (pts, closed) in paths {
-        let (Some(&first), Some(&last)) = (pts.first(), pts.last()) else {
-            continue;
-        };
-        out.push(PathEvent::Begin { at: at(first) });
-        for w in pts.windows(2) {
-            if let [a, b] = *w {
-                out.push(PathEvent::Line {
-                    from: at(a),
-                    to: at(b),
-                });
-            }
+        if self.vertices.len() >= MAX_VERTICES {
+            self.full = true;
+            return Err(GeometryBuilderError::TooManyVertices);
         }
-        out.push(PathEvent::End {
-            last: at(last),
-            first: at(first),
-            close: *closed,
+        let id = self.vertices.len() as u32; // < MAX_VERTICES
+        let p = v.position();
+        self.vertices.push(Vertex {
+            pos: [p.x, p.y],
+            color: self.color,
         });
+        Ok(VertexId(id))
     }
-    out
 }
 
-/// Fills `paths` (non-zero rule) into the mesh. `map` takes a point of
-/// `paths`' space to world coordinates, or `None` out of range. Returns the
-/// range of indices added; on error the mesh is unchanged.
+/// Fills a simple polygon (non-zero rule) into the mesh. Its coordinates are
+/// world chart units that `f32` holds exactly, so the vertices written are
+/// exactly its points. Returns the range of indices added; on error the mesh
+/// is unchanged.
 pub(crate) fn fill(
-    paths: &[Subpath],
+    poly: &[P],
     color: Rgba,
-    map: impl Fn(P) -> Option<[f32; 2]>,
     vertices: &mut Vec<Vertex>,
     indices: &mut Vec<u32>,
 ) -> Result<(u32, u32), TessError> {
-    // Tessellate near the origin, where `f32` is most precise.
-    let offset = paths
-        .iter()
-        .find_map(|(p, _)| p.first().copied())
-        .unwrap_or_default();
+    let at = |p: P| point(p[0] as f32, p[1] as f32);
+    let (Some(&first), Some(&last)) = (poly.first(), poly.last()) else {
+        return Ok((indices.len() as u32, 0));
+    };
+    let mut events = vec![PathEvent::Begin { at: at(first) }];
+    events.extend(poly.windows(2).filter_map(|w| match *w {
+        [a, b] => Some(PathEvent::Line {
+            from: at(a),
+            to: at(b),
+        }),
+        _ => None,
+    }));
+    events.push(PathEvent::End {
+        last: at(last),
+        first: at(first),
+        close: true,
+    });
     let (v0, i0) = (vertices.len(), indices.len());
     let mut sink = Sink {
         vertices,
         indices,
-        map: |p: P| map([p[0] + offset[0], p[1] + offset[1]]),
         color,
-        error: None,
+        full: false,
         start: (v0, i0),
     };
-    let result = FillTessellator::new().tessellate(
-        events(paths, offset),
-        &FillOptions::non_zero(),
-        &mut sink,
-    );
-    let error = sink.error;
-    if result.is_err() || error.is_some() {
+    let result = FillTessellator::new().tessellate(events, &FillOptions::non_zero(), &mut sink);
+    let full = sink.full;
+    if result.is_err() {
         vertices.truncate(v0);
         indices.truncate(i0);
-        return Err(error.unwrap_or(TessError::Failed));
+        return Err(if full {
+            TessError::TooManyVertices
+        } else {
+            TessError::Failed
+        });
     }
     let count = indices.len() - i0;
     Ok((i0 as u32, count as u32)) // indices ≤ 3 × triangles, bounded by MAX_VERTICES

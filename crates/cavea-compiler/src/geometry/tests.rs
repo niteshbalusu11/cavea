@@ -204,7 +204,7 @@ fn auto_outlines_are_simple_padded_and_tight() {
     ];
     for (name, blocks, p) in cases {
         let s = seats(&blocks);
-        let poly = auto_outline(&s, p);
+        let poly = auto_outline(&s, p).unwrap();
         assert!(poly.len() >= 3 && simple(&poly), "{name}: not simple");
         for &seat in &s {
             assert_eq!(winding(&poly, seat).abs(), 1, "{name}: seat outside");
@@ -221,7 +221,7 @@ fn auto_outlines_are_simple_padded_and_tight() {
         block("", &rows(2, 5)),
         block(r#""origin":[5000,3000],"#, &rows(2, 5)),
     ]);
-    let poly = auto_outline(&s, 47.5);
+    let poly = auto_outline(&s, 47.5).unwrap();
     assert!(simple(&poly) && s.iter().all(|&p| winding(&poly, p) != 0));
     assert_eq!(convex_hull(poly.clone()).len(), poly.len());
     // A block curved through about 160° is far from convex, and so is its
@@ -230,10 +230,10 @@ fn auto_outlines_are_simple_padded_and_tight() {
         r#""curve":{"kind":"arc","radius":1000},"#,
         &rows(3, 50),
     )]);
-    let poly = auto_outline(&s, 47.5);
+    let poly = auto_outline(&s, 47.5).unwrap();
     let (hull, _) = hull_area_perimeter(&poly);
     assert!(area(&poly).abs() < 0.6 * hull, "{} vs {hull}", area(&poly));
-    assert!(auto_outline(&[], 47.5).is_empty());
+    assert_eq!(auto_outline(&[], 47.5), Some(Vec::new()));
 }
 
 #[test]
@@ -309,7 +309,7 @@ fn assert_largest(poly: &[P], anchor: P, chars: usize) {
 fn anchors_and_label_sizes() {
     // A square: the pole is its centre.
     let square = [[0.0, 0.0], [1000.0, 0.0], [1000.0, 1000.0], [0.0, 1000.0]];
-    let c = pole(&square);
+    let c = pole(&square, [1.0, 1.0]);
     assert!(
         (c[0] - 500.0).abs() <= 2.0 && (c[1] - 500.0).abs() <= 2.0,
         "{c:?}"
@@ -327,7 +327,7 @@ fn anchors_and_label_sizes() {
         [400.0, 400.0],
         [0.0, 400.0],
     ];
-    let c = pole(&l);
+    let c = pole(&l, [1.0, 1.0]);
     assert_eq!(winding(&l, c).abs(), 1);
     assert!(boundary_distance(&l, c) >= 100.0 - 2.0, "{c:?}");
     assert!((c[0] - 100.0).abs() <= 2.0, "{c:?}");

@@ -578,7 +578,7 @@ fn compiled_bytes_are_deterministic() {
             .all(|s| s.mesh_count > 0 && s.label_size > 0)
     );
     let hex: String = a.public_hash.iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!(hex, "457d9a6a07ea02ba0566a0d0ed683c53");
+    assert_eq!(hex, "7f91b50fbc271147f29a10dc7e04d8da");
 }
 
 /// One row of 10: position 3 removed, and position 7 nudged 30 cu right, so
@@ -896,6 +896,32 @@ fn explicit_outlines_are_tessellated_in_world_space() {
     // "Box" in the world's 300 × 400 box: 3 × 0.6 × size < 300 gives 666
     // quarter units.
     assert_eq!(s.label_size, 666);
+
+    // Far from the origin, where `f32` steps by 8 cu: the bounds still cover
+    // every vertex written, and a thin U gets an anchor inside its walls.
+    let json = r##"{"schema":1,"name":"o","nextOid":99,"nodes":[
+      {"id":1,"type":"section","label":"A","origin":[100000003,0],"outline":{"points":[[0,0],[100,0],[100,100],[0,100]]}},
+      {"id":2,"type":"section","label":"A","outline":{"points":[[0,0],[10000,0],[10000,10000],[9999,10000],[9999,1],[1,1],[1,10000],[0,10000]]}}]}"##;
+    let c = decode_both(&compile_json(json).unwrap());
+    assert_mesh_partition(&c);
+    for s in &c.sections {
+        let outline =
+            &c.mesh.indices[s.mesh_first as usize..(s.mesh_first + s.mesh_count) as usize];
+        for &i in outline {
+            let [x, y] = c.mesh.vertices[i as usize].pos.map(|v| f64::from(v) * 4.0);
+            let b = s.bounds.map(f64::from);
+            assert!(
+                x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3],
+                "{x} {y} {b:?}"
+            );
+        }
+    }
+    let [ax, ay] = c.sections[1].label_anchor.map(|v| f64::from(v) / 4.0);
+    let wall = |v: f64| (0.0..=1.0).contains(&v) || (9999.0..=10000.0).contains(&v);
+    assert!(
+        (wall(ax) || (0.0..=1.0).contains(&ay)) && (0.0..=10000.0).contains(&ax),
+        "{ax} {ay}"
+    );
 }
 
 /// Section outline bounds: an automatic outline grows the section's bounds
@@ -947,11 +973,13 @@ fn auto_outlines_reach_the_chart() {
 
 #[test]
 fn bad_outlines_name_their_sections() {
-    let json = r##"{"schema":1,"name":"b","nextOid":99,"nodes":[
+    let json = r##"{"schema":1,"name":"b","nextOid":99,"categories":[{"key":"a","label":"A","color":"#000000"}],"nodes":[
       {"id":1,"type":"section","outline":{"points":[[0,0],[100,100],[100,0],[0,100]]}},
       {"id":2,"type":"section","outline":{"points":[[0,0],[50,0],[100,0]]}},
       {"id":3,"type":"section","outline":{"points":[[0,0],[1e300,0],[0,1e300]]}},
-      {"id":4,"type":"section","outline":{"points":[[0,0],[1,0],[0,1]]}}]}"##;
+      {"id":4,"type":"section","outline":{"points":[[0,0],[1,0],[0,1]]}},
+      {"id":5,"type":"section","category":"a","children":[{"id":6,"type":"rowBlock","rowPitch":1e308,"rows":[{"rid":7,"seats":1,"oids":[[8,1]]}]}]},
+      {"id":9,"type":"section","origin":[1e8,0],"outline":{"points":[[0,0],[1,0],[1,1],[0,1]]}}]}"##;
     let got: Vec<_> = findings(json)
         .into_iter()
         .map(|f| (f.code, f.node, f.detail))
@@ -963,6 +991,11 @@ fn bad_outlines_name_their_sections() {
             (Code::E005, Some(1), geometry("self-intersecting outline")),
             (Code::E005, Some(2), geometry("zero size")),
             (Code::E005, Some(3), Detail::OutOfRange),
+            // The padding overflows the grid's arithmetic.
+            (Code::E005, Some(5), Detail::OutOfRange),
+            // A 1 cu square at x = 10⁸ collapses at the `f32` precision of
+            // `MESH`.
+            (Code::E005, Some(9), geometry("zero size")),
         ]
     );
 }
