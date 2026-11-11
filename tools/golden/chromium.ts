@@ -188,10 +188,22 @@ export class Browser {
     return [...this.exceptions];
   }
 
+  /**
+   * Asks the browser to close (so its helper processes finish writing the
+   * profile), stops it by process id if it has not gone within 5 s, then
+   * removes its directory.
+   */
   async close(): Promise<void> {
+    await Promise.race([this.send("Browser.close").catch(() => undefined), Bun.sleep(5000)]);
+    const exited = await Promise.race([
+      this.proc.exited.then(() => true),
+      Bun.sleep(5000).then(() => false),
+    ]);
+    if (!exited) {
+      this.proc.kill();
+      await this.proc.exited;
+    }
     this.ws.close();
-    this.proc.kill();
-    await this.proc.exited;
     await rm(this.scratch, { recursive: true, force: true });
   }
 }
