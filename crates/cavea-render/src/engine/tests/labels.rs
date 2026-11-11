@@ -14,6 +14,11 @@ use crate::{
     },
 };
 
+/// One range, as draws record them.
+fn one(range: Range<u32>) -> Vec<Range<u32>> {
+    vec![range]
+}
+
 /// Two floors. Ground: section North (four rows of ten, the first seat
 /// accessible), section South (two rows of ten, one labelled `Ä`), the text
 /// objects STAGE (centred, always shown) and Left (left-aligned, turned
@@ -190,8 +195,8 @@ fn a_string_is_asked_for_once_per_bucket_drawn_once_supplied_and_never_when_idle
     assert_eq!(
         draws,
         [
-            (Pipeline::Text, vec![0..2], 1.0),
-            (Pipeline::Text, vec![2..3], 1.0)
+            (Pipeline::Text, one(0..2), 1.0),
+            (Pipeline::Text, one(2..3), 1.0)
         ]
     );
 
@@ -243,7 +248,7 @@ fn section_labels_show_at_overview_and_cross_fade_at_their_anchor_within_the_cla
         let drawn = draws_since(&e, from);
         if shown {
             assert!(
-                drawn.contains(&(Pipeline::Text, vec![sections.clone()], alpha)),
+                drawn.contains(&(Pipeline::Text, one(sections.clone()), alpha)),
                 "{s}: {drawn:?}"
             );
             assert!(alpha > 0.0);
@@ -304,7 +309,7 @@ fn row_labels_show_from_8_px_seats_at_the_ends_the_chart_asks_for() {
         // baked atlas; South's `Ä` is asked of the host.
         let rows = labels(&e).rows;
         assert!(
-            rows >= 4 * ends && rows % ends.max(1) == 0,
+            rows >= 4 * ends && rows.is_multiple_of(ends.max(1)),
             "{display}: {rows}"
         );
         let asked_a = asked.iter().any(|a| a.1 == "Ä");
@@ -316,7 +321,7 @@ fn row_labels_show_from_8_px_seats_at_the_ends_the_chart_asks_for() {
                 .iter()
                 .rev()
                 .find(|d| d.0 == Pipeline::Glyph);
-            assert_eq!(draw.map(|d| d.2.clone()), Some(vec![0..rows]));
+            assert_eq!(draw.map(|d| d.2.clone()), Some(one(0..rows)));
             // Each instance sits at a compiled row end.
             let chart = &e.scene.as_ref().unwrap().scene.chart;
             let buffer = &e.backend.buffers[&labels(&e).row_buffers().unwrap()[0].0];
@@ -524,7 +529,7 @@ fn decoration_icons_are_the_active_floors_drawn_every_frame() {
         let from = e.backend.calls.len();
         tick(&mut e, s);
         let last = e.backend.calls[from..].last().unwrap();
-        assert_eq!((last.0, last.1.clone()), (Pipeline::Shape, vec![0..2]));
+        assert_eq!((last.0, last.1.clone()), (Pipeline::Shape, one(0..2)));
         assert_eq!(e.backend.modes.last(), Some(&mode::DECORATION_ICONS));
     }
 }
@@ -579,16 +584,25 @@ fn the_atlas_packs_without_overlap_grows_once_and_clears_only_what_is_unused() {
     let mut events = Vec::new();
     let mut rng = Rng(0xa71a5);
     let mut n = 0u32;
-    // Builds of fresh strings, each answered at once, until the atlas has
-    // grown and filled.
+    // Builds that use every string so far and add fresh ones, each
+    // answered at once, until the atlas has grown and filled.
     let mut sides = Vec::new();
-    while n < 4000 {
+    let bucket = |i: u32| (i % BUCKETS.len() as u32) as u8;
+    while n < 1500 {
         atlas.begin();
+        for i in 0..n {
+            let key = Key {
+                source: Source::String(i),
+                weight: 400,
+                bucket: bucket(i),
+            };
+            atlas.lookup(key, "", "f", &mut events);
+        }
         for _ in 0..REQUESTS_PER_BUILD {
             let key = Key {
                 source: Source::String(n),
                 weight: 400,
-                bucket: (n % BUCKETS.len() as u32) as u8,
+                bucket: bucket(n),
             };
             n += 1;
             atlas.lookup(key, "x", "f", &mut events);
@@ -617,7 +631,11 @@ fn the_atlas_packs_without_overlap_grows_once_and_clears_only_what_is_unused() {
             }
         }
     }
-    assert_eq!(sides, [START_SIDE, MAX_SIDE], "made at 1024, grown once");
+    assert_eq!(
+        sides,
+        [START_SIDE, MAX_SIDE],
+        "made at 1024, grown once, when all in use"
+    );
     assert!(atlas.rasterised > 0);
     // Full, with every raster used by this build: a raster that does not
     // fit is dropped and nothing is cleared.
@@ -707,10 +725,29 @@ fn measure_map_labels() {
     e.handle(super::text::atlas());
     resize(&mut e, 1920.0, 1080.0, 1.0, 3.0);
     tick(&mut e, 0.0);
-    let centre = cam(&e).centre;
-    for (name, s) in [("overview", 1.2), ("8 px seats", 8.0)] {
+    let fit = cam(&e).centre;
+    let [x, y] = e.scene.as_ref().unwrap().scene.chart.sections[0].label_anchor;
+    let section = [f64::from(x) / 4.0, f64::from(y) / 4.0];
+    let views = [
+        ("overview", fit, 1.2),
+        ("8 px seats", section, 8.0),
+        ("detail, 20 px seats", section, 20.0),
+    ];
+    for (name, centre, s) in views {
         look(&mut e, centre, s);
         rasterise(&mut e, 16.0);
+        // A frame that rebuilds nothing, everything on.
+        let runs = 200u32;
+        let start = std::time::Instant::now();
+        for i in 0..runs {
+            e.dirty = true;
+            tick(&mut e, 500.0 + f64::from(i));
+        }
+        let frame = start.elapsed().as_secs_f64() * 1e6 / f64::from(runs);
+        println!(
+            "{name}: a frame in {frame:.1} µs (CPU, fake backend), {} draw calls",
+            e.label_stats().frame_draws
+        );
         let runs = 200u32;
         let start = std::time::Instant::now();
         for i in 0..runs {
@@ -720,6 +757,17 @@ fn measure_map_labels() {
             tick(&mut e, 1000.0 + f64::from(i));
         }
         let ms = start.elapsed().as_secs_f64() * 1000.0 / f64::from(runs);
+        // The collision pass alone, over the same candidates.
+        let start = std::time::Instant::now();
+        let cell = e.scene.as_ref().unwrap().scene.seat_size / 2.0;
+        let mut l = std::mem::take(&mut e.scene.as_mut().unwrap().map_labels);
+        for _ in 0..runs {
+            l.place_for_measurement(cell);
+        }
+        let place = start.elapsed().as_secs_f64() * 1000.0 / f64::from(runs);
+        let cands = l.candidates();
+        e.scene.as_mut().unwrap().map_labels = l;
+        println!("{name}: collision pass over {cands} candidates in {place:.3} ms");
         let l = labels(&e);
         println!(
             "{name}: build in {ms:.3} ms per frame ({} candidates placed: {} text, {} rows; atlas {} KiB, {} strings)",

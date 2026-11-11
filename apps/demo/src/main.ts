@@ -320,11 +320,7 @@ const options: SeatMapOptions = {
     hover = object?.label ?? "";
     showSelection();
   },
-  onCameraChange(view) {
-    log("cameraChange")(view);
-    // After the frame that changed the camera.
-    requestAnimationFrame(showText);
-  },
+  onCameraChange: log("cameraChange"),
   onError(error) {
     log("error")(error.code, error.message);
     report(`error ${error.code}: ${error.message}`);
@@ -369,6 +365,8 @@ try {
     options.chart = { url: chartUrl };
   }
   map = await createSeatMap(container, options);
+  // A timer for the readout only; the map's frame loop stays idle.
+  setInterval(showText, 500);
   Object.assign(window, {
     caveaDemo: {
       map,

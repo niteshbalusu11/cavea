@@ -8,10 +8,10 @@
 //! √2; a size between buckets is drawn from the next larger one, scaled down.
 //!
 //! The texture is made on the first raster, [`START_SIDE`] square, and packed
-//! by shelves. When a raster does not fit it grows once to [`MAX_SIDE`]
-//! (everything is asked for again); at full size it is cleared if it holds
-//! strings the last build did not use, and otherwise the raster is dropped:
-//! what is visible then fits, or the rest waits for the view to change.
+//! by shelves. When a raster does not fit, the atlas is cleared if it holds
+//! strings the last build did not use (what is in view is asked for again);
+//! if every string in it is in use it grows once, to [`MAX_SIDE`]; at that
+//! size the raster is dropped, and waits for the view to change.
 
 use crate::{
     backend::{
@@ -283,10 +283,10 @@ impl TextAtlas {
             if let Some(spot) = self.pack(width + 1, height + 1) {
                 return Ok(Some(spot));
             }
-            if self.side < max {
-                self.make(backend, (self.side * 2).min(max))?;
-            } else if self.entries.iter().any(|e| e.used != self.build) {
+            if self.entries.iter().any(|e| e.used != self.build) {
                 self.clear();
+            } else if self.side < max {
+                self.make(backend, (self.side * 2).min(max))?;
             } else {
                 return Ok(None);
             }

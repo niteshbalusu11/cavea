@@ -7,27 +7,11 @@
 //! with one `Tick`. So the engine never reads a clock or schedules anything,
 //! and a recorded command trace replays identically.
 //!
-//! The traits here are for work the engine needs done synchronously, in the
-//! middle of a frame, and cannot do portably itself. They have no
-//! implementations yet: text arrives with REN-026, images with REN-020.
-
-/// A string drawn by the host as a coverage bitmap for the dynamic text atlas.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Raster {
-    pub width: u32,
-    pub height: u32,
-    /// Distance from the bitmap's top to the baseline, in device pixels.
-    pub baseline: u32,
-}
-
-/// Draws whole strings with the platform's text stack (canvas `fillText`,
-/// CoreText, Android canvas), which does shaping and font fallback (04 §12).
-pub trait TextRasteriser {
-    /// Draws `text` in `font` at `px` device pixels into `out` as one byte of
-    /// coverage per pixel, row by row, replacing its contents. Returns `None`
-    /// if the host cannot draw it.
-    fn rasterise(&mut self, text: &str, font: &str, px: f32, out: &mut Vec<u8>) -> Option<Raster>;
-}
+//! Text is not a trait either: the engine asks for a string with the
+//! `TextRequest` event and the host answers with `SetText` between frames
+//! (04 §12, D-37), so rasterising never happens inside a frame and works the
+//! same from a worker. The trait here is for loading images, which comes with
+//! REN-020.
 
 /// Loads and decodes background images (04 §7). Loading is asynchronous on
 /// every platform, so the engine only asks; the decoded pixels come back as a

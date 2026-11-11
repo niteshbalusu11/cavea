@@ -120,16 +120,18 @@ impl TextInstance {
     fn encode(&self) -> [u8; TEXT_STRIDE] {
         let mut out = [0; TEXT_STRIDE];
         let [x, y, w, h] = self.raster.rect;
-        let [ax, ay] = self.anchor.map(|v| v.round() as i16);
-        let words = [x, y, w, h, ax as u16, ay as u16, self.raster.px, self.angle];
-        let bytes = (self.pos.iter().chain([&self.em]))
-            .flat_map(|v| v.to_le_bytes())
-            .chain(words.iter().flat_map(|v| v.to_le_bytes()))
-            .chain([u8::from(self.halo), self.min_q, self.max_q, 0])
-            .chain(self.color);
-        for (slot, byte) in out.iter_mut().zip(bytes) {
-            *slot = byte;
+        // Rounded half up; `as` saturates.
+        let [ax, ay] = self.anchor.map(|v| (v + 0.5).floor() as i16 as u16);
+        let words = [x, y, w, h, ax, ay, self.raster.px, self.angle];
+        let floats = [self.pos[0], self.pos[1], self.em];
+        for (i, v) in floats.iter().enumerate() {
+            out[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
         }
+        for (i, v) in words.iter().enumerate() {
+            out[12 + i * 2..14 + i * 2].copy_from_slice(&v.to_le_bytes());
+        }
+        out[28..32].copy_from_slice(&[u8::from(self.halo), self.min_q, self.max_q, 0]);
+        out[32..36].copy_from_slice(&self.color);
         out
     }
 }
@@ -549,49 +551,41 @@ impl MapLabels {
         self.text_bytes.clear();
         self.row_bytes.clear();
         let mut kept = [0u32; 3];
-        for kind in [Kind::Section, Kind::Seat, Kind::Text, Kind::Glyph] {
-            for cand in self.cands.iter().filter(|c| c.kind == kind) {
-                if kind == Kind::Glyph && self.row_bytes.len() >= MAX_ROW_LABELS * LABEL_STRIDE
-                    || kind != Kind::Glyph
-                        && self.text_bytes.len() + 2 * TEXT_STRIDE
-                            > MAX_TEXT_INSTANCES * TEXT_STRIDE
-                {
+        // Candidates were pushed in priority order: sections, seats, text
+        // objects, then rows in chart order whichever atlas draws them.
+        for cand in &self.cands {
+            let glyph = cand.kind == Kind::Glyph;
+            let full = if glyph {
+                self.row_bytes.len() >= MAX_ROW_LABELS * LABEL_STRIDE
+            } else {
+                self.text_bytes.len() + 2 * TEXT_STRIDE > MAX_TEXT_INSTANCES * TEXT_STRIDE
+            };
+            if full {
+                continue;
+            }
+            if let Some(b) = cand.bbox {
+                let (x0, y0) = (cells(b[0], bounds[0]), cells(b[1], bounds[1]));
+                let (x1, y1) = (cells(b[2], bounds[0]), cells(b[3], bounds[1]));
+                let bits = || (y0..=y1).flat_map(move |y| (x0..=x1).map(move |x| y * side + x));
+                let grid = &mut self.grid;
+                if bits().any(|i| grid.get(i / 64).is_some_and(|w| w >> (i % 64) & 1 != 0)) {
                     continue;
                 }
-                if let Some(b) = cand.bbox {
-                    let (x0, y0) = (cells(b[0], bounds[0]), cells(b[1], bounds[1]));
-                    let (x1, y1) = (cells(b[2], bounds[0]), cells(b[3], bounds[1]));
-                    let at = |x: usize, y: usize| y * side + x;
-                    let taken = (y0..=y1).any(|y| {
-                        (x0..=x1).any(|x| {
-                            self.grid
-                                .get(at(x, y) / 64)
-                                .is_some_and(|w| w >> (at(x, y) % 64) & 1 != 0)
-                        })
-                    });
-                    if taken {
-                        continue;
-                    }
-                    for y in y0..=y1 {
-                        for x in x0..=x1 {
-                            if let Some(w) = self.grid.get_mut(at(x, y) / 64) {
-                                *w |= 1 << (at(x, y) % 64);
-                            }
-                        }
+                for i in bits() {
+                    if let Some(w) = grid.get_mut(i / 64) {
+                        *w |= 1 << (i % 64);
                     }
                 }
-                match kind {
-                    Kind::Glyph => self
-                        .row_bytes
-                        .extend_from_slice(cand.bytes.get(..LABEL_STRIDE).unwrap_or_default()),
-                    _ => {
-                        for bytes in [Some(cand.bytes), cand.second].into_iter().flatten() {
-                            self.text_bytes.extend_from_slice(&bytes);
-                            if let Some(n) = kept.get_mut(kind as usize) {
-                                *n += 1;
-                            }
-                        }
-                    }
+            }
+            if glyph {
+                let bytes = cand.bytes.get(..LABEL_STRIDE).unwrap_or_default();
+                self.row_bytes.extend_from_slice(bytes);
+                continue;
+            }
+            for bytes in [Some(cand.bytes), cand.second].into_iter().flatten() {
+                self.text_bytes.extend_from_slice(&bytes);
+                if let Some(n) = kept.get_mut(cand.kind as usize) {
+                    *n += 1;
                 }
             }
         }
@@ -719,4 +713,16 @@ fn vertex(usage: BufferUsage) -> BufferDesc {
 fn meets(b: &[i32; 4], rect: [f32; 4]) -> bool {
     let [x0, y0, x1, y1] = b.map(|v| v as f32 * 0.25);
     x0 <= rect[2] && x1 >= rect[0] && y0 <= rect[3] && y1 >= rect[1]
+}
+
+#[cfg(test)]
+impl MapLabels {
+    /// Places the last build's candidates again, to time it.
+    pub fn place_for_measurement(&mut self, cell: f32) {
+        self.place(cell);
+    }
+
+    pub fn candidates(&self) -> usize {
+        self.cands.len()
+    }
 }

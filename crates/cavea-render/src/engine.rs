@@ -1549,6 +1549,17 @@ impl<B: GpuBackend> Engine<B> {
     }
 }
 
+/// Dropping the engine (the web view's `free`, at `destroy`) deletes every
+/// GPU resource it made, so nothing outlives it on the context.
+impl<B: GpuBackend> Drop for Engine<B> {
+    fn drop(&mut self) {
+        self.release_scene();
+        if let Some(atlas) = self.atlas.take() {
+            self.backend.destroy(ResourceId::Texture(atlas.texture));
+        }
+    }
+}
+
 /// Draws `call`, counting its GPU draw calls (one per range): all, and those
 /// of the dynamic atlas and row labels.
 fn submit(
