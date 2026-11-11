@@ -729,6 +729,8 @@ async fn sse_stream() {
 /// An SSE stream nobody reads: at the stall limit its task ends and drops the
 /// subscription, but the connection keeps its slot until the HTTP side drops
 /// the body, so stalled streams cannot pile up past the connection limits.
+/// At shutdown that slot does not hold up the actors: they stop and release
+/// their leases at once.
 #[tokio::test]
 #[ignore = "needs CAVEA_TEST_DATABASE_URL"]
 async fn a_stalled_sse_stream_keeps_its_slot() {
@@ -750,9 +752,28 @@ async fn a_stalled_sse_stream_keeps_its_slot() {
         assert_eq!(server.realtime.subscribers(Transport::Sse), 0);
         assert_eq!(server.seats.registry.subscribers(id), 0);
         assert_eq!(server.realtime.connections(), 1);
+        let lease = async || -> bool {
+            sqlx::query_scalar("SELECT lease_until IS NOT NULL FROM events WHERE key = $1")
+                .bind(&t.event)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
+        assert!(lease().await);
+        let mut server = server;
+        let _ = server.stop.take().unwrap().send(());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while lease().await {
+            assert!(Instant::now() < deadline, "the actor waited for the slot");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(server.realtime.connections(), 1);
         drop(body);
-        server.settled(id).await;
-        server.shutdown().await;
+        timeout(Duration::from_secs(5), server.done)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
     })
     .await;
 }
