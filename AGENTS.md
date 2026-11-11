@@ -33,13 +33,13 @@ Toolchains: Rust is pinned in `rust-toolchain.toml` (with the `wasm32-unknown-un
 - `cargo test --workspace`
 - `cargo xtask check-deps`: enforces the dependency rule in `docs/01-architecture.md` §3
 - `cargo xtask build-web`: builds `cavea-web` for wasm32 with the `wasm-release` profile, writes the bindings to `packages/renderer/wasm/` (gitignored), runs `wasm-opt` if present, and prints raw and brotli sizes. `--demo` adds the debug-only exports `apps/demo` needs (synthetic seats); never measure or ship that build
-- `CAVEA_LISTEN=127.0.0.1:<port> cargo run -p cavea-server`: the server; `GET /healthz` answers `ok`. Settings are `CAVEA_` environment variables (`docs/08-server.md` §13)
+- `CAVEA_LISTEN=127.0.0.1:<port> cargo run -p cavea-server`: the server; `GET /healthz` answers `ok`. Settings are `CAVEA_` environment variables (`docs/08-server.md` §13); add `CAVEA_LOG_FORMAT=text` for readable logs
 
 **TypeScript** (run `cargo xtask build-web` first; `typecheck`, `build` and `test` need the WASM output)
 
 - `bun install` (CI uses `bun install --frozen-lockfile`)
 - `bun run lint`: oxlint, warnings denied (`.oxlintrc.json`)
-- `bun run format` / `bun run format:check`: oxfmt (`.oxfmtrc.json`; Markdown is not formatted)
+- `bun run format` / `bun run format:check`: oxfmt (`.oxfmtrc.json`; Markdown is not formatted). oxfmt also checks TOML files such as `Cargo.toml`, so run `bun run format:check` for every change, including Rust-only ones
 - `bun run typecheck`: `tsc --noEmit` in every workspace package
 - `bun run build`: builds every workspace package that has a `build` script
 - `bun run test`: `bun test`
@@ -92,6 +92,7 @@ Structured, never ad hoc.
 - Log events carry fields, not interpolated strings: `info!(event = %key, seq, "hold committed")`.
 - No `println!`, `eprintln!` or `dbg!` outside `xtask` and CLI output.
 - Never log secrets: API keys, hold tokens, session tokens, request bodies (`docs/12-security-licensing.md` §4).
+- In a handler: add the route in `cavea_server::http::router` (before `finish`, which adds the request layer); return `Result<_, ApiError>` (`ApiError::new(Code::…)`, `.with_detail(..)`, `?` on an engine `Failure`); take bodies with `http::Json`, not `axum::Json`, so rejections are problem+json (wrap other extractors the same way); call `cavea_telemetry::record_workspace(..)` and `record_event(..)` once known; wrap database calls with `.instrument(cavea_telemetry::db_span("name"))`. Span names are in `cavea_telemetry::span` (`docs/08-server.md` §15).
 
 ## Tests
 

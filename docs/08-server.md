@@ -426,7 +426,7 @@ The `SeatStore` trait hides all of this from the engine: `load_event`, `commit_b
 - Mutating requests accept `Idempotency-Key` (up to 255 characters, kept 24 hours). Replaying a key with a different body returns `409 idempotency_mismatch`.
 - Objects are addressed by label. A request may instead send `{"version": "<hash>", "idx": [..]}`.
 - Lists use cursor pagination: `?limit=100&after=<cursor>`; responses carry `next`.
-- Every response carries `Cavea-Request-Id`.
+- Every response, errors and 404s included, carries `Cavea-Request-Id`. The server generates `req_` and 32 lowercase hex digits. A caller may send its own `Cavea-Request-Id` to correlate with its logs: the server adopts it only if it is 1 to 64 characters from `A-Z a-z 0-9 . _ -`, and otherwise ignores it and generates one. An adopted id is not guaranteed unique.
 - The OpenAPI 3.1 document is served at `/v1/openapi.json`.
 
 ### 6.2 Endpoints
@@ -574,8 +574,27 @@ Idempotency-Key: order-77120
 | 422 | `not_enough_objects` | Best-available could not satisfy the request |
 | 422 | `chart_invalid` | Publish blocked by validation errors |
 | 429 | `rate_limited` | |
+| 500 | `internal_error` | Unexpected fault; the cause is logged under the request id, never returned |
 | 503 | `overloaded` | Actor mailbox full; retry after the given delay |
 | 503 | `unavailable` | Storage unreachable |
+
+Every error is `application/problem+json` with exactly these members:
+
+```json
+{
+  "code": "object_not_free",
+  "status": 409,
+  "message": "At least one object is not free.",
+  "details": { "objects": [{ "idx": 3, "reason": "not_free" }] },
+  "request_id": "req_6ad9b530f0e172e7214232f15266b459"
+}
+```
+
+- `code` and `status` always pair as in the table. `message` is for humans and may change; match on `code`.
+- `details` is always an object, empty when there is nothing to add. Engine refusals fill it: `invalid_request` has `reason`; `not_found` has `missing` (`hold_token` or `objects`, with `objects` listing the unresolved references as `{"label"}` or `{"idx"}`); the two object conflicts list `{"idx", "reason"}` per object; `hold_limit_exceeded` has `limit` and `requested`.
+- `request_id` equals the `Cavea-Request-Id` header.
+- An unknown path, and a known path with the wrong method, are `404 not_found`. A body that is not JSON, lacks `Content-Type: application/json`, does not match the expected shape or is over the size limit is `400 invalid_request` with `details.reason` one of `json_syntax`, `content_type`, `json_data`, `body_too_large`, `body_unreadable`.
+- `503 overloaded` carries `Retry-After: 1`.
 
 ## 7. Algorithms
 
@@ -734,6 +753,7 @@ Live reports read the actor. CSV exports stream from PostgreSQL.
 | `CAVEA_DATABASE_URL` | — | PostgreSQL connection string (required) |
 | `CAVEA_LISTEN` | `0.0.0.0:8080` | |
 | `CAVEA_LOG` | `info` | Log filter, in `tracing` directive syntax such as `info,cavea_server=debug` |
+| `CAVEA_LOG_FORMAT` | `json` | `json` (one object per line, for production) or `text` (readable, for development) |
 | `CAVEA_PUBLIC_URL` | — | External base URL, used in chart URLs and webhooks |
 | `CAVEA_LICENCE` | — | Licence file path or contents |
 | `CAVEA_ADMIN_KEY` | — | Bootstrap admin key |
@@ -777,6 +797,19 @@ Metrics (Prometheus):
 | `cavea_db_pool_in_use` | Gauge |
 
 Tracing: one span per request, with child spans for mailbox wait, apply and commit. Logs are JSON with request id, workspace and event.
+
+```
+request {request_id, method, route, status, duration_ms, workspace, event, event_id, commit_seq}
+├─ mailbox_wait {op}     queued in the actor's mailbox
+├─ apply {op}            on the actor's task, parented to the request explicitly
+└─ db {statement}        a database call made by the handler
+commit {event_id, seq, commands}   one per batch; follows_from each apply span in it
+```
+
+- `route` is the matched template (`/v1/events/{event_key}`), or `<unmatched>`; the raw path is never logged because it carries customer keys. Query strings, headers and bodies are never logged.
+- Each request logs one `request completed` record when it finishes: `info`, or `debug` for a successful `/healthz`.
+- A batch serves many requests, so `commit` is not a child of any one of them. Its `follows_from` links lead to each `apply` span and through it to the request id, for trace export. In logs, the engine records the batch's `event_id` and `seq` (as `commit_seq`) on the span that submitted each command (the request span, when the handler submits from it), so a record inside `commit {event_id: E, seq: 42}` and the `request completed` records with `event_id: E, commit_seq: 42` belong together. `seq` alone is per event and does not identify a commit. `event_id` is the event's UUID as 32 hex digits; `event` is the customer's event key.
+- A JSON record lists every enclosing span with its fields under `spans`, outermost first, so a record inside `apply` carries the request id.
 
 ## 16. Failure modes
 

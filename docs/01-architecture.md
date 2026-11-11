@@ -96,7 +96,7 @@ cavea/
 └─ docs/                      # this spec set
 ```
 
-Dependency rule: `cavea-core` and `cavea-format` depend on nothing in the workspace except each other. Nothing depends on `cavea-server`.
+Dependency rule: `cavea-core` and `cavea-format` depend on nothing in the workspace except each other. `cavea-telemetry` (the server's logging and request spans) depends on nothing in the workspace. Nothing depends on `cavea-server`.
 
 ## 4. Technology choices
 

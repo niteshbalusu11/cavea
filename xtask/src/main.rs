@@ -163,7 +163,8 @@ fn brotli_len(bytes: &[u8]) -> Result<usize> {
 }
 
 /// `cavea-core` and `cavea-format` may depend on no workspace crate except each
-/// other, and nothing may depend on `cavea-server` (`docs/01-architecture.md` §3).
+/// other, `cavea-telemetry` on none, and nothing may depend on `cavea-server`
+/// (`docs/01-architecture.md` §3).
 fn check_deps() -> Result<()> {
     let output = cargo()
         .current_dir(root())
@@ -191,6 +192,7 @@ fn check_deps() -> Result<()> {
             let allowed = match name {
                 "cavea-core" => dep == "cavea-format",
                 "cavea-format" => dep == "cavea-core",
+                "cavea-telemetry" => false,
                 _ => dep != "cavea-server",
             };
             if !allowed {

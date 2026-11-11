@@ -58,8 +58,8 @@ struct Envelope {
     wait: Span,
 }
 
-/// A reply waiting to be released, with the caller's span.
-type Queued = (oneshot::Sender<Reply>, Reply, Span);
+/// A reply waiting to be released, with its `apply` span and the caller's span.
+type Queued = (oneshot::Sender<Reply>, Reply, Span, Span);
 
 /// Sends commands to one actor. Cheap to clone.
 #[derive(Debug, Clone)]
@@ -157,9 +157,19 @@ async fn run<S: SeatStore, C: Clock>(
                 // they observed is already committed.
                 Ok(None) => release(&mut pending),
                 Ok(Some(batch)) => {
-                    let span = info_span!("commit", seq = batch.seq, commands = pending.len());
-                    for (_, _, caller) in &pending {
-                        span.follows_from(caller);
+                    // `seq` is per event, so the event id names the commit too.
+                    let event_id = format!("{:032x}", batch.event.0);
+                    let span = info_span!(
+                        "commit",
+                        event_id,
+                        seq = batch.seq,
+                        commands = pending.len()
+                    );
+                    for (_, _, apply, caller) in &pending {
+                        span.follows_from(apply);
+                        // Lets the caller's own log records name this commit.
+                        caller.record("event_id", &event_id);
+                        caller.record("commit_seq", batch.seq);
                     }
                     in_flight = Some(Box::pin(store.commit_batch(batch).instrument(span)));
                     committing = std::mem::take(&mut pending);
@@ -208,7 +218,7 @@ async fn run<S: SeatStore, C: Clock>(
                 let applied =
                     span.in_scope(|| state.apply(&request.actor, &request.command, clock.now()));
                 match applied {
-                    Ok(result) => pending.push((reply, result, span)),
+                    Ok(result) => pending.push((reply, result, span, parent)),
                     Err(v) => {
                         let _ = reply.send(Err(Failure::Unavailable));
                         return Err(stop(ActorError::Invariant(v), pending, committing, rx));
@@ -220,7 +230,7 @@ async fn run<S: SeatStore, C: Clock>(
 }
 
 fn release(queued: &mut Vec<Queued>) {
-    for (reply, result, span) in queued.drain(..) {
+    for (reply, result, span, _) in queued.drain(..) {
         if let Err(failure) = &result {
             span.in_scope(|| debug!(code = failure.code(), "command refused"));
         }
@@ -243,7 +253,7 @@ fn stop(
         }
         _ => error!(error = %err, "actor stopped; event must be reloaded"),
     }
-    for (reply, _, _) in committing.into_iter().chain(pending) {
+    for (reply, _, _, _) in committing.into_iter().chain(pending) {
         let _ = reply.send(Err(Failure::Unavailable));
     }
     rx.close();
