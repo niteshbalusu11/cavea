@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use cavea_compiler::document::{Curve, Node};
+use cavea_compiler::document::{Curve, Node, Outline, Path, Points, ShapeKind};
 use cavea_compiler::{ChartDocument, compile};
 
 use crate::tests::Rng;
@@ -33,24 +33,39 @@ fn empty() -> ChartDocument {
     .expect("chart")
 }
 
+/// The traces of the slices before snapping: with it off.
+pub(crate) fn unsnapped(mut s: Session) -> Session {
+    s.set_snap(SnapSettings {
+        grid: false,
+        objects: false,
+        spacing: false,
+        rows: false,
+        angles: false,
+        ..SnapSettings::default()
+    });
+    s
+}
+
 struct T {
     s: Session,
     time: f64,
+    zoom: f64,
 }
 
 impl T {
     fn new(doc: ChartDocument) -> Self {
         Self {
-            s: Session::load(doc).expect("load"),
+            s: Session::load(doc).map(unsnapped).expect("load"),
             time: 0.0,
+            zoom: 1.0,
         }
     }
 
     fn p(&self, at: [f64; 2], mods: Modifiers) -> Pointer {
         Pointer {
             world: at,
-            screen: at,
-            zoom: 1.0,
+            screen: [at[0] * self.zoom, at[1] * self.zoom],
+            zoom: self.zoom,
             button: Button::Primary,
             kind: PointerKind::Mouse,
             mods,
@@ -455,6 +470,216 @@ fn rect(origin: [f64; 2], size: [f64; 2]) -> serde_json::Value {
     serde_json::json!({ "id": 0, "type": "shape", "kind": "rect", "origin": origin, "size": size })
 }
 
+#[test]
+fn single_row_tool() {
+    let mut t = T::new(empty());
+    t.s.set_tool(ToolId::Row);
+    // Two clicks, then a click on the end: straight, 11 seats over 550.
+    t.click([0.0, 0.0]);
+    t.click([550.0, 0.0]);
+    t.click([553.0, 4.0]);
+    let row = match t.node(t.selected()) {
+        Node::Row(r) => r,
+        _ => panic!("row"),
+    };
+    let Path::Polyline { points } = &row.path;
+    assert_eq!(
+        (row.origin, points.clone()),
+        ([0.0, 0.0], vec![[0.0, 0.0], [550.0, 0.0]])
+    );
+    assert_eq!((row.seats, row.label.as_deref()), (11, Some("A")));
+    assert_eq!(row.category.as_deref(), Some("std"));
+    // Dragged, then Enter: straight.
+    t.drag([0.0, 500.0], [300.0, 500.0], NONE);
+    t.key(Key::Enter);
+    assert!(matches!(t.node(t.selected()), Node::Row(r) if r.seats == 6));
+    // A third click bends it through that point.
+    t.click([0.0, 1_000.0]);
+    t.click([1_000.0, 1_000.0]);
+    t.click([500.0, 1_200.0]);
+    let row = match t.node(t.selected()) {
+        Node::Row(r) => r,
+        _ => panic!("row"),
+    };
+    let Path::Polyline { points } = &row.path;
+    // A sag of 200 needs 20 segments for 0.5 cu (sag / n²).
+    assert_eq!(points.len(), 21);
+    assert!(close(points[10], [500.0, 200.0], 1e-9));
+    let length: f64 = points
+        .windows(2)
+        .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
+        .sum();
+    assert_eq!(row.seats, (length / 55.0).floor() as u32 + 1);
+    assert!(row.seats > 19);
+    assert_eq!(t.s.editor().undo_len(), 3);
+    compiles(&ChartDocument {
+        nodes: vec![Node::Row(row)],
+        ..empty()
+    });
+    // Past 4,095 seats the last row shown stays.
+    t.click([0.0, 3_000.0]);
+    t.to([550.0, 3_000.0], NONE);
+    t.to([300_000.0, 3_000.0], NONE);
+    let live = t.s.document().children(None).last().copied().expect("live");
+    assert!(matches!(t.node(live), Node::Row(r) if r.seats == 11));
+    t.key(Key::Escape);
+    // An end placed closer than 1 cu shows nothing, whatever was shown.
+    let before = t.state();
+    t.click([0.0, 4_000.0]);
+    t.to([550.0, 4_000.0], NONE);
+    t.click([0.5, 4_000.0]);
+    t.key(Key::Enter);
+    assert_eq!(t.state(), before);
+    // Escape after the second click leaves nothing.
+    let before = t.state();
+    t.click([0.0, 2_000.0]);
+    t.click([500.0, 2_000.0]);
+    t.key(Key::Escape);
+    assert_eq!(t.state(), before);
+}
+
+#[test]
+fn shape_tools() {
+    let mut t = T::new(empty());
+    t.s.set_tool(ToolId::Rect);
+    t.drag([0.0, 0.0], [200.0, -100.0], NONE);
+    let s = shape(&t.node(t.selected())).clone();
+    assert_eq!(
+        (s.kind, s.origin, s.size),
+        (ShapeKind::Rect, [100.0, -50.0], Some([200.0, 100.0]))
+    );
+    assert_eq!(s.style.fill.as_deref(), Some(draft_fill()));
+    t.drag([0.0, 0.0], [200.0, 100.0], SHIFT);
+    let s = shape(&t.node(t.selected())).clone();
+    assert_eq!((s.origin, s.size), ([100.0, 100.0], Some([200.0, 200.0])));
+    t.click([0.0, 500.0]);
+    assert_eq!(t.s.document().ids().count(), 2, "a click draws nothing");
+    t.s.set_tool(ToolId::Ellipse);
+    t.drag([0.0, 0.0], [-50.0, 80.0], NONE);
+    let s = shape(&t.node(t.selected())).clone();
+    assert_eq!(
+        (s.kind, s.origin, s.size),
+        (ShapeKind::Ellipse, [-25.0, 40.0], Some([50.0, 80.0]))
+    );
+    // Lines: dragged with Shift (15° steps), or two clicks.
+    t.s.set_tool(ToolId::Line);
+    t.drag([0.0, 0.0], [100.0, 30.0], SHIFT);
+    let s = shape(&t.node(t.selected())).clone();
+    let end = s
+        .points
+        .as_deref()
+        .and_then(|p| p.last().copied())
+        .expect("end");
+    let r = 100f64.hypot(30.0);
+    assert!(close(
+        end,
+        [r * 15f64.to_radians().cos(), r * 15f64.to_radians().sin()],
+        1e-9
+    ));
+    assert!(s.style.fill.is_none() && s.style.stroke_width > 0.0);
+    t.click([0.0, 0.0]);
+    t.click([0.0, 100.0]);
+    let s = shape(&t.node(t.selected())).clone();
+    assert_eq!(s.points, Some(vec![[0.0, 0.0], [0.0, 100.0]]));
+    // A polygon closed on its first corner.
+    t.s.set_tool(ToolId::Polygon);
+    for p in [
+        [0.0, 0.0],
+        [100.0, 0.0],
+        [100.0, 100.0],
+        [0.0, 100.0],
+        [1.0, 1.0],
+    ] {
+        t.click(p);
+    }
+    let s = shape(&t.node(t.selected())).clone();
+    assert_eq!(s.kind, ShapeKind::Polygon);
+    assert_eq!(s.points.as_ref().map(Vec::len), Some(4));
+    let entries = t.s.editor().undo_len();
+    // A corner whose edge crosses the outline is refused; Enter closes.
+    for p in [[0.0, 0.0], [100.0, 100.0], [100.0, 0.0], [0.0, 100.0]] {
+        t.click(p);
+    }
+    assert!(matches!(t.s.overlay().readout, Some(Readout::Points(3))));
+    t.key(Key::Enter);
+    assert_eq!(
+        shape(&t.node(t.selected())).points.as_ref().map(Vec::len),
+        Some(3)
+    );
+    // A closing edge that would cross the outline is refused.
+    let before = t.state();
+    let spiral = [
+        [0.0, 0.0],
+        [100.0, 0.0],
+        [100.0, 100.0],
+        [10.0, 100.0],
+        [10.0, 30.0],
+        [50.0, 30.0],
+        [50.0, 70.0],
+    ];
+    spiral.iter().for_each(|&p| t.click(p));
+    t.key(Key::Enter);
+    t.click([0.0, 0.0]);
+    assert_eq!(t.state(), before);
+    t.key(Key::Escape);
+    assert_eq!(t.s.overlay().preview, Vec::<[f64; 2]>::new());
+    assert_eq!(t.s.editor().undo_len(), entries + 1);
+    for id in t.s.document().ids().collect::<Vec<_>>() {
+        compiles(&ChartDocument {
+            nodes: vec![t.node(id)],
+            ..empty()
+        });
+    }
+}
+
+fn draft_fill() -> &'static str {
+    "#D1D5DB"
+}
+
+#[test]
+fn text_tool() {
+    let mut t = T::new(empty());
+    t.s.set_tool(ToolId::Text);
+    t.click([0.0, -500.0]);
+    let field = t.s.overlay().text.expect("field");
+    assert_eq!(
+        (field.node, field.at, field.text.as_str()),
+        (None, [0.0, -500.0], "")
+    );
+    t.s.set_text("ST");
+    t.s.set_text("STAGE");
+    t.key(Key::Enter);
+    let id = t.selected();
+    assert!(matches!(t.node(id), Node::Text(x) if x.text == "STAGE" && x.origin == [0.0, -500.0]));
+    assert_eq!(t.s.editor().undo_len(), 1);
+    assert!(t.s.overlay().text.is_none());
+    // Empty on commit, or Escape: nothing.
+    let before = t.state();
+    t.click([0.0, 500.0]);
+    t.s.set_text("x");
+    t.s.set_text("");
+    t.key(Key::Enter);
+    t.click([0.0, 500.0]);
+    t.s.set_text("Hi");
+    t.key(Key::Escape);
+    assert_eq!(t.state(), before);
+    // A click away commits.
+    t.click([0.0, 900.0]);
+    t.s.set_text("Bar");
+    t.click([500.0, 900.0]);
+    assert_eq!(t.s.editor().undo_len(), 2);
+    // A double click with the select tool edits the string.
+    t.s.set_tool(ToolId::Select);
+    t.click([0.0, -500.0]);
+    t.time -= 900.0;
+    t.click([0.0, -500.0]);
+    assert_eq!(t.s.overlay().text.and_then(|f| f.node), Some(id));
+    t.s.set_text("STAGE LEFT");
+    t.key(Key::Enter);
+    assert!(matches!(t.node(id), Node::Text(x) if x.text == "STAGE LEFT"));
+    assert_eq!(t.s.editor().undo_len(), 3);
+}
+
 /// `p` turned by `degrees` about `c` (clockwise, y down).
 fn turn(p: [f64; 2], c: [f64; 2], degrees: f64) -> [f64; 2] {
     let (s, k) = degrees.to_radians().sin_cos();
@@ -804,8 +1029,19 @@ fn draw_a_theatre() {
     assert!(compiled.stats.seats > 200, "{}", compiled.stats.seats);
 }
 
-fn tools() -> [ToolId; 3] {
-    [ToolId::Select, ToolId::RowBlock, ToolId::ArcBlock]
+fn tools() -> [ToolId; 10] {
+    [
+        ToolId::Select,
+        ToolId::RowBlock,
+        ToolId::ArcBlock,
+        ToolId::Row,
+        ToolId::Rect,
+        ToolId::Ellipse,
+        ToolId::Polygon,
+        ToolId::Line,
+        ToolId::Text,
+        ToolId::Section,
+    ]
 }
 
 /// Every id, `rid` and `oid` of a document.
@@ -872,6 +1108,7 @@ fn event(t: &mut T, r: &mut Rng) {
                 t.key(r.pick(&keys).unwrap_or(Key::Enter));
             }
         }
+        10 => t.s.set_text(["", "A", "STAGE", "Ünïcødé"][r.below(4)]),
         11 => t.s.set_tool(r.pick(&tools()).unwrap_or(ToolId::Select)),
         12 => drop(t.s.undo()),
         13 => {
@@ -895,8 +1132,8 @@ fn event(t: &mut T, r: &mut Rng) {
     }
 }
 
-/// Generated traces with every tool: after each event that leaves no
-/// gesture open, the document parses again; every undo entry the tools
+/// Generated traces with every tool, half with snapping: after each event
+/// that leaves no gesture open, the document parses again; every undo entry the tools
 /// make undoes and redoes byte for byte; ids are never reused; each node
 /// compiles alone (no seat-less block, zero-size shape or bad arc can be
 /// drawn); and switching tools never leaves a gesture open.
@@ -921,7 +1158,10 @@ fn generated_traces() {
         for node in shapes.into_iter().take(seed as usize / 3 % 4) {
             add(&mut t.s, node);
         }
-        t.s.set_tool(tools()[(seed as usize) % 3]);
+        t.s.set_tool(tools()[(seed as usize) % 10]);
+        if seed % 2 == 1 {
+            t.s.set_snap(SnapSettings::default());
+        }
         let mut committed = t.state();
         let mut ever = ids(&t.s.document().snapshot());
         for _ in 0..60 {
@@ -951,7 +1191,17 @@ fn generated_traces() {
                         nodes: vec![node.clone()],
                         ..empty()
                     };
-                    if let Err(e) = compile(&one) {
+                    // A section may hold two blocks with the same default
+                    // labels (E001, as two blocks outside sections would).
+                    let labels = |e: &cavea_compiler::CompileError| match e {
+                        cavea_compiler::CompileError::Invalid(f) => {
+                            f.iter().all(|f| f.code == cavea_compiler::Code::E001)
+                        }
+                        _ => false,
+                    };
+                    if let Err(e) = compile(&one)
+                        && !labels(&e)
+                    {
                         panic!(
                             "seed {seed}: {e}\n{}",
                             serde_json::to_string(node).unwrap_or_default()
@@ -1014,6 +1264,33 @@ fn hostile_drawing_input() {
     for _ in 0..3_000 {
         t.click([r.f(5_000.0), r.f(5_000.0)]);
     }
+    t.s.set_tool(ToolId::Polygon);
+    for _ in 0..10_000 {
+        t.click([r.f(5_000.0), r.f(5_000.0)]);
+    }
+    assert!(t.s.overlay().preview.len() <= 4_097);
+    t.key(Key::Enter);
+    // The section tool's polygon, then its box over everything and moves,
+    // snapping.
+    t.s.set_tool(ToolId::Section);
+    t.click([0.0, 0.0]);
+    for _ in 0..5_000 {
+        t.click([r.f(5_000.0), r.f(5_000.0)]);
+    }
+    assert!(t.s.overlay().preview.len() <= 4_097);
+    t.key(Key::Enter);
+    t.key(Key::Escape);
+    t.s.set_snap(SnapSettings::default());
+    t.drag([-1e300, -1e300], [1e300, 1e300], NONE);
+    t.drag([0.0, 0.0], [f64::MAX, 1.0], NONE);
+    t.s.set_tool(ToolId::Select);
+    t.drag([0.0, 0.0], [1e300, -1e300], NONE);
+    t.s.select_all();
+    t.drag([0.0, 0.0], [f64::MAX, f64::MAX], NONE);
+    t.s.set_tool(ToolId::Text);
+    t.click([0.0, 0.0]);
+    t.s.set_text(&"x".repeat(100_000));
+    t.key(Key::Enter);
     t.s.set_tool(ToolId::Select);
     assert!(!t.s.editor().gesture_open());
     ChartDocument::from_json(&t.state()).expect("parses");
@@ -1103,5 +1380,605 @@ fn measure_tools() {
          resize step (row added to 5,000 seats) {resize:.3} ms; \
          seats added to 20,000 rows {wide:.3} ms; \
          rotate step ({count} sections, {seats} seats) {rotate:.3} ms"
+    );
+}
+
+fn section(n: &Node) -> &cavea_compiler::document::Section {
+    match n {
+        Node::Section(s) => s,
+        _ => panic!("not a section"),
+    }
+}
+
+/// Sets a node's origin and rotation.
+fn place(s: &mut Session, id: u32, origin: [f64; 2], rotation: f64) {
+    let nodes = vec![NodeTransform {
+        id,
+        origin,
+        rotation,
+    }];
+    s.apply(Command::TransformNodes { nodes })
+        .expect("transform");
+}
+
+/// Row labels with a prefix, so a second block in a section repeats none.
+fn distinct(s: &mut Session, id: u32) {
+    let labels = cavea_compiler::document::RowLabels {
+        prefix: "X".into(),
+        ..Default::default()
+    };
+    let property = Property::RowLabels(Box::new(labels));
+    s.apply(Command::SetProperty { id, property })
+        .expect("labels");
+}
+
+/// Asserts every seat of `before` (by node, by oid) is where it was.
+fn in_place(t: &T, before: &[(u32, BTreeMap<u32, [f64; 2]>)]) {
+    for (id, seats) in before {
+        assert_eq!(kept(seats, &t.seats(*id), 1e-9), seats.len(), "node {id}");
+    }
+}
+
+fn world_seats(t: &T, ids: &[u32]) -> Vec<(u32, BTreeMap<u32, [f64; 2]>)> {
+    ids.iter().map(|&id| (id, t.seats(id))).collect()
+}
+
+/// The section tool's box adopts the top-level nodes it contains, and
+/// reparenting (the tool, `placeNode` both ways, dissolving) never moves a
+/// seat, rotated nodes and a rotated section included; each is one undo
+/// entry that undoes byte for byte.
+#[test]
+fn sections_keep_seats_in_place() {
+    let mut t = T::new(empty());
+    let a = t.s.insert(None, &straight(3, 4)).expect("a");
+    let b =
+        t.s.insert(None, &fan([1_000.0, -600.0], 700.0, 2, 6))
+            .expect("b");
+    distinct(&mut t.s, b);
+    place(&mut t.s, a, [-400.0, 200.0], 33.0);
+    let stage = add(&mut t.s, rect([0.0, -1_500.0], [600.0, 100.0]));
+    let before = world_seats(&t, &[a, b]);
+    let start = t.state();
+    t.s.set_tool(ToolId::Section);
+    t.drag([-3_000.0, -3_000.0], [3_000.0, 3_000.0], NONE);
+    let s = t.selected();
+    let sec = section(&t.node(s)).clone();
+    assert_eq!(sec.label.as_deref(), Some("Section 1"));
+    assert_eq!(
+        (sec.outline.clone(), sec.category.as_deref()),
+        (Outline::Auto, Some("std"))
+    );
+    assert_eq!(t.s.document().children(Some(s)), &[a, b, stage]);
+    assert_eq!(t.s.document().children(None), &[s]);
+    in_place(&t, &before);
+    assert_eq!(t.s.overlay().sections.len(), 1);
+    assert!(t.s.overlay().sections[0].len() >= 3);
+    let grouped = t.state();
+    t.s.undo().expect("undo");
+    assert_eq!(t.state(), start);
+    t.s.redo().expect("redo");
+    assert_eq!(t.state(), grouped);
+    // Turned with its children, then a turned block out and back in.
+    place(&mut t.s, s, [100.0, 50.0], 40.0);
+    let before = world_seats(&t, &[a, b]);
+    for parent in [None, Some(s)] {
+        let undone = t.state();
+        t.s.apply(Command::PlaceNode {
+            id: a,
+            parent,
+            index: 0,
+        })
+        .expect("place");
+        assert_eq!(t.s.document().parent(a), parent);
+        in_place(&t, &before);
+        let done = t.state();
+        t.s.undo().expect("undo");
+        assert_eq!(t.state(), undone);
+        t.s.redo().expect("redo");
+        assert_eq!(t.state(), done);
+    }
+    // Dissolved: the children where the section was, in order, in place.
+    let undone = t.state();
+    t.s.dissolve(s).expect("dissolve");
+    assert_eq!(t.s.document().children(None), &[a, b, stage]);
+    in_place(&t, &before);
+    t.s.undo().expect("undo");
+    assert_eq!(t.state(), undone);
+    // A box holding nothing it may take (only a section): an empty
+    // section, its outline the box.
+    t.drag([-3_000.0, -3_000.0], [3_000.0, 3_000.0], NONE);
+    let empty = section(&t.node(t.selected())).clone();
+    assert_eq!(empty.label.as_deref(), Some("Section 2"));
+    assert!(empty.children.is_empty() && t.s.document().children(Some(t.selected())).is_empty());
+    let corners = vec![[-3e3, -3e3], [3e3, -3e3], [3e3, 3e3], [-3e3, 3e3]];
+    assert_eq!(empty.outline, Outline::Points(Points { points: corners }));
+    // A click without a drag starts a polygon, not a section.
+    t.click([5_000.0, 5_000.0]);
+    t.key(Key::Escape);
+    let doc = t.s.document().save();
+    let compiled = compile(&doc).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(compiled.stats.sections, 2);
+}
+
+/// The section tool's polygon: its outline is the points clicked, in the
+/// section's space; it adopts the top-level nodes inside it; a closing
+/// click that would make the outline cross itself is refused.
+#[test]
+fn section_by_points() {
+    let mut t = T::new(empty());
+    let a = t.s.insert(None, &straight(2, 3)).expect("a");
+    let far = add(&mut t.s, rect([2_000.0, 0.0], [100.0, 100.0]));
+    let small = vec![[200.0, 200.0], [250.0, 200.0], [250.0, 250.0]];
+    let inner = t.s.group(&[], Some(small)).expect("inner");
+    t.s.set_tool(ToolId::Section);
+    let before = t.state();
+    let spiral = [
+        [0.0, 0.0],
+        [100.0, 0.0],
+        [100.0, 100.0],
+        [10.0, 100.0],
+        [10.0, 30.0],
+        [50.0, 30.0],
+        [50.0, 70.0],
+    ];
+    spiral.iter().for_each(|&p| t.click(p));
+    t.click([0.0, 0.0]);
+    t.key(Key::Enter);
+    assert_eq!(t.state(), before);
+    t.key(Key::Escape);
+    let square = [
+        [-300.0, -300.0],
+        [300.0, -300.0],
+        [300.0, 400.0],
+        [-300.0, 400.0],
+    ];
+    square.iter().for_each(|&p| t.click(p));
+    t.click([-300.0, -299.0]);
+    let s = t.selected();
+    let sec = section(&t.node(s)).clone();
+    assert_eq!(sec.origin, [0.0, 50.0]);
+    let local: Vec<_> = square.iter().map(|p| [p[0], p[1] - 50.0]).collect();
+    assert_eq!(sec.outline, Outline::Points(Points { points: local }));
+    assert_eq!(t.s.document().children(Some(s)), &[a]);
+    assert_eq!(t.s.document().parent(far), None);
+    assert_eq!(t.s.document().children(None), &[s, far, inner]);
+    assert_eq!(t.s.editor().undo_len(), 4);
+    let compiled = compile(&t.s.document().save()).unwrap_or_else(|e| panic!("{e}"));
+    let codes: Vec<_> = compiled.findings.iter().map(|f| f.code).collect();
+    assert!(!codes.contains(&cavea_compiler::Code::W104), "{codes:?}");
+}
+
+/// Convert to polygon: the explicit points are the compiler's automatic
+/// outline, so the compiled chart is the same, byte for byte; undo restores
+/// `"auto"`; an explicit outline is not converted again.
+#[test]
+fn convert_to_polygon() {
+    let mut t = T::new(empty());
+    let a = t.s.insert(None, &straight(4, 6)).expect("a");
+    let b =
+        t.s.insert(None, &fan([0.0, -400.0], 900.0, 3, 9))
+            .expect("b");
+    distinct(&mut t.s, b);
+    place(&mut t.s, a, [100.0, 300.0], 20.0);
+    let s = t.s.group(&[a, b], None).expect("group");
+    let auto = compile(&t.s.document().save()).expect("compiles");
+    let shown = t.s.overlay().sections;
+    let before = t.state();
+    t.s.convert_outline(s).expect("convert");
+    let sec = section(&t.node(s)).clone();
+    let Outline::Points(p) = &sec.outline else {
+        panic!("explicit");
+    };
+    let origin = sec.origin;
+    let world: Vec<_> = p
+        .points
+        .iter()
+        .map(|q| [q[0] + origin[0], q[1] + origin[1]])
+        .collect();
+    assert_eq!(vec![world], shown);
+    let explicit = compile(&t.s.document().save()).expect("compiles");
+    assert_eq!(explicit.public, auto.public);
+    assert!(t.s.convert_outline(s).is_err());
+    t.s.undo().expect("undo");
+    assert_eq!(t.state(), before);
+}
+
+const ALT: Modifiers = Modifiers { alt: true, ..NONE };
+
+fn snapped(doc: ChartDocument) -> T {
+    let mut t = T::new(doc);
+    t.s.set_snap(SnapSettings::default());
+    t
+}
+
+/// Drags node `id` (selected first) from `from` by `d`, looking at the
+/// overlay before the release; returns the guides shown then.
+fn move_by(t: &mut T, id: u32, from: [f64; 2], d: [f64; 2], mods: Modifiers) -> Vec<Guide> {
+    t.s.set_tool(ToolId::Select);
+    t.s.select(Level::Top, [id]);
+    let to = [from[0] + d[0], from[1] + d[1]];
+    t.down(from, mods);
+    t.to([from[0] + d[0] / 2.0, from[1] + d[1] / 2.0], mods);
+    t.to(to, mods);
+    let guides = t.s.overlay().guides;
+    t.up(to, mods);
+    assert!(t.s.overlay().guides.is_empty(), "guides end with the drag");
+    guides
+}
+
+fn shape_origin(t: &T, id: u32) -> [f64; 2] {
+    shape(&t.node(id)).origin
+}
+
+/// Each kind of snap: the moved node lands exactly on the target, with its
+/// guide; edges and centres win over a nearer grid line; the target held
+/// stays while it is in reach, so a jittering pointer does not flicker; Alt
+/// and each setting turn it off.
+#[test]
+fn snapping() {
+    let mut t = snapped(empty());
+    // The grid: a rectangle drawn from (2, 3) to (202, 104).
+    t.s.set_tool(ToolId::Rect);
+    t.drag([2.0, 3.0], [202.0, 104.0], NONE);
+    let a = t.selected();
+    assert_eq!(shape(&t.node(a)).size, Some([200.0, 100.0]));
+    assert_eq!(shape_origin(&t, a), [100.0, 55.0]);
+    // Edges: B's left edge 4 from A's right edge lands on it, though the
+    // grid (205) is nearer; y goes to the grid (13 → 15).
+    let b = add(&mut t.s, rect([400.0, 300.0], [100.0, 100.0]));
+    let guides = move_by(&mut t, b, [380.0, 280.0], [-146.0, -237.0], NONE);
+    assert_eq!(shape_origin(&t, b), [250.0, 65.0]);
+    let line = Guide::Line {
+        from: [200.0, 5.0],
+        to: [200.0, 115.0],
+    };
+    assert_eq!(guides, vec![line]);
+    t.s.undo().expect("undo");
+    // Alt: no snapping; objects off: the grid.
+    move_by(&mut t, b, [380.0, 280.0], [-146.0, -237.0], ALT);
+    assert_eq!(shape_origin(&t, b), [254.0, 63.0]);
+    t.s.undo().expect("undo");
+    let all = SnapSettings::default();
+    t.s.set_snap(SnapSettings {
+        objects: false,
+        ..all
+    });
+    move_by(&mut t, b, [380.0, 280.0], [-146.0, -237.0], NONE);
+    assert_eq!(shape_origin(&t, b), [255.0, 65.0]);
+    t.s.undo().expect("undo");
+    // A resize handle inside a section: its own section is no target.
+    let only = SnapSettings {
+        grid: false,
+        spacing: false,
+        rows: false,
+        angles: false,
+        ..all
+    };
+    t.s.set_snap(only);
+    let lone = add(&mut t.s, rect([5_050.0, 5_050.0], [100.0, 100.0]));
+    let s = t.s.group(&[lone], None).expect("group");
+    t.s.select(Level::Section(s), [lone]);
+    t.by(HandleKind::Corner(Corner::BottomRight), [5.0, 5.0], NONE);
+    assert_eq!(shape(&t.node(lone)).size, Some([105.0, 105.0]));
+    // Nor is the section a new node is drawn into, from the first press.
+    let room = vec![[0.0, 8e3], [1e3, 8e3], [1e3, 9e3], [0.0, 9e3]];
+    let room = t.s.group(&[], Some(room)).expect("room");
+    t.s.select(Level::Section(room), []);
+    t.s.set_tool(ToolId::Rect);
+    t.drag([5.0, 8_200.0], [100.0, 8_300.0], NONE);
+    assert_eq!(shape(&t.node(t.selected())).size, Some([95.0, 100.0]));
+    // The grid line held stays while the pointer jitters across the middle.
+    t.s.set_snap(SnapSettings {
+        objects: false,
+        grid: true,
+        ..only
+    });
+    t.s.set_tool(ToolId::Select);
+    t.s.select(Level::Top, [b]);
+    t.down([380.0, 280.0], NONE);
+    let mut lefts = Vec::new();
+    for x in [2.4, 2.6, 2.4, 2.6] {
+        t.to([x + 380.0 - 350.0, 280.0], NONE);
+        lefts.push(shape(&t.node(b)).origin[0] - 50.0);
+    }
+    t.key(Key::Escape);
+    t.up([380.0, 280.0], NONE);
+    assert_eq!(lefts, [0.0; 4]);
+    // So does a line's end.
+    t.s.set_tool(ToolId::Line);
+    t.down([100.0, -2_000.0], NONE);
+    let mut ends = Vec::new();
+    for x in [2.4, 2.6, 2.4, 2.6] {
+        t.to([x, -1_900.0], NONE);
+        let id = *t.s.document().children(None).last().expect("line");
+        let s = shape(&t.node(id)).clone();
+        ends.push(s.origin[0] + s.points.expect("points")[1][0]);
+    }
+    t.key(Key::Escape);
+    t.up([2.6, -1_900.0], NONE);
+    assert_eq!(ends, [0.0; 4]);
+    t.s.set_tool(ToolId::Select);
+    t.s.set_snap(all);
+    // No flicker: C's left edge (203) and A's right edge (200) both in
+    // reach; the one held first stays while it is.
+    add(&mut t.s, rect([253.0, -500.0], [100.0, 100.0]));
+    t.s.select(Level::Top, [b]);
+    t.down([380.0, 280.0], NONE);
+    let mut lefts = Vec::new();
+    for x in [-148.6, -148.4, -148.6, -148.4, -142.0] {
+        t.to([380.0 + x, 0.0], NONE);
+        lefts.push(shape(&t.node(b)).origin[0] - 50.0);
+    }
+    t.up([258.0, 0.0], NONE);
+    assert_eq!(lefts, [200.0, 200.0, 200.0, 200.0, 203.0]);
+    t.s.undo().expect("undo");
+}
+
+/// Equal spacing: dragged beside two nodes 100 apart, a third keeps the
+/// same gap, with two markers; off, it goes to the grid.
+#[test]
+fn equal_spacing() {
+    let mut t = snapped(empty());
+    for x in [50.0, 250.0] {
+        add(&mut t.s, rect([x, 1_050.0], [100.0, 100.0]));
+    }
+    let r = add(&mut t.s, rect([1_000.0, 1_050.0], [100.0, 100.0]));
+    let guides = move_by(&mut t, r, [980.0, 1_030.0], [-547.0, 0.0], NONE);
+    assert_eq!(shape_origin(&t, r), [450.0, 1_050.0]);
+    let gap = |from: [f64; 2], to: [f64; 2]| Guide::Spacing {
+        from,
+        to,
+        distance: 100.0,
+    };
+    let markers: Vec<_> = guides
+        .into_iter()
+        .filter(|g| matches!(g, Guide::Spacing { .. }))
+        .collect();
+    let y = 1_050.0;
+    assert_eq!(
+        markers,
+        [gap([100.0, y], [200.0, y]), gap([300.0, y], [400.0, y])]
+    );
+    t.s.undo().expect("undo");
+    let all = SnapSettings::default();
+    t.s.set_snap(SnapSettings {
+        spacing: false,
+        ..all
+    });
+    move_by(&mut t, r, [980.0, 1_030.0], [-547.0, 0.0], NONE);
+    assert_eq!(shape_origin(&t, r), [455.0, 1_050.0]);
+}
+
+/// Row alignment: a block dragged near a neighbour turned the same way
+/// lands with its front row on one of the neighbour's row lines, along the
+/// neighbour's own axis, with a dashed extension; off, it does not.
+#[test]
+fn row_alignment() {
+    let mut t = snapped(empty());
+    let n = t.s.insert(None, &straight(6, 10)).expect("n");
+    let m = t.s.insert(None, &straight(4, 6)).expect("m");
+    let axes = |deg: f64| {
+        let (s, c) = f64::to_radians(deg).sin_cos();
+        ([c, s], [-s, c])
+    };
+    let (u, nrm) = axes(30.0);
+    let at = |x: f64, y: f64| [x * u[0] + y * nrm[0], x * u[1] + y * nrm[1]];
+    place(&mut t.s, n, [0.0, 0.0], 30.0);
+    // 230 along the normal: 40 past row line 2.
+    place(&mut t.s, m, at(900.0, 230.0), 30.0);
+    let from = t.s.index().to_world(m, [0.0, 0.0]).expect("origin");
+    let guides = move_by(&mut t, m, from, at(0.0, -37.0), NONE);
+    let o = block(&t.node(m)).origin;
+    let y = o[0] * nrm[0] + o[1] * nrm[1];
+    assert!((y - 190.0).abs() < 1e-9, "{y}");
+    let x = o[0] * u[0] + o[1] * u[1];
+    assert!((x - 900.0).abs() < 1e-9, "{x}");
+    assert!(guides.iter().any(|g| matches!(g, Guide::Row { .. })));
+    t.s.undo().expect("undo");
+    // A second neighbour with row lines 3 cu further: the line held stays
+    // while the pointer jitters between them.
+    let k = t.s.insert(None, &straight(6, 10)).expect("k");
+    place(&mut t.s, k, at(-900.0, 3.0), 30.0);
+    t.s.select(Level::Top, [m]);
+    t.down(from, NONE);
+    let mut ys = Vec::new();
+    for y in [-38.6, -38.4, -38.6, -38.4] {
+        let to = at(0.0, y);
+        t.to([from[0] + to[0], from[1] + to[1]], NONE);
+        let o = block(&t.node(m)).origin;
+        ys.push(((o[0] * nrm[0] + o[1] * nrm[1]) * 1e6).round() / 1e6);
+    }
+    t.key(Key::Escape);
+    t.up(from, NONE);
+    assert_eq!(ys, [190.0; 4]);
+    // At 10% (a 60 cu reach) one neighbour's lines 95 apart: the one held
+    // stays as the pointer jitters across the middle.
+    t.s.undo().expect("undo");
+    t.s.undo().expect("undo");
+    assert!(t.s.document().node(k).is_none());
+    t.zoom = 0.1;
+    // On a seat clear of the handles' 60 cu reach.
+    let from = t.s.index().to_world(m, [82.5, 95.0]).expect("seat");
+    t.down(from, NONE);
+    let mut ys = Vec::new();
+    for y in [-87.6, -87.4, -87.6, -87.4] {
+        let to = at(0.0, y);
+        t.to([from[0] + to[0], from[1] + to[1]], NONE);
+        let o = block(&t.node(m)).origin;
+        ys.push(((o[0] * nrm[0] + o[1] * nrm[1]) * 1e6).round() / 1e6);
+    }
+    t.key(Key::Escape);
+    t.up(from, NONE);
+    assert_eq!(ys, [95.0; 4]);
+    t.zoom = 1.0;
+    let all = SnapSettings::default();
+    t.s.set_snap(SnapSettings { rows: false, ..all });
+    move_by(&mut t, m, from, at(0.0, -37.0), NONE);
+    let o = block(&t.node(m)).origin;
+    assert!(((o[0] * nrm[0] + o[1] * nrm[1]) - 190.0).abs() > 1.0);
+}
+
+/// Angles: a turn snaps to 15° steps, and a block to the angle facing the
+/// floor's focal point first; a line's end to 15° directions.
+#[test]
+fn angle_snapping() {
+    let mut t = snapped(empty());
+    let b = t.s.insert(None, &straight(2, 4)).expect("b");
+    place(&mut t.s, b, [1_000.0, 0.0], 0.0);
+    t.s.select(Level::Top, [b]);
+    let pivot = t.handle(HandleKind::Pivot);
+    t.turn_by(pivot, 13.0, NONE);
+    assert_eq!(block(&t.node(b)).rotation, 15.0);
+    t.s.undo().expect("undo");
+    // Facing (0, −1000) from the pivot: its front (−y) points there.
+    let (dx, dy) = (0.0 - pivot[0], -1_000.0 - pivot[1]);
+    let facing = dx.atan2(-dy).to_degrees();
+    let h = t.handle(HandleKind::Rotate);
+    t.down(h, NONE);
+    t.to(turn(h, pivot, facing / 2.0), NONE);
+    t.to(turn(h, pivot, facing - 1.0), NONE);
+    let guides = t.s.overlay().guides;
+    t.up(turn(h, pivot, facing - 1.0), NONE);
+    assert!((block(&t.node(b)).rotation - facing).abs() < 1e-9);
+    assert!(matches!(guides[..], [Guide::Angle { .. }]));
+    // A line at 14.6° ends at 15° (in reach: 6 cu at 500 is 0.69°).
+    t.s.set_tool(ToolId::Line);
+    let r = 500.0;
+    let (s, c) = 14.6f64.to_radians().sin_cos();
+    t.drag([0.0, 5_000.0], [r * c, 5_000.0 + r * s], NONE);
+    let end = shape(&t.node(t.selected())).points.clone().expect("points")[1];
+    let (s, c) = 15f64.to_radians().sin_cos();
+    assert!(close(end, [r * c, r * s], 1e-9), "{end:?}");
+    // An edge in reach wins over a 15° step, even exactly on it.
+    add(&mut t.s, rect([150.0, 7_000.0], [100.0, 100.0]));
+    t.s.set_tool(ToolId::Line);
+    t.drag([0.0, 7_000.0], [100.0, 7_026.0], NONE);
+    let end = shape(&t.node(t.selected())).points.clone().expect("points")[1];
+    assert_eq!(end, [100.0, 26.0]);
+}
+
+/// A small theatre drawn with snapping on: a stage, its label centred on it
+/// by snapping, two blocks whose rows line up by snapping, each grouped
+/// into a section by the section tool. It compiles with no errors and no
+/// unlabelled section.
+#[test]
+fn draw_a_theatre_with_sections() {
+    let mut t = snapped(empty());
+    t.s.set_tool(ToolId::Rect);
+    t.drag([-302.0, -1_101.0], [298.0, -1_002.0], NONE);
+    let stage = t.selected();
+    assert_eq!(shape_origin(&t, stage), [0.0, -1_050.0]);
+    t.s.set_tool(ToolId::Text);
+    t.click([3.0, -1_047.0]);
+    t.s.set_text("STAGE");
+    t.key(Key::Enter);
+    assert_eq!(text_origin(&t.node(t.selected())), [0.0, -1_050.0]);
+    t.s.set_tool(ToolId::RowBlock);
+    t.drag([-700.0, -700.0], [-100.0, -300.0], NONE);
+    let left = t.selected();
+    t.drag([100.0, -650.0], [700.0, -250.0], NONE);
+    let right = t.selected();
+    // Moved up by 47: its front row onto the left block's (3 cu away).
+    let from = block(&t.node(right)).origin;
+    move_by(&mut t, right, from, [0.0, -47.0], NONE);
+    assert_eq!(
+        block(&t.node(right)).origin[1],
+        block(&t.node(left)).origin[1]
+    );
+    t.s.set_tool(ToolId::Section);
+    t.drag([-800.0, -800.0], [-50.0, 0.0], NONE);
+    t.drag([50.0, -800.0], [800.0, 0.0], NONE);
+    let doc = t.s.document().save();
+    let compiled = compile(&doc).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((compiled.stats.sections, compiled.stats.seats), (2, 88));
+    let codes: Vec<_> = compiled.findings.iter().map(|f| f.code).collect();
+    assert!(!codes.contains(&cavea_compiler::Code::W109), "{codes:?}");
+}
+
+fn text_origin(n: &Node) -> [f64; 2] {
+    match n {
+        Node::Text(x) => x.origin,
+        _ => panic!("text"),
+    }
+}
+
+/// Prints snapping and section timings on `stadium-100k`: run with
+/// `cargo test --release -p cavea-edit measure_ -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn measure_snapping_and_sections() {
+    use std::time::Instant;
+    let stadium = cavea_testkit::presets::find("stadium-100k")
+        .expect("preset")
+        .generate(1);
+    let mut t = snapped(stadium);
+    let doc = t.s.document();
+    let sections: Vec<u32> = doc
+        .children(None)
+        .iter()
+        .copied()
+        .filter(|&id| matches!(doc.node(id), Some(Node::Section(_))))
+        .take(50)
+        .collect();
+    let first = doc.children(Some(sections[0]))[0];
+    let seat = t.s.index().seats(first)[0].pos;
+    let at = t.s.index().to_world(first, seat).expect("seat");
+    let frames = 200;
+    let drag = |t: &mut T| {
+        t.down(at, NONE);
+        t.to([at[0] + 20.0 / t.zoom, at[1]], NONE);
+        let clock = Instant::now();
+        for i in 0..frames {
+            let d = f64::from(i % 40) / t.zoom;
+            t.to([at[0] + d, at[1] + d / 2.0], NONE);
+        }
+        let per = ms(clock, frames);
+        assert!(t.s.editor().gesture_open(), "dragging");
+        t.key(Key::Escape);
+        t.up(at, NONE);
+        per
+    };
+    let mut lines = Vec::new();
+    // Zoom 1 (snapping looks 1,000 cu around), and the whole stadium on a
+    // 1,000 px canvas (it looks at everything).
+    for zoom in [1.0, 0.01] {
+        t.zoom = zoom;
+        t.s.select(Level::Section(sections[0]), [first]);
+        let one = drag(&mut t);
+        t.s.select(Level::Top, sections.clone());
+        let fifty = drag(&mut t);
+        lines.push(format!(
+            "zoom {zoom}: snapped move dragging 1 block {one:.3} ms, 50 sections {fifty:.3} ms"
+        ));
+    }
+    // 50 blocks out of their sections, then a section around them.
+    let blocks: Vec<u32> = sections
+        .iter()
+        .map(|&s| t.s.document().children(Some(s))[0])
+        .collect();
+    for &s in &sections {
+        t.s.dissolve(s).expect("dissolve");
+    }
+    let clock = Instant::now();
+    t.s.group(&blocks, None).expect("group");
+    let group = ms(clock, 1);
+    let clock = Instant::now();
+    t.s.undo().expect("undo");
+    let undo = ms(clock, 1);
+    // A 5,000-seat section: its automatic outline shown, then converted.
+    let big = t.s.insert(None, &straight(50, 100)).expect("big");
+    let s = t.s.group(&[big], None).expect("group");
+    let clock = Instant::now();
+    let shown = t.s.overlay().sections;
+    let overlay = ms(clock, 1);
+    let clock = Instant::now();
+    t.s.convert_outline(s).expect("convert");
+    let convert = ms(clock, 1);
+    println!(
+        "stadium-100k: {}; section around 50 blocks {group:.3} ms, undo {undo:.3} ms; \
+         5,000-seat section: overlay with its outline ({} points) {overlay:.3} ms, \
+         convert to polygon {convert:.3} ms",
+        lines.join("; "),
+        shown[0].len()
     );
 }

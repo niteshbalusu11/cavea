@@ -5,6 +5,7 @@ use std::f64::consts::{PI, TAU};
 use cavea_core::limits::MAX_SEATS_PER_ROW;
 
 use super::draw::{Entry, Live, Spot, budget, count, dist, finish};
+use super::snap;
 use super::{Button, Context, Cursor, Input, Key, Overlay, Pointer, Readout, Tool, tuning};
 use crate::draft::{Draft, MIN_RADIUS, arc_max_seats, arc_row_seats};
 use crate::index::P;
@@ -90,7 +91,8 @@ impl Tool for BlockTool {
         match (&mut self.state, *input) {
             (Block::Idle, Input::PointerDown(p)) if p.button == Button::Primary => {
                 let spot = Spot::at(cx, &p);
-                let a = spot.local(cx, p.world);
+                let at = snap::point(cx, &p, None, spot.parent);
+                let a = spot.local(cx, at);
                 self.entry = Entry::default();
                 self.state = Block::Drag {
                     down: p,
@@ -116,11 +118,13 @@ impl Tool for BlockTool {
                     b,
                     shift,
                     dragged,
+                    live,
                     ..
                 },
                 Input::PointerMove(p),
             ) => {
-                (*b, *shift) = (spot.local(cx, p.world), p.mods.shift);
+                let at = snap::point(cx, &p, live.created(), spot.parent);
+                (*b, *shift) = (spot.local(cx, at), p.mods.shift);
                 *dragged |= p.dragged_from(down);
                 self.show(cx, None);
             }
@@ -407,12 +411,14 @@ impl ArcTool {
         match &mut self.state {
             Arc::Idle => {
                 let spot = Spot::at(cx, &p);
-                let c = spot.local(cx, p.world);
+                let at = snap::point(cx, &p, None, spot.parent);
+                let c = spot.local(cx, at);
                 let budget = budget(cx);
                 self.state = Arc::Centre { spot, c, budget };
             }
             Arc::Centre { spot, c, budget } => {
-                let q = spot.local(cx, p.world);
+                let at = snap::point(cx, &p, None, spot.parent);
+                let q = spot.local(cx, at);
                 let start = (q[1] - c[1]).atan2(q[0] - c[0]);
                 let shape = ArcShape {
                     radius: radius(*c, q),

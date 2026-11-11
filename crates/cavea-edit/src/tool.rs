@@ -13,12 +13,20 @@ use crate::selection::{Selection, View};
 mod block;
 mod draw;
 mod handles;
+mod row;
 mod select;
+mod shape;
+pub(crate) mod snap;
+mod text;
 
 pub(crate) use block::{ArcTool, BlockTool};
 pub(crate) use draw::Spot;
 pub use handles::{Corner, Handle, HandleKind, Side};
+pub(crate) use row::RowTool;
 pub(crate) use select::{SelectTool, select_all, step_in};
+pub(crate) use shape::{ShapeKindTool, ShapeTool};
+pub use snap::{Guide, SnapSettings};
+pub(crate) use text::TextTool;
 
 #[cfg(test)]
 mod draw_tests;
@@ -47,6 +55,11 @@ pub mod tuning {
     pub const HANDLE_TOUCH: f64 = 14.0;
     /// How far the rotate handle sits outside the selection frame.
     pub const ROTATE_OFFSET: f64 = 24.0;
+    /// How near a snap target must be to pull a position onto it.
+    pub const SNAP: f64 = 6.0;
+    /// How far around the pointer or the dragged selection snapping looks
+    /// for other nodes: about a viewport.
+    pub const SNAP_REACH: f64 = 1_000.0;
     /// The most seats a drag may preview in one block (a count, not a
     /// size): it bounds the work of one pointer move. Typed numbers are
     /// limited only by `02-domain-model.md` §14.
@@ -164,6 +177,13 @@ pub enum ToolId {
     Select,
     RowBlock,
     ArcBlock,
+    Row,
+    Rect,
+    Ellipse,
+    Polygon,
+    Line,
+    Text,
+    Section,
 }
 
 /// What the canvas draws over the chart, in chart coordinates; sizes in
@@ -179,10 +199,19 @@ pub struct Overlay {
     pub marquee: Option<Rect>,
     /// The select tool's handles on the frame.
     pub handles: Vec<Handle>,
+    /// A line through these points: a polygon being clicked, to the pointer.
+    pub preview: Vec<P>,
     /// The live readout of the gesture in progress, for the status bar.
     pub readout: Option<Readout>,
     /// The numbers typed so far during a drag (07 §4, numeric entry).
     pub entry: String,
+    /// A text field the chrome should show while text is typed.
+    pub text: Option<TextField>,
+    /// What the last pointer event snapped to (§5.2).
+    pub guides: Vec<Guide>,
+    /// The outlines of the selected sections, and of the section whose
+    /// children are selected, automatic or explicit.
+    pub sections: Vec<Vec<P>>,
 }
 
 /// The numbers a gesture shows while it runs (07 §4). Lengths in chart
@@ -204,6 +233,11 @@ pub enum Readout {
         rows: u32,
         seats: u32,
     },
+    /// A single row: its length along the path and its seats.
+    Row {
+        length: f64,
+        seats: u32,
+    },
     Size {
         width: f64,
         height: f64,
@@ -212,10 +246,22 @@ pub enum Readout {
         length: f64,
         angle: f64,
     },
+    /// Corners of a polygon so far.
+    Points(u32),
     /// The angle a rotation has turned the selection by.
     Rotate {
         angle: f64,
     },
+}
+
+/// Text being typed (07 §2.3): the chrome shows a field at `at` (world)
+/// holding `text`, and sends each change with `Session::set_text`. `node`
+/// is the text node being edited, once it exists.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextField {
+    pub node: Option<u32>,
+    pub at: [f64; 2],
+    pub text: String,
 }
 
 /// What a tool works on.
@@ -227,6 +273,7 @@ pub(crate) struct Context<'a> {
     pub(crate) floor: Option<u32>,
     /// The active category, which new seats take (07 §7).
     pub(crate) category: Option<&'a str>,
+    pub(crate) snap: &'a mut snap::Snap,
 }
 
 impl Context<'_> {
@@ -259,4 +306,7 @@ pub(crate) trait Tool: std::fmt::Debug {
     /// Adds the tool's own overlay (a selection box being dragged, handles,
     /// a readout) to the selection's.
     fn overlay(&self, view: &View<'_>, selection: &Selection, out: &mut Overlay);
+
+    /// Takes the whole string of a text field the tool asked for.
+    fn text(&mut self, _cx: &mut Context<'_>, _text: &str) {}
 }

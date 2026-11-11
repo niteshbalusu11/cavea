@@ -16,6 +16,7 @@ mod draft;
 mod editor;
 mod index;
 mod op;
+mod section;
 mod selection;
 mod session;
 mod tool;
@@ -28,8 +29,8 @@ pub use index::{Anchor, AnchorKind, CachedSeat, Quad, Rect, Select, SpatialIndex
 pub use selection::{Level, Selection};
 pub use session::Session;
 pub use tool::{
-    Button, Corner, Cursor, Handle, HandleKind, Input, Key, Modifiers, Overlay, Pointer,
-    PointerKind, Readout, Side, ToolId, tuning,
+    Button, Corner, Cursor, Guide, Handle, HandleKind, Input, Key, Modifiers, Overlay, Pointer,
+    PointerKind, Readout, Side, SnapSettings, TextField, ToolId, tuning,
 };
 
 #[cfg(test)]

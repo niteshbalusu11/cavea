@@ -292,7 +292,7 @@ fn outer_box(pts: &[[f64; 2]]) -> Option<Bounds> {
 const OUTLINE_COLOR: ccf::Rgba = [255, 255, 255, 255];
 /// Half the default row pitch: the outline padding of a section without row
 /// blocks.
-const DEFAULT_PADDING: f64 = 47.5;
+pub const DEFAULT_PADDING: f64 = 47.5;
 
 /// A bookable node to expand, and where it sits in the world.
 struct Member<'d> {

@@ -176,6 +176,13 @@ pub(crate) fn pickable(doc: &Document, floor: Option<u32>, id: u32) -> bool {
     free(id) && doc.parent(id).is_none_or(free) && floor_of(doc, id) == floor
 }
 
+/// Whether a node is drawn on the floor shown: it and its section are not
+/// hidden. Snapping targets these, locked ones included.
+pub(crate) fn shown(doc: &Document, floor: Option<u32>, id: u32) -> bool {
+    let visible = |id: u32| doc.node(id).is_some_and(|n| each_node!(n, x => !x.hidden));
+    visible(id) && doc.parent(id).is_none_or(visible) && floor_of(doc, id) == floor
+}
+
 /// What a canvas query sees: the document, the index, the floor shown and
 /// the hit tolerance in chart units.
 pub(crate) struct View<'a> {

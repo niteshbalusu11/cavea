@@ -19,6 +19,7 @@ use cavea_core::limits::{MAX_CATEGORIES, MAX_FLOORS, MAX_OBJECTS, MAX_SEATS_PER_
 use serde::{Deserialize, Serialize};
 
 use crate::document::{Document, each_node, node_id};
+use crate::index::Place;
 use crate::op::{Op, row_index};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -46,7 +47,9 @@ pub enum Command {
         nodes: Vec<NodeTransform>,
     },
     /// Moves a node to `index` in `parent`'s children, counted after it has
-    /// left its current place: reparenting and reordering.
+    /// left its current place: reparenting and reordering. A node changing
+    /// parent keeps its place on the canvas: its origin and rotation are
+    /// rewritten into the new parent's space.
     PlaceNode {
         id: u32,
         parent: Option<u32>,
@@ -391,6 +394,31 @@ impl Document {
             Command::PlaceNode { id, parent, index } => {
                 let node = self.node(id).ok_or(CommandError::MissingNode(id))?;
                 self.check_placement(parent, matches!(node, Node::Section(_)))?;
+                let from = self.parent(id);
+                if from != parent {
+                    // Keep the node where it is on the canvas: its world
+                    // place, carried into the new parent's space.
+                    let (origin, rotation) = each_node!(node, n => (n.origin, n.rotation));
+                    let (out, into) = (self.space(from), self.space(parent));
+                    let origin = into.0.invert(out.0.apply(origin));
+                    let turn = out.1 - into.1;
+                    let rotation = if turn == 0.0 {
+                        rotation
+                    } else {
+                        crate::draft::normalise(rotation + turn)
+                    };
+                    if !origin.iter().chain([&rotation]).all(|v| v.is_finite()) {
+                        return Err(CommandError::InvalidValue("origin"));
+                    }
+                    run(
+                        self,
+                        Op::Transform {
+                            id,
+                            origin,
+                            rotation,
+                        },
+                    )?;
+                }
                 let index = index as usize;
                 run(self, Op::Place { id, parent, index })
             }
@@ -779,6 +807,15 @@ impl Document {
     }
 
     /// Only top-level sections hold children; sections are top-level.
+    /// The space of `parent`'s children in the world (the world for `None`;
+    /// sections are top-level), and its rotation.
+    fn space(&self, parent: Option<u32>) -> (Place, f64) {
+        match parent.and_then(|p| self.node(p)) {
+            Some(n) => each_node!(n, n => (Place::of(n.origin, n.rotation), n.rotation)),
+            None => (Place::of([0.0, 0.0], 0.0), 0.0),
+        }
+    }
+
     fn check_placement(&self, parent: Option<u32>, section: bool) -> Result<()> {
         match parent {
             Some(p) if section || self.parent(p).is_some() => Err(CommandError::Placement),

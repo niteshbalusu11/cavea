@@ -86,7 +86,7 @@ pub(crate) fn flat(poly: &[P]) -> bool {
 /// with at least `padding` between every seat centre and the outline. Empty
 /// when there are no seats; `None` when the grid's numbers overflow or the
 /// grid would exceed 2²⁶ cells.
-pub(crate) fn auto_outline(seats: &[P], padding: f64) -> Option<Vec<P>> {
+pub fn auto_outline(seats: &[P], padding: f64) -> Option<Vec<P>> {
     let Some(&first) = seats.first() else {
         return Some(Vec::new());
     };
