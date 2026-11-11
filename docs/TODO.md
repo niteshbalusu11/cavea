@@ -195,7 +195,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **SRV-007** Chart endpoints: create, draft with etag, validate, publish, versions (08 §6.2)
 - [x] **SRV-008** Compile on publish; store public, precompressed and full artefacts (03 §4.6)
 - [x] **SRV-009** Serve compiled charts with immutable caching and content negotiation (03 §4.6)
-- [ ] **SRV-010** Asset upload and serving (08 §6.2). Built and tested, not yet reviewed, on the branch `slice/assets-unreviewed`
+- [x] **SRV-010** Asset upload and serving (08 §6.2). Upload, sniffing and public serving (D-47); E007 at publish for an asset the workspace does not hold, and attaching a thumbnail to a version (DSN-040), are not built
 - [x] **SRV-011** Event endpoints: create, get, patch, archive (08 §6.2)
 - [x] **SRV-012** Hold-token endpoints (08 §6.2)
 - [x] **SRV-013** Seat operation endpoints: hold, release, book, change status (08 §6.2)

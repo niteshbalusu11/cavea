@@ -15,6 +15,10 @@ use crate::net::TrustedProxies;
 use sqlx::ConnectOptions as _;
 use sqlx::postgres::PgConnectOptions;
 
+/// The highest `CAVEA_ASSET_MAX_BYTES`: an upload is held in memory whole
+/// before it is stored.
+const MAX_ASSET_BYTES: u32 = 256 << 20;
+
 #[derive(Debug, Clone)]
 pub struct Config {
     /// `CAVEA_LISTEN`: the socket address to bind.
@@ -61,6 +65,8 @@ pub struct Config {
     /// `CAVEA_RATE_LIMIT_READS`: other public requests per minute per
     /// publishable key and client address; 0 is unlimited.
     pub rate_limit_reads: u32,
+    /// `CAVEA_ASSET_MAX_BYTES`: the largest image `POST /v1/assets` takes.
+    pub asset_max_bytes: NonZeroU32,
 }
 
 impl Config {
@@ -98,6 +104,9 @@ impl Config {
             trusted_proxies: setting("CAVEA_TRUSTED_PROXIES", TrustedProxies::default)?,
             rate_limit_holds: setting("CAVEA_RATE_LIMIT_HOLDS", || 120)?,
             rate_limit_reads: setting("CAVEA_RATE_LIMIT_READS", || 3_000)?,
+            asset_max_bytes: setting("CAVEA_ASSET_MAX_BYTES", || {
+                NonZeroU32::MIN.saturating_add((10 << 20) - 1)
+            })?,
         }
         .checked()
     }
@@ -107,6 +116,12 @@ impl Config {
             return Err(ConfigError {
                 var: "CAVEA_HEARTBEAT_SECS",
                 reason: "is invalid: must be less than CAVEA_LEASE_SECS".to_owned(),
+            });
+        }
+        if self.asset_max_bytes.get() > MAX_ASSET_BYTES {
+            return Err(ConfigError {
+                var: "CAVEA_ASSET_MAX_BYTES",
+                reason: "is invalid: must be at most 268435456 (256 MiB)".to_owned(),
             });
         }
         if self.node_id.is_empty() {

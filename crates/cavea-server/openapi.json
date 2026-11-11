@@ -58,6 +58,15 @@
           "type": "string"
         }
       },
+      "HashPath": {
+        "description": "An asset's content hash: 32 lowercase hex digits.",
+        "in": "path",
+        "name": "hash",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
       "IdPath": {
         "description": "An API key id: `key_` and 32 hex digits.",
         "in": "path",
@@ -270,6 +279,45 @@
       }
     },
     "schemas": {
+      "Asset": {
+        "additionalProperties": false,
+        "properties": {
+          "content_type": {
+            "enum": [
+              "image/png",
+              "image/jpeg",
+              "image/webp"
+            ]
+          },
+          "hash": {
+            "description": "The content hash: 32 lowercase hex digits.",
+            "type": "string"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "size": {
+            "description": "Bytes.",
+            "type": "integer"
+          },
+          "url": {
+            "description": "Where it is served, relative to the server.",
+            "type": "string"
+          },
+          "width": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hash",
+          "content_type",
+          "size",
+          "width",
+          "height",
+          "url"
+        ],
+        "type": "object"
+      },
       "Book": {
         "additionalProperties": false,
         "properties": {
@@ -1723,6 +1771,77 @@
         "summary": "Readiness",
         "tags": [
           "system"
+        ]
+      }
+    },
+    "/v1/assets": {
+      "post": {
+        "description": "The body is the image: PNG, JPEG or WebP, decided by its bytes (any `Content-Type` is ignored); at most `CAVEA_ASSET_MAX_BYTES` (10 MiB by default) and 8,192 pixels a side. Refused with `400` and `reason`: `body_too_large`, `asset_type`, `asset_malformed` (truncated, or data after the image's end) or `asset_dimensions`.",
+        "operationId": "uploadAsset",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {},
+            "image/jpeg": {},
+            "image/png": {},
+            "image/webp": {}
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Asset"
+                }
+              }
+            },
+            "description": "The workspace already had these bytes",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Asset"
+                }
+              }
+            },
+            "description": "A new asset",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "secretKey": []
+          }
+        ],
+        "summary": "Upload an image",
+        "tags": [
+          "assets"
         ]
       }
     },
@@ -3384,6 +3503,63 @@
         "summary": "This document",
         "tags": [
           "system"
+        ]
+      }
+    },
+    "/v1/public/assets/{hash}": {
+      "get": {
+        "description": "No credential: the content hash names the file. Immutable; CORS open.",
+        "operationId": "publicAsset",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/HashPath"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {},
+              "image/png": {},
+              "image/webp": {}
+            },
+            "description": "The image, with the type it was sniffed as",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [],
+        "summary": "An image",
+        "tags": [
+          "public"
         ]
       }
     },

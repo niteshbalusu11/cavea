@@ -9,6 +9,7 @@ macro_rules! rfc3339 {
     };
 }
 
+mod assets;
 pub mod auth;
 #[macro_use]
 mod charts;
@@ -77,6 +78,7 @@ fn routes() -> openapi::Routes {
         .merge(events::routes())
         .merge(seats::routes())
         .merge(objects::routes())
+        .merge(assets::routes())
         .merge(public::routes())
         .merge(realtime::routes())
 }

@@ -315,6 +315,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64",
+ "blake3",
  "brotli",
  "cavea-compiler",
  "cavea-core",

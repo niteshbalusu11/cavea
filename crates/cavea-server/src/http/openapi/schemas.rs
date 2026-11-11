@@ -555,6 +555,23 @@ Without: booked objects.",
                 &[],
             ),
         ),
+        (
+            "Asset",
+            object(
+                &[
+                    ("hash", text("The content hash: 32 lowercase hex digits.")),
+                    (
+                        "content_type",
+                        json!({ "enum": ["image/png", "image/jpeg", "image/webp"] }),
+                    ),
+                    ("size", described(integer(), "Bytes.")),
+                    ("width", integer()),
+                    ("height", integer()),
+                    ("url", text("Where it is served, relative to the server.")),
+                ],
+                &[],
+            ),
+        ),
     ];
     entries
         .into_iter()
