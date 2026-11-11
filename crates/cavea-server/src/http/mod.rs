@@ -10,9 +10,11 @@ macro_rules! rfc3339 {
 }
 
 pub mod auth;
+mod charts;
 mod error;
 pub mod extract;
 mod keys;
+mod public;
 mod workspaces;
 
 use std::sync::Arc;
@@ -50,6 +52,8 @@ fn routes() -> Router<AppState> {
         .route("/healthz", get(healthz))
         .merge(workspaces::routes())
         .merge(keys::routes())
+        .merge(charts::routes())
+        .merge(public::routes())
 }
 
 /// Add the problem+json fallbacks, the default body limit and the request span

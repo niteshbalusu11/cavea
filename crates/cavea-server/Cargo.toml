@@ -10,13 +10,20 @@ publish.workspace = true
 anyhow.workspace = true
 # `query` adds serde_urlencoded, for the problem+json `Query` extractor.
 axum = { workspace = true, features = ["tokio", "http1", "json", "matched-path", "query"] }
+# Brotli (quality 11) of each published chart's public artefact (03 §4.6); the
+# workspace's version, already built for xtask.
+brotli.workspace = true
+# Parses, validates and compiles chart drafts (03 §3); its dependencies are
+# already in the workspace.
+cavea-compiler.workspace = true
 cavea-engine.workspace = true
 cavea-telemetry.workspace = true
 # The secure random source for API keys; already in the tree through sqlx-postgres.
 getrandom = { version = "0.4.3", default-features = false }
 # Request and response bodies; `derive` adds serde_derive (its syn is in the tree).
 serde = { version = "1", default-features = false, features = ["derive"] }
-serde_json.workspace = true
+# `raw_value` (already on through axum's `json`) takes a draft as uploaded.
+serde_json = { workspace = true, features = ["raw_value"] }
 # SHA-256 of API keys and the admin key; already in the tree through sqlx-postgres.
 sha2 = { version = "0.11.1", default-features = false }
 # Runtime queries only (no `macros`: they need a database or offline data at
@@ -29,11 +36,14 @@ sqlx = { workspace = true, features = [
 ] }
 # Constant-time comparison of the admin key; already in the tree through rustls.
 subtle = { version = "2.6.1", default-features = false }
-# `time` for the commit timeout.
-tokio = { workspace = true, features = ["time"] }
+# `time` for the commit and compile timeouts; `sync` (already built for
+# cavea-engine) for the compile permits.
+tokio = { workspace = true, features = ["time", "sync"] }
 tracing.workspace = true
 
 [dev-dependencies]
+cavea-format.workspace = true
+cavea-testkit.workspace = true
 tower = { workspace = true, features = ["util"] }
 tracing-subscriber.workspace = true
 

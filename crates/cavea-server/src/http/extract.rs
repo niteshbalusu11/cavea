@@ -50,6 +50,26 @@ where
     type Rejection = ApiError;
 
     async fn from_request(request: Request, state: &S) -> Result<Self, ApiError> {
+        let RawJson(bytes) = RawJson::from_request(request, state).await?;
+        match axum::Json::<T>::from_bytes(&bytes) {
+            Ok(axum::Json(value)) => Ok(Self(value)),
+            Err(rejection) => Err(json_rejection(&rejection)),
+        }
+    }
+}
+
+/// A JSON request body as bytes, not yet parsed: the checks of [`Json`]
+/// (content type, the route's size limit, nesting depth) without the parse.
+#[derive(Debug, Clone, Default)]
+pub struct RawJson(pub Bytes);
+
+impl<S> FromRequest<S> for RawJson
+where
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(request: Request, state: &S) -> Result<Self, ApiError> {
         if !json_content_type(&request) {
             return Err(invalid(
                 "content_type",
@@ -71,14 +91,11 @@ where
             )
             .with_detail("limit", MAX_JSON_DEPTH));
         }
-        match axum::Json::<T>::from_bytes(&bytes) {
-            Ok(axum::Json(value)) => Ok(Self(value)),
-            Err(rejection) => Err(json_rejection(&rejection)),
-        }
+        Ok(Self(bytes))
     }
 }
 
-fn invalid(reason: &'static str, message: &'static str) -> ApiError {
+pub(super) fn invalid(reason: &'static str, message: &'static str) -> ApiError {
     ApiError::new(Code::InvalidRequest)
         .with_message(message)
         .with_detail("reason", reason)

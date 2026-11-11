@@ -436,6 +436,8 @@ CREATE TABLE audit_log (
 );
 ```
 
+Migration 2 adds `chart_versions.full_hash bytea NOT NULL` (16 bytes, the full artefact's content hash), replaces `UNIQUE (chart_id, hash)` with `UNIQUE (chart_id, full_hash)`, and indexes `hash`, by which the public chart route finds a file (§6.2).
+
 The `SeatStore` trait hides all of this from the engine: `acquire`, `load_event`, `commit_batch`, `heartbeat`, `release`. A store speaks for one node. Tests use an in-memory implementation with fault injection, whose leases follow the injected clock.
 
 ## 6. REST API
@@ -460,18 +462,32 @@ Secret key unless marked.
 
 | Method and path | Purpose |
 |---|---|
-| `GET /v1/charts` | List |
-| `POST /v1/charts` | Create (`key`, `name`, optional document) |
-| `GET /v1/charts/{chart}` | Metadata, draft etag, published version |
-| `GET /v1/charts/{chart}/draft` | The draft document |
-| `PUT /v1/charts/{chart}/draft` | Replace the draft; requires `If-Match: <etag>` |
-| `POST /v1/charts/{chart}/validate` | Run validation on the draft |
-| `POST /v1/charts/{chart}/publish` | Compile and publish; returns the new version |
-| `GET /v1/charts/{chart}/versions` | List versions |
+| `GET /v1/charts` | List chart objects (never drafts), archived ones included; the cursor is a chart key |
+| `POST /v1/charts` | Create (`key`, `name`, optional `document`); `201` with the chart object |
+| `GET /v1/charts/{chart}` | The chart object: metadata, draft etag, published version |
+| `GET /v1/charts/{chart}/draft` | The draft document, with its etag in `ETag` |
+| `PUT /v1/charts/{chart}/draft` | Replace the draft (the body is the document); requires `If-Match`; returns the chart object |
+| `POST /v1/charts/{chart}/validate` | Compile the draft and return its findings, without publishing |
+| `POST /v1/charts/{chart}/publish` | Compile and publish; optional `If-Match`; `201` with the new version, or `200` with the existing one |
+| `GET /v1/charts/{chart}/versions` | List version objects, oldest first; the cursor is a version id |
 | `GET /v1/charts/{chart}/versions/{number}/diff` | Objects added, removed and relabelled against the previous version |
 | `POST /v1/charts/{chart}/copy` | Duplicate |
-| `DELETE /v1/charts/{chart}` | Archive |
+| `DELETE /v1/charts/{chart}` | Archive; returns the chart object. Idempotent |
 | `POST /v1/assets` | Upload an image; returns its hash |
+
+`{chart}` is the customer's chart key (02 §3). Chart rules:
+
+- **Chart object:** `{key, name, draft_etag, draft_updated_at, published_version, archived_at, created_at}`. `published_version` is a version object or `null`.
+- **Version object:** `{id, number, hash, url, stats, created_at}`. `id` is `cv_` and 32 hex digits; `number` counts from 1 per chart; `hash` is the public artefact's content hash, 32 lowercase hex digits (03 §4.1); `url` is where it is served, relative to the server's base URL (`/v1/public/charts/{hash}.ccf`); `stats` is `{seats, rows, segments, sections, floors, public_bytes, public_br_bytes, full_bytes}`.
+- **Draft etag:** an opaque string such as `"3"` (the quotes are part of it, as in an HTTP entity tag), which changes on every save. Pass it back verbatim in `If-Match`. `If-Match: *` matches any draft. Any other form, or a weak tag, is `400` (`reason: "if_match"`).
+- **Saving a draft:** a missing `If-Match` is `400` (`reason: "if_match"`): a caller that means to overwrite whatever is there says so with `*`. A stale etag is `409 version_conflict` with the current `draft_etag` in `details`. The body is at most 16 MiB (a create body 16 MiB and 4 KiB): 27 times a parametric document at the design limit of 1,000,000 objects (02 §14; 600 KB measured), or about 16 bytes of per-seat data per object. A draft must parse as a chart document of a schema the server reads (unknown fields refused, 03 §2) and may not hold `\u0000`, which PostgreSQL `jsonb` cannot store; otherwise `400` with `reason: "document"` and the parser's message. It need not validate: the designer saves work in progress. Parsing runs on a blocking thread. The draft is stored as uploaded, as `jsonb` (03 §2.8), and read back in `jsonb`'s canonical form.
+- **Creating:** without `document`, the draft is `{"schema": 1, "name": <name>, "nextOid": 1}`. A key already used in the workspace, by an archived chart too, is `409 already_exists`.
+- **Validate:** `200` with `{draft_etag, valid, findings, stats}`. Each finding is `{code, severity, node, message}`: `code` is an E or W code of 03 §3.2, or `unsupported` for a node the compiler cannot compile yet; `severity` is `error` or `warning`; `node` is the node id, or `null` for findings about settings, categories and floors. `valid` is true when no finding is an error. `stats` is `null` when the draft did not compile.
+- **Publish:** compiles the draft as it is at the request. With `If-Match`, a draft whose etag differs is `409 version_conflict` before anything is compiled. Findings of error severity refuse it: `422 chart_invalid` with `details.findings` as above. Otherwise, in one transaction with the chart row locked, the server stores a new immutable version (02 INV-12): the next number, the public and full content hashes, the draft as `source`, the public artefact, its brotli form, the full artefact and `stats`; and points the chart's published version at it. A draft saved while the compile ran makes the publish `409 version_conflict`, and an archive while it ran `400` (`reason: "archived"`), creating nothing: a version is always the draft that was current when it was stored. Publishes racing on one chart are serialised by the row lock.
+- **Unchanged publish:** versions are identified by the full artefact's hash, which covers every compiled field. A draft that compiles to a version the chart already has publishes that version again: `200` with it, no new row, and the chart's published version points at it (so republishing an older draft goes back to its version). Two versions may share a public hash when they differ only in full-only data (`oid`s, ranks, section priorities, 03 §4.2); they then share one public file.
+- **Compile bounds:** validate and publish compile on blocking threads, at most two at once per node; others wait their turn. A request waits at most 60 s for its compile, its turn included, else `503 overloaded` (`reason: "compile_timeout"`); a compile still running keeps its turn until it ends, so compiles never take more than two threads. The work itself is bounded by the draft size limit and by the compiler's limits, checked before expansion allocates (02 §14). Measured locally (AMD Ryzen 9 7900X, release build): compiling 100,000 seats takes 54 ms and brotli 0.5 s; 1,000,000 seats 0.5 s and 4.6 s.
+- **Archive:** sets `archived_at`; archiving again returns the chart unchanged. The draft can no longer be saved or published (`400`, `reason: "archived"`); it can still be read and validated. The key stays taken. Versions are untouched and their public files are still served: events pinned to them keep working, and browsers and CDNs cache those files for a year regardless.
+- **Who:** `draft_updated_by` and `chart_versions.created_by` are left empty until console users exist (09 §2): an API key is not a user.
 
 **Events**
 
@@ -537,8 +553,10 @@ Secret key unless marked.
 | `POST /v1/public/events/{event}/best-available` | Only if enabled for the event |
 | `GET /v1/public/events/{event}/sections` | JSON: floors, sections, categories with availability counts (for the list view without WASM) |
 | `GET /v1/public/events/{event}/sections/{section}/rows` | JSON: rows with their available seats, grouped into runs |
-| `GET /v1/public/charts/{chart}/versions/{hash}.ccf` | Compiled chart |
+| `GET /v1/public/charts/{hash}.ccf` | Compiled chart (no credential; 03 §4.6) |
 | `GET /v1/public/assets/{hash}` | Background images |
+
+The compiled chart route takes no credential and ignores any sent. A chart file is named by its content hash alone: the URL must be the same for every buyer so that browsers and CDNs can cache it, a credential in a header would keep CDNs from caching it and force a CORS preflight, and a publishable key in the URL would change it on every key rotation. The hash identifies the bytes, so the route is unambiguous across workspaces (two workspaces that publish identical charts serve one identical file), and it exposes nothing a buyer of the event does not already download: 128 bits cannot be guessed, and the chart's key and workspace are not in the URL. It serves only public artefacts of published versions; the full artefact is never served. Private charts are P2 (03 §4.6).
 
 **System**
 
@@ -607,6 +625,56 @@ Authorization: Bearer sk_…
 
 `201` with a key object as in `secret_key` above. `GET /v1/keys` returns key objects without `key`; `DELETE /v1/keys/{id}` returns the key object with `revoked_at` set.
 
+Charts:
+
+```http
+POST /v1/charts
+Authorization: Bearer sk_…
+
+{ "key": "royal", "name": "Royal Theatre" }
+```
+
+```json
+{ "key": "royal", "name": "Royal Theatre", "draft_etag": "\"1\"",
+  "draft_updated_at": "2027-01-10T09:00:00Z", "published_version": null,
+  "archived_at": null, "created_at": "2027-01-10T09:00:00Z" }
+```
+
+```http
+PUT /v1/charts/royal/draft
+Authorization: Bearer sk_…
+If-Match: "1"
+Content-Type: application/json
+
+{ "schema": 1, "name": "Royal Theatre", "nextOid": 20431, "categories": [ … ], "nodes": [ … ] }
+```
+
+`200` with the chart object, `draft_etag` now `"2"`, also in `ETag`.
+
+```http
+POST /v1/charts/royal/publish
+Authorization: Bearer sk_…
+If-Match: "2"
+```
+
+```json
+{ "id": "cv_7d1e0c4b9a8f4e3d2c1b0a9f8e7d6c5b", "number": 1,
+  "hash": "9f2c4e1a7b3d5f6e8a0c2b4d6f8e0a1c",
+  "url": "/v1/public/charts/9f2c4e1a7b3d5f6e8a0c2b4d6f8e0a1c.ccf",
+  "stats": { "seats": 2000, "rows": 144, "segments": 144, "sections": 24, "floors": 1,
+             "public_bytes": 28209, "public_br_bytes": 9752, "full_bytes": 32653 },
+  "created_at": "2027-01-10T09:05:00Z" }
+```
+
+Refused (nothing was published):
+
+```json
+{ "code": "chart_invalid", "status": 422, "message": "The chart has validation errors.",
+  "details": { "findings": [ { "code": "E007", "severity": "error", "node": 12,
+                               "message": "E007 node 12: unknown category \"vip\"" } ] },
+  "request_id": "req_6ad9b530f0e172e7214232f15266b459" }
+```
+
 ### 6.4 Error codes
 
 | HTTP | `code` | Meaning |
@@ -615,11 +683,11 @@ Authorization: Bearer sk_…
 | 401 | `unauthorized` | Missing or invalid key |
 | 403 | `forbidden` | Key lacks permission, or origin not allowed |
 | 404 | `not_found` | Unknown chart, event, object, token, key or workspace |
-| 409 | `already_exists` | A workspace (later: chart, event) with this key already exists |
+| 409 | `already_exists` | A workspace or chart (later: event) with this key already exists |
 | 409 | `object_not_free` | At least one object is not free |
 | 409 | `object_not_held_by_token` | Book or release named an object the token does not hold |
 | 409 | `object_status_conflict` | An object's status does not allow the change: release without a token of an object that is not booked, or change-status to free of a held or booked object |
-| 409 | `version_conflict` | Draft etag mismatch |
+| 409 | `version_conflict` | Draft etag mismatch; `details.draft_etag` is the current one |
 | 409 | `upgrade_conflict` | Non-free objects missing from the new chart version |
 | 409 | `idempotency_mismatch` | Key reused with a different body |
 | 410 | `hold_token_expired` | Not returned by the actor, which deletes an expired token before processing any command at or after its expiry (§7.3); the token is then `not_found` |
@@ -627,10 +695,10 @@ Authorization: Bearer sk_…
 | 422 | `channel_not_allowed` | |
 | 422 | `orphan_rule_violated` | |
 | 422 | `not_enough_objects` | Best-available could not satisfy the request |
-| 422 | `chart_invalid` | Publish blocked by validation errors |
+| 422 | `chart_invalid` | Publish blocked by validation errors; `details.findings` lists them (§6.2) |
 | 429 | `rate_limited` | |
 | 500 | `internal_error` | Unexpected fault; the cause is logged under the request id, never returned |
-| 503 | `overloaded` | Actor mailbox full; retry after the given delay |
+| 503 | `overloaded` | Actor mailbox full, or a chart compile did not finish in time (`reason: "compile_timeout"`); retry after the given delay |
 | 503 | `unavailable` | Storage unreachable |
 
 Every error is `application/problem+json` with exactly these members:
@@ -648,7 +716,7 @@ Every error is `application/problem+json` with exactly these members:
 - `code` and `status` always pair as in the table. `message` is for humans and may change; match on `code`.
 - `details` is always an object, empty when there is nothing to add. Engine refusals fill it: `invalid_request` has `reason`; `not_found` has `missing` (`hold_token` or `objects`, with `objects` listing the unresolved references as `{"label"}` or `{"idx"}`); the three object conflicts list `{"idx", "reason"}` per object (`not_free`, `not_held_by_token`, `not_booked`, `not_blocked`); `forbidden` from the engine means the key's kind may not issue the command (`02-domain-model.md` §4.3); `hold_limit_exceeded` has `limit` and `requested`.
 - `request_id` equals the `Cavea-Request-Id` header.
-- An unknown path, and a known path with the wrong method, are `404 not_found`. A body that is not JSON, lacks `Content-Type: application/json`, does not match the expected shape, is over the size limit or nests too deeply is `400 invalid_request` with `details.reason` one of `json_syntax`, `content_type`, `json_data`, `body_too_large`, `json_depth` (with `limit`), `body_unreadable`. A malformed path parameter is `reason: "path"`, a malformed query parameter or cursor `reason: "query"`, an invalid body field `reason: "invalid_field"` with `field`, and too many objects `reason: "too_many_objects"`. An identifier in the path that cannot exist, or belongs to another workspace, is `404`.
+- An unknown path, and a known path with the wrong method, are `404 not_found`. A body that is not JSON, lacks `Content-Type: application/json`, does not match the expected shape, is over the size limit or nests too deeply is `400 invalid_request` with `details.reason` one of `json_syntax`, `content_type`, `json_data`, `body_too_large`, `json_depth` (with `limit`), `body_unreadable`. A malformed path parameter is `reason: "path"`, a malformed query parameter or cursor `reason: "query"`, an invalid body field `reason: "invalid_field"` with `field`, and too many objects `reason: "too_many_objects"`. For charts: a missing or malformed `If-Match` is `reason: "if_match"`, a draft that is not a storable chart document `reason: "document"`, and a change to an archived chart `reason: "archived"`. An identifier in the path that cannot exist, or belongs to another workspace, is `404`.
 - `401 unauthorized` has `details.reason`: `missing` (no `Authorization`), `malformed` (not `Bearer <token>`), `invalid` (unknown or revoked key, or not the admin key). `403 forbidden` from authentication has `reason`: `key_kind` (the wrong kind of credential for the route), `origin` (§11), or `self_revocation`.
 - `503 overloaded` carries `Retry-After: 1`.
 
@@ -795,7 +863,7 @@ Live reports read the actor. CSV exports stream from PostgreSQL.
 | Embed token | Embedded designer or manager | Short-lived, scoped to one workspace and one chart or event, with a permission list |
 
 - Session tokens are optional. An event can require them (`require_session: true`), which is the strongest defence against anonymous seat hoarding.
-- Every query is scoped by workspace id taken from the credential, never from the request. In the server the workspace id is obtainable only from an authenticated key (`http::Auth`).
+- Every query is scoped by workspace id taken from the credential, never from the request. In the server the workspace id is obtainable only from an authenticated key (`http::Auth`). The one exception is the compiled chart route, which takes no credential and finds a public file by its content hash alone (§6.2).
 
 API keys:
 

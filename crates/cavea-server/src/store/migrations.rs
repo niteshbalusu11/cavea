@@ -15,11 +15,18 @@ use sqlx::{Connection as _, SqlSafeStr as _};
 use tracing::Instrument as _;
 
 /// `(version, description, sql)`, in version order.
-const MIGRATIONS: &[(i64, &str, &str)] = &[(
-    1,
-    "initial",
-    include_str!("../../migrations/0001_initial.sql"),
-)];
+const MIGRATIONS: &[(i64, &str, &str)] = &[
+    (
+        1,
+        "initial",
+        include_str!("../../migrations/0001_initial.sql"),
+    ),
+    (
+        2,
+        "chart_versions_full_hash",
+        include_str!("../../migrations/0002_chart_versions_full_hash.sql"),
+    ),
+];
 
 /// Where applied migrations are recorded, with each one's SHA-384.
 const TABLE: &str = "cavea_migrations";

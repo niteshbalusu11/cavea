@@ -90,20 +90,46 @@ async fn call_from(
     origin: Option<&str>,
     body: Option<Value>,
 ) -> (Response<Body>, Value) {
+    let headers: &[(header::HeaderName, &str)] = match origin {
+        Some(origin) => &[(header::ORIGIN, origin)],
+        None => &[],
+    };
+    call_with(app, method, uri, token, headers, body).await
+}
+
+async fn call_with(
+    app: &Router,
+    method: Method,
+    uri: &str,
+    token: Option<&str>,
+    headers: &[(header::HeaderName, &str)],
+    body: Option<Value>,
+) -> (Response<Body>, Value) {
+    let request = request(method, uri, token, headers, body.map(|b| b.to_string()));
+    send(app.clone(), request).await
+}
+
+fn request(
+    method: Method,
+    uri: &str,
+    token: Option<&str>,
+    headers: &[(header::HeaderName, &str)],
+    body: Option<String>,
+) -> Request<Body> {
     let mut request = Request::builder().method(method).uri(uri);
     if let Some(token) = token {
         request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
     }
-    if let Some(origin) = origin {
-        request = request.header(header::ORIGIN, origin);
+    for (name, value) in headers {
+        request = request.header(name, *value);
     }
-    let request = match body {
+    match body {
         Some(body) => request
             .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(body.to_string())),
+            .body(Body::from(body)),
         None => request.body(Body::empty()),
-    };
-    send(app.clone(), request.unwrap()).await
+    }
+    .unwrap()
 }
 
 /// A workspace made through the API, with one credential of each kind.
@@ -117,6 +143,12 @@ struct Tenant {
     revoked: String,
     /// A publishable key for routes to act on: `{key}` in a route table.
     spare_id: String,
+    /// A chart with one published version: `{chart}` in a route table.
+    chart: String,
+    /// The draft of `chart`, as published: `{document}` in a route body.
+    document: String,
+    /// The public hash of that version: `{hash}` in a route table.
+    hash: String,
 }
 
 impl Tenant {
@@ -147,7 +179,19 @@ impl Tenant {
         let uri = format!("/v1/keys/{revoked_id}");
         let (response, _) = call(app, Method::DELETE, &uri, Some(&secret), None).await;
         assert_eq!(response.status(), 200);
+        let chart = format!("chart-{key}");
+        let document = tiny_document(key);
+        let body = json!({ "key": chart, "name": key, "document": serde_json::from_str::<Value>(&document).unwrap() });
+        let (response, created) =
+            call(app, Method::POST, "/v1/charts", Some(&secret), Some(body)).await;
+        assert_eq!(response.status(), 201, "{created}");
+        let uri = format!("/v1/charts/{chart}/publish");
+        let (response, version) = call(app, Method::POST, &uri, Some(&secret), None).await;
+        assert_eq!(response.status(), 201, "{version}");
         Self {
+            chart,
+            document,
+            hash: version["hash"].as_str().unwrap().to_owned(),
             id: ws["id"].as_str().unwrap().to_owned(),
             secret_id: ws["secret_key"]["id"].as_str().unwrap().to_owned(),
             secret,
@@ -173,13 +217,27 @@ impl Tenant {
             &self.spare_id,
             &self.secret[..11],
             &self.publishable[..11],
+            &self.chart,
+            &self.hash,
         ]
     }
 
     /// Fill a route template's placeholders with this tenant's identifiers.
     fn path(&self, template: &str) -> String {
-        template.replace("{key}", &self.spare_id)
+        template
+            .replace("{key}", &self.spare_id)
+            .replace("{chart}", &self.chart)
+            .replace("{hash}", &self.hash)
+            .replace("{document}", &self.document)
     }
+}
+
+/// A small valid chart document named `name`: a 2,000-seat synthetic
+/// stadium, so that each name compiles to its own content hash.
+fn tiny_document(name: &str) -> String {
+    let mut document = cavea_testkit::synthetic::stadium(2_000, 1);
+    document.name = name.to_owned();
+    String::from_utf8(document.to_json().unwrap()).unwrap()
 }
 
 fn assert_no_secrets(logs: &Captured, secrets: &[&str]) {
@@ -456,13 +514,16 @@ enum Needs {
     Admin,
     Secret,
     Publishable,
+    /// No credential: a public file whose URL names it (08 §6.2).
+    Nothing,
 }
 
-fn credential(tenant: &Tenant, needs: Needs) -> &str {
+fn credential(tenant: &Tenant, needs: Needs) -> Option<&str> {
     match needs {
-        Needs::Admin => ADMIN,
-        Needs::Secret => &tenant.secret,
-        Needs::Publishable => &tenant.publishable,
+        Needs::Admin => Some(ADMIN),
+        Needs::Secret => Some(&tenant.secret),
+        Needs::Publishable => Some(&tenant.publishable),
+        Needs::Nothing => None,
     }
 }
 
@@ -487,6 +548,65 @@ const ROUTES: &[(Method, &str, Needs, u16, Option<&str>)] = &[
         Some(r#"{"kind":"secret","name":"n"}"#),
     ),
     (Method::DELETE, "/v1/keys/{key}", Needs::Secret, 200, None),
+    (Method::GET, "/v1/charts", Needs::Secret, 200, None),
+    (
+        Method::POST,
+        "/v1/charts",
+        Needs::Secret,
+        201,
+        Some(r#"{"key":"new","name":"n"}"#),
+    ),
+    (Method::GET, "/v1/charts/{chart}", Needs::Secret, 200, None),
+    (
+        Method::GET,
+        "/v1/charts/{chart}/draft",
+        Needs::Secret,
+        200,
+        None,
+    ),
+    (
+        Method::PUT,
+        "/v1/charts/{chart}/draft",
+        Needs::Secret,
+        200,
+        Some("{document}"),
+    ),
+    (
+        Method::POST,
+        "/v1/charts/{chart}/validate",
+        Needs::Secret,
+        200,
+        None,
+    ),
+    // The draft is the published one: publishing it again creates nothing.
+    (
+        Method::POST,
+        "/v1/charts/{chart}/publish",
+        Needs::Secret,
+        200,
+        None,
+    ),
+    (
+        Method::GET,
+        "/v1/charts/{chart}/versions",
+        Needs::Secret,
+        200,
+        None,
+    ),
+    (
+        Method::GET,
+        "/v1/public/charts/{hash}.ccf",
+        Needs::Nothing,
+        200,
+        None,
+    ),
+    (
+        Method::DELETE,
+        "/v1/charts/{chart}",
+        Needs::Secret,
+        200,
+        None,
+    ),
 ];
 
 /// T5: every route, called with each wrong kind of credential, is refused;
@@ -505,21 +625,32 @@ async fn tenant_isolation() {
         let a = Tenant::create(&app, "a").await;
         let b = Tenant::create(&app, "b").await;
         for (method, template, needs, ok, body) in ROUTES {
-            let body = body.map(|b| serde_json::from_str::<Value>(b).unwrap());
+            let body = body.map(|b| serde_json::from_str::<Value>(&a.path(b)).unwrap());
             let path = a.path(template);
+            // `If-Match: *` for the routes that need one; the others ignore it.
+            let if_match = [(header::IF_MATCH, "*")];
             let call = async |token: Option<&str>| {
-                call(&app, method.clone(), &path, token, body.clone()).await
+                call_with(&app, method.clone(), &path, token, &if_match, body.clone()).await
             };
+            if *needs == Needs::Nothing {
+                // Any credential, of any workspace, or none: the same answer.
+                let tokens = [ADMIN, &a.secret, &a.publishable, &b.secret, &b.publishable];
+                for token in tokens.map(Some).into_iter().chain([None]) {
+                    let (response, _) = call(token).await;
+                    assert_eq!(response.status().as_u16(), *ok, "{method} {template}");
+                }
+                continue;
+            }
             let (response, problem) = call(None).await;
             assert_problem(&response, &problem, Code::Unauthorized);
             for wrong in [Needs::Admin, Needs::Secret, Needs::Publishable] {
                 if wrong != *needs {
-                    let (response, problem) = call(Some(credential(&a, wrong))).await;
+                    let (response, problem) = call(credential(&a, wrong)).await;
                     assert_problem(&response, &problem, Code::Forbidden);
                 }
             }
             if *needs != Needs::Admin {
-                let (response, foreign) = call(Some(credential(&b, *needs))).await;
+                let (response, foreign) = call(credential(&b, *needs)).await;
                 if template.contains('{') {
                     assert_problem(&response, &foreign, Code::NotFound);
                 } else {
@@ -534,7 +665,7 @@ async fn tenant_isolation() {
                     assert!(!text.contains(id), "{method} {template} revealed {id:.11}");
                 }
             }
-            let (response, own) = call(Some(credential(&a, *needs))).await;
+            let (response, own) = call(credential(&a, *needs)).await;
             assert_eq!(
                 response.status().as_u16(),
                 *ok,
@@ -546,3 +677,5 @@ async fn tenant_isolation() {
     })
     .await;
 }
+
+mod charts;

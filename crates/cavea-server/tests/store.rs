@@ -107,8 +107,10 @@ async fn insert_event(pool: &PgPool, event: EventId, epoch: u64) {
            SELECT gen_random_uuid(), id, 'chart', 'Chart', '{}' FROM ws RETURNING id
          ), cv AS (
            INSERT INTO chart_versions
-             (id, chart_id, number, hash, source, public_ccf, public_ccf_br, full_ccf, stats)
-           SELECT gen_random_uuid(), id, 1, '\\x00', '{}', '', '', '', '{}' FROM ch RETURNING id
+             (id, chart_id, number, hash, full_hash, source, public_ccf, public_ccf_br,
+              full_ccf, stats)
+           SELECT gen_random_uuid(), id, 1, '\\x00', '\\x00', '{}', '', '', '', '{}'
+             FROM ch RETURNING id
          )
          INSERT INTO events (id, workspace_id, key, chart_version_id, owner_epoch)
          SELECT $1::uuid, ws.id, 'event', cv.id, $2 FROM ws, cv",
@@ -797,23 +799,23 @@ async fn migrations_apply_once_and_refuse_an_unknown_schema() {
         a.unwrap();
         b.unwrap();
         let pool = store::connect(options.clone(), 2).await.unwrap();
-        assert_eq!(migration_rows(&pool).await, [1]);
+        assert_eq!(migration_rows(&pool).await, [1, 2]);
         // Again: nothing to do.
         store::migrate(&options).await.unwrap();
-        assert_eq!(migration_rows(&pool).await, [1]);
+        assert_eq!(migration_rows(&pool).await, [1, 2]);
 
         // A migration from a newer server.
         sqlx::query(
             "INSERT INTO cavea_migrations (version, description, success, checksum, execution_time)
-             VALUES (2, 'future', true, '\\x00', 0)",
+             VALUES (3, 'future', true, '\\x00', 0)",
         )
         .execute(&pool)
         .await
         .unwrap();
         let err = store::migrate(&options).await.unwrap_err();
-        assert!(matches!(err, MigrationError::Newer(2)), "{err}");
+        assert!(matches!(err, MigrationError::Newer(3)), "{err}");
         assert!(err.to_string().contains("newer"), "{err}");
-        sqlx::query("DELETE FROM cavea_migrations WHERE version = 2")
+        sqlx::query("DELETE FROM cavea_migrations WHERE version = 3")
             .execute(&pool)
             .await
             .unwrap();
