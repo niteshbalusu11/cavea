@@ -12,12 +12,15 @@
 //! - `build-designer`: build `cavea-designer` the same way into
 //!   `packages/designer-core/wasm/` and print its sizes; not gated.
 //! - `types [--check]`: write the TypeScript types generated from the Rust
-//!   definitions (`types.rs`), or fail if the committed ones are stale.
+//!   definitions (`types.rs`) and the console's API types generated from the
+//!   server's OpenAPI document (`api.rs`), or fail if the committed ones are
+//!   stale.
 //! - `check-deps`: enforce the workspace dependency rule from
 //!   `docs/01-architecture.md` §3.
 //! - `determinism`: run the tests that pin compiled hashes natively and for
 //!   wasm32 under bun (`docs/13-testing-benchmarks.md` §4).
 
+mod api;
 mod determinism;
 mod types;
 

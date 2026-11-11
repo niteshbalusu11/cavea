@@ -64,23 +64,28 @@ const TARGETS: &[Target] = &[DESIGNER];
 pub fn write(check: bool) -> Result<()> {
     let root = super::root();
     let mut stale = Vec::new();
+    let mut outputs = Vec::new();
     for target in TARGETS {
         let (typescript, schema) = generate(&root, target)?;
-        for (path, text) in [(target.typescript, typescript), (target.schema, schema)] {
-            let file = root.join(path);
-            let old = fs::read_to_string(&file).unwrap_or_default();
-            if old == text {
-                continue;
+        outputs.push((target.typescript, typescript));
+        outputs.push((target.schema, schema));
+    }
+    // The console's API types, from the server's OpenAPI document (`api.rs`).
+    outputs.push((crate::api::OUTPUT, crate::api::generate(&root)?));
+    for (path, text) in outputs {
+        let file = root.join(path);
+        let old = fs::read_to_string(&file).unwrap_or_default();
+        if old == text {
+            continue;
+        }
+        if check {
+            stale.push(path);
+        } else {
+            if let Some(dir) = file.parent() {
+                fs::create_dir_all(dir)?;
             }
-            if check {
-                stale.push(path);
-            } else {
-                if let Some(dir) = file.parent() {
-                    fs::create_dir_all(dir)?;
-                }
-                fs::write(&file, text).with_context(|| format!("cannot write {path}"))?;
-                println!("wrote {path}");
-            }
+            fs::write(&file, text).with_context(|| format!("cannot write {path}"))?;
+            println!("wrote {path}");
         }
     }
     ensure!(
