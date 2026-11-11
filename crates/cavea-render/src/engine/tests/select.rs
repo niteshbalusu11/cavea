@@ -27,7 +27,7 @@ fn hall() -> E {
 
 fn seat_pos(e: &E, idx: u32) -> [f64; 2] {
     let [x, y] = e.scene.as_ref().unwrap().scene.pos[idx as usize];
-    cam(e).to_screen([f64::from(x), f64::from(y)], SIZE)
+    cam(e).to_screen([f64::from(x), f64::from(y)], e.viewport.unwrap().css)
 }
 
 fn click(e: &mut E, ty: PointerType, [x, y]: [f64; 2], t: f64) -> Vec<Event> {
@@ -407,6 +407,62 @@ fn hover_emits_and_draws_only_on_change() {
     assert!(hovered(&tick(&mut e, 700.0)).is_empty());
     let events = click(&mut e, TOUCH, [5.0, 5.0], 2000.0);
     assert_eq!(hovered(&events), [None]);
+}
+
+/// The label of the hall seat a mouse at `at` is over, by brute force over
+/// the seats on screen (size 40, mouse tolerance up to the half size).
+fn under(e: &E, at: [f64; 2]) -> Option<String> {
+    let reach = (20.0 * cam(e).zoom).max(4.0);
+    let d = |i: u32| {
+        let p = seat_pos(e, i);
+        ((p[0] - at[0]).powi(2) + (p[1] - at[1]).powi(2)).sqrt()
+    };
+    let idx = (0..20)
+        .filter(|&i| d(i) <= reach)
+        .min_by(|&a, &b| d(a).total_cmp(&d(b)))?;
+    Some(format!(
+        "S-{}-{}",
+        ["A", "B"][idx as usize / 10],
+        idx % 10 + 1
+    ))
+}
+
+#[test]
+fn hover_follows_the_pointer_after_a_drag_or_resize() {
+    // A drag the clamp stops leaves the pointer off its seat: the release
+    // hovers what is under it.
+    let mut e = hall();
+    e.handle(Command::SetReducedMotion(true));
+    let start = seat_pos(&e, 0);
+    hover(&mut e, start, 100.0);
+    let end = [start[0] + 700.0, start[1]];
+    let at = |p: [f64; 2]| p.map(|v| v as f32);
+    ptr(&mut e, Down, 1, MOUSE, at(start), 200.0);
+    ptr(&mut e, Move, 1, MOUSE, at(end), 250.0);
+    ptr(&mut e, Up, 1, MOUSE, at(end), 300.0);
+    tick(&mut e, 300.0);
+    assert_ne!(
+        under(&e, end).as_deref(),
+        Some("S-A-1"),
+        "the drag was clamped"
+    );
+    assert_eq!(e.hover.map(|i| e.info(i).label), under(&e, end));
+
+    // A resize moves the seats under a still pointer.
+    let mut e = hall();
+    let [x, y] = e.scene.as_ref().unwrap().scene.pos[3];
+    set_camera(&mut e, [x - 100.0, y - 75.0, 200.0, 150.0]);
+    tick(&mut e, 0.0);
+    let p = seat_pos(&e, 3);
+    hover(&mut e, p, 100.0);
+    assert_eq!(e.hover, Some(3));
+    let camera = cam(&e);
+    // The centre stays put, so seats shift by half the change: one pitch.
+    resize(&mut e, W + 176.0, H, 1.0, 3.0);
+    tick(&mut e, 200.0);
+    assert_eq!(cam(&e), camera, "only the viewport changed");
+    assert_ne!(under(&e, p).as_deref(), Some("S-A-4"));
+    assert_eq!(e.hover.map(|i| e.info(i).label), under(&e, p));
 }
 
 /// The stadium of the test kit plus a block of rows outside any section.

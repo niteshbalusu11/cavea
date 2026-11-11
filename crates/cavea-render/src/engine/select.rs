@@ -188,7 +188,7 @@ impl<B: GpuBackend> Engine<B> {
             .collect()
     }
 
-    fn info(&self, idx: u32) -> ObjectInfo {
+    pub(super) fn info(&self, idx: u32) -> ObjectInfo {
         let Some(loaded) = &self.scene else {
             return ObjectInfo::default();
         };

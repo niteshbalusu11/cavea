@@ -542,6 +542,7 @@ impl<B: GpuBackend> Engine<B> {
     /// arrival order, then the animation list; report the camera; draw if dirty.
     fn frame(&mut self, time_ms: f64) {
         self.frame_requested = false;
+        let css_before = self.viewport.map(|v| v.css);
         if let Some([width, height, dpr, max_dpr]) = self.resize.take() {
             let (px_width, px_height, ratio) = backing_size(width, height, dpr, max_dpr);
             let css = |v: f32| {
@@ -577,15 +578,19 @@ impl<B: GpuBackend> Engine<B> {
         self.run_actions();
         self.flush_selection();
         self.step_animations(time_ms);
-        if self.camera != self.reported {
-            self.reported = self.camera;
+        // Seats moved on screen: what is under the hover position may differ.
+        let moved = self.camera != self.reported;
+        if moved || self.viewport.map(|v| v.css) != css_before {
             if self.recogniser.pressed() {
-                // A drag moves the chart with the pointer: the hovered seat
-                // stays under it, and the last hover position is stale.
+                // A drag moves the chart with the pointer; the hover
+                // position is stale until the release reports a new one.
                 self.hover_at = None;
             } else {
                 self.rehover();
             }
+        }
+        if moved {
+            self.reported = self.camera;
             if let (Some(camera), Some(loaded)) = (self.camera, &self.scene) {
                 let seat_px = f64::from(loaded.scene.seat_size) * camera.zoom;
                 self.events.push(Event::CameraChanged {
@@ -661,9 +666,20 @@ impl<B: GpuBackend> Engine<B> {
                     pointer,
                     at,
                     time_ms,
-                } => self
-                    .recogniser
-                    .pointer(kind, id, pointer, at, time_ms, &mut self.actions),
+                } => {
+                    self.recogniser
+                        .pointer(kind, id, pointer, at, time_ms, &mut self.actions);
+                    // A mouse or pen released over the canvas hovers where it
+                    // is, which a drag may have left on another seat.
+                    if kind == PointerKind::Up
+                        && pointer != PointerType::Touch
+                        && !self.recogniser.pressed()
+                    {
+                        self.run_actions();
+                        self.hover_at = Some(at);
+                        self.rehover();
+                    }
+                }
                 Queued::Wheel {
                     delta,
                     at,
