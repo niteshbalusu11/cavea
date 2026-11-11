@@ -1,15 +1,18 @@
 //! The event's in-memory state and the synchronous state machine (08 §4.1,
-//! §7.1). No I/O, no clock, no runtime: the caller supplies `now`, and
+//! §7). No I/O, no clock, no runtime: the caller supplies `now`, and
 //! [`EventState::take_batch`] hands over what must be committed.
 
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 
 use crate::chart::ChartView;
-use crate::store::{Batch, HoldRow, LoadedEvent, LogRecord, ObjectRow};
+use crate::idempotency::{Lookup, Window};
+use crate::store::{Batch, Booking, HoldRow, IdempotencyRecord, LoadedEvent, LogRecord, ObjectRow};
 use crate::types::{
-    Command, EventId, Failure, HoldId, Idx, InvalidReason, Missing, ObjectFailure, ObjectReason,
-    ObjectRef, Oid, Op, Outcome, Reply, Status, Timestamp, TokenHash, limits,
+    BookDetail, Command, EventId, Failure, HoldId, Idx, InvalidReason, Missing, ObjectFailure,
+    ObjectReason, ObjectRef, Oid, Op, Outcome, Reply, Request, Status, Timestamp, TokenHash,
+    limits,
 };
 
 /// Memory no longer matches what the engine guarantees. The actor must stop
@@ -66,11 +69,13 @@ pub struct HoldView<'a> {
 /// Changes applied to memory since the last [`EventState::take_batch`].
 #[derive(Debug, Default)]
 struct Pending {
-    /// `holds.len()` when this batch opened; later slots were created in it.
-    holds_before: usize,
-    extended: Vec<u32>,
+    /// Holds created, extended or deleted, with the slot each was in.
+    holds: Vec<(HoldId, u32)>,
+    /// Holds created in this batch.
+    created: Vec<HoldId>,
     objects: Vec<(Idx, u64)>,
     log: Vec<LogRecord>,
+    idempotency: Vec<IdempotencyRecord>,
 }
 
 /// One event's seat state.
@@ -82,9 +87,16 @@ pub struct EventState {
     status: Vec<u8>,
     /// Per `idx`: hold slot + 1, or 0.
     holder: Vec<u32>,
-    /// By slot. Holds are not deleted until expiry exists (ENG-008).
-    holds: Vec<Hold>,
+    /// By slot; a deleted hold leaves `None` until the slot is reused.
+    holds: Vec<Option<Hold>>,
+    free_slots: Vec<u32>,
     by_token: HashMap<TokenHash, u32>,
+    /// `(expires_at, id, slot)`. Entries whose hold was deleted or extended
+    /// are stale and skipped when they surface.
+    expiry: BinaryHeap<Reverse<(Timestamp, HoldId, u32)>>,
+    /// Booking data, only for booked objects: free seats cost nothing.
+    booked: HashMap<Idx, Booking>,
+    window: Window,
     seq: u64,
     epoch: u64,
     pending: Pending,
@@ -111,8 +123,18 @@ fn corrupt(why: &'static str) -> InvariantViolation {
     InvariantViolation(why)
 }
 
+/// What a command does to one object it names.
+enum Check {
+    /// Already in the target state: a no-op for this object.
+    Skip,
+    Change,
+    Fail(ObjectReason),
+}
+
 impl EventState {
-    /// Build the state from what the store holds (08 §4.7 step 3).
+    /// Build the state from what the store holds (08 §4.7 steps 3 and 4).
+    /// Holds already past their expiry are scheduled and expire on the next
+    /// [`Self::apply`] or [`Self::expire_due`].
     pub fn restore(
         event: EventId,
         chart: Arc<ChartView>,
@@ -125,7 +147,11 @@ impl EventState {
             status: vec![Status::FREE.code(); n],
             holder: vec![0; n],
             holds: Vec::with_capacity(loaded.holds.len()),
+            free_slots: Vec::new(),
             by_token: HashMap::with_capacity(loaded.holds.len()),
+            expiry: BinaryHeap::with_capacity(loaded.holds.len()),
+            booked: HashMap::new(),
+            window: Window::restore(loaded.idempotency),
             seq: loaded.seq,
             epoch: loaded.epoch,
             pending: Pending::default(),
@@ -141,13 +167,14 @@ impl EventState {
             {
                 return Err(LoadError::Inconsistent("duplicate hold"));
             }
-            state.holds.push(Hold {
+            state.expiry.push(Reverse((row.expires_at, row.id, slot)));
+            state.holds.push(Some(Hold {
                 id: row.id,
                 token: row.token_hash,
                 expires_at: row.expires_at,
                 max_objects: row.max_objects,
                 objects: Vec::new(),
-            });
+            }));
         }
         for row in loaded.objects {
             let idx = state
@@ -160,7 +187,7 @@ impl EventState {
                     let slot = *slot_of
                         .get(&id)
                         .ok_or(LoadError::Inconsistent("object held by unknown hold"))?;
-                    if let (Some(h), Some(hold)) =
+                    if let (Some(h), Some(Some(hold))) =
                         (state.holder.get_mut(i), state.holds.get_mut(slot as usize))
                     {
                         *h = slot + 1;
@@ -170,11 +197,17 @@ impl EventState {
                 (false, None) => {}
                 _ => return Err(LoadError::Inconsistent("hold_id does not match status")),
             }
+            match (row.status == Status::BOOKED, row.booking) {
+                (true, Some(booking)) => {
+                    state.booked.insert(idx, booking);
+                }
+                (false, None) => {}
+                _ => return Err(LoadError::Inconsistent("booking does not match status")),
+            }
             if let Some(s) = state.status.get_mut(i) {
                 *s = row.status.code();
             }
         }
-        state.pending.holds_before = state.holds.len();
         Ok(state)
     }
 
@@ -205,29 +238,111 @@ impl EventState {
     #[must_use]
     pub fn holder(&self, idx: Idx) -> Option<HoldId> {
         let slot = self.holder.get(idx as usize)?.checked_sub(1)?;
-        self.holds.get(slot as usize).map(|h| h.id)
+        self.slot(slot).map(|h| h.id)
+    }
+
+    /// A booked object's order reference, ticket type and `extra`.
+    #[must_use]
+    pub fn booking(&self, idx: Idx) -> Option<&Booking> {
+        self.booked.get(&idx)
     }
 
     #[must_use]
     pub fn hold(&self, token: &TokenHash) -> Option<HoldView<'_>> {
-        let slot = *self.by_token.get(token)?;
-        self.holds.get(slot as usize).map(view)
+        self.slot(*self.by_token.get(token)?).map(view)
     }
 
     pub fn holds(&self) -> impl Iterator<Item = HoldView<'_>> {
-        self.holds.iter().map(view)
+        self.holds.iter().flatten().map(view)
     }
 
-    /// Validate `command` against memory at time `now` and, if it is accepted,
-    /// apply it to memory and record it for the next batch. An `Err` means
-    /// memory is corrupt and the state must be discarded.
+    /// When the earliest live hold expires. Drops stale schedule entries.
+    pub fn next_expiry(&mut self) -> Option<Timestamp> {
+        while let Some(&Reverse((at, id, slot))) = self.expiry.peek() {
+            if self
+                .slot(slot)
+                .is_some_and(|h| h.id == id && h.expires_at == at)
+            {
+                return Some(at);
+            }
+            self.expiry.pop();
+        }
+        None
+    }
+
+    /// Expire every hold whose expiry is at or before `now`, in expiry order
+    /// (ties by hold id). Each expiry is a command of its own: it takes a
+    /// `seq`, frees the hold's objects and deletes the hold. Returns how many
+    /// expired.
+    pub fn expire_due(&mut self, now: Timestamp) -> Result<usize, InvariantViolation> {
+        let mut expired = 0;
+        while let Some(at) = self.next_expiry() {
+            if at > now {
+                break;
+            }
+            let Some(Reverse((_, _, slot))) = self.expiry.pop() else {
+                break;
+            };
+            self.expire(slot)?;
+            expired += 1;
+        }
+        Ok(expired)
+    }
+
+    /// Apply the expiries due at `now`, then validate the request against
+    /// memory and, if it is accepted, apply it and record it for the next
+    /// batch. A request whose idempotency key is already known is answered
+    /// from its record. An `Err` means memory is corrupt and the state must be
+    /// discarded.
     pub fn apply(
+        &mut self,
+        request: &Request,
+        now: Timestamp,
+    ) -> Result<Reply, InvariantViolation> {
+        self.expire_due(now)?;
+        if let Some(key) = &request.idempotency {
+            let chars = key.key.chars().count();
+            if chars == 0 || chars > limits::MAX_IDEMPOTENCY_KEY_CHARS {
+                return Ok(Err(Failure::InvalidRequest(
+                    InvalidReason::IdempotencyKeyLength,
+                )));
+            }
+            match self.window.check(key, now) {
+                Lookup::Replay(reply) => return Ok(reply),
+                Lookup::Mismatch => return Ok(Err(Failure::IdempotencyMismatch)),
+                Lookup::Full => return Ok(Err(Failure::Overloaded)),
+                Lookup::Miss => {}
+            }
+        }
+        let reply = if request.command.permits(request.authority) {
+            match self.execute(&request.actor, &request.command, now) {
+                Ok(outcome) => Ok(outcome),
+                Err(Error::Refused(failure)) => Err(failure),
+                Err(Error::Corrupt(v)) => return Err(v),
+            }
+        } else {
+            Err(Failure::Forbidden)
+        };
+        if let Some(key) = &request.idempotency {
+            let record = IdempotencyRecord {
+                key: key.key.clone(),
+                fingerprint: key.fingerprint,
+                created_at: now,
+                reply: reply.clone(),
+            };
+            self.window.insert(record.clone());
+            self.pending.idempotency.push(record);
+        }
+        Ok(reply)
+    }
+
+    fn execute(
         &mut self,
         actor: &Arc<str>,
         command: &Command,
         now: Timestamp,
-    ) -> Result<Reply, InvariantViolation> {
-        let result = match command {
+    ) -> Result<Outcome, Error> {
+        match command {
             Command::CreateHold {
                 token,
                 ttl_secs,
@@ -236,23 +351,26 @@ impl EventState {
             Command::Hold { token, objects } => self.hold_objects(actor, token, objects, now),
             Command::Release { token, objects } => self.release(actor, token, objects, now),
             Command::ExtendHold { token, ttl_secs } => self.extend(actor, token, *ttl_secs, now),
-        };
-        match result {
-            Ok(outcome) => Ok(Ok(outcome)),
-            Err(Error::Refused(failure)) => Ok(Err(failure)),
-            Err(Error::Corrupt(v)) => Err(v),
+            Command::Book {
+                token,
+                objects,
+                order_ref,
+                details,
+            } => self.book(actor, token.as_ref(), objects, order_ref, details, now),
+            Command::ReleaseBooked { objects } => self.release_booked(actor, objects),
+            Command::ChangeStatus { objects, status } => {
+                self.change_status(actor, objects, *status)
+            }
         }
     }
 
     /// Seal everything applied since the last call into one batch, or `None`
-    /// if no command changed anything.
+    /// if nothing needs writing.
     pub fn take_batch(&mut self) -> Result<Option<Batch>, InvariantViolation> {
         let pending = std::mem::take(&mut self.pending);
-        self.pending.holds_before = self.holds.len();
-        let Some(last) = pending.log.last() else {
+        if pending.log.is_empty() && pending.idempotency.is_empty() {
             return Ok(None);
-        };
-        let seq = last.seq;
+        }
 
         let mut objects = pending.objects;
         objects.sort_unstable();
@@ -271,44 +389,44 @@ impl EventState {
                     oid,
                     status,
                     hold_id: self.holder(idx),
+                    booking: self.booked.get(&idx).cloned(),
                     seq: obj_seq,
                 });
             }
         }
 
-        let holds_created = self
-            .holds
-            .get(pending.holds_before..)
-            .ok_or(corrupt("holds shrank"))?
-            .iter()
-            .map(|h| HoldRow {
-                id: h.id,
-                token_hash: h.token,
-                expires_at: h.expires_at,
-                max_objects: h.max_objects,
-            })
-            .collect();
-        let mut extended = pending.extended;
-        extended.sort_unstable();
-        extended.dedup();
-        let mut holds_extended = Vec::new();
-        for slot in extended {
-            if (slot as usize) < pending.holds_before {
-                let h = self.holds.get(slot as usize).ok_or(corrupt("bad slot"))?;
-                holds_extended.push((h.id, h.expires_at));
+        let mut created = pending.created;
+        created.sort_unstable();
+        let mut touched = pending.holds;
+        touched.sort_unstable();
+        touched.dedup_by_key(|(id, _)| *id);
+        let (mut holds_created, mut holds_extended, mut holds_deleted) = (vec![], vec![], vec![]);
+        for (id, slot) in touched {
+            let live = self.slot(slot).filter(|h| h.id == id);
+            match (created.binary_search(&id).is_ok(), live) {
+                (true, Some(h)) => holds_created.push(HoldRow {
+                    id,
+                    token_hash: h.token,
+                    expires_at: h.expires_at,
+                    max_objects: h.max_objects,
+                }),
+                (false, Some(h)) => holds_extended.push((id, h.expires_at)),
+                (false, None) => holds_deleted.push(id),
+                (true, None) => {} // created and deleted in this batch
             }
         }
 
         Ok(Some(Batch {
             event: self.event,
             epoch: self.epoch,
-            seq,
+            seq: self.seq,
             holds_created,
             holds_extended,
-            holds_deleted: Vec::new(),
+            holds_deleted,
             objects_set,
             objects_freed,
             log: pending.log,
+            idempotency: pending.idempotency,
         }))
     }
 
@@ -327,16 +445,18 @@ impl EventState {
             .collect()
     }
 
+    fn slot(&self, slot: u32) -> Option<&Hold> {
+        self.holds.get(slot as usize).and_then(Option::as_ref)
+    }
+
     /// The slot of the token's hold, if it exists and has not expired.
     fn live_hold(&self, token: &TokenHash, now: Timestamp) -> Result<u32, Error> {
         let slot = *self
             .by_token
             .get(token)
             .ok_or(Failure::NotFound(Missing::HoldToken))?;
-        let hold = self
-            .holds
-            .get(slot as usize)
-            .ok_or(corrupt("token maps to no hold"))?;
+        let hold = self.slot(slot).ok_or(corrupt("token maps to no hold"))?;
+        // Unreachable after `expire_due(now)`; kept for a caller that skips it.
         if now >= hold.expires_at {
             return Err(Failure::HoldTokenExpired.into());
         }
@@ -346,13 +466,17 @@ impl EventState {
     fn hold_mut(&mut self, slot: u32) -> Result<&mut Hold, InvariantViolation> {
         self.holds
             .get_mut(slot as usize)
+            .and_then(Option::as_mut)
             .ok_or(corrupt("bad hold slot"))
     }
 
-    /// Resolve references to unique `idx`, ascending.
-    fn resolve(&self, objects: &[ObjectRef]) -> Result<Vec<Idx>, Failure> {
+    /// Resolve references in order, listing every unknown one together.
+    fn resolve_each<'a>(
+        &self,
+        objects: impl Iterator<Item = &'a ObjectRef>,
+    ) -> Result<Vec<Idx>, Failure> {
         let mut missing = Vec::new();
-        let mut idxs = Vec::with_capacity(objects.len());
+        let mut idxs = Vec::new();
         for object in objects {
             match self.chart.resolve(object) {
                 Some(idx) => idxs.push(idx),
@@ -362,9 +486,40 @@ impl EventState {
         if !missing.is_empty() {
             return Err(Failure::NotFound(Missing::Objects(missing)));
         }
+        Ok(idxs)
+    }
+
+    /// Resolve references to unique `idx`, ascending.
+    fn resolve(&self, objects: &[ObjectRef]) -> Result<Vec<Idx>, Failure> {
+        let mut idxs = self.resolve_each(objects.iter())?;
         idxs.sort_unstable();
         idxs.dedup();
         Ok(idxs)
+    }
+
+    /// All-or-nothing validation (02 §4.3): classify every object by its status
+    /// and holder slot (+1, or 0). Returns the objects to change, or a refusal
+    /// listing every failing object.
+    fn check(&self, idxs: &[Idx], rule: impl Fn(Status, u32) -> Check) -> Result<Vec<Idx>, Error> {
+        let mut failed = Vec::new();
+        let mut change = Vec::new();
+        for &idx in idxs {
+            let i = idx as usize;
+            let status = self.status(idx).ok_or(corrupt("idx outside state"))?;
+            let holder = *self.holder.get(i).ok_or(corrupt("idx outside state"))?;
+            if (holder != 0) != (status == Status::HELD) {
+                return Err(corrupt("holder does not match status").into());
+            }
+            match rule(status, holder) {
+                Check::Skip => {}
+                Check::Change => change.push(idx),
+                Check::Fail(reason) => failed.push(ObjectFailure { idx, reason }),
+            }
+        }
+        match failed.first() {
+            Some(first) => Err(first.reason.failure(failed).into()),
+            None => Ok(change),
+        }
     }
 
     fn create_hold(
@@ -382,11 +537,20 @@ impl EventState {
         if self.by_token.contains_key(&token) {
             return Err(Failure::InvalidRequest(InvalidReason::TokenAlreadyExists).into());
         }
-        let slot = u32::try_from(self.holds.len()).map_err(|_| corrupt("too many holds"))?;
+        let slot = match self.free_slots.pop() {
+            Some(slot) => slot,
+            None => {
+                self.holds.push(None);
+                u32::try_from(self.holds.len() - 1).map_err(|_| corrupt("too many holds"))?
+            }
+        };
         let seq = self.next_seq();
         let id = HoldId(seq);
         let expires_at = now.plus_secs(ttl_secs);
-        self.holds.push(Hold {
+        *self
+            .holds
+            .get_mut(slot as usize)
+            .ok_or(corrupt("bad hold slot"))? = Some(Hold {
             id,
             token,
             expires_at,
@@ -394,13 +558,12 @@ impl EventState {
             objects: Vec::new(),
         });
         self.by_token.insert(token, slot);
+        self.expiry.push(Reverse((expires_at, id, slot)));
+        self.pending.holds.push((id, slot));
+        self.pending.created.push(id);
         self.log(LogRecord {
-            seq,
-            op: Op::CreateHold,
-            actor: actor.clone(),
-            hold_id: Some(id),
-            oids: Vec::new(),
             expires_at: Some(expires_at),
+            ..record(seq, Op::CreateHold, actor, Some(id), Vec::new())
         });
         Ok(Outcome::HoldCreated {
             seq,
@@ -419,28 +582,15 @@ impl EventState {
         check_count(objects)?;
         let slot = self.live_hold(token, now)?;
         let idxs = self.resolve(objects)?;
-        let mut failed = Vec::new();
-        let mut new = Vec::new();
-        for &idx in &idxs {
-            let i = idx as usize;
-            let status = *self.status.get(i).ok_or(corrupt("idx outside state"))?;
-            let holder = *self.holder.get(i).ok_or(corrupt("idx outside state"))?;
+        let new = self.check(&idxs, |status, holder| {
             if holder == slot + 1 {
-                if status != Status::HELD.code() {
-                    return Err(corrupt("holder set on an object that is not held").into());
-                }
-            } else if status != Status::FREE.code() {
-                failed.push(ObjectFailure {
-                    idx,
-                    reason: ObjectReason::NotFree,
-                });
+                Check::Skip
+            } else if status == Status::FREE {
+                Check::Change
             } else {
-                new.push(idx);
+                Check::Fail(ObjectReason::NotFree)
             }
-        }
-        if !failed.is_empty() {
-            return Err(Failure::ObjectNotFree(failed).into());
-        }
+        })?;
         let hold = self.hold_mut(slot)?;
         let (id, expires_at) = (hold.id, hold.expires_at);
         if let Some(limit) = hold.max_objects {
@@ -460,16 +610,9 @@ impl EventState {
         let oids = self.oids(&new)?;
         let seq = self.next_seq();
         for &idx in &new {
-            self.set_object(idx, Status::HELD, slot + 1, seq)?;
+            self.set_object(idx, Status::HELD, slot + 1, None, seq)?;
         }
-        self.log(LogRecord {
-            seq,
-            op: Op::Hold,
-            actor: actor.clone(),
-            hold_id: Some(id),
-            oids,
-            expires_at: None,
-        });
+        self.log(record(seq, Op::Hold, actor, Some(id), oids));
         Ok(Outcome::Held {
             seq,
             expires_at,
@@ -489,23 +632,10 @@ impl EventState {
         }
         let slot = self.live_hold(token, now)?;
         let idxs = if objects.is_empty() {
-            let mut all = self.hold_mut(slot)?.objects.clone();
-            all.sort_unstable();
-            all
+            self.objects_of(slot)?
         } else {
             let idxs = self.resolve(objects)?;
-            let failed: Vec<_> = idxs
-                .iter()
-                .filter(|&&idx| self.holder.get(idx as usize) != Some(&(slot + 1)))
-                .map(|&idx| ObjectFailure {
-                    idx,
-                    reason: ObjectReason::NotHeldByToken,
-                })
-                .collect();
-            if !failed.is_empty() {
-                return Err(Failure::ObjectNotHeldByToken(failed).into());
-            }
-            idxs
+            self.check(&idxs, |_, holder| held_by(holder, slot))?
         };
         if idxs.is_empty() {
             return Ok(Outcome::Released {
@@ -516,19 +646,12 @@ impl EventState {
         let oids = self.oids(&idxs)?;
         let seq = self.next_seq();
         for &idx in &idxs {
-            self.set_object(idx, Status::FREE, 0, seq)?;
+            self.set_object(idx, Status::FREE, 0, None, seq)?;
         }
         let hold = self.hold_mut(slot)?;
         hold.objects.retain(|i| idxs.binary_search(i).is_err());
         let id = hold.id;
-        self.log(LogRecord {
-            seq,
-            op: Op::Release,
-            actor: actor.clone(),
-            hold_id: Some(id),
-            oids,
-            expires_at: None,
-        });
+        self.log(record(seq, Op::Release, actor, Some(id), oids));
         Ok(Outcome::Released { seq, objects: idxs })
     }
 
@@ -546,16 +669,223 @@ impl EventState {
         let hold = self.hold_mut(slot)?;
         hold.expires_at = expires_at;
         let id = hold.id;
-        self.pending.extended.push(slot);
+        // The old entry is now stale and is skipped when it surfaces.
+        self.expiry.push(Reverse((expires_at, id, slot)));
+        self.pending.holds.push((id, slot));
         self.log(LogRecord {
-            seq,
-            op: Op::ExtendHold,
-            actor: actor.clone(),
-            hold_id: Some(id),
-            oids: Vec::new(),
             expires_at: Some(expires_at),
+            ..record(seq, Op::ExtendHold, actor, Some(id), Vec::new())
         });
         Ok(Outcome::Extended { seq, expires_at })
+    }
+
+    fn book(
+        &mut self,
+        actor: &Arc<str>,
+        token: Option<&TokenHash>,
+        objects: &[ObjectRef],
+        order_ref: &Arc<str>,
+        details: &[BookDetail],
+        now: Timestamp,
+    ) -> Result<Outcome, Error> {
+        if objects.len() > limits::MAX_OBJECTS_PER_COMMAND
+            || details.len() > limits::MAX_OBJECTS_PER_COMMAND
+        {
+            return Err(Failure::InvalidRequest(InvalidReason::TooManyObjects).into());
+        }
+        if token.is_none() && objects.is_empty() {
+            return Err(Failure::InvalidRequest(InvalidReason::NoObjects).into());
+        }
+        check_text(
+            order_ref,
+            limits::MAX_ORDER_REF_CHARS,
+            InvalidReason::OrderRefLength,
+        )?;
+        for d in details {
+            if let Some(t) = &d.ticket_type {
+                check_text(
+                    t,
+                    limits::MAX_TICKET_TYPE_CHARS,
+                    InvalidReason::TicketTypeLength,
+                )?;
+            }
+            if d.extra
+                .as_ref()
+                .is_some_and(|e| e.len() > limits::MAX_EXTRA_BYTES)
+            {
+                return Err(Failure::InvalidRequest(InvalidReason::ExtraTooLarge).into());
+            }
+        }
+        let slot = token.map(|t| self.live_hold(t, now)).transpose()?;
+        let refs = objects.iter().chain(details.iter().map(|d| &d.object));
+        let mut named = self.resolve_each(refs)?;
+        let detailed = named.split_off(objects.len());
+        named.sort_unstable();
+        named.dedup();
+        let idxs = match slot {
+            Some(slot) if named.is_empty() => self.objects_of(slot)?,
+            _ => named,
+        };
+        if idxs.is_empty() {
+            return Err(Failure::InvalidRequest(InvalidReason::NoObjects).into());
+        }
+        let mut detail_of = HashMap::with_capacity(detailed.len());
+        for (&idx, d) in detailed.iter().zip(details) {
+            if idxs.binary_search(&idx).is_err() || detail_of.insert(idx, d).is_some() {
+                return Err(Failure::InvalidRequest(InvalidReason::DetailMismatch).into());
+            }
+        }
+        match slot {
+            Some(slot) => self.check(&idxs, |_, holder| held_by(holder, slot))?,
+            None => self.check(&idxs, |status, _| {
+                if status == Status::FREE {
+                    Check::Change
+                } else {
+                    Check::Fail(ObjectReason::NotFree)
+                }
+            })?,
+        };
+        let oids = self.oids(&idxs)?;
+        let seq = self.next_seq();
+        for &idx in &idxs {
+            let detail = detail_of.get(&idx);
+            let booking = Booking {
+                order_ref: order_ref.clone(),
+                ticket_type: detail.and_then(|d| d.ticket_type.clone()),
+                extra: detail.and_then(|d| d.extra.clone()),
+            };
+            self.set_object(idx, Status::BOOKED, 0, Some(booking), seq)?;
+        }
+        let mut hold_id = None;
+        if let Some(slot) = slot {
+            let hold = self.hold_mut(slot)?;
+            hold.objects.retain(|i| idxs.binary_search(i).is_err());
+            hold_id = Some(hold.id);
+            if hold.objects.is_empty() {
+                self.delete_hold(slot)?;
+            }
+        }
+        self.log(LogRecord {
+            order_ref: Some(order_ref.clone()),
+            ..record(seq, Op::Book, actor, hold_id, oids)
+        });
+        Ok(Outcome::Booked { seq, objects: idxs })
+    }
+
+    fn release_booked(
+        &mut self,
+        actor: &Arc<str>,
+        objects: &[ObjectRef],
+    ) -> Result<Outcome, Error> {
+        check_count(objects)?;
+        let idxs = self.resolve(objects)?;
+        self.check(&idxs, |status, _| {
+            if status == Status::BOOKED {
+                Check::Change
+            } else {
+                Check::Fail(ObjectReason::NotBooked)
+            }
+        })?;
+        let oids = self.oids(&idxs)?;
+        let seq = self.next_seq();
+        for &idx in &idxs {
+            self.set_object(idx, Status::FREE, 0, None, seq)?;
+        }
+        self.log(record(seq, Op::Release, actor, None, oids));
+        Ok(Outcome::Released { seq, objects: idxs })
+    }
+
+    /// Free → blocked or custom, or blocked or custom → free. Any other change
+    /// (blocked → custom directly, or anything involving held or booked) is
+    /// refused per object.
+    fn change_status(
+        &mut self,
+        actor: &Arc<str>,
+        objects: &[ObjectRef],
+        target: Status,
+    ) -> Result<Outcome, Error> {
+        check_count(objects)?;
+        if target == Status::HELD || target == Status::BOOKED {
+            return Err(Failure::InvalidRequest(InvalidReason::BadStatus).into());
+        }
+        let idxs = self.resolve(objects)?;
+        let change = self.check(&idxs, |status, _| {
+            if status == target {
+                Check::Skip
+            } else if target == Status::FREE {
+                if status == Status::HELD || status == Status::BOOKED {
+                    Check::Fail(ObjectReason::NotBlocked)
+                } else {
+                    Check::Change
+                }
+            } else if status == Status::FREE {
+                Check::Change
+            } else {
+                Check::Fail(ObjectReason::NotFree)
+            }
+        })?;
+        if change.is_empty() {
+            return Ok(Outcome::StatusChanged {
+                seq: self.seq,
+                objects: idxs,
+            });
+        }
+        let oids = self.oids(&change)?;
+        let seq = self.next_seq();
+        for &idx in &change {
+            self.set_object(idx, target, 0, None, seq)?;
+        }
+        self.log(LogRecord {
+            status: Some(target),
+            ..record(seq, Op::ChangeStatus, actor, None, oids)
+        });
+        Ok(Outcome::StatusChanged { seq, objects: idxs })
+    }
+
+    /// The internal `Expire` command (08 §7.3) for the hold in `slot`.
+    fn expire(&mut self, slot: u32) -> Result<(), InvariantViolation> {
+        let hold = self.hold_mut(slot)?;
+        let id = hold.id;
+        let mut idxs = std::mem::take(&mut hold.objects);
+        idxs.sort_unstable();
+        let oids = self.oids(&idxs)?;
+        let seq = self.next_seq();
+        for &idx in &idxs {
+            self.set_object(idx, Status::FREE, 0, None, seq)?;
+        }
+        self.delete_hold(slot)?;
+        // The `hold.expired` webhook outbox row (statement 7) belongs here.
+        self.log(record(
+            seq,
+            Op::Expire,
+            &Arc::from("system"),
+            Some(id),
+            oids,
+        ));
+        Ok(())
+    }
+
+    /// The hold's objects, ascending.
+    fn objects_of(&mut self, slot: u32) -> Result<Vec<Idx>, InvariantViolation> {
+        let mut all = self.hold_mut(slot)?.objects.clone();
+        all.sort_unstable();
+        Ok(all)
+    }
+
+    /// Remove a hold whose objects have all left it.
+    fn delete_hold(&mut self, slot: u32) -> Result<(), InvariantViolation> {
+        let hold = self
+            .holds
+            .get_mut(slot as usize)
+            .and_then(Option::take)
+            .ok_or(corrupt("bad hold slot"))?;
+        if !hold.objects.is_empty() {
+            return Err(corrupt("deleted a hold that still has objects"));
+        }
+        self.by_token.remove(&hold.token);
+        self.free_slots.push(slot);
+        self.pending.holds.push((hold.id, slot));
+        Ok(())
     }
 
     fn set_object(
@@ -563,16 +893,54 @@ impl EventState {
         idx: Idx,
         status: Status,
         holder: u32,
+        booking: Option<Booking>,
         seq: u64,
     ) -> Result<(), InvariantViolation> {
         let i = idx as usize;
         let (Some(s), Some(h)) = (self.status.get_mut(i), self.holder.get_mut(i)) else {
             return Err(corrupt("idx outside state"));
         };
+        let was_booked = *s == Status::BOOKED.code();
         *s = status.code();
         *h = holder;
+        match booking {
+            Some(b) => {
+                self.booked.insert(idx, b);
+            }
+            None if was_booked => {
+                self.booked.remove(&idx);
+            }
+            None => {}
+        }
         self.pending.objects.push((idx, seq));
         Ok(())
+    }
+}
+
+fn record(
+    seq: u64,
+    op: Op,
+    actor: &Arc<str>,
+    hold_id: Option<HoldId>,
+    oids: Vec<Oid>,
+) -> LogRecord {
+    LogRecord {
+        seq,
+        op,
+        actor: actor.clone(),
+        hold_id,
+        oids,
+        expires_at: None,
+        order_ref: None,
+        status: None,
+    }
+}
+
+fn held_by(holder: u32, slot: u32) -> Check {
+    if holder == slot + 1 {
+        Check::Change
+    } else {
+        Check::Fail(ObjectReason::NotHeldByToken)
     }
 }
 
@@ -591,6 +959,15 @@ fn check_ttl(ttl_secs: u32) -> Result<(), Failure> {
         Ok(())
     } else {
         Err(Failure::InvalidRequest(InvalidReason::TtlOutOfRange))
+    }
+}
+
+fn check_text(text: &str, max_chars: usize, reason: InvalidReason) -> Result<(), Failure> {
+    let chars = text.chars().count();
+    if chars == 0 || chars > max_chars {
+        Err(Failure::InvalidRequest(reason))
+    } else {
+        Ok(())
     }
 }
 

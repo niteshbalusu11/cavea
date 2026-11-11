@@ -9,9 +9,10 @@
 use std::sync::Arc;
 
 use cavea_engine::{
-    ActorConfig, ActorError, ChartView, Command, EventId, EventState, Failure, Fault, HoldId, Idx,
-    LoadedEvent, ManualClock, MemoryStore, Missing, ObjectFailure, ObjectReason, ObjectRef,
-    Outcome, Request, SeatStore, Status, StoreError, Timestamp, TokenHash, actor,
+    ActorConfig, ActorError, Authority, Batch, BookDetail, Booking, ChartView, Command, EventId,
+    EventState, Failure, Fault, HoldId, Idempotency, Idx, InvalidReason, LoadedEvent, ManualClock,
+    MemoryStore, Missing, ObjectFailure, ObjectReason, ObjectRef, Op, Outcome, Request, SeatStore,
+    Status, StoreError, Timestamp, TokenHash, actor, limits,
 };
 use tokio::sync::oneshot;
 
@@ -28,6 +29,7 @@ fn empty_state(n: u32) -> EventState {
         seq: 0,
         holds: vec![],
         objects: vec![],
+        idempotency: vec![],
     };
     EventState::restore(EVENT, chart(n), loaded).unwrap()
 }
@@ -64,27 +66,69 @@ fn release(t: u8, idxs: &[u32]) -> Command {
     }
 }
 
+fn book(t: Option<u8>, idxs: &[u32], order: &str) -> Command {
+    Command::Book {
+        token: t.map(tok),
+        objects: labels(idxs),
+        order_ref: order.into(),
+        details: vec![],
+    }
+}
+
+fn change(idxs: &[u32], code: u8) -> Command {
+    Command::ChangeStatus {
+        objects: labels(idxs),
+        status: Status::from_code(code).unwrap(),
+    }
+}
+
+fn detail(idx: u32, ticket_type: &str) -> BookDetail {
+    BookDetail {
+        object: ObjectRef::Idx(idx),
+        ticket_type: Some(ticket_type.into()),
+        extra: None,
+    }
+}
+
 fn req(command: Command) -> Request {
     Request {
-        actor: "pk_test".into(),
+        actor: "sk_test".into(),
+        authority: Authority::Secret,
         command,
+        idempotency: None,
+    }
+}
+
+fn keyed(command: Command, key: &str, fingerprint: u8) -> Request {
+    Request {
+        idempotency: Some(Idempotency {
+            key: key.into(),
+            fingerprint: [fingerprint; 32],
+        }),
+        ..req(command)
     }
 }
 
 fn run(s: &mut EventState, c: Command, now: Timestamp) -> Result<Outcome, Failure> {
-    s.apply(&"pk_test".into(), &c, now).unwrap()
+    s.apply(&req(c), now).unwrap()
+}
+
+fn not(reason: ObjectReason, idxs: &[u32]) -> Vec<ObjectFailure> {
+    idxs.iter()
+        .map(|&idx| ObjectFailure { idx, reason })
+        .collect()
 }
 
 type Fingerprint = (
     u64,
-    Vec<(Option<Status>, Option<HoldId>)>,
+    Vec<(Option<Status>, Option<HoldId>, Option<Booking>)>,
     Vec<(HoldId, Timestamp, Option<u32>, Vec<Idx>)>,
 );
 
 /// Everything observable about the state, in a comparable order.
 fn fingerprint(s: &EventState) -> Fingerprint {
     let objects = (0..s.chart().len() as u32)
-        .map(|i| (s.status(i), s.holder(i)))
+        .map(|i| (s.status(i), s.holder(i), s.booking(i).cloned()))
         .collect();
     let mut holds: Vec<_> = s
         .holds()
@@ -98,22 +142,28 @@ fn fingerprint(s: &EventState) -> Fingerprint {
     (s.seq(), objects, holds)
 }
 
-/// INV-1 and INV-2 (no expiry yet): every object is free or held, and held
-/// exactly when it is listed under exactly one hold, the one it names.
-fn check_invariants(s: &EventState) {
+/// INV-1 and INV-2 at time `now`: every object has one valid status; it is
+/// held exactly when it is listed under exactly one hold, which is unexpired
+/// and the one it names; it carries booking data exactly when booked.
+fn check_invariants(s: &EventState, now: Timestamp) {
+    for h in s.holds() {
+        assert!(h.expires_at > now, "hold {:?} outlived its expiry", h.id);
+        assert!(h.max_objects.is_none_or(|m| h.objects.len() <= m as usize));
+    }
     for i in 0..s.chart().len() as u32 {
         let listed: Vec<_> = s.holds().filter(|h| h.objects.contains(&i)).collect();
-        match s.status(i) {
-            Some(Status::FREE) => assert!(listed.is_empty() && s.holder(i).is_none()),
-            Some(Status::HELD) => {
-                assert_eq!(listed.len(), 1, "object {i} under {} holds", listed.len());
-                assert_eq!(s.holder(i), Some(listed[0].id));
-            }
-            other => panic!("object {i} has status {other:?}"),
+        let status = s.status(i).unwrap();
+        assert_eq!(
+            s.booking(i).is_some(),
+            status == Status::BOOKED,
+            "object {i}"
+        );
+        if status == Status::HELD {
+            assert_eq!(listed.len(), 1, "object {i} under {} holds", listed.len());
+            assert_eq!(s.holder(i), Some(listed[0].id));
+        } else {
+            assert!(listed.is_empty() && s.holder(i).is_none(), "object {i}");
         }
-    }
-    for h in s.holds() {
-        assert!(h.max_objects.is_none_or(|m| h.objects.len() <= m as usize));
     }
 }
 
@@ -126,13 +176,9 @@ fn hold_is_all_or_nothing_with_per_object_reasons() {
     let before = fingerprint(&s);
 
     let refused = run(&mut s, hold(2, &[0, 1, 2, 3]), T0);
-    let not_free = |idx| ObjectFailure {
-        idx,
-        reason: ObjectReason::NotFree,
-    };
     assert_eq!(
         refused,
-        Err(Failure::ObjectNotFree(vec![not_free(1), not_free(3)]))
+        Err(Failure::ObjectNotFree(not(ObjectReason::NotFree, &[1, 3])))
     );
     assert_eq!(fingerprint(&s), before);
 
@@ -193,10 +239,10 @@ fn token_limit_unknown_and_expired_tokens() {
         Err(Failure::NotFound(Missing::HoldToken))
     );
 
-    // Expiry is checked at processing time; the deadline itself is expired.
+    // Expiry is checked at processing time; at the deadline itself the hold
+    // has expired and is gone, its objects free.
     let deadline = T0.plus_secs(900);
     assert!(run(&mut s, hold(1, &[1]), Timestamp(deadline.0 - 1)).is_ok());
-    let before = fingerprint(&s);
     for c in [
         hold(1, &[2]),
         release(1, &[0]),
@@ -204,10 +250,15 @@ fn token_limit_unknown_and_expired_tokens() {
             token: tok(1),
             ttl_secs: 600,
         },
+        book(Some(1), &[], "o"),
     ] {
-        assert_eq!(run(&mut s, c, deadline), Err(Failure::HoldTokenExpired));
+        assert_eq!(
+            run(&mut s, c, deadline),
+            Err(Failure::NotFound(Missing::HoldToken))
+        );
     }
-    assert_eq!(fingerprint(&s), before);
+    assert_eq!(s.status(0), Some(Status::FREE));
+    assert_eq!(s.status(1), Some(Status::FREE));
 }
 
 #[test]
@@ -221,16 +272,10 @@ fn release_and_extend() {
     let before = fingerprint(&s);
     assert_eq!(
         run(&mut s, release(1, &[1, 3, 4]), T0),
-        Err(Failure::ObjectNotHeldByToken(vec![
-            ObjectFailure {
-                idx: 3,
-                reason: ObjectReason::NotHeldByToken
-            },
-            ObjectFailure {
-                idx: 4,
-                reason: ObjectReason::NotHeldByToken
-            },
-        ]))
+        Err(Failure::ObjectNotHeldByToken(not(
+            ObjectReason::NotHeldByToken,
+            &[3, 4]
+        )))
     );
     assert_eq!(fingerprint(&s), before);
 
@@ -265,9 +310,7 @@ fn release_and_extend() {
             },
             later
         ),
-        Err(Failure::InvalidRequest(
-            cavea_engine::InvalidReason::TtlOutOfRange
-        ))
+        Err(Failure::InvalidRequest(InvalidReason::TtlOutOfRange))
     );
 }
 
@@ -282,10 +325,380 @@ impl Rng {
     }
 }
 
-/// Random sequences of the four commands and clock advances. After every
-/// command: INV-1 and INV-2 hold, a refusal changed nothing, and `seq` moved by
-/// at most one. Batches are committed at random points; the store rejects any
-/// `seq` gap or repeat (INV-5), and reloading from it reproduces memory.
+#[test]
+fn book_with_a_token_and_directly() {
+    let mut s = empty_state(8);
+    run(&mut s, create(1, None), T0).unwrap();
+    run(&mut s, create(2, None), T0).unwrap();
+    run(&mut s, hold(1, &[0, 1, 2]), T0).unwrap();
+    run(&mut s, hold(2, &[3]), T0).unwrap();
+    s.take_batch().unwrap();
+    let before = fingerprint(&s);
+
+    let refusals = [
+        (
+            book(Some(1), &[2, 3, 4], "A"),
+            Failure::ObjectNotHeldByToken(not(ObjectReason::NotHeldByToken, &[3, 4])),
+        ),
+        (
+            book(None, &[3, 5], "A"),
+            Failure::ObjectNotFree(not(ObjectReason::NotFree, &[3])),
+        ),
+        (
+            Command::Book {
+                token: Some(tok(1)),
+                objects: labels(&[0]),
+                order_ref: "A".into(),
+                details: vec![detail(1, "adult")],
+            },
+            Failure::InvalidRequest(InvalidReason::DetailMismatch),
+        ),
+        (
+            book(Some(1), &[0], &"x".repeat(129)),
+            Failure::InvalidRequest(InvalidReason::OrderRefLength),
+        ),
+        (
+            book(None, &[], "A"),
+            Failure::InvalidRequest(InvalidReason::NoObjects),
+        ),
+    ];
+    for (command, failure) in refusals {
+        assert_eq!(run(&mut s, command, T0), Err(failure));
+    }
+    let publishable = Request {
+        authority: Authority::Publishable,
+        ..req(book(Some(1), &[0], "A"))
+    };
+    assert_eq!(s.apply(&publishable, T0).unwrap(), Err(Failure::Forbidden));
+    assert_eq!(fingerprint(&s), before, "a refusal changed state");
+    assert_eq!(s.take_batch().unwrap(), None);
+
+    // Some of the token's objects, with a ticket type and `extra`.
+    let mut d = detail(0, "adult");
+    d.extra = Some(r#"{"seat_note":"aisle"}"#.into());
+    let named = Command::Book {
+        token: Some(tok(1)),
+        objects: labels(&[0]),
+        order_ref: "A".into(),
+        details: vec![d],
+    };
+    let reply = run(&mut s, named, T0).unwrap();
+    assert_eq!(
+        reply,
+        Outcome::Booked {
+            seq: 5,
+            objects: vec![0]
+        }
+    );
+    let booking = s.booking(0).unwrap();
+    assert_eq!(
+        (&*booking.order_ref, booking.ticket_type.as_deref()),
+        ("A", Some("adult"))
+    );
+    assert!(s.hold(&tok(1)).is_some(), "the token still holds 1 and 2");
+
+    // All the token's remaining objects: the token is deleted.
+    let reply = run(&mut s, book(Some(1), &[], "B"), T0).unwrap();
+    assert_eq!(
+        reply,
+        Outcome::Booked {
+            seq: 6,
+            objects: vec![1, 2]
+        }
+    );
+    assert!(s.hold(&tok(1)).is_none());
+    assert_eq!(
+        run(&mut s, hold(1, &[5]), T0),
+        Err(Failure::NotFound(Missing::HoldToken))
+    );
+
+    let reply = run(&mut s, book(None, &[5, 6], "C"), T0).unwrap();
+    assert_eq!(
+        reply,
+        Outcome::Booked {
+            seq: 7,
+            objects: vec![5, 6]
+        }
+    );
+
+    let batch = s.take_batch().unwrap().unwrap();
+    assert_eq!(batch.holds_deleted, vec![HoldId(1)]);
+    let rows: Vec<_> = batch
+        .objects_set
+        .iter()
+        .map(|r| (r.oid, r.status, r.booking.as_ref().map(|b| &*b.order_ref)))
+        .collect();
+    let booked = |oid, order| (oid, Status::BOOKED, Some(order));
+    assert_eq!(
+        rows,
+        vec![
+            booked(100, "A"),
+            booked(101, "B"),
+            booked(102, "B"),
+            booked(105, "C"),
+            booked(106, "C")
+        ]
+    );
+    check_invariants(&s, T0);
+}
+
+#[test]
+fn release_booked_and_change_status() {
+    let mut s = empty_state(8);
+    run(&mut s, book(None, &[0, 1], "A"), T0).unwrap();
+    run(&mut s, create(1, None), T0).unwrap();
+    run(&mut s, hold(1, &[2]), T0).unwrap();
+    let release_booked = |idxs: &[u32]| Command::ReleaseBooked {
+        objects: labels(idxs),
+    };
+
+    let before = fingerprint(&s);
+    for (command, failure) in [
+        (
+            release_booked(&[0, 2, 3]),
+            Failure::ObjectStatusConflict(not(ObjectReason::NotBooked, &[2, 3])),
+        ),
+        (
+            change(&[0], 1),
+            Failure::InvalidRequest(InvalidReason::BadStatus),
+        ),
+        (
+            change(&[1, 2, 4], 0),
+            Failure::ObjectStatusConflict(not(ObjectReason::NotBlocked, &[1, 2])),
+        ),
+    ] {
+        assert_eq!(run(&mut s, command, T0), Err(failure));
+    }
+    // INV-3: a publishable key never touches a booked object.
+    for command in [release_booked(&[0]), change(&[0], 0), change(&[5], 3)] {
+        let request = Request {
+            authority: Authority::Publishable,
+            ..req(command)
+        };
+        assert_eq!(s.apply(&request, T0).unwrap(), Err(Failure::Forbidden));
+    }
+    assert_eq!(fingerprint(&s), before, "a refusal changed state");
+
+    let reply = run(&mut s, release_booked(&[0]), T0).unwrap();
+    assert_eq!(
+        reply,
+        Outcome::Released {
+            seq: 4,
+            objects: vec![0]
+        }
+    );
+    assert_eq!((s.status(0), s.booking(0)), (Some(Status::FREE), None));
+
+    run(&mut s, change(&[3, 4], 3), T0).unwrap();
+    let again = run(&mut s, change(&[4, 3], 3), T0).unwrap();
+    assert_eq!(
+        again,
+        Outcome::StatusChanged {
+            seq: 5,
+            objects: vec![3, 4]
+        }
+    );
+    run(&mut s, change(&[5], 15), T0).unwrap();
+    assert_eq!(s.status(5), Status::from_code(15));
+    // Blocked → custom is not a listed transition: go through free.
+    assert_eq!(
+        run(&mut s, change(&[4], 9), T0),
+        Err(Failure::ObjectNotFree(not(ObjectReason::NotFree, &[4])))
+    );
+    assert_eq!(
+        run(&mut s, change(&[3, 5, 6], 0), T0).unwrap(),
+        Outcome::StatusChanged {
+            seq: 7,
+            objects: vec![3, 5, 6]
+        }
+    );
+    assert_eq!(s.status(3), Some(Status::FREE));
+    assert_eq!(s.status(4), Some(Status::BLOCKED));
+    assert_eq!(s.status(5), Some(Status::FREE));
+
+    let batch = s.take_batch().unwrap().unwrap();
+    assert_eq!(batch.objects_freed, vec![100, 103, 105]);
+    let ops: Vec<_> = batch.log.iter().map(|r| (r.op, r.status)).collect();
+    assert_eq!(
+        ops[3..],
+        [
+            (Op::Release, None),
+            (Op::ChangeStatus, Some(Status::BLOCKED)),
+            (Op::ChangeStatus, Status::from_code(15)),
+            (Op::ChangeStatus, Some(Status::FREE))
+        ]
+    );
+}
+
+#[test]
+fn holds_expire_at_their_deadline_in_expiry_order() {
+    let mut s = empty_state(8);
+    for (t, ttl) in [(1, 900), (2, 600), (3, 300), (4, 900), (5, 900)] {
+        let c = Command::CreateHold {
+            token: tok(t),
+            ttl_secs: ttl,
+            max_objects: None,
+        };
+        run(&mut s, c, T0).unwrap();
+        run(&mut s, hold(t, &[u32::from(t)]), T0).unwrap();
+    }
+    s.take_batch().unwrap();
+    // Token 3 moves from T0+300 to T0+1000; token 4 releases everything but
+    // still expires; token 5 is fully booked and never fires.
+    let extend = Command::ExtendHold {
+        token: tok(3),
+        ttl_secs: 900,
+    };
+    run(&mut s, extend, T0.plus_secs(100)).unwrap();
+    run(&mut s, release(4, &[]), T0).unwrap();
+    run(&mut s, book(Some(5), &[], "A"), T0).unwrap();
+    s.take_batch().unwrap();
+    let seq = s.seq();
+
+    assert_eq!(s.next_expiry(), Some(T0.plus_secs(600)));
+    assert_eq!(s.expire_due(Timestamp(T0.plus_secs(600).0 - 1)).unwrap(), 0);
+    assert_eq!(s.expire_due(T0.plus_secs(900)).unwrap(), 3);
+    check_invariants(&s, T0.plus_secs(900));
+    assert_eq!(s.status(2), Some(Status::FREE));
+    assert_eq!(
+        s.status(3),
+        Some(Status::HELD),
+        "the extended hold is still live"
+    );
+    assert_eq!(s.status(5), Some(Status::BOOKED));
+
+    let batch = s.take_batch().unwrap().unwrap();
+    let log: Vec<_> = batch
+        .log
+        .iter()
+        .map(|r| (r.seq, r.op, r.hold_id, r.oids.clone()))
+        .collect();
+    // A hold's id is the `seq` of its `CreateHold`: 1, 3, 5, 7, 9.
+    let (h1, h2, h4) = (HoldId(1), HoldId(3), HoldId(7));
+    assert_eq!(
+        log,
+        vec![
+            (seq + 1, Op::Expire, Some(h2), vec![102]),
+            (seq + 2, Op::Expire, Some(h1), vec![101]),
+            (seq + 3, Op::Expire, Some(h4), vec![]),
+        ]
+    );
+    assert_eq!(batch.holds_deleted, vec![h1, h2, h4]);
+
+    assert_eq!(s.next_expiry(), Some(T0.plus_secs(1000)));
+    assert_eq!(s.expire_due(Timestamp(u64::MAX)).unwrap(), 1);
+    assert_eq!(s.next_expiry(), None);
+    assert_eq!(s.holds().count(), 0);
+}
+
+#[test]
+fn a_command_at_the_expiry_instant_sees_the_hold_whole_or_gone() {
+    let mut s = empty_state(4);
+    run(&mut s, create(1, None), T0).unwrap();
+    run(&mut s, create(2, None), T0).unwrap();
+    run(&mut s, hold(1, &[0, 1]), T0).unwrap();
+    run(&mut s, hold(2, &[2, 3]), T0).unwrap();
+    let deadline = T0.plus_secs(900);
+
+    // One instant before: the booking takes every object and nothing expires.
+    let last = Timestamp(deadline.0 - 1);
+    assert!(run(&mut s, book(Some(1), &[], "A"), last).is_ok());
+    // At the instant: the expiry comes first, so the booking finds no token.
+    assert_eq!(
+        run(&mut s, book(Some(2), &[], "B"), deadline),
+        Err(Failure::NotFound(Missing::HoldToken))
+    );
+    let statuses: Vec<_> = (0..4).map(|i| s.status(i).unwrap()).collect();
+    assert_eq!(
+        statuses,
+        [Status::BOOKED, Status::BOOKED, Status::FREE, Status::FREE]
+    );
+    let log = s.take_batch().unwrap().unwrap().log;
+    let ops: Vec<_> = log.iter().map(|r| r.op).collect();
+    assert_eq!(ops[4..], [Op::Book, Op::Expire]);
+}
+
+#[test]
+fn idempotency_keys_replay_the_original_reply() {
+    let mut s = empty_state(4);
+    let created = s.apply(&keyed(create(1, None), "k1", 1), T0).unwrap();
+    // A refusal is recorded too.
+    let refused = s.apply(&keyed(hold(7, &[0]), "k2", 2), T0).unwrap();
+    assert_eq!(refused, Err(Failure::NotFound(Missing::HoldToken)));
+    run(&mut s, create(7, None), T0).unwrap();
+    let before = fingerprint(&s);
+
+    let later = T0.plus_secs(60);
+    assert_eq!(
+        s.apply(&keyed(create(1, None), "k1", 1), later).unwrap(),
+        created
+    );
+    assert_eq!(
+        s.apply(&keyed(hold(7, &[0]), "k2", 2), later).unwrap(),
+        refused
+    );
+    assert_eq!(
+        s.apply(&keyed(hold(7, &[1]), "k1", 3), later).unwrap(),
+        Err(Failure::IdempotencyMismatch)
+    );
+    assert_eq!(fingerprint(&s), before, "a replay changed state");
+
+    let batch = s.take_batch().unwrap().unwrap();
+    let records: Vec<_> = batch
+        .idempotency
+        .iter()
+        .map(|r| (&*r.key, r.reply.clone()))
+        .collect();
+    assert_eq!(records, vec![("k1", created.clone()), ("k2", refused)]);
+
+    // After 24 hours the key no longer matches: the command runs again.
+    let day = Timestamp(T0.0 + limits::IDEMPOTENCY_TTL_MS);
+    let again = s.apply(&keyed(create(1, None), "k1", 9), day).unwrap();
+    // Both holds expired first (seq 3 and 4).
+    assert!(
+        matches!(again, Ok(Outcome::HoldCreated { seq: 5, .. })),
+        "{again:?}"
+    );
+}
+
+#[test]
+fn the_idempotency_window_is_bounded() {
+    let mut s = empty_state(1);
+    let first = s.apply(&keyed(create(1, None), "k0", 0), T0).unwrap();
+    for i in 1..limits::IDEMPOTENCY_WINDOW {
+        let refused = s.apply(&keyed(hold(9, &[0]), &format!("k{i}"), 0), T0);
+        assert!(refused.unwrap().is_err());
+    }
+    // Full of records younger than the minimum retention: new keys wait.
+    let fresh = keyed(hold(9, &[0]), "fresh", 0);
+    assert_eq!(s.apply(&fresh, T0).unwrap(), Err(Failure::Overloaded));
+    assert_eq!(
+        s.apply(&keyed(create(1, None), "k0", 0), T0).unwrap(),
+        first
+    );
+
+    // Past the minimum retention the oldest record makes room.
+    let later = Timestamp(T0.0 + limits::IDEMPOTENCY_MIN_RETENTION_MS);
+    assert!(matches!(
+        s.apply(&fresh, later).unwrap(),
+        Err(Failure::NotFound(Missing::HoldToken))
+    ));
+    // k0 was dropped from memory, so it runs again; the caller's store lookup
+    // covers records the window has dropped (08 §6.1).
+    assert_eq!(
+        s.apply(&keyed(create(1, None), "k0", 0), later).unwrap(),
+        Err(Failure::InvalidRequest(InvalidReason::TokenAlreadyExists))
+    );
+}
+
+/// Random sequences of every command, from both authorities, some with
+/// idempotency keys, with the clock moving (sometimes backwards). After every
+/// step: INV-1 and INV-2 including expiry; a refusal or replay changed
+/// nothing; `seq` moved by at most one; a publishable command left booked
+/// objects alone (INV-3); a key replays its first reply or is a mismatch.
+/// Batches commit at random points and the store rejects any `seq` gap
+/// (INV-5). At the end: INV-10 over the committed log, and reloading from the
+/// committed batches reproduces memory (INV-6).
 #[tokio::test]
 async fn random_command_sequences_keep_invariants() {
     const SEATS: u32 = 12;
@@ -295,7 +708,8 @@ async fn random_command_sequences_keep_invariants() {
         store.create_event(EVENT, 1);
         let mut s = empty_state(SEATS);
         let mut now = T0;
-        for _ in 0..300 {
+        let mut keys = std::collections::HashMap::new();
+        for _ in 0..400 {
             let t = rng.below(6) as u8;
             let objects = |rng: &mut Rng, min: u64| -> Vec<ObjectRef> {
                 (0..min + rng.below(4))
@@ -305,7 +719,7 @@ async fn random_command_sequences_keep_invariants() {
                     })
                     .collect()
             };
-            let command = match rng.below(9) {
+            let command = match rng.below(15) {
                 0 => Command::CreateHold {
                     token: tok(t),
                     ttl_secs: [30, 60, 300, 900][rng.below(4) as usize],
@@ -315,16 +729,40 @@ async fn random_command_sequences_keep_invariants() {
                     token: tok(t),
                     objects: objects(&mut rng, 1),
                 },
-                4 | 5 => Command::Release {
+                4 => Command::Release {
                     token: tok(t),
                     objects: objects(&mut rng, 0),
                 },
-                6 => Command::ExtendHold {
+                5 => Command::ExtendHold {
                     token: tok(t),
                     ttl_secs: 60 + rng.below(600) as u32,
                 },
-                7 => {
-                    now = Timestamp(now.0 + rng.below(30_000));
+                6 | 7 => {
+                    let objects = objects(&mut rng, 0);
+                    let details = (rng.below(3) == 0)
+                        .then(|| detail(rng.below(u64::from(SEATS)) as u32, "adult"))
+                        .into_iter()
+                        .collect();
+                    Command::Book {
+                        token: (rng.below(3) > 0).then(|| tok(t)),
+                        objects,
+                        order_ref: ["o1", "o2", ""][rng.below(3) as usize].into(),
+                        details,
+                    }
+                }
+                8 => Command::ReleaseBooked {
+                    objects: objects(&mut rng, 1),
+                },
+                9 => Command::ChangeStatus {
+                    objects: objects(&mut rng, 1),
+                    status: Status::from_code([0, 0, 3, 3, 5, 2][rng.below(6) as usize]).unwrap(),
+                },
+                10 | 11 => {
+                    now = Timestamp(now.0 + rng.below(120_000));
+                    continue;
+                }
+                12 => {
+                    now = Timestamp(now.0.saturating_sub(rng.below(5_000))); // a jump back
                     continue;
                 }
                 _ => {
@@ -334,21 +772,77 @@ async fn random_command_sequences_keep_invariants() {
                     continue;
                 }
             };
+            let key = (rng.below(3) == 0).then(|| (rng.below(8) as u8, rng.below(4) == 0));
+            let request = Request {
+                actor: "a".into(),
+                authority: [Authority::Publishable, Authority::Secret][rng.below(2) as usize],
+                command,
+                idempotency: key.map(|(k, odd)| Idempotency {
+                    key: format!("key-{k}").into(),
+                    fingerprint: [u8::from(odd); 32],
+                }),
+            };
+
+            s.expire_due(now).unwrap();
+            check_invariants(&s, now);
             let before = fingerprint(&s);
-            let reply = run(&mut s, command, now);
+            let reply = s.apply(&request, now).unwrap();
             let after = fingerprint(&s);
-            match &reply {
-                Err(_) => assert_eq!(after, before, "seed {seed}: refusal changed state"),
-                Ok(_) if after.0 == before.0 => {
-                    assert_eq!(after, before, "seed {seed}: change without a seq")
-                }
-                Ok(_) => assert_eq!(after.0, before.0 + 1, "seed {seed}"),
+            let replayed = match key {
+                Some((k, odd)) => match keys.get(&k) {
+                    Some((first_odd, first)) => {
+                        let expected = if *first_odd == odd {
+                            first
+                        } else {
+                            &Err(Failure::IdempotencyMismatch)
+                        };
+                        assert_eq!(&reply, expected, "seed {seed}");
+                        true
+                    }
+                    None => {
+                        keys.insert(k, (odd, reply.clone()));
+                        false
+                    }
+                },
+                None => false,
+            };
+            if replayed || reply.is_err() || after.0 == before.0 {
+                assert_eq!(after, before, "seed {seed}: change without a seq");
+            } else {
+                assert_eq!(after.0, before.0 + 1, "seed {seed}");
             }
-            check_invariants(&s);
+            if request.authority == Authority::Publishable {
+                for (b, a) in before.1.iter().zip(&after.1) {
+                    if b.0 == Some(Status::BOOKED) {
+                        assert_eq!(a, b, "seed {seed}: INV-3");
+                    }
+                }
+            }
+            check_invariants(&s, now);
         }
         if let Some(batch) = s.take_batch().unwrap() {
             store.commit_batch(batch).await.unwrap();
         }
+
+        // INV-10: no object is booked twice without a release in between.
+        let mut booked = std::collections::BTreeSet::new();
+        for record in store.committed().iter().flat_map(|b: &Batch| &b.log) {
+            for oid in &record.oids {
+                match record.op {
+                    Op::Book => assert!(booked.insert(*oid), "seed {seed}: INV-10"),
+                    Op::Release => {
+                        booked.remove(oid);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let live: std::collections::BTreeSet<_> = (0..SEATS)
+            .filter(|&i| s.status(i) == Some(Status::BOOKED))
+            .map(|i| 100 + i)
+            .collect();
+        assert_eq!(booked, live, "seed {seed}");
+
         let loaded = store.load_event(EVENT).await.unwrap();
         let reloaded = EventState::restore(EVENT, chart(SEATS), loaded).unwrap();
         assert_eq!(fingerprint(&reloaded), fingerprint(&s), "seed {seed}");
@@ -359,6 +853,7 @@ async fn random_command_sequences_keep_invariants() {
 
 struct Rig {
     store: Arc<MemoryStore>,
+    clock: ManualClock,
     handle: cavea_engine::ActorHandle,
     task: tokio::task::JoinHandle<Result<(), ActorError>>,
 }
@@ -366,12 +861,34 @@ struct Rig {
 fn rig(config: ActorConfig) -> Rig {
     let store = Arc::new(MemoryStore::new());
     store.create_event(EVENT, 1);
-    let (handle, fut) = actor(empty_state(20), store.clone(), ManualClock::new(T0), config);
+    start(empty_state(20), store, T0, config)
+}
+
+fn start(state: EventState, store: Arc<MemoryStore>, now: Timestamp, config: ActorConfig) -> Rig {
+    let clock = ManualClock::new(now);
+    let (handle, fut) = actor(state, store.clone(), clock.clone(), config);
     Rig {
         store,
+        clock,
         handle,
         task: tokio::spawn(fut),
     }
+}
+
+async fn reload(store: &Arc<MemoryStore>, now: Timestamp) -> Rig {
+    let loaded = store.load_event(EVENT).await.unwrap();
+    let state = EventState::restore(EVENT, chart(20), loaded).unwrap();
+    start(state, store.clone(), now, ActorConfig::default())
+}
+
+/// The op of every committed log row, in order.
+fn committed_ops(store: &MemoryStore) -> Vec<(u64, Op)> {
+    let batches = store.committed();
+    batches
+        .iter()
+        .flat_map(|b| &b.log)
+        .map(|r| (r.seq, r.op))
+        .collect()
 }
 
 /// Let every runnable task run until it blocks.
@@ -546,4 +1063,84 @@ async fn a_rejected_commit_leaves_the_store_untouched() {
         Err(StoreError::Inconsistent(_))
     ));
     assert_eq!(store.load_event(EVENT).await.unwrap(), before);
+}
+
+#[tokio::test]
+async fn the_actor_expires_holds_when_its_clock_reaches_them() {
+    let r = rig(ActorConfig::default());
+    r.handle.send(req(create(1, None))).await.unwrap();
+    r.handle.send(req(create(2, None))).await.unwrap();
+    r.handle.send(req(hold(1, &[0, 1]))).await.unwrap();
+    let extend = Command::ExtendHold {
+        token: tok(2),
+        ttl_secs: 1_800,
+    };
+    r.handle.send(req(extend)).await.unwrap();
+
+    r.clock.set(Timestamp(T0.plus_secs(900).0 - 1));
+    settle().await;
+    assert_eq!(committed_ops(&r.store).len(), 4, "nothing is due yet");
+
+    // No command arrives: the timer alone expires hold 1, and not hold 2,
+    // whose first expiry was replaced.
+    r.clock.set(T0.plus_secs(900));
+    settle().await;
+    assert_eq!(committed_ops(&r.store)[4..], [(5, Op::Expire)]);
+    let stored = r.store.load_event(EVENT).await.unwrap();
+    assert!(stored.objects.is_empty());
+    assert_eq!(stored.holds.len(), 1);
+
+    r.clock.advance_ms(3_600_000);
+    settle().await;
+    assert_eq!(committed_ops(&r.store)[5..], [(6, Op::Expire)]);
+    assert_eq!(r.store.load_event(EVENT).await.unwrap().holds, vec![]);
+}
+
+#[tokio::test]
+async fn overdue_holds_expire_promptly_after_a_reload() {
+    let store = Arc::new(MemoryStore::new());
+    store.create_event(EVENT, 1);
+    let mut s = empty_state(20);
+    run(&mut s, create(1, None), T0).unwrap();
+    run(&mut s, hold(1, &[3]), T0).unwrap();
+    store
+        .commit_batch(s.take_batch().unwrap().unwrap())
+        .await
+        .unwrap();
+
+    // Loaded long after the hold's expiry, as after an outage.
+    let r = reload(&store, T0.plus_secs(5_000)).await;
+    settle().await;
+    assert_eq!(
+        committed_ops(&store),
+        [(1, Op::CreateHold), (2, Op::Hold), (3, Op::Expire)]
+    );
+    let stored = store.load_event(EVENT).await.unwrap();
+    assert!(stored.holds.is_empty() && stored.objects.is_empty());
+    drop(r.handle);
+    assert_eq!(r.task.await.unwrap(), Ok(()));
+}
+
+#[tokio::test]
+async fn a_keyed_retry_after_a_lost_reply_returns_the_original_result() {
+    let r = rig(ActorConfig::default());
+    let booking = || keyed(book(None, &[4, 5], "77120"), "order-77120", 1);
+    r.store.push_fault(Fault::LoseReply);
+    assert_eq!(r.handle.send(booking()).await, Err(Failure::Unavailable));
+    assert!(r.task.await.unwrap().is_err());
+
+    // The batch was written; after a reload the retry gets the original reply,
+    // not `object_not_free`, and books nothing twice.
+    let r = reload(&r.store, T0.plus_secs(30)).await;
+    let original = Ok(Outcome::Booked {
+        seq: 1,
+        objects: vec![4, 5],
+    });
+    assert_eq!(r.handle.send(booking()).await, original);
+    let other = keyed(book(None, &[6], "77120"), "order-77120", 2);
+    assert_eq!(
+        r.handle.send(other).await,
+        Err(Failure::IdempotencyMismatch)
+    );
+    assert_eq!(committed_ops(&r.store), [(1, Op::Book)]);
 }

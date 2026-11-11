@@ -70,7 +70,7 @@ struct EventActor {
 }
 ```
 
-Memory: about 7 bytes per object plus holds. A 100,000-seat event is under 1 MB.
+Memory: about 7 bytes per object plus holds. A 100,000-seat event is under 1 MB. Booking data (`order_ref`, `ticket_type`, `extra`) lives in a map holding only booked objects: about 106 bytes per booked seat with a ticket type, so a fully booked 100,000-seat event adds about 11 MB, plus the length of any `extra`. The idempotency window (§6.1) adds at most 50,000 records.
 
 ### 4.2 Commands
 
@@ -78,7 +78,7 @@ Memory: about 7 bytes per object plus holds. A 100,000-seat event is under 1 MB.
 |---|---|
 | `CreateHold` | New hold token with expiry and limits |
 | `Hold` | Free → held under a token |
-| `Release` | Held → free (by token) or booked → free (secret key) |
+| `Release` | Held → free (by token) or booked → free (secret key, no token) |
 | `ExtendHold` | New expiry |
 | `Book` | Held → booked (with token) or free → booked (direct) |
 | `ChangeStatus` | Free ↔ blocked or custom |
@@ -109,7 +109,8 @@ Properties:
 - **Acknowledge after commit.** Replies and deltas for a batch are released only when its transaction commits (INV-7, INV-8).
 - **Validation sees uncommitted state.** Commands in batch *n+1* are checked against memory that already includes batch *n*. This is safe because batches commit in order and a failed commit poisons the actor (§4.6).
 - **Caps.** A batch holds at most 2,000 commands. The mailbox holds at most 10,000; beyond that, callers get `503 overloaded` with `Retry-After`. While a commit is in flight and the next batch is full, the actor stops reading the mailbox, so the excess waits there in order and forms the batch after.
-- **Refusals and no-ops.** A refused command, or one that changes nothing (holding only objects the token already holds, releasing a token that holds nothing), takes no `seq` and writes no log row. Its reply carries the `seq` it observed and is released in order with the batch it was applied in, since it may depend on that batch's uncommitted state. A batch of only such commands needs no transaction.
+- **Refusals and no-ops.** A refused command, or one that changes nothing (holding only objects the token already holds, releasing a token that holds nothing), takes no `seq` and writes no log row. Its reply carries the `seq` it observed and is released in order with the batch it was applied in, since it may depend on that batch's uncommitted state. A batch of only such commands needs no transaction, unless one carried an idempotency key: its record is written (statement 8) with `seq` unchanged.
+- **Expiry.** `next_expiry()` waits on the injected clock, never the wall clock, so a test advances the clock and sees expiries in order. Before any command is applied, every hold due at its processing time is expired first, each as its own `Expire` command with a `seq`; the timer arm only makes that happen when no command arrives. Expiries do not count towards the batch cap: a batch opened after a long stall carries every overdue expiry.
 - **Stopping.** When a commit fails, callers whose commands are in that batch, in the next one, or still in the mailbox all get `503 unavailable`, and the mailbox is closed.
 
 ### 4.4 Commit
@@ -147,13 +148,17 @@ SELECT ... FROM UNNEST(...);
 -- 7. Webhook outbox rows for subscribed types.
 INSERT INTO webhook_deliveries (...) SELECT ...;
 
--- 8. Idempotency records for commands that carried a key.
-INSERT INTO idempotency (...) SELECT ...;
+-- 8. Idempotency records for commands that carried a key, refusals included.
+--    A live record is never overwritten: a key another event used is kept.
+INSERT INTO idempotency (workspace_id, event_id, key, request_hash, status, response, created_at)
+SELECT (SELECT workspace_id FROM events WHERE id = $event), $event, * FROM UNNEST(...)
+ON CONFLICT (workspace_id, key) DO UPDATE SET ...
+ WHERE idempotency.created_at < EXCLUDED.created_at - interval '24 hours';
 ```
 
 All eight statements go in one round trip (a pipelined transaction).
 
-A batch carries the net effect of its commands as of its last one: each object appears at most once, in either the upsert list (with the `seq` of the last command that changed it) or the freed list, and a hold created and extended in the same batch is inserted once with its final expiry. The statement order above is then correct without the store knowing engine internals.
+A batch carries the net effect of its commands as of its last one: each object appears at most once, in either the upsert list (with the `seq` of the last command that changed it) or the freed list, and a hold created and extended in the same batch is inserted once with its final expiry; a hold created and deleted in the same batch is not written at all. The statement order above is then correct without the store knowing engine internals.
 
 ### 4.5 Reads
 
@@ -178,7 +183,7 @@ Load:
 
 1. Acquire ownership: `UPDATE events SET owner_node = $me, owner_epoch = owner_epoch + 1, lease_until = now() + $lease WHERE id = $1 AND (owner_node = $me OR lease_until IS NULL OR lease_until < now()) RETURNING owner_epoch, seq, chart_version_id`.
 2. Load the full CCF for the pinned version (cached per version).
-3. Read `object_state`, `holds`, `area_alloc`, `channels`; map `oid` to `idx`; fill the arrays.
+3. Read `object_state`, `holds`, `area_alloc`, `channels`, and the event's `idempotency` records younger than 24 hours; map `oid` to `idx`; fill the arrays.
 4. Schedule expiries, including any already past.
 
 Eviction: an actor with no subscribers, no outstanding holds and no command for 10 minutes is dropped. At startup the server loads every event that has rows in `holds`.
@@ -373,6 +378,7 @@ CREATE INDEX webhook_due ON webhook_deliveries (next_attempt_at) WHERE delivered
 
 CREATE TABLE idempotency (
   workspace_id uuid NOT NULL,
+  event_id     uuid,                             -- set for seat commands; loaded with the event
   key          text NOT NULL,
   request_hash bytea NOT NULL,
   status       int NOT NULL,
@@ -380,6 +386,7 @@ CREATE TABLE idempotency (
   created_at   timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (workspace_id, key)
 );
+CREATE INDEX idempotency_event ON idempotency (event_id, created_at) WHERE event_id IS NOT NULL;
 
 CREATE TABLE users (
   id            uuid PRIMARY KEY,
@@ -424,6 +431,7 @@ The `SeatStore` trait hides all of this from the engine: `load_event`, `commit_b
 - Base path `/v1`. JSON bodies, `snake_case` fields. Times are RFC 3339 UTC.
 - Authentication: `Authorization: Bearer sk_…` or `Bearer pk_…`. The workspace is implied by the key.
 - Mutating requests accept `Idempotency-Key` (up to 255 characters, kept 24 hours). Replaying a key with a different body returns `409 idempotency_mismatch`.
+- For seat commands the engine does this atomically with the command. The handler computes a 32-byte fingerprint of the request (method, path, body), looks the key up in `idempotency` first and, if found, replays or mismatches without reaching the actor; otherwise it submits the command with the key and fingerprint within a minute of that lookup. The actor keeps an in-memory window of its event's records: every keyed command it applies gets a record, refusals included (a refused request replayed later must not succeed), holding the engine's reply exactly as returned, `seq` and per-object failures included. A key in the window replays that reply or fails with `idempotency_mismatch`, changing nothing; a key not in it is applied. The window is the authority for records not yet visible to the handler's lookup (uncommitted, or committed after it) and the store for everything older. Records are written in the commit (§4.4 statement 8) and loaded with the event (§4.7 step 3), so a retry after a lost reply and a reload returns the original reply. A record matches for 24 hours from when its command was applied. The window holds at most 50,000 records; the oldest make room once older than one minute, and while every record is younger a new key is refused `503 overloaded`. `overloaded`, `unavailable`, an invalid key and a mismatch write no record. A key is per workspace, but the engine checks it per event: two events given the same new key at the same moment both apply, and the store keeps the first record.
 - Objects are addressed by label. A request may instead send `{"version": "<hash>", "idx": [..]}`.
 - Lists use cursor pagination: `?limit=100&after=<cursor>`; responses carry `next`.
 - Every response, errors and 404s included, carries `Cavea-Request-Id`. The server generates `req_` and 32 lowercase hex digits. A caller may send its own `Cavea-Request-Id` to correlate with its logs: the server adopts it only if it is 1 to 64 characters from `A-Z a-z 0-9 . _ -`, and otherwise ignores it and generates one. An adopted id is not guaranteed unique.
@@ -564,10 +572,11 @@ Idempotency-Key: order-77120
 | 404 | `not_found` | Unknown chart, event, object or token |
 | 409 | `object_not_free` | At least one object is not free |
 | 409 | `object_not_held_by_token` | Book or release named an object the token does not hold |
+| 409 | `object_status_conflict` | An object's status does not allow the change: release without a token of an object that is not booked, or change-status to free of a held or booked object |
 | 409 | `version_conflict` | Draft etag mismatch |
 | 409 | `upgrade_conflict` | Non-free objects missing from the new chart version |
 | 409 | `idempotency_mismatch` | Key reused with a different body |
-| 410 | `hold_token_expired` | |
+| 410 | `hold_token_expired` | Not returned by the actor, which deletes an expired token before processing any command at or after its expiry (§7.3); the token is then `not_found` |
 | 422 | `hold_limit_exceeded` | Over the token's object limit |
 | 422 | `channel_not_allowed` | |
 | 422 | `orphan_rule_violated` | |
@@ -591,7 +600,7 @@ Every error is `application/problem+json` with exactly these members:
 ```
 
 - `code` and `status` always pair as in the table. `message` is for humans and may change; match on `code`.
-- `details` is always an object, empty when there is nothing to add. Engine refusals fill it: `invalid_request` has `reason`; `not_found` has `missing` (`hold_token` or `objects`, with `objects` listing the unresolved references as `{"label"}` or `{"idx"}`); the two object conflicts list `{"idx", "reason"}` per object; `hold_limit_exceeded` has `limit` and `requested`.
+- `details` is always an object, empty when there is nothing to add. Engine refusals fill it: `invalid_request` has `reason`; `not_found` has `missing` (`hold_token` or `objects`, with `objects` listing the unresolved references as `{"label"}` or `{"idx"}`); the three object conflicts list `{"idx", "reason"}` per object (`not_free`, `not_held_by_token`, `not_booked`, `not_blocked`); `forbidden` from the engine means the key's kind may not issue the command (`02-domain-model.md` §4.3); `hold_limit_exceeded` has `limit` and `requested`.
 - `request_id` equals the `Cavea-Request-Id` header.
 - An unknown path, and a known path with the wrong method, are `404 not_found`. A body that is not JSON, lacks `Content-Type: application/json`, does not match the expected shape or is over the size limit is `400 invalid_request` with `details.reason` one of `json_syntax`, `content_type`, `json_data`, `body_too_large`, `body_unreadable`.
 - `503 overloaded` carries `Retry-After: 1`.
@@ -600,7 +609,7 @@ Every error is `application/problem+json` with exactly these members:
 
 ### 7.1 Hold
 
-1. Find the hold by token hash. Unknown → `not_found`; expired → `hold_token_expired`.
+1. Find the hold by token hash. Unknown → `not_found`. An expired token has already been deleted (§7.3), so it is unknown too.
 2. Resolve labels to `idx`. Unknown → `not_found`.
 3. For each object: already held by this token → skip. Not free → collect as failed. In a channel the request may not use → collect as failed.
 4. If any failed → reply with the list; change nothing.
@@ -618,13 +627,17 @@ Request shape is checked first: an empty object list, more than 1,000 objects, o
 
 ### 7.2 Book
 
-- **With a token:** all named objects (or all the token's objects if none are named) must be held by it. They become `booked` with the order reference. If the token then holds nothing, it is deleted.
+- **With a token:** all named objects (or all the token's objects if none are named) must be held by it. They become `booked` with the order reference. If the token then holds nothing, it is deleted. A token holding nothing books nothing: `invalid_request` (`no_objects`).
 - **Direct:** all named objects must be free and channel-permitted (unless `ignore_channels`).
+- Ticket types and `extra` come as per-object details; a detail naming an object not being booked, or one object twice, is `invalid_request` (`detail_mismatch`). The engine bounds `extra` to 2 KB and stores it as given; the handler checks it is a JSON object.
+- **Release without a token** (secret key): every named object must be booked (`object_status_conflict`, `not_booked`); it becomes free and its booking data is dropped.
+- **Change status:** to blocked or a custom code, every object must be free or already have that status (`object_not_free`); to free, every object must be blocked, custom or already free (`object_status_conflict`, `not_blocked`). Held and booked are not settable (`invalid_request`, `bad_status`).
 - Areas take `{"label", "quantity"}`.
 
 ### 7.3 Expiry
 
-- When the heap's earliest expiry passes, the actor issues an internal `Expire` for that token: all its objects return to free, the hold is deleted, a `hold.expired` outbox row is written.
+- When the heap's earliest expiry passes, the actor issues an internal `Expire` for that token: all its objects return to free, the hold is deleted, a `hold.expired` outbox row is written. `Expire` takes a `seq` and is logged with actor `system`, even for a hold with no objects. Holds due at the same instant expire in hold id order.
+- Extending a hold pushes a new heap entry; the old one, and the entry of a hold deleted early, are skipped when they surface, so they never fire.
 - Expiry is checked against the server clock at processing time, so a hold used at the last instant either fully succeeds or fully fails.
 
 ### 7.4 Best-available

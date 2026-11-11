@@ -15,6 +15,7 @@
 
 mod actor;
 mod chart;
+mod idempotency;
 mod memory;
 mod state;
 mod store;
@@ -24,5 +25,8 @@ pub use actor::{ActorConfig, ActorError, ActorHandle, PendingReply, actor};
 pub use chart::{ChartError, ChartView};
 pub use memory::{Fault, MemoryStore};
 pub use state::{EventState, HoldView, InvariantViolation, LoadError};
-pub use store::{Batch, HoldRow, LoadedEvent, LogRecord, ObjectRow, SeatStore, StoreError};
+pub use store::{
+    Batch, Booking, HoldRow, IdempotencyRecord, LoadedEvent, LogRecord, ObjectRow, SeatStore,
+    StoreError,
+};
 pub use types::*;

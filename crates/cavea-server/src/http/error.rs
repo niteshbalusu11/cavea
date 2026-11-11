@@ -6,7 +6,7 @@ use axum::extract::rejection::JsonRejection;
 use axum::extract::{FromRequest, Request};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use cavea_engine::{Failure, InvalidReason, Missing, ObjectFailure, ObjectRef};
+use cavea_engine::{Failure, Missing, ObjectFailure, ObjectRef};
 use serde_json::{Map, Value, json};
 
 /// A stable error code (08 §6.4). Never rename one.
@@ -18,6 +18,7 @@ pub enum Code {
     NotFound,
     ObjectNotFree,
     ObjectNotHeldByToken,
+    ObjectStatusConflict,
     VersionConflict,
     UpgradeConflict,
     IdempotencyMismatch,
@@ -35,13 +36,14 @@ pub enum Code {
 
 impl Code {
     /// Every code, in table order.
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::InvalidRequest,
         Self::Unauthorized,
         Self::Forbidden,
         Self::NotFound,
         Self::ObjectNotFree,
         Self::ObjectNotHeldByToken,
+        Self::ObjectStatusConflict,
         Self::VersionConflict,
         Self::UpgradeConflict,
         Self::IdempotencyMismatch,
@@ -69,6 +71,11 @@ impl Code {
                 "object_not_held_by_token",
                 409,
                 "At least one object is not held by this hold token.",
+            ),
+            Self::ObjectStatusConflict => (
+                "object_status_conflict",
+                409,
+                "At least one object's status does not allow this change.",
             ),
             Self::VersionConflict => ("version_conflict", 409, "The draft has changed."),
             Self::UpgradeConflict => (
@@ -205,8 +212,9 @@ impl From<Failure> for ApiError {
     fn from(failure: Failure) -> Self {
         match failure {
             Failure::InvalidRequest(reason) => {
-                Self::new(Code::InvalidRequest).with_detail("reason", invalid_reason(reason))
+                Self::new(Code::InvalidRequest).with_detail("reason", reason.code())
             }
+            Failure::Forbidden => Self::new(Code::Forbidden),
             Failure::NotFound(Missing::HoldToken) => {
                 Self::new(Code::NotFound).with_detail("missing", "hold_token")
             }
@@ -221,6 +229,9 @@ impl From<Failure> for ApiError {
             }
             Failure::ObjectNotHeldByToken(objects) => Self::new(Code::ObjectNotHeldByToken)
                 .with_detail("objects", object_failures(&objects)),
+            Failure::ObjectStatusConflict(objects) => Self::new(Code::ObjectStatusConflict)
+                .with_detail("objects", object_failures(&objects)),
+            Failure::IdempotencyMismatch => Self::new(Code::IdempotencyMismatch),
             Failure::HoldTokenExpired => Self::new(Code::HoldTokenExpired),
             Failure::HoldLimitExceeded { limit, requested } => Self::new(Code::HoldLimitExceeded)
                 .with_detail("limit", limit)
@@ -228,16 +239,6 @@ impl From<Failure> for ApiError {
             Failure::Overloaded => Self::new(Code::Overloaded),
             Failure::Unavailable => Self::new(Code::Unavailable),
         }
-    }
-}
-
-fn invalid_reason(reason: InvalidReason) -> &'static str {
-    match reason {
-        InvalidReason::NoObjects => "no_objects",
-        InvalidReason::TooManyObjects => "too_many_objects",
-        InvalidReason::TtlOutOfRange => "ttl_out_of_range",
-        InvalidReason::ZeroObjectLimit => "zero_object_limit",
-        InvalidReason::TokenAlreadyExists => "token_already_exists",
     }
 }
 

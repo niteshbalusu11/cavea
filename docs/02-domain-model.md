@@ -112,6 +112,10 @@ Manager connections (authenticated staff) receive the domain statuses, hold expi
 
 Every command is **all-or-nothing**: if one object fails its condition, nothing changes and the response lists the failing objects with reasons.
 
+Only the listed transitions exist. In particular blocked → a different custom status (or between two custom statuses) goes through free, and `change-status` never touches a held or booked object: setting blocked or custom requires each object to be free (`not_free`), setting free requires it to be blocked or custom (`not_blocked`). An object already in the requested status is a successful no-op. A release without a token (secret key) applies to booked objects only (`not_booked`); held objects are released with their token or by expiry.
+
+The engine enforces the "Who may issue it" column itself: each command carries the caller's authority (publishable, or secret for a secret key or console user), and `extend`, `book`, release without a token and `change-status` from a publishable key are refused with `forbidden`. That makes INV-3 hold whatever caller is wired up. Everything that depends on how a key is configured stays with the caller: the per-token object limit, the workspace's longest hold, channels from session tokens, allowed origins and which custom codes the workspace defines.
+
 ## 5. Holds
 
 - A hold token is created first, then used to hold objects. All objects under one token share its expiry.
@@ -121,11 +125,12 @@ Every command is **all-or-nothing**: if one object fails its condition, nothing 
 - When a token expires, all its objects return to `free` in one command, and a `hold.expired` webhook fires.
 - A token can hold objects in more than one event only if the events belong to the same season (P2).
 - The token is a bearer secret. The server stores only its SHA-256 hash.
-- A token is expired from its expiry instant onwards (`now >= expires_at`, checked when the command is processed). An expired token can no longer hold, release or extend; its objects return to `free` only through expiry.
+- A token is expired from its expiry instant onwards (`now >= expires_at`, checked when the command is processed). Expiry is applied before any command processed at or after that instant: the objects return to `free` and the token is deleted, so a later request with it gets `not_found`. A token is also deleted when booking takes its last objects. A token whose objects were all released stays valid until it expires.
 
 ## 6. Bookings
 
-- A booking sets objects to `booked` and stores `order_ref` (the customer's order identifier, up to 128 characters), an optional `ticket_type` key per object and an optional `extra` JSON object (up to 2 KB per object).
+- A booking sets objects to `booked` and stores `order_ref` (the customer's order identifier, 1 to 128 characters), an optional `ticket_type` key per object (1 to 128 characters) and an optional `extra` JSON object (up to 2 KB per object).
+- With a hold token, the booking takes the named objects, or all the token's objects if none are named; per-object details may name only objects being booked, each at most once.
 - The recommended sequence is the one the incumbents document: hold, take payment, book with the hold token. If booking fails, refund or retry; never charge first and hold second.
 - Booking is idempotent under an `Idempotency-Key` header. Replaying the same request returns the original result.
 - Cavea does not know prices, buyers or payments.

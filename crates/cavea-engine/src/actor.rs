@@ -1,5 +1,6 @@
 //! The event actor: a bounded mailbox in front of [`EventState`], with natural
-//! batching and acknowledge-after-commit (08 §4.3, §4.6).
+//! batching, acknowledge-after-commit and hold expiry on the injected clock
+//! (08 §4.3, §4.6, §7.3).
 
 use std::future::{Future, poll_fn};
 use std::pin::Pin;
@@ -11,7 +12,7 @@ use tracing::{Instrument, Span, debug, error, info_span};
 
 use crate::state::{EventState, InvariantViolation};
 use crate::store::{SeatStore, StoreError};
-use crate::types::{Clock, Failure, Reply, Request};
+use crate::types::{Clock, Failure, Op, Reply, Request, Timestamp};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ActorConfig {
@@ -129,10 +130,16 @@ pub fn actor<S: SeatStore, C: Clock>(
     (ActorHandle { tx }, run)
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "one short-lived value per loop turn; boxing would allocate per command"
+)]
 enum Next {
     Received(Envelope),
     Closed,
     Committed(Result<(), StoreError>),
+    /// The clock reached the earliest hold expiry.
+    Expiry,
 }
 
 async fn run<S: SeatStore, C: Clock>(
@@ -148,9 +155,13 @@ async fn run<S: SeatStore, C: Clock>(
     let mut committing: Vec<Queued> = Vec::new();
     let mut in_flight = None;
     let mut open = true;
+    // The wait for the earliest expiry, rebuilt when that expiry changes.
+    let mut timer = None;
 
     loop {
-        if in_flight.is_none() && !pending.is_empty() {
+        // Expiries change state without a caller, so a batch may have no
+        // replies.
+        if in_flight.is_none() {
             match state.take_batch() {
                 Err(v) => return Err(stop(ActorError::Invariant(v), pending, committing, rx)),
                 // Only refusals and no-ops: nothing to write, and everything
@@ -179,12 +190,21 @@ async fn run<S: SeatStore, C: Clock>(
         if !open && in_flight.is_none() && pending.is_empty() {
             return Ok(());
         }
+        let next_expiry = state.next_expiry();
+        if timer.as_ref().map(|(at, _)| *at) != next_expiry {
+            timer = next_expiry.map(|at: Timestamp| (at, Box::pin(clock.sleep_until(at))));
+        }
 
         let next = poll_fn(|cx| {
             if let Some(commit) = in_flight.as_mut()
                 && let Poll::Ready(result) = commit.as_mut().poll(cx)
             {
                 return Poll::Ready(Next::Committed(result));
+            }
+            if let Some((_, sleep)) = timer.as_mut()
+                && sleep.as_mut().poll(cx).is_ready()
+            {
+                return Poll::Ready(Next::Expiry);
             }
             // A full batch stops intake; the mailbox absorbs the rest.
             if open && pending.len() < max_batch {
@@ -206,6 +226,14 @@ async fn run<S: SeatStore, C: Clock>(
                 return Err(stop(ActorError::Store(e), pending, committing, rx));
             }
             Next::Closed => open = false,
+            Next::Expiry => {
+                timer = None;
+                let span = info_span!("apply", op = Op::Expire.name());
+                match span.in_scope(|| state.expire_due(clock.now())) {
+                    Ok(expired) => span.in_scope(|| debug!(expired, "holds expired")),
+                    Err(v) => return Err(stop(ActorError::Invariant(v), pending, committing, rx)),
+                }
+            }
             Next::Received(envelope) => {
                 let Envelope {
                     request,
@@ -215,8 +243,7 @@ async fn run<S: SeatStore, C: Clock>(
                 } = envelope;
                 drop(wait);
                 let span = info_span!(parent: &parent, "apply", op = request.command.op().name());
-                let applied =
-                    span.in_scope(|| state.apply(&request.actor, &request.command, clock.now()));
+                let applied = span.in_scope(|| state.apply(&request, clock.now()));
                 match applied {
                     Ok(result) => pending.push((reply, result, span, parent)),
                     Err(v) => {

@@ -2,12 +2,14 @@
 //! simulation harness (13 §3.2).
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use tokio::sync::oneshot;
 
-use crate::store::{Batch, HoldRow, LoadedEvent, ObjectRow, SeatStore, StoreError};
-use crate::types::{EventId, HoldId, Oid};
+use crate::store::{
+    Batch, HoldRow, IdempotencyRecord, LoadedEvent, ObjectRow, SeatStore, StoreError,
+};
+use crate::types::{EventId, HoldId, Oid, limits};
 
 /// A fault applied to one commit. Faults are consumed in order, one per
 /// `commit_batch` call.
@@ -27,6 +29,7 @@ struct StoredEvent {
     seq: u64,
     holds: BTreeMap<HoldId, HoldRow>,
     objects: BTreeMap<Oid, ObjectRow>,
+    idempotency: HashMap<Arc<str>, IdempotencyRecord>,
 }
 
 #[derive(Debug, Default)]
@@ -89,6 +92,7 @@ impl SeatStore for MemoryStore {
             seq: e.seq,
             holds: e.holds.values().cloned().collect(),
             objects: e.objects.values().cloned().collect(),
+            idempotency: e.idempotency.values().cloned().collect(),
         })
     }
 
@@ -118,6 +122,13 @@ impl SeatStore for MemoryStore {
         if !batch.holds_extended.iter().all(|(id, _)| known(id)) {
             return Err(StoreError::Inconsistent("extended an unknown hold".into()));
         }
+        if !batch
+            .holds_deleted
+            .iter()
+            .all(|id| e.holds.contains_key(id))
+        {
+            return Err(StoreError::Inconsistent("deleted an unknown hold".into()));
+        }
         e.seq = batch.seq;
         for h in &batch.holds_created {
             e.holds.insert(h.id, h.clone());
@@ -136,6 +147,16 @@ impl SeatStore for MemoryStore {
         for oid in &batch.objects_freed {
             e.objects.remove(oid);
         }
+        for r in &batch.idempotency {
+            // As `ON CONFLICT DO UPDATE ... WHERE` the stored record is over 24
+            // hours older: a live record is never overwritten.
+            let replace = e.idempotency.get(&r.key).is_none_or(|old| {
+                r.created_at.0 >= old.created_at.0.saturating_add(limits::IDEMPOTENCY_TTL_MS)
+            });
+            if replace {
+                e.idempotency.insert(r.key.clone(), r.clone());
+            }
+        }
         inner.committed.push(batch);
         if lose_reply {
             return Err(StoreError::Unavailable("injected lost reply".into()));
@@ -144,7 +165,8 @@ impl SeatStore for MemoryStore {
     }
 }
 
-/// INV-5: the log continues the stored `seq` with no gap or repeat.
+/// INV-5: the log continues the stored `seq` with no gap or repeat. A batch
+/// without log rows carries only idempotency records and keeps the `seq`.
 fn check_seqs(stored: u64, batch: &Batch) -> Result<(), StoreError> {
     let contiguous = batch
         .log
@@ -152,7 +174,8 @@ fn check_seqs(stored: u64, batch: &Batch) -> Result<(), StoreError> {
         .zip(stored + 1..)
         .all(|(record, expected)| record.seq == expected);
     let last = stored + batch.log.len() as u64;
-    if batch.log.is_empty() || !contiguous || batch.seq != last {
+    let empty = batch.log.is_empty() && batch.idempotency.is_empty();
+    if empty || !contiguous || batch.seq != last {
         return Err(StoreError::Inconsistent(
             "log does not continue the stored seq".into(),
         ));
