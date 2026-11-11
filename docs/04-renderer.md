@@ -65,6 +65,7 @@ The engine is driven only by commands and emits only events. Both are plain data
 | `SetPricing` | Category keys with display prices |
 | `SetFilter` | Categories, price range, accessible only |
 | `SetTheme` | A built-in theme (`light`, `dark`, `high-contrast`) and token values to apply over it (§19) |
+| `SetGlyphAtlas` | The glyph atlas's pixels, RGBA8, as the host decoded them (§12) |
 | `SetMode` | `picker`, `static`, `spotlight`, `manager` |
 | `SetSessionMode` | `hold` (default: a selection emits `HoldRequest`) or `manual` (no hold or release requests; the host holds at checkout). Refused while anything is selected or a request is outstanding |
 | `SetRules` | Maximum (1 to 100, default 100), minimum, validators, group size |
@@ -97,7 +98,7 @@ The engine is driven only by commands and emits only events. Both are plain data
 t0  init()  ─┬─ fetch WASM (streaming compile)
              ├─ fetch chart .ccf
              ├─ fetch state snapshot
-             └─ fetch font atlas
+             └─ fetch glyph atlas (PNG, decoded by the browser)
     WASM ready ─ create GL context, compile 5 shader programs
     chart arrives ─ decode → SoA arrays → upload static buffers
     FIRST FRAME (layout visible, all seats neutral)        ← "chart visible"
@@ -110,7 +111,7 @@ t0  init()  ─┬─ fetch WASM (streaming compile)
 Rules:
 
 - The four fetches start together, before any of them completes.
-- The first frame does not wait for the snapshot or the font atlas.
+- The first frame does not wait for the snapshot or the glyph atlas. The atlas reaches the engine in one `SetGlyphAtlas` whenever it arrives, and seat labels are drawn from the next frame. If it cannot be fetched, decoded or used, the map works without seat labels and the web host reports an `error` event with code `glyphAtlas` (`packages/renderer`: `loadRenderer` starts the fetch with the WASM's, `attach` hands it over).
 - If the snapshot arrives before the chart, it is kept and applied on decode.
 - Until state arrives every seat has status 0 and is drawn available: that is the neutral state of the first frame.
 - A chart that does not decode is reported as `Error` with `BadChart`; the chart already loaded, if any, stays. The old chart's GPU resources are destroyed only once the new chart's are created.
@@ -153,9 +154,9 @@ Derived at load (`cavea_render::overview::Sections`):
 | Table and booth instance buffer | 24 bytes × objects | Once; dynamic part on state change |
 | Palette texture | 33 × (categories + 1), RGBA8 | On theme or pricing change |
 | Overlay instance buffers | 4 instances, static and dynamic layout | When a ring moves |
-| MSDF glyph atlas | 256 × 256, RGB8 | Once |
+| MSDF glyph atlas | 92 × 92, RGBA8 (33,856 bytes, from a 9,458-byte PNG); glyph metrics in a 2,064-byte constant uniform block | Once |
 | Dynamic text atlas | Up to 2048 × 2048, R8 | When new strings or zoom buckets are needed |
-| Label glyph buffers | Per chunk, built lazily, LRU of 64 chunks | On first need |
+| Label glyph buffers | 20 bytes × seats of the largest chunk × up to 64 chunk slots, one buffer; LRU of 64 chunks (§12) | A chunk's slot on first need |
 | Icon atlas | 256 × 256, RGB8 | Once |
 | Background image textures | As shipped, capped at 4096 px | After first frame |
 
@@ -186,7 +187,7 @@ Five shader programs. Draw order, back to front:
 | 6 | Tables and booths | `shape` | Instanced quad | Seats and detail levels |
 | 7 | Seats | `shape` | Instanced quad, one or more ranges | Cross-fade (at the seats' opacity), seats and detail levels |
 | 8 | Seat icons (accessible, selected tick, unavailable cross) | `glyph` | Instanced quad | Detail level |
-| 9 | Seat labels | `glyph` | Instanced quad | Detail level |
+| 9 | Seat labels | `glyph` | Instanced, four glyph quads per seat, one range per visible chunk | Detail level, once the atlas has arrived |
 | 10 | Row labels, section labels, text objects, area labels | `glyph` or `text` | Instanced quad | By size |
 | 11 | Decoration, upper layer and icons | `mesh`, `glyph` | — | Always |
 | 12 | Overlays: hover ring, focus ring, selection box | `shape` | Instanced quad | When present |
@@ -201,7 +202,7 @@ Programs:
 |---|---|---|
 | `shape` | Corner from vertex id; per-instance position, size, angle, shape, category, visual, fx | Signed-distance shape, fill, stroke, anti-aliasing |
 | `mesh` | Position, colour | Vertex colour × pass opacity, premultiplied; section outline vertices hold their section's tint (§10), written by the engine over the white of `03-chart-format.md` §4.2.3 |
-| `glyph` | Corner; per-instance position, size, atlas rectangle, colour index | MSDF median, anti-aliased edge |
+| `glyph` | Glyph slot and corner from vertex id (24 vertices: four quads); per-instance centre, em size, four glyph codes and pen positions (§12); the seat's category and visual state from the seats' dynamic buffer; plane and atlas boxes per glyph from a constant uniform block | MSDF median; coverage from the distance in device pixels, the atlas's range per em × the label's em on screen (a flat value per label), so the edge is one pixel wide at any scale; ink from the palette; premultiplied |
 | `text` | Same as `glyph` | Alpha from R8 bitmap atlas |
 | `image` | Corner; rectangle | Texture × opacity |
 
@@ -265,7 +266,7 @@ Let `s` be the seat size in CSS pixels at the current zoom.
 | **Overview** | `s < 2.5` and the active floor has section fills | Section fills tinted by availability; section labels and "from" price with text and pricing; no seats |
 | **Cross-fade** | `2.5 ≤ s < 5` | Section fills fade out while seats fade in |
 | **Seats** | `5 ≤ s < 14` | Seats, each with its stroke from 5 px on screen (§8); row labels from `s ≥ 8` with text |
-| **Detail** | `s ≥ 14` | As seats, plus seat labels and icons when the text and icon passes exist |
+| **Detail** | `s ≥ 14` | As seats, plus seat labels (§12), and icons when that pass exists |
 
 - **Stroke.** The stroke is not tied to the level: each seat gets it from 5 px on screen by its own size (rows can have larger seats than the default), which is where the seats level begins. Unavailable seats are hollow (§19), so between 5 and 14 px they need the stroke to differ from available seats by more than colour (`11-accessibility.md` §6). Selection follows the same thresholds: a mouse click selects from 5 px (`tuning::SELECT_MIN_SEAT_MOUSE_PX` is the seats threshold), a touch from 18 px (§15).
 - **Hysteresis.** It applies to the level: a level is entered upwards when `s` reaches its threshold and left downwards only when `s` falls below 90% of it (`LOD_HYSTERESIS`), so between 2.25 and 2.5, 4.5 and 5, and 12.6 and 14 px the level is the one the camera came from. After `LoadChart` the level has no history and follows the upward thresholds.
@@ -298,10 +299,15 @@ Let `s` be the seat size in CSS pixels at the current zoom.
 | Text objects | Dynamic atlas | As authored |
 | Prices in overview | MSDF atlas | From `SetPricing` |
 
-- **MSDF atlas:** digits, A–Z, a–z and common punctuation of one open-licensed typeface, baked at build time.
+- **MSDF atlas:** a multi-channel signed distance field of 40 glyphs (0–9, A–Z, space, `-`, `.`, `/`) of Roboto Condensed Medium 3.016 (SIL Open Font Licence 1.1, `github.com/googlefonts/roboto-3-classic`, as nixpkgs packages it; condensed for its tabular 0.5 em digits, medium weight for small sizes), 16 px per em with a 3 px distance range, in a 92 × 92 PNG of 9,458 bytes (`packages/renderer/assets/glyphs.png`, its licence beside it in `OFL.txt`). Lowercase, other punctuation and other scripts come from the dynamic atlas. Measured for the choice (PNG after `oxipng`, brotli adds nothing): this set at 256 × 256 (the size first planned) 41 KB, at 128 × 128 19 KB, at 16 px per em 9.5 KB; all of printable ASCII (94 glyphs) at 256 × 256 62 KB, at 128 × 128 24 KB, at 16 px per em 24 KB. Raw RGB8 with brotli was 4 to 15% larger than the PNG and depends on the server compressing it. Seen in Chromium (software rendering) at ratios 1, 2 and 3: labels read correctly from the 7 px minimum to the largest a label gets (about 110 device px per em at 64 px seats and a ratio of 3); from about 60 px per em the junctions of `3`, `4`, `A` and `B` show small notches from the distance field (the stem's collinear edges either side of a crossbar), visible but not confusing. 20 px per em (13.3 KB) halves them and 24 px per em (16.1 KB) leaves a trace on `4`; the generator's stricter error correction moved the notches onto other edges instead. `#` kept artefacts at every size and was left out.
+- **Baking:** `nix-shell tools/glyph-atlas --run 'python3 -I tools/glyph-atlas/bake.py'` removes the font's overlapping contours (fontTools; Roboto 3's static fonts keep the variable font's overlaps, which leave holes in the field), runs `msdf-atlas-gen` 1.4 (built from source by that shell; nixpkgs has no package) and `oxipng`, and writes the PNG and the metrics (`crates/cavea-render/src/text/glyphs.rs`). Everything is pinned, so the output is byte for byte the same: rerunning it and finding `git status` clean verifies the committed files. CI and builders never run it. A test checks that the metrics cover the set and match the PNG's size.
+- **Delivery:** the host fetches the PNG with the WASM and decodes it with `createImageBitmap` (no colour conversion, no premultiplication); the engine gets the pixels in one `SetGlyphAtlas` and keeps them, so the texture can be made again. The metrics are compiled in (1.4 KB in the WASM), so labels are laid out without the image.
 - **Dynamic atlas:** the host's `TextRasteriser` draws whole strings at a requested pixel size (browser canvas `fillText`, CoreText, Android canvas). The platform does shaping and font fallback. Sizes are bucketed by powers of √2 and re-rasterised when the zoom crosses a bucket.
 - **Collision:** row labels and text objects are placed greedily by priority on a coarse screen grid. Seat labels never collide by construction.
-- **Label buffers:** built per chunk on first need and kept in an LRU of 64 chunks. Building 4,096 seats' labels takes well under a millisecond.
+- **Seat labels** (`cavea_render::text`): the seat part of the label (`cavea_format::full_label::seat_label`), centred on the seat and upright whatever the seat's angle. One instance per seat, 20 bytes: centre (`f32` × 2), em size in chart units (`f32`), four glyph codes (`u8`, 0 an empty slot) and their pen positions from the centre (`i8`, 1/64 em). A label longer than four glyphs, or with a character outside the atlas, is skipped whole (the dynamic atlas will draw those, REN-026).
+- **Size rule:** the label's box, its width by the capital height, fits inside a circle of 0.8 × the seat's size; one- and two-glyph labels, and every label no wider than its count of digits, are sized as that many digits, so a row's numbers look alike. A label is not drawn while its em is under 7 CSS px on screen (capitals under 5 px), which the `glyph` program checks per label: at 14 px seats labels of up to two digits show, three from 15 px, four from 19 px.
+- **Ink follows state:** the instance carries no colour. The `glyph` program reads the seat's category and visual state from the seats' dynamic buffer, bound beside the label buffer at the seat's `idx`, and the ink from the palette (§9). A hold, a delta or a theme change therefore recolours labels with no upload to label buffers.
+- **Label buffers:** one GPU buffer of `min(64, chunks)` slots, each the size of the chart's largest chunk, created on the first frame that draws labels; a chunk's labels are built into a slot on first need and kept in an LRU of 64 chunks; a chunk is rebuilt only when it was evicted and is needed again. Labels draw for exactly the chunks the cull found visible (§11), one range each in one draw call; at most 64 chunks get labels in a frame. On the 1,000 × 800 demo, 8 chunks were visible at 14.4 px seats on `stadium-100k` and 1 at 64 px on `theatre`. The worst case is the detail level's lowest zoom over small chunks: a 1,920 × 1,080 view at 14 px holds about 10,000 seat cells, so 64 visible chunks would take chunks of under about 160 seats; beyond 64, chunks go unlabelled that frame. At most two chunks are built in one frame: the others are built in the next frames, which the engine asks for, so a zoom into a new area shows its labels over a few frames instead of costing one frame several milliseconds. Measured locally (release build, AMD Ryzen 9 7900X): building a 4,033-seat chunk takes 0.30 ms; a frame at detail with eight label draws costs about 3.5 µs more CPU than without labels (the engine with the test backend); creating the 5.2 MB buffer of the 500,000-seat preset takes about 3 ms, once per chart.
 
 ## 13. Camera
 
@@ -499,8 +505,8 @@ At 100,000 seats:
 |---|---|
 | CPU scene arrays | ~2.5 MB |
 | GPU seat buffers | 1.6 MB |
-| Label buffers (64 chunks) | ≤ 6 MB |
-| Text and glyph atlases | ≤ 5 MB |
+| Label buffers (64 chunks) | ≤ 6 MB: 20 bytes a seat, 81,920 bytes for a 4,096-seat chunk, 5.24 MB for 64; 2.1 MB for the `stadium-100k` preset (64 slots of 1,666 seats) |
+| Text and glyph atlases | ≤ 5 MB; the glyph atlas is 33,856 bytes on the GPU and the same on the CPU |
 | Meshes | ≤ 2 MB (the `stadium-100k` preset: 4,636 vertices and 12,816 indices, 106,896 bytes on the GPU and the same decoded on the CPU, measured locally) |
 | WASM code and heap overhead | ≤ 4 MB |
 

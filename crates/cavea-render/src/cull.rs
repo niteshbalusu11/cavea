@@ -11,7 +11,9 @@ use cavea_format::RenderChunk;
 /// the two separated by the fewest seats are merged, which draws those seats
 /// too: some overdraw instead of more draw calls. `chunks` partition the seats
 /// in `idx` order (`cavea_format` checks it), so the ranges come out sorted and
-/// disjoint. Allocates nothing once `out` has grown to the number of chunks.
+/// disjoint. `visible` (cleared first) gets the indices of the chunks drawn,
+/// before merging: the seat labels' draws (04 §12). Allocates nothing once
+/// the vectors have grown to the number of chunks.
 pub fn ranges(
     chunks: &[RenderChunk],
     active: &Range<u32>,
@@ -19,10 +21,12 @@ pub fn ranges(
     pad: f32,
     max: usize,
     out: &mut Vec<Range<u32>>,
+    visible: &mut Vec<u32>,
 ) {
     out.clear();
+    visible.clear();
     let [vx0, vy0, vx1, vy1] = view;
-    for chunk in chunks {
+    for (i, chunk) in (0u32..).zip(chunks) {
         let end = chunk.seat_first.saturating_add(chunk.seat_count);
         let seats = chunk.seat_first.max(active.start)..end.min(active.end);
         if seats.is_empty() {
@@ -32,6 +36,7 @@ pub fn ranges(
         if x1 + pad < vx0 || x0 - pad > vx1 || y1 + pad < vy0 || y0 - pad > vy1 {
             continue;
         }
+        visible.push(i);
         match out.last_mut() {
             Some(last) if last.end == seats.start => last.end = seats.end,
             _ => out.push(seats),

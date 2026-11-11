@@ -194,6 +194,14 @@ impl View {
         self.send(Command::LoadChart { ccf })
     }
 
+    /// The glyph atlas's pixels, RGBA8 as decoded by the browser
+    /// (`loadGlyphAtlas`), passed once. Seat labels appear at the next frame.
+    /// Throws if the size does not match the atlas this build was made for.
+    #[wasm_bindgen(js_name = setGlyphAtlas)]
+    pub fn set_glyph_atlas(&mut self, rgba: Vec<u8>) -> Result<(), JsError> {
+        self.send(Command::SetGlyphAtlas { rgba })
+    }
+
     /// A built-in theme: `light`, `dark` or `high-contrast` (04 §19).
     #[wasm_bindgen(js_name = setTheme)]
     pub fn set_theme(&mut self, name: &str) -> Result<(), JsError> {
@@ -337,6 +345,15 @@ impl View {
                 height,
             }),
         })
+    }
+
+    /// Demo only: seat label chunks built since the chart loaded, chunks kept,
+    /// and label draw calls in the last frame (04 §12).
+    #[cfg(feature = "demo")]
+    #[wasm_bindgen(js_name = labelStats)]
+    pub fn label_stats(&self) -> Vec<u32> {
+        let stats = self.engine.label_stats();
+        vec![stats.built, stats.cached, stats.draws]
     }
 
     /// Demo only: the `idx` of a seat's full label, for the fake host.

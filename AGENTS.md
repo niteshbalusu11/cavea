@@ -50,6 +50,10 @@ Toolchains: Rust is pinned in `rust-toolchain.toml` (with the `wasm32-unknown-un
 - `bun run dev --port <port>` in `apps/console`: the console dev server
 - `bun run dev --port <port>` in `apps/demo`, after `cargo xtask build-web --demo`: 100,000 synthetic seats drawn by the renderer (query parameters in `apps/demo/src/main.ts`)
 
+**Glyph atlas**
+
+- `nix-shell tools/glyph-atlas --run 'python3 -I tools/glyph-atlas/bake.py'`: rebakes the seat labels' atlas (`packages/renderer/assets/glyphs.png`) and its metrics (`crates/cavea-render/src/text/glyphs.rs`) from the pinned font and tools (`docs/04-renderer.md` §12). The output is committed and deterministic; only a change to the glyph set or the font needs it. A clean `git status` afterwards verifies the committed files. The first run builds `msdf-atlas-gen` (about a minute)
+
 **Database**
 
 - `docker compose -f deploy/compose.yaml up -d --wait`: PostgreSQL 18 on `127.0.0.1:${CAVEA_PG_PORT:-5432}`, user, password and database all `cavea`

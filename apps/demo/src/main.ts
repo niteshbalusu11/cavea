@@ -27,14 +27,19 @@
 //
 // The chart has a pitch below the seats and a translucent band above them
 // (mesh decoration). Each frame line reports the level of detail
-// (`cameraChanged`) and the WebGL draw calls the frame made.
+// (`cameraChanged`), the WebGL draw calls the frame made, and the seat
+// labels: chunks built, chunks kept, label draw calls. Seat numbers show from
+// 14 px seats once the glyph atlas has arrived; `atlasDelay=ms` holds it back
+// that long, `atlas=url` fetches it from elsewhere (a bad URL shows the map
+// without labels and an `error` event).
 //
 // `window.caveaDemo` counts frames, WebGL errors and draw calls (`lod`,
 // `frameDraws`), keeps every engine event in `events`, and offers
 // `setTheme(name)`, `crowd(on)`, `resnapshot()`, `take(label)` (someone else
 // takes a seat, in a DELTA), `sell(from, count)` (the same for an `idx`
-// range) and `gap()` (a DELTA that skips a sequence number, so the view asks
-// to resync and this host answers with a SNAPSHOT) for scripted checks.
+// range), `gap()` (a DELTA that skips a sequence number, so the view asks
+// to resync and this host answers with a SNAPSHOT) and `camera(x, y, width,
+// height)` (fits that chart rectangle) for scripted checks.
 import {
   attach,
   loadRenderer,
@@ -47,6 +52,7 @@ import {
 interface DemoExports {
   setCamera(x: number, y: number, width: number, height: number): void;
   idxOf(label: string): number | undefined;
+  labelStats(): Uint32Array;
 }
 interface DemoStatics {
   demoChart(seats: number, seed: number, shape: number, preset: string): Uint8Array;
@@ -101,11 +107,21 @@ const crowdMs = Number(params.get("crowd") ?? 0);
 const crowdSize = Number(params.get("crowdSize") ?? 20);
 const snipe = params.get("snipe") === "1";
 const gapEvery = Number(params.get("gap") ?? 0);
+const atlasDelay = Number(params.get("atlasDelay") ?? 0);
 if (gestures === "cooperative") {
   document.body.classList.add("scrolling");
 }
 
-const renderer = await loadRenderer();
+const renderer = await loadRenderer(undefined, params.get("atlas") ?? undefined);
+const glyphAtlas = renderer.glyphAtlas.then(
+  (pixels) =>
+    new Promise<Uint8Array>((resolve) =>
+      setTimeout(() => {
+        report(`glyph atlas (${pixels.length} B RGBA) applied after frame ${stats.frames}`);
+        resolve(pixels);
+      }, atlasDelay),
+    ),
+);
 const view = new View(canvas) as View & Partial<DemoExports>;
 const statics = View as typeof View & Partial<DemoStatics>;
 const gl = canvas.getContext("webgl2");
@@ -129,6 +145,7 @@ const stats = {
   lod: "",
   drawCalls: 0,
   frameDraws: 0,
+  labels: [0, 0, 0],
   setTheme,
   events,
   crowd: (on: boolean) => crowd(on),
@@ -137,6 +154,10 @@ const stats = {
   sell: (from: number, count: number) =>
     sendDelta(new Map(Array.from({ length: count }, (_, k) => [from + k, 1]))),
   gap: () => sendDelta(new Map(), true),
+  camera: (x: number, y: number, width: number, height: number) => {
+    view.setCamera?.(x, y, width, height);
+    host?.update();
+  },
 };
 Object.assign(window, { caveaDemo: stats });
 let afterFirstFrame: (() => void) | undefined;
@@ -171,12 +192,15 @@ function onFrame(time: number): void {
   }
   stats.frameDraws = stats.drawCalls - drawsBefore;
   drawsBefore = stats.drawCalls;
+  stats.labels = [...(view.labelStats?.() ?? [])];
   const frames = stats.frames;
+  const [built = 0, kept = 0, labelDraws = 0] = stats.labels;
   // After this frame's events, so the level is the one it was drawn at.
   queueMicrotask(() =>
     report(
       `frame ${frames} at ${time.toFixed(0)}: gl.getError() = ${error}; ` +
-        `level ${stats.lod}, ${stats.frameDraws} draw calls`,
+        `level ${stats.lod}, ${stats.frameDraws} draw calls; ` +
+        `labels: ${built} chunks built, ${kept} kept, ${labelDraws} draws`,
     ),
   );
   const next = afterFirstFrame;
@@ -393,6 +417,9 @@ function onEvents(batch: RendererEvent[]): void {
       case "cameraChanged":
         stats.lod = event.lod;
         break;
+      case "error":
+        report(`error ${event.code}: ${event.message}`);
+        break;
       default:
         break;
     }
@@ -434,7 +461,7 @@ if (statics.demoChart === undefined || view.idxOf === undefined || view.setCamer
     report(`snapshot at seq ${seq} applied in ${(performance.now() - start).toFixed(1)} ms`);
     crowd(true);
   };
-  const options = { gestureHandling: gestures, onFrame, onEvents };
+  const options = { gestureHandling: gestures, onFrame, onEvents, glyphAtlas };
   host = attach(
     view,
     canvas,

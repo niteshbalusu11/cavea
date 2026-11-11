@@ -15,8 +15,8 @@ use naga::{
     valid::{Capabilities, ValidationFlags, Validator},
 };
 
-/// Programs translated at build time; the others in `Pipeline` come in later slices.
-const PROGRAMS: &[&str] = &["shape", "mesh"];
+/// Programs translated at build time; `text` and `image` come in later slices.
+const PROGRAMS: &[&str] = &["shape", "mesh", "glyph"];
 
 fn main() {
     if let Err(message) = run() {

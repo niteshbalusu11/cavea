@@ -13,7 +13,7 @@ use super::{
     BackendError, BufferDesc, BufferId, BufferKind, BufferUsage, Caps, DrawCall, GpuBackend,
     Pipeline, Rect, ResourceId, Sampling, Target, TextureDesc, TextureFormat, TextureId,
 };
-use crate::{seat, shaders};
+use crate::{seat, shaders, text};
 
 /// A linked program and its attribute layout.
 struct Program {
@@ -29,7 +29,8 @@ pub struct GlowBackend {
     caps: Caps,
     shape: Program,
     mesh: Program,
-    /// The uniform buffer both programs read at binding point 0.
+    glyph: Program,
+    /// The uniform buffer every program reads at binding point 0.
     globals: glow::Buffer,
     buffers: Vec<Option<(glow::Buffer, u32, BufferKind)>>,
     textures: Vec<Option<(glow::Texture, TextureDesc)>>,
@@ -50,6 +51,12 @@ impl GlowBackend {
             };
             let shape = shape_program(&gl)?;
             let mesh = mesh_program(&gl)?;
+            let glyph = glyph_program(&gl)?;
+            // The glyph metrics never change: one block at binding point 1.
+            let font = gl.create_buffer().map_err(BackendError::Create)?;
+            gl.bind_buffer(glow::UNIFORM_BUFFER, Some(font));
+            gl.buffer_data_u8_slice(glow::UNIFORM_BUFFER, &text::font_block(), glow::STATIC_DRAW);
+            gl.bind_buffer_base(glow::UNIFORM_BUFFER, 1, Some(font));
             let globals = gl.create_buffer().map_err(BackendError::Create)?;
             gl.bind_buffer(glow::UNIFORM_BUFFER, Some(globals));
             gl.buffer_data_size(
@@ -63,6 +70,7 @@ impl GlowBackend {
                 caps,
                 shape,
                 mesh,
+                glyph,
                 globals,
                 buffers: Vec::new(),
                 textures: Vec::new(),
@@ -100,7 +108,7 @@ impl GlowBackend {
         let (static_buf, static_len) = self.buffer(static_id)?;
         let (dynamic_buf, dynamic_len) = self.buffer(dynamic_id)?;
         let palette = self
-            .texture(call.texture.ok_or(BackendError::UnknownResource)?)?
+            .texture(call.textures[0].ok_or(BackendError::UnknownResource)?)?
             .0;
         for range in call.ranges {
             if range.start > range.end
@@ -175,6 +183,95 @@ impl GlowBackend {
         Ok(())
     }
 
+    /// Seat labels: per range, the label buffer from its base instance and
+    /// the dynamic buffer from the range's first seat; 24 vertices (four
+    /// glyph quads) per instance.
+    fn draw_glyph(&self, call: &DrawCall<'_>) -> Result<(), BackendError> {
+        let [label_id, dynamic_id] = call.buffers;
+        let (label_buf, label_len) = self.buffer(label_id)?;
+        let (dynamic_buf, dynamic_len) = self.buffer(dynamic_id)?;
+        let [atlas_id, palette_id] = call.textures;
+        let atlas = self
+            .texture(atlas_id.ok_or(BackendError::UnknownResource)?)?
+            .0;
+        let palette = self
+            .texture(palette_id.ok_or(BackendError::UnknownResource)?)?
+            .0;
+        let stride = text::LABEL_STRIDE as u64;
+        if call.bases.len() != call.ranges.len() {
+            return Err(BackendError::InvalidData);
+        }
+        for (range, &base) in call.ranges.iter().zip(call.bases) {
+            let label_end = u64::from(base) + u64::from(range.end.saturating_sub(range.start));
+            if range.start > range.end
+                || label_end * stride > u64::from(label_len)
+                || u64::from(range.end) * seat::DYNAMIC_STRIDE as u64 > u64::from(dynamic_len)
+                || i32::try_from(label_end * stride).is_err()
+                || i32::try_from(u64::from(range.end) * seat::DYNAMIC_STRIDE as u64).is_err()
+            {
+                return Err(BackendError::InvalidData);
+            }
+        }
+        let label_stride = text::LABEL_STRIDE as i32;
+        let dynamic_stride = seat::DYNAMIC_STRIDE as i32;
+        let gl = &self.gl;
+        // SAFETY: see the module documentation; every range was checked above,
+        // so the offsets and counts below fit in i32 and inside the buffers.
+        unsafe {
+            self.uniforms(call);
+            gl.use_program(Some(self.glyph.program));
+            gl.bind_vertex_array(Some(self.glyph.vao));
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(atlas));
+            gl.active_texture(glow::TEXTURE1);
+            gl.bind_texture(glow::TEXTURE_2D, Some(palette));
+            gl.active_texture(glow::TEXTURE0);
+            for (range, &base) in call.ranges.iter().zip(call.bases) {
+                let label = (base as usize * text::LABEL_STRIDE) as i32;
+                let dynamic = (range.start as usize * seat::DYNAMIC_STRIDE) as i32;
+                gl.bind_buffer(glow::ARRAY_BUFFER, Some(label_buf));
+                gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, label_stride, label);
+                gl.vertex_attrib_pointer_f32(1, 1, glow::FLOAT, false, label_stride, label + 8);
+                // Integer attributes at the byte offsets of `text.rs` and `seat.rs`.
+                for (location, size, ty, buffer, stride, offset) in [
+                    (
+                        2,
+                        4,
+                        glow::UNSIGNED_BYTE,
+                        label_buf,
+                        label_stride,
+                        label + 12,
+                    ),
+                    (3, 4, glow::BYTE, label_buf, label_stride, label + 16),
+                    (
+                        4,
+                        1,
+                        glow::UNSIGNED_SHORT,
+                        dynamic_buf,
+                        dynamic_stride,
+                        dynamic,
+                    ),
+                    (
+                        5,
+                        2,
+                        glow::UNSIGNED_BYTE,
+                        dynamic_buf,
+                        dynamic_stride,
+                        dynamic + 2,
+                    ),
+                ] {
+                    gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
+                    gl.vertex_attrib_pointer_i32(location, size, ty, stride, offset);
+                }
+                let count = (range.end - range.start) as i32;
+                let vertices = (6 * text::MAX_GLYPHS) as i32;
+                gl.draw_arrays_instanced(glow::TRIANGLES, 0, vertices, count);
+            }
+            gl.bind_vertex_array(None);
+        }
+        Ok(())
+    }
+
     /// Indexed triangles: each range is a range of the index buffer.
     fn draw_mesh(&self, call: &DrawCall<'_>) -> Result<(), BackendError> {
         let [vertex_id, index_id] = call.buffers;
@@ -210,31 +307,31 @@ impl GlowBackend {
     }
 }
 
-/// Links a program, binds its uniform blocks to binding point 0 and its
-/// sampler, if any, to texture unit 0, and makes an attribute layout with
+/// Links a program, binds each uniform block to its binding point and each
+/// sampler to its texture unit, and makes an attribute layout with
 /// `attributes` arrays enabled, per instance when `instanced`.
 unsafe fn program(
     gl: &glow::Context,
     [vert, frag]: [&str; 2],
-    blocks: &[&str],
-    sampler: Option<&str>,
+    blocks: &[(&str, u32)],
+    samplers: &[(&str, i32)],
     attributes: u32,
     instanced: bool,
 ) -> Result<Program, BackendError> {
     // SAFETY: see the module documentation.
     unsafe {
         let program = link(gl, vert, frag)?;
-        for block in blocks {
+        for &(block, binding) in blocks {
             if let Some(index) = gl.get_uniform_block_index(program, block) {
-                gl.uniform_block_binding(program, index, 0);
+                gl.uniform_block_binding(program, index, binding);
             }
         }
-        if let Some(sampler) = sampler {
-            gl.use_program(Some(program));
+        gl.use_program(Some(program));
+        for &(sampler, unit) in samplers {
             let location = gl.get_uniform_location(program, sampler);
-            gl.uniform_1_i32(location.as_ref(), 0);
-            gl.use_program(None);
+            gl.uniform_1_i32(location.as_ref(), unit);
         }
+        gl.use_program(None);
         let vao = gl.create_vertex_array().map_err(BackendError::Create)?;
         gl.bind_vertex_array(Some(vao));
         for location in 0..attributes {
@@ -249,26 +346,46 @@ unsafe fn program(
 }
 
 fn shape_program(gl: &glow::Context) -> Result<Program, BackendError> {
-    let blocks = [shaders::SHAPE_VERT_GLOBALS, shaders::SHAPE_FRAG_GLOBALS];
+    let blocks = [
+        (shaders::SHAPE_VERT_GLOBALS, 0),
+        (shaders::SHAPE_FRAG_GLOBALS, 0),
+    ];
     let sources = [shaders::SHAPE_VERT, shaders::SHAPE_FRAG];
+    let samplers = [(shaders::SHAPE_VERT_PALETTE, 0)];
     // SAFETY: see the module documentation.
-    unsafe {
-        program(
-            gl,
-            sources,
-            &blocks,
-            Some(shaders::SHAPE_VERT_PALETTE),
-            5,
-            true,
-        )
-    }
+    unsafe { program(gl, sources, &blocks, &samplers, 5, true) }
+}
+
+/// The `glyph` program: the globals at binding point 0, the glyph metrics at
+/// 1; the atlas on texture unit 0, the palette on 1.
+fn glyph_program(gl: &glow::Context) -> Result<Program, BackendError> {
+    let blocks = [
+        (shaders::GLYPH_VERT_GLOBALS, 0),
+        (shaders::GLYPH_VERT_FONT, 1),
+    ];
+    let sources = [shaders::GLYPH_VERT, shaders::GLYPH_FRAG];
+    let samplers = [
+        (shaders::GLYPH_FRAG_ATLAS, 0),
+        (shaders::GLYPH_VERT_PALETTE, 1),
+    ];
+    // SAFETY: see the module documentation.
+    unsafe { program(gl, sources, &blocks, &samplers, 6, true) }
 }
 
 /// The `mesh` program reads its uniforms in the vertex stage only.
 fn mesh_program(gl: &glow::Context) -> Result<Program, BackendError> {
     let sources = [shaders::MESH_VERT, shaders::MESH_FRAG];
     // SAFETY: see the module documentation.
-    unsafe { program(gl, sources, &[shaders::MESH_VERT_GLOBALS], None, 2, false) }
+    unsafe {
+        program(
+            gl,
+            sources,
+            &[(shaders::MESH_VERT_GLOBALS, 0)],
+            &[],
+            2,
+            false,
+        )
+    }
 }
 
 /// Compiles and links one program, returning the driver's log on failure.
@@ -487,6 +604,7 @@ impl GpuBackend for GlowBackend {
         match call.pipeline {
             Pipeline::Shape => self.draw_shape(call),
             Pipeline::Mesh => self.draw_mesh(call),
+            Pipeline::Glyph => self.draw_glyph(call),
             other => Err(BackendError::Unsupported(other)),
         }
     }

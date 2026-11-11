@@ -13,6 +13,7 @@ mod chart;
 mod overview;
 mod select;
 mod state;
+mod text;
 use PointerKind::{Cancel, Down, Move, Up};
 
 const MOUSE: PointerType = PointerType::Mouse;
@@ -40,6 +41,8 @@ struct Fake {
     calls: Vec<(Pipeline, Vec<Range<u32>>, f32)>,
     /// The dim factor of each `draw`.
     dims: Vec<f32>,
+    /// Ranges and label buffer bases of each `glyph` draw.
+    glyph_draws: Vec<(Vec<Range<u32>>, Vec<u32>)>,
     targets: Vec<Target>,
     clears: Vec<[f32; 4]>,
 }
@@ -113,6 +116,8 @@ impl GpuBackend for Fake {
         if call.pipeline == Pipeline::Shape {
             self.draws.push(ranges);
             self.dims.push(call.uniforms.dim);
+        } else if call.pipeline == Pipeline::Glyph {
+            self.glyph_draws.push((ranges, call.bases.to_vec()));
         }
         Ok(())
     }

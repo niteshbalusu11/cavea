@@ -34,9 +34,12 @@ const BASELINE: &str = "xtask/payload-baseline.json";
 const PAYLOAD_CAP: usize = 200_000;
 /// Growth over the baseline, in percent, that fails the build.
 const MAX_GROWTH_PERCENT: usize = 3;
-/// Files of the payload, by extension: the JavaScript glue and the WASM. The
-/// font atlas joins them when the renderer has one.
+/// Files of the payload, by extension: the JavaScript glue and the WASM.
 const PAYLOAD: [&str; 2] = ["js", "wasm"];
+/// The glyph atlas, the rest of the payload (`docs/01-architecture.md` §5),
+/// relative to the workspace root. Baked by `tools/glyph-atlas`; a PNG, so its
+/// brotli size is about its own.
+const ATLAS: &str = "packages/renderer/assets/glyphs.png";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
@@ -126,7 +129,7 @@ fn build_web(mode: Mode) -> Result<()> {
 
     let wasm = out_dir.join("cavea_web_bg.wasm");
     let wasm_opt_version = wasm_opt(&wasm)?;
-    let measured = size_report(&out_dir)?;
+    let measured = size_report(&out_dir, &root.join(ATLAS))?;
     if demo {
         println!("demo build: includes the synthetic generator; not the production payload");
         return Ok(());
@@ -287,7 +290,7 @@ fn wasm_opt_version(output: &str) -> Option<String> {
 }
 
 /// Prints the size of each payload file and returns their brotli total.
-fn size_report(dir: &Path) -> Result<usize> {
+fn size_report(dir: &Path, atlas: &Path) -> Result<usize> {
     let mut files: Vec<PathBuf> = fs::read_dir(dir)?
         .map(|entry| entry.map(|e| e.path()))
         .collect::<Result<_, _>>()?;
@@ -296,11 +299,12 @@ fn size_report(dir: &Path) -> Result<usize> {
             .is_some_and(|ext| PAYLOAD.iter().any(|p| ext == *p))
     });
     files.sort();
+    files.push(atlas.to_path_buf());
 
     println!("\n{:<28} {:>10} {:>10}", "payload", "raw", "brotli");
     let (mut total_raw, mut total_br) = (0, 0);
     for path in &files {
-        let bytes = fs::read(path)?;
+        let bytes = fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
         let br = brotli_len(&bytes)?;
         total_raw += bytes.len();
         total_br += br;
@@ -310,7 +314,10 @@ fn size_report(dir: &Path) -> Result<usize> {
             .unwrap_or_default();
         println!("{name:<28} {:>10} {:>10}", bytes.len(), br);
     }
-    println!("{:<28} {total_raw:>10} {total_br:>10}", "total (js + wasm)");
+    println!(
+        "{:<28} {total_raw:>10} {total_br:>10}",
+        "total (js + wasm + atlas)"
+    );
     println!("bytes; brotli at quality 11. Output: {}", dir.display());
     Ok(total_br)
 }

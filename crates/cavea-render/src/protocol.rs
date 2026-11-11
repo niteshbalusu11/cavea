@@ -229,6 +229,12 @@ pub enum Command {
         base: BuiltinTheme,
         tokens: Vec<ThemeToken>,
     },
+    /// The baked glyph atlas's pixels (04 §12), decoded by the host: RGBA8,
+    /// `text::ATLAS_SIZE`, rows from the top. Seat labels are drawn from the
+    /// first frame after it; without it there are none.
+    SetGlyphAtlas {
+        rgba: Vec<u8>,
+    },
     SetMode(Mode),
     /// Refused with `InvalidInput` while anything is selected or a request
     /// is outstanding.
