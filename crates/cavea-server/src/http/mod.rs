@@ -19,6 +19,7 @@ mod events;
 pub mod extract;
 pub mod health;
 mod keys;
+mod members;
 mod objects;
 pub mod openapi;
 mod panic;
@@ -43,11 +44,12 @@ use crate::limiter::Limiter;
 use crate::realtime::Realtime;
 use crate::seats::Seats;
 
-pub use auth::{AdminKey, AdminKeyAuth, Auth, PublishableKey, QueryKey, SecretKey};
+pub use auth::{AdminKey, AdminKeyAuth, Auth, PublishableKey, QueryKey};
 pub use error::{ApiError, Code};
 pub use extract::{Json, Path, Query};
 pub use health::Health;
 pub(crate) use public::parse_hash;
+pub use staff::{Member, Staff};
 
 /// Shared with every handler through `State<AppState>`. Cheap to clone.
 #[derive(Debug, Clone)]
@@ -89,6 +91,7 @@ fn routes() -> openapi::Routes {
         .merge(public::routes())
         .merge(realtime::routes())
         .merge(console::routes())
+        .merge(members::routes())
 }
 
 /// Add the problem+json fallbacks, the default body limit, CORS for the public
@@ -102,6 +105,10 @@ fn finish(routes: Router<AppState>, state: AppState) -> Router {
         })
         .layer(DefaultBodyLimit::max(extract::DEFAULT_BODY_LIMIT))
         .layer(middleware::from_fn_with_state(state.clone(), public::cors))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            staff::no_store_for_cookies,
+        ))
         // Inside the request span, so that a panic's `500` carries the request
         // id and is logged and counted under its route.
         .layer(panic::CatchPanicLayer)

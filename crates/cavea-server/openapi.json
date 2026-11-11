@@ -47,10 +47,10 @@
         }
       },
       "CsrfToken": {
-        "description": "Required: the session's `csrf_token` from `GET /console/api/me` (or sign-in).",
+        "description": "With a console session, required: the session's `csrf_token` from `GET /console/api/me` (or sign-in). Not used with an API key.",
         "in": "header",
         "name": "Cavea-Csrf-Token",
-        "required": true,
+        "required": false,
         "schema": {
           "type": "string"
         }
@@ -136,6 +136,24 @@
         "in": "path",
         "name": "token",
         "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "UserPath": {
+        "description": "A console user's id: `usr_` and 32 hex digits.",
+        "in": "path",
+        "name": "user",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Workspace": {
+        "description": "With a console session, required: the workspace acted on, `ws_` and 32 hex digits, one the user is a member of. Ignored with a secret key, whose workspace is its own.",
+        "in": "header",
+        "name": "Cavea-Workspace",
+        "required": false,
         "schema": {
           "type": "string"
         }
@@ -365,6 +383,24 @@
         ],
         "type": "object"
       },
+      "ChangeRole": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "enum": [
+              "owner",
+              "admin",
+              "editor",
+              "operator",
+              "viewer"
+            ]
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "type": "object"
+      },
       "ChangeStatus": {
         "additionalProperties": false,
         "properties": {
@@ -528,6 +564,26 @@
                 "name": {
                   "type": "string"
                 },
+                "permissions": {
+                  "description": "What the role allows: compare with an operation's `x-cavea-permission`.",
+                  "items": {
+                    "enum": [
+                      "charts.read",
+                      "charts.write",
+                      "charts.archive",
+                      "events.read",
+                      "events.write",
+                      "seats.hold",
+                      "seats.write",
+                      "channels.assign",
+                      "reports.read",
+                      "developers",
+                      "settings",
+                      "ownership"
+                    ]
+                  },
+                  "type": "array"
+                },
                 "role": {
                   "enum": [
                     "owner",
@@ -542,7 +598,8 @@
                 "id",
                 "key",
                 "name",
-                "role"
+                "role",
+                "permissions"
               ],
               "type": "object"
             },
@@ -1290,6 +1347,28 @@
         ],
         "type": "object"
       },
+      "MemberList": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceMember"
+            },
+            "type": "array"
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "next"
+        ],
+        "type": "object"
+      },
       "MintKey": {
         "additionalProperties": false,
         "properties": {
@@ -1788,6 +1867,42 @@
           "next"
         ],
         "type": "object"
+      },
+      "WorkspaceMember": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "enum": [
+              "owner",
+              "admin",
+              "editor",
+              "operator",
+              "viewer"
+            ]
+          },
+          "user": {
+            "additionalProperties": false,
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "id": {
+                "description": "`usr_` and 32 hex digits.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "email"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "user",
+          "role"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -1797,7 +1912,7 @@
         "type": "http"
       },
       "consoleSession": {
-        "description": "A staff member's console session (09 §2), set by `POST /console/api/session` or `/console/api/setup`; `cavea_console` when `CAVEA_CONSOLE_COOKIE_SECURE=false`. Not the buyer's session token. With it, a non-safe method sends `Cavea-Csrf-Token`.",
+        "description": "A staff member's console session (09 §2), set by `POST /console/api/session` or `/console/api/setup`; `cavea_console` when `CAVEA_CONSOLE_COOKIE_SECURE=false`. Not the buyer's session token. With it, a non-safe method sends `Cavea-Csrf-Token`, and a `/v1` route names its workspace in `Cavea-Workspace`.",
         "in": "cookie",
         "name": "__Host-cavea_console",
         "type": "apiKey"
@@ -1835,7 +1950,7 @@
     }
   },
   "info": {
-    "description": "The Cavea server's REST API (`docs/08-server.md` §6). JSON bodies with `snake_case` fields; times are RFC 3339 UTC. Every response carries `Cavea-Request-Id`; a caller may send its own (1 to 64 characters of `A-Z a-z 0-9 . _ -`). Errors are `application/problem+json` with a stable `code` (08 §6.4): match on `code`, not on `message`. Lists are `{\"data\": [..], \"next\": <cursor or null>}`, oldest first; pass `next` back as `after`. The WebSocket protocol of `GET /v1/public/rt` is 08 §8, which OpenAPI cannot describe. The `/console/api` routes take the console session cookie (09 §10); their non-safe methods send `Cavea-Csrf-Token`.",
+    "description": "The Cavea server's REST API (`docs/08-server.md` §6). JSON bodies with `snake_case` fields; times are RFC 3339 UTC. Routes under `/v1` that take a secret key also take a console session (the cookie `/console/api/session` sets, 09 §10): the request names its workspace in `Cavea-Workspace`, a non-safe method carries `Cavea-Csrf-Token`, and the member's role must grant the operation's `x-cavea-permission` (`x-cavea-roles` lists the roles that do, 09 §2). Every response carries `Cavea-Request-Id`; a caller may send its own (1 to 64 characters of `A-Z a-z 0-9 . _ -`). Errors are `application/problem+json` with a stable `code` (08 §6.4): match on `code`, not on `message`. Lists are `{\"data\": [..], \"next\": <cursor or null>}`, oldest first; pass `next` back as `after`. The WebSocket protocol of `GET /v1/public/rt` is 08 §8, which OpenAPI cannot describe.",
     "title": "Cavea server API",
     "version": "0.0.0"
   },
@@ -1882,6 +1997,202 @@
         "summary": "The signed-in user",
         "tags": [
           "console"
+        ]
+      }
+    },
+    "/console/api/members": {
+      "get": {
+        "description": "Ordered by user id.",
+        "operationId": "listMembers",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberList"
+                }
+              }
+            },
+            "description": "A page of members",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "List the workspace's members",
+        "tags": [
+          "console"
+        ],
+        "x-cavea-permission": "settings",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/console/api/members/{user}": {
+      "delete": {
+        "description": "Applies to the member's next request; the user and their other workspaces stay. Removing an owner needs `ownership`; the last owner cannot be removed.",
+        "operationId": "removeMember",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Remove a member",
+        "tags": [
+          "console"
+        ],
+        "x-cavea-permission": "settings",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
+        ]
+      },
+      "patch": {
+        "description": "Applies to the member's next request. Making or unmaking an owner needs `ownership`; the last owner cannot be changed (`400`, `last_owner`).",
+        "operationId": "changeMemberRole",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeRole"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceMember"
+                }
+              }
+            },
+            "description": "The member",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Change a member's role",
+        "tags": [
+          "console"
+        ],
+        "x-cavea-permission": "settings",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
         ]
       }
     },
@@ -2239,6 +2550,14 @@
       "post": {
         "description": "The body is the image: PNG, JPEG or WebP, decided by its bytes (any `Content-Type` is ignored); at most `CAVEA_ASSET_MAX_BYTES` (10 MiB by default) and 8,192 pixels a side. Refused with `400` and `reason`: `body_too_large`, `asset_type`, `asset_malformed` (truncated, or data after the image's end) or `asset_dimensions`.",
         "operationId": "uploadAsset",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/octet-stream": {},
@@ -2298,11 +2617,20 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Upload an image",
         "tags": [
           "assets"
+        ],
+        "x-cavea-permission": "charts.write",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "editor"
         ]
       }
     },
@@ -2311,6 +2639,9 @@
         "description": "Archived charts included; never drafts. The cursor is a chart key.",
         "operationId": "listCharts",
         "parameters": [
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
           {
             "$ref": "#/components/parameters/Limit"
           },
@@ -2353,15 +2684,34 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "List charts",
         "tags": [
           "charts"
+        ],
+        "x-cavea-permission": "charts.read",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "editor",
+          "operator",
+          "viewer"
         ]
       },
       "post": {
         "operationId": "createChart",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2410,11 +2760,20 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Create a chart",
         "tags": [
           "charts"
+        ],
+        "x-cavea-permission": "charts.write",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "editor"
         ]
       }
     },
@@ -2425,6 +2784,12 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/ChartPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
           }
         ],
         "responses": {
@@ -2465,11 +2830,19 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Archive a chart",
         "tags": [
           "charts"
+        ],
+        "x-cavea-permission": "charts.archive",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
         ]
       },
       "get": {
@@ -2477,6 +2850,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/ChartPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
           }
         ],
         "responses": {
@@ -2517,11 +2893,22 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "A chart",
         "tags": [
           "charts"
+        ],
+        "x-cavea-permission": "charts.read",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "editor",
+          "operator",
+          "viewer"
         ]
       }
     },
@@ -2531,6 +2918,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/ChartPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
           }
         ],
         "responses": {
@@ -2574,11 +2964,22 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "The draft document",
         "tags": [
           "charts"
+        ],
+        "x-cavea-permission": "charts.read",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "editor",
+          "operator",
+          "viewer"
         ]
       },
       "put": {
@@ -2587,6 +2988,12 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/ChartPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
           },
           {
             "$ref": "#/components/parameters/IfMatchRequired"
@@ -2646,11 +3053,20 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Replace the draft",
         "tags": [
           "charts"
+        ],
+        "x-cavea-permission": "charts.write",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "editor"
         ]
       }
     },
@@ -2660,6 +3076,12 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/ChartPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
           },
           {
             "$ref": "#/components/parameters/IfMatch"
@@ -2724,11 +3146,20 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Publish the draft",
         "tags": [
           "charts"
+        ],
+        "x-cavea-permission": "charts.write",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "editor"
         ]
       }
     },
@@ -2738,6 +3169,12 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/ChartPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
           }
         ],
         "responses": {
@@ -2778,11 +3215,20 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Validate the draft",
         "tags": [
           "charts"
+        ],
+        "x-cavea-permission": "charts.write",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "editor"
         ]
       }
     },
@@ -2792,6 +3238,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/ChartPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
           },
           {
             "$ref": "#/components/parameters/Limit"
@@ -2838,11 +3287,22 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "List versions",
         "tags": [
           "charts"
+        ],
+        "x-cavea-permission": "charts.read",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "editor",
+          "operator",
+          "viewer"
         ]
       }
     },
@@ -2851,6 +3311,9 @@
         "description": "Archived events included. The cursor is an event key.",
         "operationId": "listEvents",
         "parameters": [
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
           {
             "$ref": "#/components/parameters/Limit"
           },
@@ -2893,16 +3356,35 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "List events",
         "tags": [
           "events"
+        ],
+        "x-cavea-permission": "events.read",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "editor",
+          "operator",
+          "viewer"
         ]
       },
       "post": {
         "description": "Pins the chart's published version, or `version`.",
         "operationId": "createEvent",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2954,11 +3436,19 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Create an event",
         "tags": [
           "events"
+        ],
+        "x-cavea-permission": "events.write",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
         ]
       }
     },
@@ -2969,6 +3459,12 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/EventPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
           }
         ],
         "responses": {
@@ -3009,11 +3505,19 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Archive an event",
         "tags": [
           "events"
+        ],
+        "x-cavea-permission": "events.write",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
         ]
       },
       "get": {
@@ -3021,6 +3525,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/EventPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
           }
         ],
         "responses": {
@@ -3061,11 +3568,22 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "An event, with its counts",
         "tags": [
           "events"
+        ],
+        "x-cavea-permission": "events.read",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "editor",
+          "operator",
+          "viewer"
         ]
       },
       "patch": {
@@ -3073,6 +3591,12 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/EventPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
           }
         ],
         "requestBody": {
@@ -3123,11 +3647,19 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Change an event's name or settings",
         "tags": [
           "events"
+        ],
+        "x-cavea-permission": "events.write",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
         ]
       }
     },
@@ -3137,6 +3669,12 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/EventPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
           },
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -3196,11 +3734,20 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Book by hold token or directly",
         "tags": [
           "events"
+        ],
+        "x-cavea-permission": "seats.write",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "operator"
         ]
       }
     },
@@ -3210,6 +3757,12 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/EventPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
           },
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -3266,11 +3819,20 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Block, unblock or set a custom status",
         "tags": [
           "events"
+        ],
+        "x-cavea-permission": "seats.write",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "operator"
         ]
       }
     },
@@ -3280,6 +3842,12 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/EventPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
           },
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -3339,11 +3907,19 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Hold objects under a token",
         "tags": [
           "events"
+        ],
+        "x-cavea-permission": "seats.hold",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
         ]
       }
     },
@@ -3354,6 +3930,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/EventPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
           },
           {
             "description": "Objects' labels: `label=A&label=B`.",
@@ -3438,11 +4017,22 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Objects' status",
         "tags": [
           "events"
+        ],
+        "x-cavea-permission": "events.read",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "editor",
+          "operator",
+          "viewer"
         ]
       }
     },
@@ -3452,6 +4042,12 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/EventPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
           },
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -3508,11 +4104,20 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Release held or booked objects",
         "tags": [
           "events"
+        ],
+        "x-cavea-permission": "seats.write",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "operator"
         ]
       }
     },
@@ -3520,6 +4125,14 @@
       "post": {
         "description": "Not idempotent: an `Idempotency-Key` is ignored. The token is shown only here.",
         "operationId": "createHoldToken",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -3568,11 +4181,19 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Create a hold token",
         "tags": [
           "hold-tokens"
+        ],
+        "x-cavea-permission": "seats.hold",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
         ]
       }
     },
@@ -3583,6 +4204,12 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/TokenPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
           },
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -3629,11 +4256,20 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Release everything a token holds",
         "tags": [
           "hold-tokens"
+        ],
+        "x-cavea-permission": "seats.write",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "operator"
         ]
       },
       "get": {
@@ -3641,6 +4277,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/TokenPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
           }
         ],
         "responses": {
@@ -3681,11 +4320,22 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "A hold token",
         "tags": [
           "hold-tokens"
+        ],
+        "x-cavea-permission": "events.read",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "editor",
+          "operator",
+          "viewer"
         ]
       }
     },
@@ -3695,6 +4345,12 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/TokenPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
           },
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -3751,11 +4407,19 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Extend a hold token",
         "tags": [
           "hold-tokens"
+        ],
+        "x-cavea-permission": "seats.hold",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
         ]
       }
     },
@@ -3764,6 +4428,9 @@
         "description": "Revoked keys included; never a key or its hash.",
         "operationId": "listKeys",
         "parameters": [
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
           {
             "$ref": "#/components/parameters/Limit"
           },
@@ -3806,15 +4473,31 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "List the workspace's API keys",
         "tags": [
           "keys"
+        ],
+        "x-cavea-permission": "developers",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
         ]
       },
       "post": {
         "operationId": "createKey",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -3860,11 +4543,19 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Create an API key",
         "tags": [
           "keys"
+        ],
+        "x-cavea-permission": "developers",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
         ]
       }
     },
@@ -3875,6 +4566,12 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/IdPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
           }
         ],
         "responses": {
@@ -3915,11 +4612,19 @@
         "security": [
           {
             "secretKey": []
+          },
+          {
+            "consoleSession": []
           }
         ],
         "summary": "Revoke an API key",
         "tags": [
           "keys"
+        ],
+        "x-cavea-permission": "developers",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
         ]
       }
     },

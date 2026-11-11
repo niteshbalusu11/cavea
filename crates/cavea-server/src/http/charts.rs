@@ -10,17 +10,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json, value::RawValue};
 use tracing::Instrument as _;
 
-use super::auth::{Auth, SecretKey};
+use super::auth::Auth;
 use super::extract::{Json, Page, Path, Query, RawJson, check_text, invalid};
 use super::openapi::{Needs, Op, Routes};
+use super::staff::Staff;
 use super::{ApiError, AppState, Code, List};
 use crate::charts::{self, ChartError, MAX_DRAFT_BYTES};
+use crate::console::Permission;
 
 pub(super) fn routes() -> Routes {
     // A create body is a draft plus a key and a name of at most 128
     // characters each, however they are escaped.
     let create_limit = DefaultBodyLimit::max(MAX_DRAFT_BYTES + 4096);
-    let secret = |op: Op| op.needs(Needs::Secret);
+    let reading = |op: Op| op.needs(Needs::Staff(Permission::ChartsRead));
+    let writing = |op: Op| op.needs(Needs::Staff(Permission::ChartsWrite));
     let draft = || {
         Some(serde_json::json!({
             "application/json": { "schema": { "$ref": "#/components/schemas/ChartDocument" } },
@@ -28,14 +31,14 @@ pub(super) fn routes() -> Routes {
     };
     Routes::new()
         .add(
-            secret(Op::get("/v1/charts", "listCharts", "List charts"))
+            reading(Op::get("/v1/charts", "listCharts", "List charts"))
                 .about("Archived charts included; never drafts. The cursor is a chart key.")
                 .page()
                 .reply(200, "ChartList", "A page of charts"),
             list,
         )
         .layered(
-            secret(Op::post("/v1/charts", "createChart", "Create a chart"))
+            writing(Op::post("/v1/charts", "createChart", "Create a chart"))
                 .body("CreateChart")
                 .reply(201, "Chart", "The chart")
                 .errors(&[409]),
@@ -43,7 +46,7 @@ pub(super) fn routes() -> Routes {
             |route| route.layer(create_limit),
         )
         .add(
-            secret(Op::get("/v1/charts/{chart}", "getChart", "A chart")).reply(
+            reading(Op::get("/v1/charts/{chart}", "getChart", "A chart")).reply(
                 200,
                 "Chart",
                 "The chart: metadata, draft etag, published version",
@@ -51,17 +54,14 @@ pub(super) fn routes() -> Routes {
             read,
         )
         .add(
-            secret(Op::delete(
-                "/v1/charts/{chart}",
-                "archiveChart",
-                "Archive a chart",
-            ))
-            .about("Idempotent. Versions stay served.")
-            .reply(200, "Chart", "The chart, archived"),
+            Op::delete("/v1/charts/{chart}", "archiveChart", "Archive a chart")
+                .needs(Needs::Staff(Permission::ChartsArchive))
+                .about("Idempotent. Versions stay served.")
+                .reply(200, "Chart", "The chart, archived"),
             archive,
         )
         .add(
-            secret(Op::get(
+            reading(Op::get(
                 "/v1/charts/{chart}/draft",
                 "getDraft",
                 "The draft document",
@@ -71,7 +71,7 @@ pub(super) fn routes() -> Routes {
             read_draft,
         )
         .layered(
-            secret(Op::put(
+            writing(Op::put(
                 "/v1/charts/{chart}/draft",
                 "saveDraft",
                 "Replace the draft",
@@ -86,7 +86,7 @@ pub(super) fn routes() -> Routes {
             |route| route.layer(DefaultBodyLimit::max(MAX_DRAFT_BYTES)),
         )
         .add(
-            secret(Op::post(
+            writing(Op::post(
                 "/v1/charts/{chart}/validate",
                 "validateDraft",
                 "Validate the draft",
@@ -96,7 +96,7 @@ pub(super) fn routes() -> Routes {
             validate,
         )
         .add(
-            secret(Op::post(
+            writing(Op::post(
                 "/v1/charts/{chart}/publish",
                 "publishChart",
                 "Publish the draft",
@@ -112,7 +112,7 @@ pub(super) fn routes() -> Routes {
             publish,
         )
         .add(
-            secret(Op::get(
+            reading(Op::get(
                 "/v1/charts/{chart}/versions",
                 "listVersions",
                 "List versions",
@@ -322,7 +322,7 @@ const LIST: &str = concat!(
 );
 
 async fn list(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Query(page): Query<Page>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<List<Chart>>, ApiError> {
@@ -353,8 +353,8 @@ struct CreateChart {
 
 const CREATE: &str = concat!(
     "WITH c AS (
-  INSERT INTO charts (id, workspace_id, key, name, draft)
-  VALUES (gen_random_uuid(), $1::uuid, $2, $3, $4::jsonb)
+  INSERT INTO charts (id, workspace_id, key, name, draft, draft_updated_by)
+  VALUES (gen_random_uuid(), $1::uuid, $2, $3, $4::jsonb, $5::uuid)
   RETURNING *
 )
 SELECT ",
@@ -363,7 +363,7 @@ SELECT ",
 );
 
 async fn create(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     State(state): State<AppState>,
     Json(body): Json<CreateChart>,
 ) -> Result<(StatusCode, axum::Json<Chart>), ApiError> {
@@ -390,6 +390,7 @@ async fn create(
         .bind(&body.key)
         .bind(&body.name)
         .bind(&draft)
+        .bind(auth.user())
         .fetch_one(&state.db)
         .instrument(cavea_telemetry::db_span("create_chart"))
         .await;
@@ -412,7 +413,7 @@ const READ: &str = concat!(
 );
 
 async fn read(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(key): Path<String>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<Chart>, ApiError> {
@@ -441,7 +442,7 @@ SELECT ",
 /// stays taken, and its versions and their public URLs stay as they are
 /// (events pinned to them keep working; 08 §6.2).
 async fn archive(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(key): Path<String>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<Chart>, ApiError> {
@@ -463,7 +464,7 @@ const READ_DRAFT: &str = "SELECT draft::text, draft_etag FROM charts
 
 /// The draft document as stored, with its etag in `ETag`.
 async fn read_draft(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(key): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Response, ApiError> {
@@ -492,7 +493,8 @@ fn etag_header(etag: i64) -> Result<HeaderValue, ApiError> {
 const SAVE_DRAFT: &str = concat!(
     "WITH c AS (
   UPDATE charts
-     SET draft = $3::jsonb, draft_etag = draft_etag + 1, draft_updated_at = now()
+     SET draft = $3::jsonb, draft_etag = draft_etag + 1, draft_updated_at = now(),
+         draft_updated_by = $5::uuid
    WHERE workspace_id = $1::uuid AND key = $2 AND archived_at IS NULL
      AND ($4::bigint IS NULL OR draft_etag = $4)
   RETURNING *
@@ -509,7 +511,7 @@ const DRAFT_STATE: &str = "SELECT draft_etag, archived_at IS NOT NULL FROM chart
 /// Replace the draft. The body is the chart document; it must parse as one
 /// (it need not validate) and `If-Match` is required.
 async fn save_draft(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(key): Path<String>,
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -534,6 +536,7 @@ async fn save_draft(
             .bind(&key)
             .bind(draft)
             .bind(etag)
+            .bind(auth.user())
             .fetch_optional(&state.db)
             .await?;
         if let Some(row) = row {
@@ -595,7 +598,7 @@ struct Validation {
 
 /// Compile the draft and report its findings without publishing.
 async fn validate(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(key): Path<String>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<Validation>, ApiError> {
@@ -682,10 +685,11 @@ const SAME_VERSION: &str = concat!(
 const INSERT_VERSION: &str = concat!(
     "WITH v AS (
   INSERT INTO chart_versions
-    (id, chart_id, number, hash, full_hash, source, public_ccf, public_ccf_br, full_ccf, stats)
+    (id, chart_id, number, hash, full_hash, source, public_ccf, public_ccf_br, full_ccf, stats,
+     created_by)
   SELECT gen_random_uuid(), c.id,
          coalesce((SELECT max(number) FROM chart_versions WHERE chart_id = c.id), 0) + 1,
-         $2, $3, c.draft, $4, $5, $6, $7::jsonb
+         $2, $3, c.draft, $4, $5, $6, $7::jsonb, $8::uuid
     FROM charts c WHERE c.id = $1::uuid
   RETURNING *
 )
@@ -701,7 +705,7 @@ const SET_PUBLISHED: &str = "UPDATE charts SET published_version_id = $2::uuid W
 /// A draft that compiles to a version the chart already has publishes that
 /// version again (`200`) rather than a duplicate (`201` for a new one).
 async fn publish(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(key): Path<String>,
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -754,6 +758,7 @@ async fn publish(
                     .bind(public_br)
                     .bind(&compiled.full)
                     .bind(stats.to_string())
+                    .bind(auth.user())
                     .fetch_one(&mut *tx)
                     .await?;
                 (true, row)
@@ -812,7 +817,7 @@ const CHART_EXISTS: &str =
     "SELECT EXISTS (SELECT FROM charts WHERE workspace_id = $1::uuid AND key = $2)";
 
 async fn versions(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(key): Path<String>,
     Query(page): Query<Page>,
     State(state): State<AppState>,

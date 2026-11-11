@@ -323,7 +323,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [ ] **CON-001** Application shell, router, navigation, workspace switcher (09 §1). The foundation is built (`apps/console`: router, the console frame and its navigation, themes, tokens, the message catalogue, base components; 09 §9 as built); the workspace switcher waits for sign-in and workspaces in the console (CON-003)
 - [ ] **CON-002** First-run setup with a one-time link (09 §2). The server side is built: the logged link, `POST /console/api/setup`, one owner under a race, owner of every workspace (D-51). The console owes the `/console/setup` page that reads the token from the fragment
 - [ ] **CON-003** Sign-in, sessions, CSRF, optional TOTP (09 §2, §10). The server side is built but TOTP: argon2id, `/console/api/session`, `me`, `password`, the `__Host-` cookie with idle and absolute ends, CSRF and origin checks on every cookie mutation (08 §11, D-50). Owed: TOTP (`POST /console/api/totp`; SHA-1 HMAC is in the tree), password reset, and the console's sign-in screen, CSRF header and dev proxy (09 §9)
-- [ ] **CON-004** Roles and permission checks on every route (09 §2). Roles are stored per workspace and listed by `GET /console/api/me`; the console session is not yet a credential on `/v1`
+- [ ] **CON-004** Roles and permission checks on every route (09 §2). The server side is built: every secret-key route takes a console session, names its workspace in `Cavea-Workspace` and declares one of twelve permissions, one per cell of 09 §2, checked against the five roles by the authorisation matrix (08 §11, D-54); ownership transfer is the members routes' `ownership`. Owed: the console hiding what a role cannot do (from `me`'s permissions), the workspace switcher (CON-001)
 - [ ] **CON-005** Charts list with thumbnails, search, card menu, empty state (09 §3.1)
 - [ ] **CON-006** Chart detail: versions, events, settings (09 §3.2)
 - [ ] **CON-007** Events list and create form (09 §4.1)
@@ -331,7 +331,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [ ] **CON-009** Event settings tab (09 §4.3)
 - [ ] **CON-010** API keys screen (09 §6)
 - [ ] **CON-011** Quick-start snippets pre-filled with workspace values (09 §6)
-- [ ] **CON-012** Workspace and members settings; invitations (09 §7)
+- [ ] **CON-012** Workspace and members settings; invitations (09 §7). Built on the server: list members, change a role, remove a member (`/console/api/members`, owner and admin; only an owner makes or unmakes an owner; a workspace keeps one owner; 08 §6.2). Owed: invitations and the admin key's first owner of a new workspace (written, unreviewed, on branch `slice/members-invitations-audit-unreviewed`), workspace settings (name), and the console's screens
 - [ ] **CON-013** Audit log writes for sensitive actions (09 §4.2)
 - [ ] **CON-014** Interface standards: tables, forms, feedback, themes, keyboard (09 §8)
 - [ ] **CON-015** Embed the built console in the server binary with hashed assets (09 §9)

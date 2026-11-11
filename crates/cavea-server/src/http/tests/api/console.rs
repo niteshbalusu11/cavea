@@ -175,6 +175,20 @@ async fn setup_creates_the_first_workspace() {
         assert_eq!(response.status(), 201, "{me}");
         assert_eq!(me["workspaces"][0]["key"], "acme");
         assert_eq!(me["workspaces"][0]["role"], "owner");
+        // The owner acts on `/v1` with the session alone.
+        let id = cookie_session(&response);
+        let ws = me["workspaces"][0]["id"].as_str().unwrap();
+        let body = json!({ "kind": "secret", "name": "backend" });
+        let (response, key) = console_call(
+            &app,
+            Method::POST,
+            "/v1/keys",
+            Some(&id),
+            Some(ws),
+            Some(body),
+        )
+        .await;
+        assert_eq!(response.status(), 201, "{key}");
     })
     .await;
 }
@@ -238,7 +252,10 @@ async fn sign_in_is_uniform_rotates_and_signs_out() {
         );
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         assert_eq!(me["csrf_token"], id.csrf());
-        assert_eq!(me["workspaces"][0]["role"], "editor");
+        assert_eq!(
+            me["workspaces"][0]["permissions"],
+            json!(["charts.read", "charts.write", "events.read"])
+        );
         let (response, _) =
             console_call(&app, Method::GET, "/console/api/me", Some(&old), None, None).await;
         assert_eq!(response.status(), 401);
@@ -532,6 +549,150 @@ async fn sign_in_backs_off_without_locking_out() {
         let (response, problem) = attempt(busy, "ada@example.org", PASSWORD).await;
         assert_problem(&response, &problem, Code::RateLimited);
         assert_eq!(problem["details"]["reason"], "sign_in");
+    })
+    .await;
+}
+
+/// CON-004 and the audit trail: a console user's seat operations are written
+/// to the event log as `usr_…`, and drafts and versions record who.
+#[tokio::test]
+#[ignore = "needs CAVEA_TEST_DATABASE_URL"]
+async fn a_console_user_is_the_actor() {
+    let _serial = serial();
+    with_db(async move |pool| {
+        let app = api(&pool, Some(ADMIN));
+        let a = Tenant::create(&app, "a").await;
+        let (user, id) = member(&pool, &a.id, Role::Operator, "ada@example.org").await;
+        let uri = format!("/v1/events/{}/change-status", a.event);
+        let body = json!({ "objects": { "version": a.hash, "idx": [5] }, "status": "blocked" });
+        let (response, reply) =
+            console_call(&app, Method::POST, &uri, Some(&id), Some(&a.id), Some(body)).await;
+        assert_eq!(response.status(), 200, "{reply}");
+        let actor: String = sqlx::query_scalar(
+            "SELECT actor FROM event_log WHERE seq = $1 ORDER BY at DESC LIMIT 1",
+        )
+        .bind(reply["seq"].as_i64().unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(actor, format!("usr_{user}"));
+
+        // An editor saves and publishes: both record the user; a key, nobody.
+        let (editor, id) = member(&pool, &a.id, Role::Editor, "bob@example.org").await;
+        let uri = format!("/v1/charts/{}/draft", a.chart);
+        let mut headers = console(&id, Some(&a.id));
+        headers.push((header::IF_MATCH, "*".to_owned()));
+        let document = tiny_document("by bob");
+        let (response, _) = call_with(
+            &app,
+            Method::PUT,
+            &uri,
+            None,
+            &refs(&headers),
+            Some(serde_json::from_str(&document).unwrap()),
+        )
+        .await;
+        assert_eq!(response.status(), 200);
+        let uri = format!("/v1/charts/{}/publish", a.chart);
+        let (response, _) =
+            console_call(&app, Method::POST, &uri, Some(&id), Some(&a.id), None).await;
+        assert_eq!(response.status(), 201);
+        let who: (Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT replace(c.draft_updated_by::text, '-', ''), replace(v.created_by::text, '-', '')
+               FROM charts c JOIN chart_versions v ON v.id = c.published_version_id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(who, (Some(editor.clone()), Some(editor.clone())));
+        // A chart created with its document records its author too.
+        let body = json!({ "key": "by-bob", "name": "n", "document": serde_json::from_str::<Value>(&document).unwrap() });
+        let (response, _) =
+            console_call(&app, Method::POST, "/v1/charts", Some(&id), Some(&a.id), Some(body)).await;
+        assert_eq!(response.status(), 201);
+        let author: Option<String> = sqlx::query_scalar(
+            "SELECT replace(draft_updated_by::text, '-', '') FROM charts WHERE key = 'by-bob'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(author, Some(editor));
+    })
+    .await;
+}
+
+/// What a console session costs a `/v1` request against a secret key: the
+/// same read, 2,000 times each, through the router (no network). Run with
+/// `--release -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore = "a measurement: needs CAVEA_TEST_DATABASE_URL and --release"]
+async fn measure_session_lookup() {
+    let _serial = serial();
+    with_db(async move |pool| {
+        let app = api(&pool, Some(ADMIN));
+        let a = Tenant::create(&app, "a").await;
+        let (_, id) = member(&pool, &a.id, Role::Viewer, "ada@example.org").await;
+        let uri = format!("/v1/events/{}", a.event);
+        let key = [(header::AUTHORIZATION, format!("Bearer {}", a.secret))];
+        let cookie = console(&id, Some(&a.id));
+        for (label, headers) in [("secret key", &key[..]), ("console session", &cookie[..])] {
+            let mut times = Vec::new();
+            for i in 0..2_200 {
+                let request = request(Method::GET, &uri, None, &refs(headers), None);
+                let started = std::time::Instant::now();
+                let response = app.clone().oneshot(request).await.unwrap();
+                let elapsed = started.elapsed();
+                assert_eq!(response.status(), 200);
+                if i >= 200 {
+                    times.push(elapsed.as_secs_f64() * 1e3);
+                }
+            }
+            times.sort_by(f64::total_cmp);
+            let at = |q: f64| times[((times.len() - 1) as f64 * q) as usize];
+            println!("{label}: p50 {:.3} ms, p99 {:.3} ms", at(0.5), at(0.99));
+        }
+    })
+    .await;
+}
+
+/// The hold path with a secret key: 1,800 holds of one seat each on the
+/// tenant's token, through the router (no network); the first 200 warm up.
+/// Run with `--release -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore = "a measurement: needs CAVEA_TEST_DATABASE_URL and --release"]
+async fn measure_hold_with_a_key() {
+    let _serial = serial();
+    with_db(async move |pool| {
+        let app = api(&pool, Some(ADMIN));
+        let a = Tenant::create(&app, "a").await;
+        let uri = format!("/v1/events/{}/hold", a.event);
+        let key = [(header::AUTHORIZATION, format!("Bearer {}", a.secret))];
+        let mut times = Vec::new();
+        for i in 0..1_800 {
+            let body =
+                json!({ "hold_token": a.token, "objects": { "version": a.hash, "idx": [i] } });
+            let request = request(
+                Method::POST,
+                &uri,
+                None,
+                &refs(&key),
+                Some(body.to_string()),
+            );
+            let started = std::time::Instant::now();
+            let response = app.clone().oneshot(request).await.unwrap();
+            let elapsed = started.elapsed();
+            assert_eq!(response.status(), 200);
+            if i >= 200 {
+                times.push(elapsed.as_secs_f64() * 1e3);
+            }
+        }
+        times.sort_by(f64::total_cmp);
+        let at = |q: f64| times[((times.len() - 1) as f64 * q) as usize];
+        println!(
+            "hold with a secret key: p50 {:.3} ms, p99 {:.3} ms",
+            at(0.5),
+            at(0.99)
+        );
     })
     .await;
 }

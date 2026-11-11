@@ -8,25 +8,27 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tracing::Instrument as _;
 
-use super::auth::SecretKey;
 use super::charts::Version;
 use super::extract::{Json, Page, Path, Query, check_text, invalid, invalid_field};
 use super::openapi::{Needs, Op, Routes};
+use super::staff::Staff;
 use super::{ApiError, AppState, Code, List};
+use crate::console::Permission;
 use crate::seats::event_id;
 
 pub(super) fn routes() -> Routes {
-    let secret = |op: Op| op.needs(Needs::Secret);
+    let reading = |op: Op| op.needs(Needs::Staff(Permission::EventsRead));
+    let writing = |op: Op| op.needs(Needs::Staff(Permission::EventsWrite));
     Routes::new()
         .add(
-            secret(Op::get("/v1/events", "listEvents", "List events"))
+            reading(Op::get("/v1/events", "listEvents", "List events"))
                 .about("Archived events included. The cursor is an event key.")
                 .page()
                 .reply(200, "EventList", "A page of events"),
             list,
         )
         .add(
-            secret(Op::post("/v1/events", "createEvent", "Create an event"))
+            writing(Op::post("/v1/events", "createEvent", "Create an event"))
                 .about("Pins the chart's published version, or `version`.")
                 .body("CreateEvent")
                 .reply(201, "Event", "The event")
@@ -34,7 +36,7 @@ pub(super) fn routes() -> Routes {
             create,
         )
         .add(
-            secret(Op::get(
+            reading(Op::get(
                 "/v1/events/{event}",
                 "getEvent",
                 "An event, with its counts",
@@ -43,7 +45,7 @@ pub(super) fn routes() -> Routes {
             read,
         )
         .add(
-            secret(Op::patch(
+            writing(Op::patch(
                 "/v1/events/{event}",
                 "updateEvent",
                 "Change an event's name or settings",
@@ -53,7 +55,7 @@ pub(super) fn routes() -> Routes {
             update,
         )
         .add(
-            secret(Op::delete(
+            writing(Op::delete(
                 "/v1/events/{event}",
                 "archiveEvent",
                 "Archive an event",
@@ -244,7 +246,7 @@ const LIST: &str = concat!(
 );
 
 async fn list(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Query(page): Query<Page>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<List<Event>>, ApiError> {
@@ -298,7 +300,7 @@ SELECT ",
 
 /// Create an event pinned to one immutable chart version (D-11).
 async fn create(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     State(state): State<AppState>,
     Json(body): Json<CreateEvent>,
 ) -> Result<(StatusCode, axum::Json<Event>), ApiError> {
@@ -378,7 +380,7 @@ const COUNTS: &str = "SELECT status, count(*) FROM object_state
 /// them does not load the event's actor. A hold past its expiry counts as held
 /// until its expiry commits, which a loaded event does at once.
 async fn read(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(key): Path<String>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<Event>, ApiError> {
@@ -457,7 +459,7 @@ const EXISTS: &str =
 /// Change the name or the settings. New settings apply to tokens created and
 /// extended from then on; existing tokens keep their expiry and limit.
 async fn update(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(key): Path<String>,
     State(state): State<AppState>,
     Json(body): Json<UpdateEvent>,
@@ -512,7 +514,7 @@ SELECT ",
 /// schedule; bookings stay; the loaded actor is left to evict itself once it
 /// has no holds. The key stays taken.
 async fn archive(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(key): Path<String>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<Event>, ApiError> {

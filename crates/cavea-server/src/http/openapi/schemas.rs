@@ -7,6 +7,7 @@ use serde_json::{Map, Value, json};
 
 use super::super::Code;
 use super::schema_ref as r;
+use crate::console::Permission;
 
 /// An object with `required` fields always present and `optional` ones
 /// sometimes; nothing else.
@@ -123,6 +124,9 @@ fn hold_ttl() -> Value {
 /// Every schema, by name.
 pub(super) fn all() -> Map<String, Value> {
     let codes: Vec<&str> = Code::ALL.iter().map(|c| c.as_str()).collect();
+    let permissions: Vec<&str> = Permission::ALL.iter().map(|p| p.as_str()).collect();
+    let roles = || json!({ "enum": ["owner", "admin", "editor", "operator", "viewer"] });
+    let user_id = || text("`usr_` and 32 hex digits.");
     let status_wire = json!({ "oneOf": [
         { "enum": ["free", "blocked"] },
         described(range(4, 15), "A custom status code."),
@@ -632,9 +636,14 @@ Without: booked objects.",
                                 ),
                                 ("key", string()),
                                 ("name", string()),
+                                ("role", roles()),
                                 (
-                                    "role",
-                                    json!({ "enum": ["owner", "admin", "editor", "operator", "viewer"] }),
+                                    "permissions",
+                                    described(
+                                        array(json!({ "enum": permissions })),
+                                        "What the role allows: compare with an operation's \
+`x-cavea-permission`.",
+                                    ),
                                 ),
                             ],
                             &[],
@@ -661,6 +670,21 @@ Without: booked objects.",
                 &[],
             ),
         ),
+        (
+            "WorkspaceMember",
+            object(
+                &[
+                    (
+                        "user",
+                        object(&[("id", user_id()), ("email", string())], &[]),
+                    ),
+                    ("role", roles()),
+                ],
+                &[],
+            ),
+        ),
+        ("MemberList", list("WorkspaceMember")),
+        ("ChangeRole", object(&[("role", roles())], &[])),
         (
             "Asset",
             object(

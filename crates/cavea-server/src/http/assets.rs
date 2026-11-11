@@ -27,12 +27,13 @@ use http_body::{Frame, SizeHint};
 use serde_json::json;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use super::auth::SecretKey;
 use super::extract::{Path, invalid};
 use super::openapi::{Needs, Op, Routes};
 use super::public::{IMMUTABLE, cors_open, none_match, parse_hash};
+use super::staff::Staff;
 use super::{ApiError, AppState, Code};
 use crate::assets::{self, Image};
+use crate::console::Permission;
 
 pub(super) fn routes() -> Routes {
     let image = || Some(json!({ "image/png": {}, "image/jpeg": {}, "image/webp": {} }));
@@ -45,7 +46,7 @@ pub(super) fn routes() -> Routes {
 `Content-Type` is ignored); at most `CAVEA_ASSET_MAX_BYTES` (10 MiB by default) and 8,192 pixels \
 a side. Refused with `400` and `reason`: `body_too_large`, `asset_type`, `asset_malformed` \
 (truncated, or data after the image's end) or `asset_dimensions`.")
-                .needs(Needs::Secret)
+                .needs(Needs::Staff(Permission::ChartsWrite))
                 .raw_body(json!({
                     "required": true,
                     "content": { "application/octet-stream": {}, "image/png": {}, "image/jpeg": {}, "image/webp": {} },
@@ -71,7 +72,7 @@ fn too_large(max: u32) -> ApiError {
 }
 
 async fn upload(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     State(state): State<AppState>,
     headers: HeaderMap,
     mut body: Body,

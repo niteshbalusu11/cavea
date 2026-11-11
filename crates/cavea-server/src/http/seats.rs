@@ -25,21 +25,26 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use tracing::Instrument as _;
 
-use super::auth::{Auth, PublishableKey, SecretKey, has_hex_tail, push_hex, sha256};
+use super::auth::{Auth, PublishableKey, has_hex_tail, push_hex, sha256};
 use super::events::{Settings, archived};
 use super::extract::{Json, Path, check_object_count, invalid, invalid_field};
 use super::openapi::{Needs, Op, Routes};
 use super::session::{self, Session};
+use super::staff::Staff;
 use super::{ApiError, AppState, Code};
+use crate::console::Permission;
 use crate::seats::{Chart, event_id};
 use crate::store::reply;
 use cavea_core::limits::MAX_OBJECTS;
 
 pub(super) fn routes() -> Routes {
-    let secret = |op: Op| op.needs(Needs::Secret);
+    let reading = |op: Op| op.needs(Needs::Staff(Permission::EventsRead));
+    // 09 §2: the operator may block, release and book, not hold.
+    let holding = |op: Op| op.needs(Needs::Staff(Permission::SeatsHold));
+    let writing = |op: Op| op.needs(Needs::Staff(Permission::SeatsWrite));
     Routes::new()
         .add(
-            secret(Op::post(
+            holding(Op::post(
                 "/v1/hold-tokens",
                 "createHoldToken",
                 "Create a hold token",
@@ -51,7 +56,7 @@ pub(super) fn routes() -> Routes {
             create_token,
         )
         .add(
-            secret(Op::get(
+            reading(Op::get(
                 "/v1/hold-tokens/{token}",
                 "getHoldToken",
                 "A hold token",
@@ -64,7 +69,7 @@ pub(super) fn routes() -> Routes {
             read_token,
         )
         .add(
-            secret(Op::delete(
+            writing(Op::delete(
                 "/v1/hold-tokens/{token}",
                 "releaseHoldToken",
                 "Release everything a token holds",
@@ -76,7 +81,7 @@ pub(super) fn routes() -> Routes {
             release_token,
         )
         .add(
-            secret(Op::post(
+            holding(Op::post(
                 "/v1/hold-tokens/{token}/extend",
                 "extendHoldToken",
                 "Extend a hold token",
@@ -88,7 +93,7 @@ pub(super) fn routes() -> Routes {
             extend_token,
         )
         .add(
-            secret(Op::post(
+            holding(Op::post(
                 "/v1/events/{event}/hold",
                 "hold",
                 "Hold objects under a token",
@@ -100,7 +105,7 @@ pub(super) fn routes() -> Routes {
             hold,
         )
         .add(
-            secret(Op::post(
+            writing(Op::post(
                 "/v1/events/{event}/release",
                 "release",
                 "Release held or booked objects",
@@ -112,7 +117,7 @@ pub(super) fn routes() -> Routes {
             release,
         )
         .add(
-            secret(Op::post(
+            writing(Op::post(
                 "/v1/events/{event}/book",
                 "book",
                 "Book by hold token or directly",
@@ -124,7 +129,7 @@ pub(super) fn routes() -> Routes {
             book,
         )
         .add(
-            secret(Op::post(
+            writing(Op::post(
                 "/v1/events/{event}/change-status",
                 "changeStatus",
                 "Block, unblock or set a custom status",
@@ -668,7 +673,7 @@ async fn new_token(
 
 /// Any lifetime the engine allows; unlimited unless `max_objects` is given.
 async fn create_token(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     State(state): State<AppState>,
     Json(body): Json<CreateToken>,
 ) -> Result<Response, ApiError> {
@@ -747,7 +752,7 @@ const READ_TOKEN: &str = "SELECT e.key, replace(e.chart_version_id::text, '-', '
 type TokenRow = (String, String, i64, Option<i32>, Vec<i32>);
 
 async fn read_token(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(token): Path<String>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<Value>, ApiError> {
@@ -816,7 +821,7 @@ struct Extend {
 
 /// Set the token's expiry to now plus the lifetime.
 async fn extend_token(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(token): Path<String>,
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -841,7 +846,7 @@ async fn extend_token(
 
 /// Release everything the token holds. The token stays valid until it expires.
 async fn release_token(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(token): Path<String>,
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -868,7 +873,7 @@ struct HoldBody {
 }
 
 async fn hold(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(event): Path<String>,
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -944,7 +949,7 @@ struct ReleaseBody {
 }
 
 async fn release(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(event): Path<String>,
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -1039,7 +1044,7 @@ struct BookBody {
 }
 
 async fn book(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(event): Path<String>,
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -1113,7 +1118,7 @@ struct ChangeStatusBody {
 }
 
 async fn change_status(
-    SecretKey(auth): SecretKey,
+    Staff(auth): Staff,
     Path(event): Path<String>,
     headers: HeaderMap,
     State(state): State<AppState>,

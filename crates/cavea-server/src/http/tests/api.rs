@@ -12,7 +12,7 @@ use sqlx::postgres::{PgConnectOptions, PgPool};
 use sqlx::{AssertSqlSafe, ConnectOptions as _, Connection as _, Executor as _, PgConnection};
 
 use super::*;
-use crate::console::{Role, SessionId, sessions};
+use crate::console::{Permission, Role, SessionId, sessions};
 use crate::http::auth::PublishableKey;
 use crate::http::openapi::Needs;
 use crate::http::{AdminKey, routes};
@@ -354,9 +354,7 @@ fn console(id: &SessionId, workspace: Option<&str>) -> Vec<(header::HeaderName, 
         (crate::http::staff::CSRF, id.csrf()),
     ];
     if let Some(ws) = workspace {
-        // Ignored until `/v1` takes console sessions (CON-004).
-        let name = header::HeaderName::from_static("cavea-workspace");
-        headers.push((name, ws.to_owned()));
+        headers.push((crate::http::staff::WORKSPACE, ws.to_owned()));
     }
     headers
 }
@@ -700,6 +698,7 @@ fn route_of(template: &str) -> String {
         .replace("{hash}.ccf", "{file}")
         .replace("{asset}", "{hash}")
         .replace("{key}", "{id}")
+        .replace("{spare}", "{user}")
 }
 
 /// The credential a row's operation takes, and whether it takes a session
@@ -901,7 +900,79 @@ const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
         ),
     ),
     (Method::DELETE, "/console/api/session", 204, None),
+    (Method::GET, "/console/api/members", 200, None),
+    // `{user}` is the viewer, left a viewer; `{spare}` a member the matrix
+    // adds back before each cell.
+    (
+        Method::PATCH,
+        "/console/api/members/{user}",
+        200,
+        Some(r#"{"role":"viewer"}"#),
+    ),
+    (Method::DELETE, "/console/api/members/{spare}", 204, None),
 ];
+
+/// Each route's permission (09 §2), written out: `every_route_declares_its_permission`
+/// compares it with the route table, so a route added or remapped without
+/// changing this table fails.
+const PERMISSIONS: &[(Method, &str, &str)] = &[
+    (Method::GET, "/v1/keys", "developers"),
+    (Method::POST, "/v1/keys", "developers"),
+    (Method::DELETE, "/v1/keys/{id}", "developers"),
+    (Method::GET, "/v1/charts", "charts.read"),
+    (Method::POST, "/v1/charts", "charts.write"),
+    (Method::GET, "/v1/charts/{chart}", "charts.read"),
+    (Method::DELETE, "/v1/charts/{chart}", "charts.archive"),
+    (Method::GET, "/v1/charts/{chart}/draft", "charts.read"),
+    (Method::PUT, "/v1/charts/{chart}/draft", "charts.write"),
+    (Method::POST, "/v1/charts/{chart}/validate", "charts.write"),
+    (Method::POST, "/v1/charts/{chart}/publish", "charts.write"),
+    (Method::GET, "/v1/charts/{chart}/versions", "charts.read"),
+    (Method::POST, "/v1/assets", "charts.write"),
+    (Method::GET, "/v1/events", "events.read"),
+    (Method::POST, "/v1/events", "events.write"),
+    (Method::GET, "/v1/events/{event}", "events.read"),
+    (Method::PATCH, "/v1/events/{event}", "events.write"),
+    (Method::DELETE, "/v1/events/{event}", "events.write"),
+    (Method::POST, "/v1/hold-tokens", "seats.hold"),
+    (Method::GET, "/v1/hold-tokens/{token}", "events.read"),
+    (Method::DELETE, "/v1/hold-tokens/{token}", "seats.write"),
+    (Method::POST, "/v1/hold-tokens/{token}/extend", "seats.hold"),
+    (Method::POST, "/v1/events/{event}/hold", "seats.hold"),
+    (Method::POST, "/v1/events/{event}/release", "seats.write"),
+    (Method::POST, "/v1/events/{event}/book", "seats.write"),
+    (
+        Method::POST,
+        "/v1/events/{event}/change-status",
+        "seats.write",
+    ),
+    (Method::GET, "/v1/events/{event}/objects", "events.read"),
+    (Method::GET, "/console/api/members", "settings"),
+    (Method::PATCH, "/console/api/members/{user}", "settings"),
+    (Method::DELETE, "/console/api/members/{user}", "settings"),
+];
+
+/// Every route a secret key or a console member may call declares exactly
+/// the permission [`PERMISSIONS`] gives it, and no other route declares one.
+#[test]
+fn every_route_declares_its_permission() {
+    use std::collections::BTreeSet;
+    let declared: BTreeSet<(String, String, &str)> = routes()
+        .ops()
+        .iter()
+        .filter_map(|op| match op.needs {
+            Needs::Staff(p) | Needs::Member(p) => {
+                Some((op.method.to_string(), op.path.to_owned(), p.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    let table: BTreeSet<(String, String, &str)> = PERMISSIONS
+        .iter()
+        .map(|(m, path, p)| (m.to_string(), (*path).to_owned(), *p))
+        .collect();
+    assert_eq!(declared, table);
+}
 
 /// 13 §10 "tenant isolation": two workspaces with identical chart and event
 /// keys. Every read of a route naming only those keys answers each workspace
@@ -936,7 +1007,7 @@ async fn identical_keys_never_cross() {
             let (needs, _) = op_of(method, template);
             let path = a.path(template);
             for (mine, theirs) in [(&a, &b), (&b, &a)] {
-                let key = if needs == Needs::Secret {
+                let key = if matches!(needs, Needs::Staff(_)) {
                     &mine.secret
                 } else {
                     &mine.publishable
@@ -1011,7 +1082,9 @@ fn with_key(path: &str, key: &str) -> String {
 }
 
 /// Placeholders that name an identifier of the tenant under test.
-const IDENTIFIERS: [&str; 5] = ["{key}", "{chart}", "{hash}", "{event}", "{token}"];
+const IDENTIFIERS: [&str; 7] = [
+    "{key}", "{chart}", "{hash}", "{event}", "{token}", "{user}", "{spare}",
+];
 
 /// The route that takes the tenant's hold token in `Cavea-Hold-Token`.
 const HEADER_TOKEN: &str = "/v1/public/hold-tokens/current";
@@ -1078,17 +1151,27 @@ const CREDS: [Cred; 19] = [
 /// The declared table (13 §10): what each credential gets on a route that
 /// needs `needs`, as the refusal's code and `reason`. `None` is allowed: the
 /// route's success, or for another workspace's credential `404` when the
-/// route names one of the tenant's identifiers. A console session is a
-/// credential on the console's routes only: on every other it is none.
+/// route names one of the tenant's identifiers. A console member is allowed
+/// exactly what 09 §2's role table gives the route's permission.
 fn expect(needs: Needs, cred: Cred) -> Option<(Code, &'static str)> {
     use Cred as C;
     let member = matches!(cred, C::Member(_) | C::ForeignMember | C::Outsider);
     match (needs, cred) {
+        (Needs::Member(p), C::Member(role)) => {
+            (!role.allows(p)).then_some((Code::Forbidden, "role"))
+        }
+        (Needs::Member(_), C::ForeignMember) => None,
+        (Needs::Member(_), C::Outsider) => Some((Code::Forbidden, "workspace")),
+        (Needs::Member(_), _) => Some((Code::Unauthorized, "console_session")),
         (Needs::Nothing, _)
         | (Needs::Admin, C::Admin)
-        | (Needs::Secret, C::Secret | C::ForeignSecret)
+        | (Needs::Staff(_), C::Secret | C::ForeignSecret | C::ForeignMember)
         | (Needs::Console, C::Member(_) | C::ForeignMember | C::Outsider)
         | (Needs::Publishable | Needs::QueryKey, C::Publishable | C::ForeignPublishable) => None,
+        (Needs::Staff(p), C::Member(role)) => {
+            (!role.allows(p)).then_some((Code::Forbidden, "role"))
+        }
+        (Needs::Staff(_), C::Outsider) => Some((Code::Forbidden, "workspace")),
         (Needs::Console, _) => Some((Code::Unauthorized, "console_session")),
         // A cookie is no credential on key routes.
         (_, C::None) => Some((Code::Unauthorized, "missing")),
@@ -1103,7 +1186,12 @@ fn expect(needs: Needs, cred: Cred) -> Option<(Code, &'static str)> {
 struct Members {
     users: Vec<(Cred, String)>,
     sessions: Vec<(Cred, SessionId)>,
+    /// An editor of A whom the member removal row removes: `{spare}`.
+    spare: String,
 }
+
+const SPARE_MEMBER: &str = "INSERT INTO memberships (user_id, workspace_id, role)
+VALUES ($1::uuid, $2::uuid, 'editor') ON CONFLICT DO NOTHING";
 
 impl Members {
     async fn create(pool: &PgPool, a: &Tenant, b: &Tenant) -> Self {
@@ -1117,12 +1205,40 @@ impl Members {
         users.push((Cred::ForeignMember, user));
         let (user, _) = member(pool, &b.id, Role::Owner, "outsider@b.example").await;
         users.push((Cred::Outsider, user));
+        let (spare, _) = member(pool, &a.id, Role::Editor, "spare@a.example").await;
         let mut members = Self {
             users,
             sessions: Vec::new(),
+            spare,
         };
         members.sign_in(pool).await;
         members
+    }
+
+    /// `template` with the members' placeholders filled.
+    fn path(&self, template: &str) -> String {
+        let viewer = self.user(Cred::Member(Role::Viewer));
+        template
+            .replace("{user}", &format!("usr_{viewer}"))
+            .replace("{spare}", &format!("usr_{}", self.spare))
+    }
+
+    fn user(&self, cred: Cred) -> &str {
+        self.users
+            .iter()
+            .find(|(c, _)| *c == cred)
+            .map(|(_, u)| u.as_str())
+            .unwrap()
+    }
+
+    /// Put back what a successful cell of the removal row took away.
+    async fn restore(&self, pool: &PgPool, a: &Tenant) {
+        sqlx::query(SPARE_MEMBER)
+            .bind(&self.spare)
+            .bind(&a.id[3..])
+            .execute(pool)
+            .await
+            .unwrap();
     }
 
     /// A new session for every member, as after a password change or a
@@ -1157,11 +1273,12 @@ impl Members {
 }
 
 /// 13 §10 and T5: every route × every credential, compared with [`expect`];
-/// with workspace B's key of the right kind and workspace A's identifiers,
-/// `404` if the route names one, never revealing anything of A; console
-/// sessions of five roles and of another workspace's members, refused on
-/// every route but the console's; on every non-safe console route, the
-/// session without its CSRF token and from another site; an expired or another workspace's session
+/// with workspace B's key or member of the right kind and workspace A's
+/// identifiers, `404` if the route names one, never revealing anything of A;
+/// the five roles of 09 §2 against each route's permission; a member of B
+/// naming A's workspace; on every non-safe route a console session takes,
+/// the session without its CSRF token, from another site, and on `/v1`
+/// without naming a workspace; an expired or another workspace's session
 /// token on the routes that take one; and another event's hold token where a
 /// body names a token and an event.
 #[tokio::test]
@@ -1177,6 +1294,7 @@ async fn authorisation_matrix() {
         let a = Tenant::create(&app, "a").await;
         let b = Tenant::create(&app, "b").await;
         let mut members = Members::create(&pool, &a, &b).await;
+        members.restore(&pool, &a).await;
         // A second event of A's, with a token: another event's hold token.
         let (response, _) = call(
             &app,
@@ -1231,7 +1349,7 @@ async fn authorisation_matrix() {
                 || IDENTIFIERS
                     .iter()
                     .any(|p| template.contains(p) || body.is_some_and(|b| b.contains(p)));
-            let path = a.path(template).replace("{asset}", &asset);
+            let path = members.path(&a.path(template)).replace("{asset}", &asset);
             let send_with = async |authorization: Option<&str>,
                                    extra: &[(header::HeaderName, &str)],
                                    body: Option<&str>,
@@ -1275,6 +1393,7 @@ async fn authorisation_matrix() {
                 send(app.clone(), request.unwrap()).await
             };
             for (n, cred) in CREDS.into_iter().enumerate() {
+                members.restore(&pool, &a).await;
                 let value = match cred {
                     Cred::None | Cred::Member(_) | Cred::ForeignMember | Cred::Outsider => None,
                     Cred::Malformed(i) if needs == Needs::QueryKey => {
@@ -1298,6 +1417,11 @@ async fn authorisation_matrix() {
                     send_with(value.as_deref(), &refs(&console_headers), *body, n).await;
                 cells += 1;
                 let at = format!("{method} {template} with {cred:?}");
+                // A cookie without a key: never stored by a shared cache.
+                if !console_headers.is_empty() && value.is_none() {
+                    let cache = response.headers().get(header::CACHE_CONTROL);
+                    assert_eq!(cache.map(|v| v.as_bytes()), Some(&b"no-store"[..]), "{at}");
+                }
                 match expected {
                     Some((code, reason)) => {
                         assert_problem(&response, &answer, code);
@@ -1305,7 +1429,14 @@ async fn authorisation_matrix() {
                     }
                     None if foreign
                         && names_identifier
-                        && !matches!(needs, Needs::Nothing | Needs::Console) =>
+                        && matches!(
+                            needs,
+                            Needs::Staff(_)
+                                | Needs::Member(_)
+                                | Needs::Publishable
+                                | Needs::QueryKey
+                                | Needs::Admin
+                        ) =>
                     {
                         assert_problem(&response, &answer, Code::NotFound);
                     }
@@ -1322,9 +1453,9 @@ async fn authorisation_matrix() {
                 }
             }
             // A console session on a non-safe route: refused without its CSRF
-            // token, and from another site.
+            // token, from another site, and on `/v1` without a workspace.
             let safe = *method == Method::GET;
-            if needs == Needs::Console && !safe {
+            if matches!(needs, Needs::Staff(_) | Needs::Member(_) | Needs::Console) && !safe {
                 let owner = members.headers(Cred::Member(Role::Owner), &a, &b);
                 let without = |name: &header::HeaderName| {
                     owner
@@ -1338,10 +1469,14 @@ async fn authorisation_matrix() {
                     header::HeaderName::from_static("sec-fetch-site"),
                     "cross-site",
                 ));
-                let cases = [
+                let mut cases = vec![
                     (without(&crate::http::staff::CSRF), Code::Forbidden, "csrf"),
                     (cross_site, Code::Forbidden, "origin"),
                 ];
+                if needs != Needs::Console {
+                    let no_workspace = without(&crate::http::staff::WORKSPACE);
+                    cases.push((no_workspace, Code::InvalidRequest, "workspace"));
+                }
                 for (headers, code, reason) in cases {
                     let (response, answer) = send_with(None, &headers, *body, 0).await;
                     cells += 1;
@@ -1364,7 +1499,7 @@ async fn authorisation_matrix() {
             // Another event's hold token, where the body names a token for
             // the event in the path.
             if template.contains("{event}") && body.is_some_and(|b| b.contains("{token}")) {
-                let key = if needs == Needs::Secret {
+                let key = if matches!(needs, Needs::Staff(_)) {
                     &a.secret
                 } else {
                     &a.publishable
@@ -1414,6 +1549,7 @@ mod assets;
 mod charts;
 mod console;
 mod limits;
+mod members;
 mod objects;
 mod realtime;
 mod seats;
