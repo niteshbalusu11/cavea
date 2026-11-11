@@ -217,12 +217,14 @@ function MembersTab() {
   const revoke = async (inv: Invitation) => {
     try {
       await call("revokeInvitation", { path: { invitation: inv.id } }, signal);
-      invitations.update((rows) => rows.filter((r) => r.id !== inv.id));
+      // Read the loaded pages again rather than drop the row: a revoked
+      // invitation is deleted, and the next page's cursor may name it.
+      invitations.refetch();
       notify(msg("invite.revoked", { email: inv.email }));
     } catch (e) {
       const error = asApiError(e);
       if (error.code === "not_found") {
-        invitations.update((rows) => rows.filter((r) => r.id !== inv.id));
+        invitations.refetch();
         notify(msg("invite.alreadyGone"), "error", reference(error));
       } else {
         report(e);

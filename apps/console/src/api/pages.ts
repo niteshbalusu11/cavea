@@ -3,7 +3,7 @@
 // a list screen shows the pages loaded so far with "Load more", and a
 // screen that needs a whole list (a chart's versions, the charts to choose
 // from) loads every page up to a bound and says when it stopped short.
-import { createSignal, type Accessor } from "solid-js";
+import { createSignal, onCleanup, type Accessor } from "solid-js";
 import { isAbort, type ApiError } from "./client.ts";
 import { asApiError, createQuery, type Loaded } from "./query.ts";
 
@@ -68,6 +68,10 @@ export function createPages<K, T>(
     more = null;
     setMoreState("idle");
     return loadPages((after) => page(k, after, signal), pages);
+  });
+  onCleanup(() => {
+    more?.abort();
+    more = null;
   });
   return {
     state: query.state,
