@@ -4,6 +4,8 @@
 
 #[cfg(feature = "glow")]
 pub mod glow;
+#[cfg(feature = "designer")]
+pub mod record;
 
 use std::{fmt, ops::Range};
 

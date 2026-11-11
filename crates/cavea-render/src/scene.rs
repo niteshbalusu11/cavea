@@ -98,6 +98,54 @@ impl Scene {
         })
     }
 
+    /// A scene of a chart whose positions are already in `pos` (its own
+    /// `seat_pos` empty): the designer's live scene (04 §25). As
+    /// [`Self::decode`] from here on; kept apart so the buyer's code is
+    /// untouched by the designer's.
+    #[cfg(feature = "designer")]
+    pub fn from_chart(chart: Chart, pos: Vec<[f32; 2]>) -> Self {
+        let seats = pos.len();
+        let mut row = Vec::with_capacity(seats);
+        for (r, record) in (0u32..).zip(&chart.rows) {
+            row.extend(std::iter::repeat_n(r, usize::from(record.seat_count)));
+        }
+        let seat_size = (f32::from(chart.meta.seat_size) * 0.25).max(0.25);
+        let max_half = chart
+            .rows
+            .iter()
+            .map(|r| f32::from(r.seat_size.div_ceil(2)) * 0.25)
+            .fold(seat_size / 2.0, f32::max);
+        let (active, floor_box) = chart.floors.first().map_or((0..0, [0; 4]), |f| {
+            (f.seat_first..f.seat_first + f.seat_count, f.bounds)
+        });
+        let loose_rows = (0u32..)
+            .zip(&chart.rows)
+            .filter(|(_, r)| r.section == NONE && active.contains(&r.seat_first))
+            .map(|(i, _)| i)
+            .collect();
+        let [x0, y0, x1, y1] = floor_box.map(|v| v as f32 * 0.25);
+        let bounds = Bounds {
+            x: x0 - max_half,
+            y: y0 - max_half,
+            width: x1 - x0 + 2.0 * max_half,
+            height: y1 - y0 + 2.0 * max_half,
+        };
+        Self {
+            chart,
+            pos,
+            row,
+            status: vec![0; seats],
+            visual: vec![0; seats],
+            fx: vec![0; seats],
+            active,
+            floor: 0,
+            loose_rows,
+            bounds,
+            max_half,
+            seat_size,
+        }
+    }
+
     /// The static instance buffer (04 §6) for every seat: position, half size
     /// and shape from the seat's row, and for oriented shapes (rounded, chair)
     /// the angle of the row at the seat, from its neighbours in its segment.
@@ -107,6 +155,28 @@ impl Scene {
         for segment in &self.chart.segments {
             let first = segment.seat_first;
             for i in first..first + u32::from(segment.seat_count) {
+                if let Some(seat) = self.in_segment(segment, i) {
+                    out.extend_from_slice(&seat.encode());
+                }
+            }
+        }
+        out
+    }
+
+    /// The static instance bytes of seats `range`, as [`Self::encode_static`]
+    /// writes them: a live scene's piece uploaded alone (04 §25).
+    #[cfg(feature = "designer")]
+    pub fn encode_static_range(&self, range: Range<u32>) -> Vec<u8> {
+        let mut out = Vec::with_capacity(range.len() * seat::STATIC_STRIDE);
+        let segments = &self.chart.segments;
+        let first =
+            segments.partition_point(|s| s.seat_first + u32::from(s.seat_count) <= range.start);
+        for segment in segments.get(first..).unwrap_or_default() {
+            if segment.seat_first >= range.end {
+                break;
+            }
+            let end = segment.seat_first + u32::from(segment.seat_count);
+            for i in segment.seat_first.max(range.start)..end.min(range.end) {
                 if let Some(seat) = self.in_segment(segment, i) {
                     out.extend_from_slice(&seat.encode());
                 }

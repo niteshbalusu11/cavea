@@ -50,8 +50,12 @@ use crate::{
 };
 
 mod keys;
+#[cfg(feature = "designer")]
+mod live;
 mod select;
 mod state;
+#[cfg(feature = "designer")]
+pub use live::Affine;
 use select::SelectState;
 
 /// Overlay instances at most: a halo and a ring each for hover and focus.
@@ -268,6 +272,9 @@ pub struct Engine<B: GpuBackend> {
     seats_drawn: u32,
     last_seats: u32,
     start_ms: Option<f64>,
+    /// The designer's live scene, transforms and overlay (04 §25).
+    #[cfg(feature = "designer")]
+    live: live::Live,
     /// Intents seen, for tests.
     #[cfg(test)]
     intents: Vec<Intent>,
@@ -319,6 +326,8 @@ impl<B: GpuBackend> Engine<B> {
             seats_drawn: 0,
             last_seats: 0,
             start_ms: None,
+            #[cfg(feature = "designer")]
+            live: live::Live::default(),
             #[cfg(test)]
             intents: Vec::new(),
             #[cfg(test)]
@@ -624,6 +633,8 @@ impl<B: GpuBackend> Engine<B> {
         if let Some(loaded) = &mut self.scene {
             loaded.release(&mut self.backend);
         }
+        #[cfg(feature = "designer")]
+        self.live_release();
         if let Some(texture) = self.atlas.as_mut().and_then(|a| a.texture.take()) {
             self.backend.destroy(ResourceId::Texture(texture));
         }
@@ -665,6 +676,8 @@ impl<B: GpuBackend> Engine<B> {
             loaded.mesh_dirty = None;
             loaded.overlay_bytes.clear();
             self.state_gen = self.state_gen.wrapping_add(1);
+            #[cfg(feature = "designer")]
+            self.live_resources_made();
         }
         Ok(())
     }
@@ -826,12 +839,13 @@ impl<B: GpuBackend> Engine<B> {
                     height: css(height),
                 },
             });
-            let stage = self.stage();
+            let stage = self.stage().filter(|_| !self.host_view());
             if let (Some(camera), Some(stage)) = (&mut self.camera, stage) {
                 camera.clamp(stage.chart, stage.size, stage.limits);
             }
         }
         if self.camera.is_none()
+            && !self.host_view()
             && let Some(stage) = self.stage()
         {
             let mut camera = Camera::fit(stage.chart, stage.size);
@@ -902,12 +916,26 @@ impl<B: GpuBackend> Engine<B> {
             .and_then(|()| self.upload())
             .and_then(|()| self.draw_world(viewport, time))
             .and_then(|()| self.draw_overlays(viewport, time));
+        #[cfg(feature = "designer")]
+        let drawn = drawn.and_then(|()| self.draw_live_overlay(viewport));
         if let Err((code, message)) = drawn {
             self.error(code, message);
         }
         self.last_draws = self.draws;
         self.last_seats = self.seats_drawn;
         self.backend.end_frame();
+    }
+
+    /// Whether the host sets the camera (the designer, 04 §25): the engine
+    /// then never fits or clamps it.
+    #[cfg(feature = "designer")]
+    fn host_view(&self) -> bool {
+        self.live.host_view
+    }
+
+    #[cfg(not(feature = "designer"))]
+    fn host_view(&self) -> bool {
+        false
     }
 
     /// The default seat's size on screen in CSS pixels, once a chart and a
@@ -1201,6 +1229,10 @@ impl<B: GpuBackend> Engine<B> {
     /// cross-fade), its seats while they show (from the cross-fade up), its
     /// upper decoration. The fills and seats fade by seat size (04 §10).
     fn draw_world(&mut self, viewport: Viewport, time: f32) -> Result<(), (ErrorCode, String)> {
+        #[cfg(feature = "designer")]
+        if self.draw_world_live(viewport, time)? {
+            return Ok(());
+        }
         let (Some(loaded), Some(camera)) = (&self.scene, self.camera) else {
             return Ok(());
         };
@@ -1277,6 +1309,8 @@ impl<B: GpuBackend> Engine<B> {
             state_gen: self.state_gen,
             sold_out: &self.sold_out,
             sold_out_gen: self.sold_out_gen,
+            #[cfg(feature = "designer")]
+            moved: &self.live.moved_seats,
         };
         let gpu = |error: BackendError| (ErrorCode::Gpu, error.to_string());
         let again = loaded
@@ -1694,6 +1728,8 @@ fn glyph_desc() -> TextureDesc {
 impl<B: GpuBackend> Drop for Engine<B> {
     fn drop(&mut self) {
         self.release_scene();
+        #[cfg(feature = "designer")]
+        self.live_release();
         if let Some(texture) = self.atlas.take().and_then(|a| a.texture) {
             self.backend.destroy(ResourceId::Texture(texture));
         }

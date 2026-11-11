@@ -81,6 +81,10 @@ pub struct View<'a> {
     /// The "sold out" string and its generation.
     pub sold_out: &'a str,
     pub sold_out_gen: u32,
+    /// Seats the designer draws moved (04 §25): ranges of `idx` and the
+    /// rigid transform of each (columns of a 2 × 3 matrix), increasing.
+    #[cfg(feature = "designer")]
+    pub moved: &'a [(Range<u32>, [[f64; 2]; 3])],
 }
 
 /// One label that may be placed: its box in chart units for collision
@@ -101,22 +105,22 @@ enum Kind {
 }
 
 /// A `text` instance (`shaders/text.wgsl`).
-struct TextInstance {
-    pos: [f32; 2],
-    em: f32,
-    raster: Raster,
+pub(crate) struct TextInstance {
+    pub(crate) pos: [f32; 2],
+    pub(crate) em: f32,
+    pub(crate) raster: Raster,
     /// The anchor in the raster, texels from its top left.
-    anchor: [f32; 2],
-    angle: u16,
-    halo: bool,
+    pub(crate) anchor: [f32; 2],
+    pub(crate) angle: u16,
+    pub(crate) halo: bool,
     /// Smallest and largest em on screen, quarter CSS pixels (0: no largest).
-    min_q: u8,
-    max_q: u8,
-    color: Rgba,
+    pub(crate) min_q: u8,
+    pub(crate) max_q: u8,
+    pub(crate) color: Rgba,
 }
 
 impl TextInstance {
-    fn encode(&self) -> [u8; TEXT_STRIDE] {
+    pub(crate) fn encode(&self) -> [u8; TEXT_STRIDE] {
         let mut out = [0; TEXT_STRIDE];
         let [x, y, w, h] = self.raster.rect;
         // Rounded half up; `as` saturates.
@@ -176,6 +180,25 @@ impl MapLabels {
         }
         self.text_held.clear();
         self.built.clear();
+    }
+
+    /// Builds again at the next frame, whatever it was built for: the live
+    /// scene changed under the same indices (04 §25).
+    #[cfg(feature = "designer")]
+    pub fn invalidate(&mut self) {
+        self.built.clear();
+    }
+
+    /// Takes the decoration icons of a new live scene; their buffers are
+    /// made again at the next draw.
+    #[cfg(feature = "designer")]
+    pub fn reload_icons(&mut self, backend: &mut impl GpuBackend, scene: &Scene) {
+        if let Some(bufs) = self.icon_bufs.take() {
+            bufs.into_iter()
+                .for_each(|id| backend.destroy(ResourceId::Buffer(id)));
+        }
+        self.icon_bytes.iter_mut().for_each(Vec::clear);
+        self.load_icons(scene);
     }
 
     /// The active floor's decoration icons (`ICON`, 04 §7 pass 11) as
@@ -425,7 +448,22 @@ impl MapLabels {
                     color[3] = (f32::from(color[3]) * theme.dim) as u8;
                 }
                 left -= 1;
-                let pos = scene.pos.get(i).copied().unwrap_or_default();
+                #[allow(unused_mut, reason = "moved by the designer's transforms")]
+                let mut pos = scene.pos.get(i).copied().unwrap_or_default();
+                // A seat drawn moved has its label drawn there too.
+                #[cfg(feature = "designer")]
+                {
+                    let at = view.moved.partition_point(|(r, _)| r.end <= idx);
+                    if let Some((r, a)) = view.moved.get(at)
+                        && r.contains(&idx)
+                    {
+                        let [x, y] = pos.map(f64::from);
+                        pos = [
+                            (a[0][0] * x + a[1][0] * y + a[2][0]) as f32,
+                            (a[0][1] * x + a[1][1] * y + a[2][1]) as f32,
+                        ];
+                    }
+                }
                 let (bytes, _) = centred(pos, seat_cu * LABEL_FIT, raster, color);
                 self.cands.push(Cand {
                     bbox: None,

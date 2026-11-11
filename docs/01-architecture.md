@@ -182,6 +182,8 @@ Server budgets measured locally, 2026-11-11 (TST-024, TST-025), not on the refer
 
 Edit core measured locally, 2026-11-11 (DSN-001..003), native release build on an AMD Ryzen 9 7900X, not in a browser: on `stadium-100k` (370 nodes, 399 KB of JSON), parse 3.3 ms and load into the editor 0.25 ms; a seat-pitch change on one block 0.005 ms; one drag step of 50 blocks (18,666 seats) 0.002 ms; undo or redo of either at most 0.002 ms; deleting 50 blocks 0.016 ms and undoing it 0.011 ms (`cargo test --release -p cavea-edit measure_ -- --ignored --nocapture`). Expansion, the spatial index and drawing are not included.
 
+With the canvas (DSN-004, DSN-005), measured locally 2026-11-11, native release build on the same machine with the engine on a recording backend (`cargo test --release -p cavea-designer measure_canvas -- --ignored --nocapture`), not on a device: on `stadium-100k`, opening (import 9 ms) and the first draw 75 ms, against 2 s; a drag step of a 5,000-seat block 0.12 ms of edit core and engine CPU and of all 100,000 seats 1.1 ms, nothing compiled and no seat uploaded per step, against 60 fps; baking after release 1.5 ms for the block and 30 ms over 6 frames (at most 12 ms each) for everything. In Chromium 157 with SwiftShader software rendering, the first `draw()` takes 134 to 142 ms and a drag step's 0.2 to 0.3 ms median. The designer module is 2,858,976 B raw and 684,689 B brotli (from 2,460,634 B and 567,901 B before the canvas; not gated).
+
 ### Where the time goes
 
 Drawing 100,000 seats is one instanced draw call, so the GPU is not the constraint. The budget is spent on:
