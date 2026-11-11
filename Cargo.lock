@@ -319,6 +319,8 @@ name = "cavea-sim"
 version = "0.0.0"
 dependencies = [
  "cavea-engine",
+ "cavea-format",
+ "tokio",
 ]
 
 [[package]]

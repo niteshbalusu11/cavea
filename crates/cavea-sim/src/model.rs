@@ -213,6 +213,22 @@ impl Model {
         })
     }
 
+    /// The command alone, without expiries or the idempotency window: for
+    /// replaying committed commands in log order, whose expiries the log
+    /// itself carries.
+    pub fn execute(&mut self, request: &Request, now: Timestamp) -> Reply {
+        self.command(request, now)
+    }
+
+    /// The hold's expiry, if it exists.
+    #[must_use]
+    pub fn expiry_of(&self, id: HoldId) -> Option<Timestamp> {
+        self.holds
+            .values()
+            .find(|h| h.id == id)
+            .map(|h| h.expires_at)
+    }
+
     /// The authority check, then the command itself.
     fn command(&mut self, request: &Request, now: Timestamp) -> Reply {
         let secret = request.authority == Authority::Secret;
