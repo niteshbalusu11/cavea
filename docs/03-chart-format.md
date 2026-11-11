@@ -291,7 +291,7 @@ Header (32 bytes)
   4   version        u16       1
   6   flags          u16       bit 0: full (server) artefact
   8   chunk_count    u32
-  12  total_len      u32
+  12  total_len      u32       the file length
   16  content_hash   16 bytes  BLAKE3-128 of everything after the header
 
 Chunk directory (chunk_count × 16 bytes)
@@ -309,11 +309,24 @@ Encodings:
 
 | Id | Name | Layout |
 |---|---|---|
-| 0 | Raw | Fixed-width little-endian records |
-| 1 | Varint | LEB128 unsigned integers |
-| 2 | Delta | Zigzag LEB128 of differences from the previous value |
-| 3 | Run-length | Pairs of (value, run length), both varints |
+| 0 | Raw | Count, then fixed-width little-endian records |
+| 1 | Varint | Count, then LEB128 unsigned integers |
+| 2 | Delta | Count, then zigzag LEB128 of differences from the previous value |
+| 3 | Run-length | Count, then pairs of (value, run length), both varints |
 | 4 | Strings | Count, then u32 offsets, then UTF-8 bytes |
+
+Container rules:
+
+- **Version.** A reader of version *n* reads versions 1 to *n* and rejects any other value, including higher ones. Additive changes (a new chunk, which old readers skip) keep the version; anything an old reader would misread raises it.
+- **Reserved bits and bytes.** Header flag bits 1–15, the directory's reserved bytes, and reserved bits inside records (category flags 1–7, seat flags 5–7) are written as zero. Readers ignore them, so a later minor revision may give them a meaning that old readers can safely ignore.
+- **Payload placement.** Payloads come after the directory, in directory order, without overlap: each payload's offset is a multiple of 4, at least the previous payload's end (or the directory's end, for the first), and its end is within the file. Bytes between payloads are zero padding and are not read. `total_len` equals the file length exactly.
+- **Varints** are LEB128 values of at most 5 bytes that fit in a u32. **Zigzag** maps a signed difference *d* to `(d << 1) ^ (d >> 31)`. Differences are taken modulo 2³², so every i32 or u32 sequence round-trips. The first value's difference is from 0.
+- **Counts.** Every payload starts with the item count as a varint. A `Raw` payload is then exactly *count* records; records are packed, with no padding and no alignment, and a reader decodes them field by field. Nothing may follow the last item.
+- **Strings** (`STRS`): the count *n*, then *n* u32 end offsets, then the UTF-8 bytes of all strings concatenated. String *i* spans bytes `[end[i−1], end[i])`, with `end[−1] = 0`. Offsets do not decrease, each falls on a character boundary, and the last equals the byte length.
+- **Required chunks.** Every chunk in §4.2 for an artefact is required, empty or not: an empty table is written with count 0. A chart with no seats still has `SPOS`, `SCAT` and `SFLG`, each with count 0. A reader asked for the full artefact also requires `SOID`, `SRNK` and `OPRI` and flag bit 0. A reader that wants public data skips the full-only chunks, so it reads either artefact.
+- **Determinism.** The writer emits the chunks in the order of §4.2 and the same chart always gives the same bytes.
+
+**Content hash.** `content_hash` is the first 16 bytes of the BLAKE3 hash of `file[32..total_len]`. The `cavea-format` writer leaves the field zero and offers a function to patch it in; the artefact emitter (`cavea-compiler`) computes the hash and patches it, since the 32-byte header itself is not hashed. Readers in `cavea-format` expose the stored value and do not verify it: the browser fetches by a content-addressed URL, and the hashing code would add to the renderer's payload. The server may verify it when it stores an artefact.
 
 ### 4.2 Chunks
 
@@ -327,7 +340,7 @@ Encodings:
 | `CHNK` | Per render chunk: section, seat `idx` range, bounding box | Raw | Both |
 | `ROWS` | Per row: section, label, first seat `idx`, seat count, seat size, shape, label-rule index, bounding box, label anchors | Raw | Both |
 | `RSEG` | Per row segment: row, first seat offset, count | Raw | Both |
-| `LBLR` | Label rules: scheme, start, step, direction, prefix, suffix | Raw | Both |
+| `LBLR` | Label rules: scheme, start, step, prefix, suffix, custom labels | Raw | Both |
 | `LBLX` | Label exceptions: (`idx`, string index) | Varint | Both |
 | `SPOS` | Seat positions. Per row: the first seat's quantised (x, y), then deltas | Delta | Both |
 | `SCAT` | Seat categories | Run-length | Both |
@@ -353,6 +366,70 @@ Seat flags (`SFLG`, one byte):
 | 4 | Removable |
 | 5–7 | Reserved, zero |
 
+#### 4.2.1 Value types
+
+| Type | Bytes | Meaning |
+|---|---|---|
+| `str` | 4 | u32 index into `STRS` |
+| `opt` | 4 | u32 index, or `0xFFFFFFFF` for none (`NONE`). `opt str` is an optional string |
+| `q` | 4 | i32 position in quarter chart units (0.25 cu) |
+| `point` | 8 | `q` x, `q` y |
+| `box` | 16 | `q` min x, min y, max x, max y |
+| `size` | 2 | u16 length in quarter chart units |
+| `angle` | 2 | u16 binary angle, 65,536 per turn, clockwise |
+| `rgba` | 4 | Bytes R, G, B, A |
+| `range` | 8 | u32 first, u32 count |
+| `opt point` | 9 | u8 presence (0 or 1), then `point`, written as zeros when absent |
+| `f32` | 4 | IEEE 754, finite |
+
+Enumerations are one byte; any other value is an error.
+
+| Enumeration | Values |
+|---|---|
+| seat shape | 0 circle, 1 rounded, 2 chair |
+| row label display | 0 none, 1 start, 2 end, 3 both |
+| scheme | 0 numeric, 1 odd, 2 even, 3 alpha, 4 alpha-lower, 5 roman, 6 custom |
+| alpha overflow | 0 double, 1 spreadsheet |
+| seat order | 0 ltr, 1 rtl, 2 center-out |
+| object kind | 0 table (booked whole), 1 booth, 2 area |
+| table shape | 0 round, 1 rect |
+| text align | 0 left, 1 center, 2 right |
+| mesh layer | 0 below seats, 1 above seats |
+
+#### 4.2.2 Record layouts
+
+Fields are listed in byte order. Record sizes are in brackets.
+
+- **`META`** (exactly one record) [41]: name `str`, label template `str`, table label template `str`, compiler name and version `str`, seat count u32, bounds `box`, default seat size `size`, default seat shape, row label display, `rank_algo` u8.
+- **`CATS`** [13]: key `str`, label `str`, colour `rgba`, flags u8 (bit 0 accessible).
+- **`FLRS`** [41]: name `str`, level i32, seats `range`, bounds `box`, focal point `opt point`.
+- **`SECT`** [66]: label `opt str`, floor u32, seats `range`, rows `range`, default category `opt`, entrance `opt str`, outline `range` of `MESH` indices, bounds `box`, label anchor `point`, maximum label size `size`.
+- **`CHNK`** [28]: section `opt`, seats `range`, bounds `box`.
+- **`ROWS`** [60]: section `opt`, label `str`, first seat u32, seat count u16, positions u16, label rule `opt`, ordinal base u32, seat order, seat shape, seat size `size`, bounds `box`, label anchor at the start `point`, at the end `point`.
+- **`RSEG`** [12]: row u32, first seat u32, seat count u16, position u16.
+- **`LBLR`** [26]: scheme, alpha overflow, start u32, step u32, prefix `opt str`, suffix `opt str`, custom labels: `range` of strings.
+- **`LBLX`** (Varint): count, then per exception `idx` and `str`, two varints.
+- **`SPOS`** (Delta): count (the seat count), then per seat x and y as zigzag varints. Rows are taken in order; each row's first seat is a difference from (0, 0), that is absolute, and each later seat a difference from the seat before it.
+- **`SCAT`**, **`SFLG`** (Run-length): count (the seat count), then (value, run) pairs. Runs are at least 1 and add up to the count. `SCAT` values index `CATS`; `SFLG` values fit in a byte.
+- **`OBJS`** [53]: object kind, label `str`, category u32, capacity u32 (areas; 1 otherwise), floor u32, section `opt`, mesh `range` of `MESH` indices, bounds `box`, label anchor `point`.
+- **`TBLS`** [29]: table shape, rotation `angle`, chairs u16, first seat `opt` (booked by seat: the first of *chairs* consecutive seats; booked whole: `NONE`), object `opt` (booked whole: index into `OBJS`), centre `point`, width and height as two `q`.
+- **`MESH`** (Raw): vertex count, index count and draw count as three varints, then the vertices [12: x f32, y f32 in chart units, `rgba`], the indices [4: u32], and the draw ranges [9: mesh layer, `range` of indices].
+- **`TEXT`** [27]: text `str`, position `point`, size `size`, angle `angle`, colour `rgba`, text align, weight u16, minimum zoom `f32`.
+- **`ICON`** [16]: icon key `str` (`entrance`, `exit`, `stairs`, `toilets`, `bar`, `lift`), position `point`, size `size`, angle `angle`.
+- **`IMGS`** [23]: asset hash `str`, bounds `box`, angle `angle`, opacity u8 (255 opaque).
+- **`SOID`** (Delta): one u32 `oid` per object, in `idx` order.
+- **`SRNK`** (Delta): one u16 rank per object, in `idx` order; values above 65,535 are an error.
+- **`OPRI`** (Raw) [4]: one `f32` priority per section.
+
+#### 4.2.3 Structure
+
+- **Objects.** Seats come first: seat *i* has `idx` *i*. `OBJS` entry *j* has `idx` = seat count + *j*. `SOID` and `SRNK` cover every object.
+- **Rows** partition the seats: row *r*'s first seat is the sum of the earlier rows' seat counts. Seats within a row are in physical order. A table booked by seat contributes a row of its own, so that every seat has a row, a label rule and a position. *positions* counts the row's seat positions including removed ones (at most 4,095).
+- **Segments** split each row's seats, in `idx` order, into runs of at least one seat. A segment's *position* is its first seat's position in the row, counting removed positions; positions increase and stay below the row's *positions*. A row without seats has no segments.
+- **Floors** and **render chunks** each partition the seats in `idx` order. A chunk holds at most 4,096 seats.
+- **Seat labels** are generated, not stored. A seat at position *p* in a row has ordinal `ordinal_base + seat_ordinal(order, positions, p)` (`cavea-core::label`), and the row's label rule turns that into text. The compiler resolves `serpentine` into `ltr` or `rtl` per row and `continuous` into `ordinal_base`, so neither is stored. A seat listed in `LBLX` uses that string instead, and a row whose rule is `NONE` labels only its listed seats. `LBLX` is sorted by `idx`, at most one entry per seat. Row labels are stored whole, as strings.
+- **Ranges into `MESH`** (section outlines, object meshes, draw ranges) are ranges of indices. Every index is below the vertex count.
+
 ### 4.3 Why these encodings
 
 - A straight row has a constant step between seats, so `SPOS` deltas repeat and compress to almost nothing under brotli.
@@ -363,9 +440,11 @@ Seat flags (`SFLG`, one byte):
 ### 4.4 Reader requirements
 
 - Treat the file as hostile: validate every offset, length and count against the file size before use.
-- Reject overlapping chunks, unknown encodings and counts that exceed the limits in `02-domain-model.md` §14.
-- Skip unknown chunk tags. Fail on a missing required chunk.
-- Allocate once per array, sized from validated counts.
+- Reject overlapping or out-of-order chunks, unknown encodings and counts that exceed the limits in `02-domain-model.md` §14.
+- Skip unknown chunk tags. Fail on a missing required chunk, on a known chunk that appears twice, and on a known chunk with an encoding other than its own.
+- Allocate once per array, sized from validated counts. A count is never trusted beyond what the remaining bytes could encode, or for run-length chunks beyond the seat count in `META`.
+- Check every cross-reference once, at decode time: every index (string, category, floor, section, row, label rule, object, vertex) is within its table, and every range and partition in §4.2.3 holds. A decoded chart is internally consistent, so consumers index it without further checks. The writer applies the same check and refuses a chart that fails it.
+- Return a typed error naming the chunk and the rule broken.
 - Decode is a single forward pass. Targets: ≤ 5 ms per 100,000 seats on a desktop, ≤ 20 ms on the reference Android phone.
 - The decoder has a fuzz target and must never panic (`13-testing-benchmarks.md` §5).
 
