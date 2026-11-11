@@ -50,6 +50,16 @@ pub(crate) fn local(f: &Finding) -> bool {
     }
 }
 
+/// A chart-wide count exceeded (E006): the compiler then leaves out the
+/// nodes past it, so their own errors may be missing from its list.
+pub(crate) fn limit(f: &Finding) -> bool {
+    match &f.detail {
+        Detail::Expand(ExpandErrorKind::TooManyObjects) => true,
+        Detail::TooMany { .. } => !local(f),
+        _ => false,
+    }
+}
+
 /// The findings of compiling `doc`: the errors of one that does not
 /// compile, else its warnings. An encoding failure, which only a chart
 /// without errors can reach, is returned as its message.
@@ -118,6 +128,11 @@ impl Validator {
             self.dirty.remove(id);
         }
         for &id in &changes.nodes {
+            // A node moved into a section is no longer a unit of its own.
+            if doc.parent(id).is_some() {
+                self.units.remove(&id);
+                self.dirty.remove(&id);
+            }
             let mut top = id;
             while let Some(p) = doc.parent(top) {
                 top = p;
@@ -224,7 +239,15 @@ impl Validator {
             }
             _ => {
                 items.extend(self.chart.iter().map(|f| (f, false)));
-                items.extend(self.units.values().flatten().map(|f| (f, false)));
+                // Past a chart-wide limit the compiler stops checking the
+                // nodes beyond it, which a unit alone still reports: the
+                // units' findings are then only a guide until the pass.
+                let limited = self.full.iter().flat_map(|f| &f.findings).any(limit);
+                let units = self.units.iter().flat_map(|(id, f)| {
+                    let stale = limited || self.dirty.contains(id);
+                    f.iter().map(move |f| (f, stale))
+                });
+                items.extend(units);
                 // The last pass's findings no unit can give, while they may
                 // be out of date.
                 let exists = |n: Option<u32>| n.is_none_or(|n| doc.node(n).is_some());

@@ -16,7 +16,7 @@ use crate::selection::Selection;
 use crate::tests::{Rng, command, subjects};
 use crate::tool::snap::{self, Moving, Snap};
 use crate::tool::{Context, Pointer};
-use crate::validation::local;
+use crate::validation::{self, local};
 use crate::*;
 
 fn state(s: &Session) -> Vec<u8> {
@@ -73,7 +73,8 @@ fn validation_is_the_compilers() {
                 s.validate(1);
             }
             let reference = findings(&s.document().snapshot());
-            if reference.len() < MAX_FINDINGS {
+            // Past a chart-wide limit the compiler skips nodes a unit checks.
+            if reference.len() < MAX_FINDINGS && !reference.iter().any(validation::limit) {
                 let theirs = keys(reference.iter().filter(|f| local(f)));
                 assert_eq!(keys(s.validator().local_findings()), theirs, "subject {n}");
                 local_checked += 1;
@@ -960,4 +961,69 @@ fn measure_panels() {
         ms(t),
         o.markers.len()
     );
+}
+
+/// Sol review round 1 (S1, S3, S4, S5): a node moved into a section stops
+/// being a unit of its own; renumbering keeps an override for an oid the
+/// node lacks (which `editSeats` could not clear) and so applies what it
+/// previews; the active category stays one of the chart's through undo;
+/// switching tools ends the preview.
+#[test]
+fn panel_state_follows_the_document() {
+    let mut value = serde_json::to_value(chart()).expect("json");
+    value["nodes"][1]["category"] = serde_json::Value::Null;
+    value["nodes"][1]["seatOverrides"] = serde_json::json!({ "999": { "label": "X" } });
+    let doc: ChartDocument = serde_json::from_value(value).expect("doc");
+    let mut s = Session::load(doc).expect("load");
+    while !s.validate(1).done {}
+    let e002 = |s: &Session| {
+        s.validation()
+            .findings
+            .iter()
+            .any(|f| f.code == "E002" && f.node == Some(20))
+    };
+    assert!(e002(&s), "block 20 has no category");
+    s.apply(Command::PlaceNode {
+        id: 20,
+        parent: Some(30),
+        index: 0,
+    })
+    .expect("place");
+    while !s.validator().units_done() {
+        s.validate(1);
+    }
+    assert!(!e002(&s), "the section gives it one");
+    // Renumbering block 20 with a dangling label override.
+    s.select(Level::Section(30), [20]);
+    let num = Numbering {
+        rows: None,
+        seats: Some(SeatLabels {
+            start: Some(LabelStart::Number(5)),
+            ..SeatLabels::default()
+        }),
+        after_z: None,
+        across: None,
+        keep_overrides: false,
+    };
+    let preview = s.preview_numbering(&num).expect("preview").clone();
+    s.set_tool(ToolId::Rect);
+    assert!(
+        s.numbering_preview().is_none(),
+        "a tool switch ends the preview"
+    );
+    s.select(Level::Section(30), [20]);
+    s.number(&num).expect("applies what it previews");
+    assert_eq!(current(&mut s), preview);
+    // Undo of a rename of the active category.
+    s.set_category(Some("std".into()));
+    let vip = Category {
+        key: "gold".into(),
+        label: "Gold".into(),
+        color: "#CA8A04".into(),
+        accessible: false,
+    };
+    s.update_category("std", vip).expect("rename");
+    assert_eq!(s.category(), Some("gold"));
+    s.undo().expect("undo");
+    assert_eq!(s.category(), Some("std"));
 }

@@ -427,8 +427,14 @@ pub(crate) fn renumbered(
             };
             *labels = sl;
             if clear {
-                // As `editSeats label null`: an override left empty goes.
-                overrides.retain(|_, o| {
+                // As `editSeats label null` on the node's seats: an override
+                // left empty goes; one for an oid the node lacks is kept, as
+                // `editSeats` cannot name it (and it labels no seat).
+                let oids: BTreeSet<u32> = view.index.seats(id).iter().map(|s| s.oid).collect();
+                overrides.retain(|oid, o| {
+                    if !oids.contains(oid) {
+                        return true;
+                    }
                     let had = o.label.take().is_some();
                     !had || !o.flags.is_empty() || o.category.is_some() || o.nudge.is_some()
                 });

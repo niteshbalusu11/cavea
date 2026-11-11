@@ -109,7 +109,7 @@ impl Session {
     /// Switches the tool; the old one abandons what it was doing first, so
     /// no gesture is left open.
     pub fn set_tool(&mut self, id: ToolId) {
-        self.with_tool(|tool, cx| tool.reset(cx));
+        self.reset_tool();
         self.tool = match id {
             ToolId::Select => Box::new(SelectTool::default()),
             ToolId::RowBlock => Box::new(BlockTool::default()),
@@ -448,12 +448,10 @@ impl Session {
         category: Category,
     ) -> Result<Applied, CommandError> {
         let new = category.key.clone();
+        let was = self.category.as_deref() == Some(key);
         let key = key.to_owned();
-        let result = self.apply(Command::UpdateCategory {
-            key: key.clone(),
-            category,
-        });
-        self.follow(&key, Some(new), &result);
+        let result = self.apply(Command::UpdateCategory { key, category });
+        self.follow(was, Some(new), &result);
         result
     }
 
@@ -484,19 +482,21 @@ impl Session {
             return Err(CommandError::CategoryInUse { key, references });
         }
         let replacement = replacement.map(str::to_owned);
+        let was = self.category.as_deref() == Some(key);
         let result = self.apply(Command::RemoveCategory {
             key: key.to_owned(),
             replacement: replacement.clone(),
         });
         let next =
             replacement.or_else(|| self.document().categories().first().map(|c| c.key.clone()));
-        self.follow(key, next, &result);
+        self.follow(was, next, &result);
         result
     }
 
-    /// The active category follows a category renamed, merged or deleted.
-    fn follow(&mut self, key: &str, next: Option<String>, result: &Result<Applied, CommandError>) {
-        if result.is_ok() && self.category.as_deref() == Some(key) {
+    /// The active category follows a category renamed, merged or deleted
+    /// (`was`: it was the active one).
+    fn follow(&mut self, was: bool, next: Option<String>, result: &Result<Applied, CommandError>) {
+        if result.is_ok() && was {
             self.category = next;
         }
     }
@@ -777,6 +777,16 @@ impl Session {
         self.index.sync(doc);
         self.validator.sync(doc);
         self.selection.reconcile(doc);
+        // The active category is one of the chart's, also after an undo or
+        // redo of a category edit: else the first.
+        let cats = doc.categories();
+        if self
+            .category
+            .as_ref()
+            .is_some_and(|k| !cats.iter().any(|c| &c.key == k))
+        {
+            self.category = cats.first().map(|c| c.key.clone());
+        }
         let listed = |f| doc.floors().iter().any(|l| l.id == f);
         if !self.floor.is_some_and(listed) {
             let first = doc.floors().first().map(|f| f.id);
