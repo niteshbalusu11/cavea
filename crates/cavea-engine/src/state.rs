@@ -221,6 +221,12 @@ impl EventState {
         &self.chart
     }
 
+    /// The ownership epoch every batch of this state is fenced on.
+    #[must_use]
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
     /// The sequence number of the last command applied to memory.
     #[must_use]
     pub fn seq(&self) -> u64 {

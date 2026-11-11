@@ -35,8 +35,7 @@ WS / SSE ◀── Realtime hub ◀── per-event broadcast            Committ
 |---|---|
 | `http` | Router, extractors, auth, problem+json errors, OpenAPI |
 | `public` | Publishable-key endpoints, CORS, rate limiting |
-| `registry` | Finds or loads the actor for an event; eviction |
-| `engine` (crate `cavea-engine`) | Actor, state machine, hold expiry, best-available |
+| `engine` (crate `cavea-engine`) | Actor, state machine, hold expiry, best-available; the actor registry (finds or loads the actor for an event, ownership, poison and reload, eviction), kept here behind `SeatStore` so that the simulation harness drives it |
 | `store` | `SeatStore` trait and its PostgreSQL implementation |
 | `realtime` | WebSocket, SSE, polling; frame encoding; back-pressure |
 | `charts` | Draft storage, validation, compile on publish, asset storage |
@@ -160,7 +159,7 @@ ON CONFLICT (workspace_id, key) DO UPDATE SET ...
  WHERE idempotency.created_at <= EXCLUDED.created_at - interval '24 hours';
 ```
 
-All eight parts go in one round trip as one statement: each is a data-modifying CTE fed by `UNNEST` arrays, every write is gated on the fence (`WHERE EXISTS (SELECT FROM fence)`), and the statement returns how many rows the fence updated. A single statement is its own transaction, so it needs no `BEGIN` or `COMMIT`; any error in any part aborts all of it. `sqlx` cannot pipeline separate statements (D-23). When the fence matches nothing, a second query reads the event's epoch and `seq` to report `fenced`, a `seq` mismatch or a missing hold. The lease renewal in statement 1 arrives with ownership (ENG-012); until then the statement sets `seq` only. A record is replaced once the stored one is 24 hours old or more, matching the engine, for which a record is expired from that instant.
+All eight parts go in one round trip as one statement: each is a data-modifying CTE fed by `UNNEST` arrays, every write is gated on the fence (`WHERE EXISTS (SELECT FROM fence)`), and the statement returns how many rows the fence updated. A single statement is its own transaction, so it needs no `BEGIN` or `COMMIT`; any error in any part aborts all of it. `sqlx` cannot pipeline separate statements (D-23). When the fence matches nothing, a second query reads the event's epoch and `seq` to report `fenced`, a `seq` mismatch or a missing hold. The fence also renews the lease by the database clock; it checks the epoch only, so a lapsed lease that no other node has taken still commits. A record is replaced once the stored one is 24 hours old or more, matching the engine, for which a record is expired from that instant.
 
 A batch carries the net effect of its commands as of its last one: each object appears at most once, in either the upsert list (with the `seq` of the last command that changed it) or the freed list, and a hold created and extended in the same batch is inserted once with its final expiry; a hold created and deleted in the same batch is not written at all. The statement order above is then correct without the store knowing engine internals.
 
@@ -175,29 +174,32 @@ A batch carries the net effect of its commands as of its last one: each object a
 | Failure | Response |
 |---|---|
 | Commit fails (database down, timeout) | Fail every command in that batch and in later uncommitted batches with `503 unavailable`. Drop the actor. The next request reloads it from PostgreSQL |
-| Fencing check updates zero rows | Same, and log loudly: another node owns the event |
+| Fencing check updates zero rows, or a heartbeat fails | Same, and for fencing log loudly: another node owns the event |
 | Actor panics | The registry catches it, fails pending callers, drops the actor |
+| Load fails (database down, event leased by another node) | Every request waiting for that load gets `503 unavailable`. For the next second, requests for the event fail at once without touching the database; after that the next request tries again. An outage costs at most one load attempt per event per second. A load that fails after acquiring the event releases its lease |
 | Process crash | Nothing acknowledged is lost. On restart, events with outstanding holds are loaded so that expiries still fire |
 
-There is no in-memory rollback path. Reloading from the database is the single recovery mechanism, which keeps it tested.
+There is no in-memory rollback path. Reloading from the database is the single recovery mechanism, which keeps it tested. A request that reaches an actor as it stops is not applied: it waits for the actor to end and goes to the reloaded one.
 
-A commit that takes longer than 5 s, from waiting for a connection to the reply, fails as `unavailable`. Whether it was written is then unknown, and the statement may still commit on the server after the actor has stopped. That is safe: if it commits before the reload reads the event, the reloaded state includes it; if after, it either fails its own fence (the reloaded actor has already advanced `seq`) or advances `seq` itself, so the reloaded actor's next commit fails its fence and the event is reloaded again. Nothing is acknowledged that is not durable (INV-7) and no delta is published for it (INV-8). One case remains until loading takes ownership and raises the epoch (§4.7 step 1, ENG-012): a late batch of only idempotency records leaves `seq` unchanged, so it can land after the reload without being noticed, and a retry served by the reloaded actor in between may get a different reply than later retries.
+A commit that takes longer than 5 s, from waiting for a connection to the reply, fails as `unavailable`; so does an acquire, heartbeat or release. Whether a timed-out commit was written is then unknown, and the statement may still commit on the server after the actor has stopped. That is safe: if it commits before the reload acquires the event, the reloaded state includes it; if after, it fails its fence, because acquiring raised the epoch (§4.7 step 1), also for a batch of only idempotency records, which leaves `seq` unchanged. Nothing is acknowledged that is not durable (INV-7) and no delta is published for it (INV-8).
 
 ### 4.7 Loading and eviction
 
 Load:
 
-1. Acquire ownership: `UPDATE events SET owner_node = $me, owner_epoch = owner_epoch + 1, lease_until = now() + $lease WHERE id = $1 AND (owner_node = $me OR lease_until IS NULL OR lease_until < now()) RETURNING owner_epoch, seq, chart_version_id`.
+1. Acquire ownership: `UPDATE events SET owner_node = $me, owner_epoch = owner_epoch + 1, lease_until = now() + $lease WHERE id = $1 AND (owner_node = $me OR lease_until IS NULL OR lease_until < now()) RETURNING owner_epoch, chart_version_id`. No row: the event is unknown, or another node holds a live lease (`leased`, answered `503 unavailable`). The same node acquiring again (a reload) always succeeds and fences its earlier actor.
 2. Load the full CCF for the pinned version (cached per version).
-3. Read `object_state`, `holds`, `area_alloc`, `channels`, and the event's `idempotency` records younger than 24 hours by the database clock, all in one `REPEATABLE READ` snapshot; map `oid` to `idx`; fill the arrays.
-4. Schedule expiries, including any already past.
+3. Read `object_state`, `holds`, `area_alloc`, `channels`, and the event's `idempotency` records younger than 24 hours by the database clock, all in one `REPEATABLE READ` snapshot; map `oid` to `idx`; fill the arrays. If the snapshot's epoch is not the one just acquired, another node took the event in between and the load fails.
+4. Schedule expiries, including any already past: the actor expires those first, as its first commit.
 
-Eviction: an actor with no subscribers, no outstanding holds and no command for 10 minutes is dropped. At startup the server loads every event that has rows in `holds`.
+Concurrent requests for an event that is not loaded share one load; a failed load is reported to all of them (§4.6).
+
+Eviction: an actor with no subscribers, no outstanding holds and no command for 10 minutes stops: it takes no more commands, commits what it accepted and releases its lease. It is checked once per 10 minutes on the engine clock, so it stops between 10 and 20 minutes after the last command, hold expiry or departing subscriber. A subscriber keeps the actor with a keep-alive guard from the registry. A command after eviction loads the event again. At startup the server loads every event that has rows in `holds`.
 
 ### 4.8 Ownership and failover
 
 - v1 runs one node. The lease and epoch are implemented from the start so that a second node can never corrupt state.
-- **Active–passive (P2):** a standby takes over events whose lease has lapsed. Lease 15 s, renewed with every commit and by a 5 s heartbeat when idle. Only database time is used.
+- **Active–passive (P2):** a standby takes over events whose lease has lapsed. Lease 15 s, renewed with every commit and by a 5 s heartbeat when idle (`CAVEA_LEASE_SECS`, `CAVEA_HEARTBEAT_SECS`). Only database time is used. A heartbeat that fails or is fenced stops the actor as a failed commit does. On shutdown and eviction the lease is released (`lease_until = NULL`), so another node or a restart can take the event at once.
 - **Multi-node (P2):** a node receiving a command for an event it does not own proxies it to the owner. Realtime subscribers on other nodes are fed by a node-to-node stream.
 - A deposed node may serve a stale snapshot for up to one lease period. It cannot commit.
 
@@ -434,7 +436,7 @@ CREATE TABLE audit_log (
 );
 ```
 
-The `SeatStore` trait hides all of this from the engine: `load_event`, `commit_batch`, `acquire`, `heartbeat`. Tests use an in-memory implementation with fault injection.
+The `SeatStore` trait hides all of this from the engine: `acquire`, `load_event`, `commit_batch`, `heartbeat`, `release`. A store speaks for one node. Tests use an in-memory implementation with fault injection, whose leases follow the injected clock.
 
 ## 6. REST API
 
@@ -791,7 +793,9 @@ Live reports read the actor. CSV exports stream from PostgreSQL.
 | `CAVEA_LOG_RETENTION_DAYS` | 400 | `event_log` partitions older than this are dropped |
 | `CAVEA_OBJECT_STORE_URL` | none | Optional S3-compatible storage for assets |
 | `CAVEA_OTLP_ENDPOINT` | none | Trace export |
-| `CAVEA_NODE_ID` | hostname | |
+| `CAVEA_NODE_ID` | hostname | This node's name in `events.owner_node`; nodes on one database must differ |
+| `CAVEA_LEASE_SECS` | 15 | How long ownership of an event lasts unless renewed |
+| `CAVEA_HEARTBEAT_SECS` | 5 | How long an idle actor waits before renewing its lease; less than the lease |
 
 ## 14. Deployment
 
@@ -829,6 +833,8 @@ request {request_id, method, route, status, duration_ms, workspace, event, event
 ├─ apply {op}            on the actor's task, parented to the request explicitly
 └─ db {statement}        a database call made by the handler
 commit {event_id, seq, commands}   one per batch; follows_from each apply span in it
+actor {event_id}                   one per loaded event: its load, actor and lease release
+└─ heartbeat                       an idle lease renewal
 ```
 
 - `route` is the matched template (`/v1/events/{event_key}`), or `<unmatched>`; the raw path is never logged because it carries customer keys. Query strings, headers and bodies are never logged.

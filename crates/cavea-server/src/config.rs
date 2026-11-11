@@ -24,12 +24,20 @@ pub struct Config {
     pub database_url: DatabaseUrl,
     /// `CAVEA_DB_POOL`: the most connections the pool opens.
     pub db_pool: NonZeroU32,
+    /// `CAVEA_NODE_ID`: this node's name in `events.owner_node`. Defaults to
+    /// the host name; two nodes on one database must differ.
+    pub node_id: String,
+    /// `CAVEA_LEASE_SECS`: how long an event's ownership lasts unless renewed.
+    pub lease_secs: NonZeroU32,
+    /// `CAVEA_HEARTBEAT_SECS`: how long an idle actor waits before renewing its
+    /// lease. Less than the lease.
+    pub heartbeat_secs: NonZeroU32,
 }
 
 impl Config {
     /// Read every setting. Add a new one here, with its default, and to 08 §13.
     pub fn from_env() -> Result<Self, ConfigError> {
-        Ok(Self {
+        Self {
             listen: setting("CAVEA_LISTEN", || SocketAddr::from(([0, 0, 0, 0], 8080)))?,
             log: setting("CAVEA_LOG", || "info".to_owned())?,
             log_format: setting("CAVEA_LOG_FORMAT", LogFormat::default)?,
@@ -40,8 +48,43 @@ impl Config {
                     .to_owned(),
             })?,
             db_pool: setting("CAVEA_DB_POOL", || NonZeroU32::MIN.saturating_add(15))?,
-        })
+            node_id: match optional("CAVEA_NODE_ID")? {
+                Some(id) => id,
+                None => hostname().ok_or(ConfigError {
+                    var: "CAVEA_NODE_ID",
+                    reason: "is required: the host name could not be read".to_owned(),
+                })?,
+            },
+            lease_secs: setting("CAVEA_LEASE_SECS", || NonZeroU32::MIN.saturating_add(14))?,
+            heartbeat_secs: setting("CAVEA_HEARTBEAT_SECS", || NonZeroU32::MIN.saturating_add(4))?,
+        }
+        .checked()
     }
+
+    fn checked(self) -> Result<Self, ConfigError> {
+        if self.heartbeat_secs >= self.lease_secs {
+            return Err(ConfigError {
+                var: "CAVEA_HEARTBEAT_SECS",
+                reason: "is invalid: must be less than CAVEA_LEASE_SECS".to_owned(),
+            });
+        }
+        if self.node_id.is_empty() {
+            return Err(ConfigError {
+                var: "CAVEA_NODE_ID",
+                reason: "is invalid: must not be empty".to_owned(),
+            });
+        }
+        Ok(self)
+    }
+}
+
+/// The host name: `HOSTNAME` if set (as in containers), else the kernel's.
+fn hostname() -> Option<String> {
+    let name = std::env::var("HOSTNAME")
+        .ok()
+        .or_else(|| std::fs::read_to_string("/proc/sys/kernel/hostname").ok())?;
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 /// A parsed PostgreSQL connection URL. It holds the password, so neither it

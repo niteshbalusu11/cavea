@@ -26,10 +26,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cavea_engine::{
-    ActorConfig, Authority, Batch, BookDetail, Booking, ChartView, Clock, Command, EventId,
-    EventState, Failure, HoldId, HoldRow, Idempotency, IdempotencyRecord, LoadedEvent, LogRecord,
-    ManualClock, MemoryStore, Missing, ObjectFailure, ObjectReason, ObjectRef, ObjectRow, Op,
-    Outcome, Request, SeatStore, Status, StoreError, Timestamp, TokenHash, actor,
+    ActorConfig, Authority, Batch, BookDetail, Booking, ChartVersionId, ChartView, Clock, Command,
+    EventId, EventState, Failure, HoldId, HoldRow, Idempotency, IdempotencyRecord, LoadedEvent,
+    LogRecord, MEMORY_LEASE_MS, ManualClock, MemoryCharts, MemoryStore, Missing, ObjectFailure,
+    ObjectReason, ObjectRef, ObjectRow, Op, Outcome, Registry, RegistryConfig, Request, SeatStore,
+    Status, StoreError, Timestamp, TokenHash, actor,
 };
 use cavea_server::store::{self, MigrationError, PgStore};
 use serde_json::Value;
@@ -84,6 +85,13 @@ async fn migrated_pool(options: &PgConnectOptions) -> PgPool {
     store::connect(options.clone(), 8).await.unwrap()
 }
 
+/// The lease both stores grant.
+const LEASE: Duration = Duration::from_millis(MEMORY_LEASE_MS);
+
+fn pg_store(pool: &PgPool, node: &str) -> PgStore {
+    PgStore::new(pool.clone(), node, LEASE)
+}
+
 fn hex(event: EventId) -> String {
     format!("{:032x}", event.0)
 }
@@ -125,6 +133,13 @@ trait Harness {
     async fn set_epoch(&self, event: EventId, epoch: u64);
     /// The stored log, in `seq` order.
     async fn log(&self, event: EventId) -> Vec<LogRow>;
+    /// A second node's store on the same data.
+    fn peer(&self) -> Self::Store;
+    /// Let the event's lease run out, by the store's clock.
+    async fn lapse(&self, event: EventId);
+    /// Milliseconds left on the event's lease, by the store's clock.
+    async fn lease_left(&self, event: EventId) -> Option<i64>;
+    async fn chart_version(&self, event: EventId) -> ChartVersionId;
 }
 
 impl Harness for MemoryStore {
@@ -133,7 +148,7 @@ impl Harness for MemoryStore {
         self
     }
     async fn create_event(&self, event: EventId, epoch: u64) {
-        MemoryStore::create_event(self, event, epoch);
+        MemoryStore::create_event(self, event, epoch, ChartVersionId(event.0 + 1));
     }
     async fn set_epoch(&self, event: EventId, epoch: u64) {
         self.set_owner_epoch(event, epoch);
@@ -155,6 +170,19 @@ impl Harness for MemoryStore {
                 )
             })
             .collect()
+    }
+    fn peer(&self) -> Self {
+        MemoryStore::peer(self, "node-2")
+    }
+    async fn lapse(&self, _: EventId) {
+        self.clock().advance_ms(MEMORY_LEASE_MS + 1);
+    }
+    async fn lease_left(&self, event: EventId) -> Option<i64> {
+        let until = self.lease(event).unwrap().1?;
+        Some(until.0 as i64 - self.clock().now().0 as i64)
+    }
+    async fn chart_version(&self, event: EventId) -> ChartVersionId {
+        ChartVersionId(event.0 + 1)
     }
 }
 
@@ -196,6 +224,40 @@ impl Harness for Pg {
             })
             .collect()
     }
+    fn peer(&self) -> PgStore {
+        pg_store(&self.pool, "node-2")
+    }
+    async fn lapse(&self, event: EventId) {
+        sqlx::query("UPDATE events SET lease_until = now() - interval '1 ms' WHERE id = $1::uuid")
+            .bind(hex(event))
+            .execute(&self.pool)
+            .await
+            .unwrap();
+    }
+    async fn lease_left(&self, event: EventId) -> Option<i64> {
+        sqlx::query_scalar(
+            "SELECT (extract(epoch FROM lease_until - now()) * 1000)::int8
+               FROM events WHERE id = $1::uuid",
+        )
+        .bind(hex(event))
+        .fetch_one(&self.pool)
+        .await
+        .unwrap()
+    }
+    async fn chart_version(&self, event: EventId) -> ChartVersionId {
+        chart_version(&self.pool, event).await
+    }
+}
+
+async fn chart_version(pool: &PgPool, event: EventId) -> ChartVersionId {
+    let id: String = sqlx::query_scalar(
+        "SELECT replace(chart_version_id::text, '-', '') FROM events WHERE id = $1::uuid",
+    )
+    .bind(hex(event))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    ChartVersionId(u128::from_str_radix(&id, 16).unwrap())
 }
 
 /// Unix milliseconds now: the PostgreSQL store ages idempotency records by the
@@ -553,10 +615,74 @@ async fn refusals<H: Harness>(h: &H) {
     );
 }
 
+/// Ownership (08 §4.7 step 1, §4.8): acquiring raises the epoch; a live lease
+/// refuses another node; commits and heartbeats renew it by the store's clock;
+/// once it lapses another node takes over and the old owner's commit,
+/// heartbeat and release are fenced; a release frees the event at once.
+async fn ownership<H: Harness>(h: &H) {
+    let ev = EventId(0x1004);
+    h.create_event(ev, 0).await;
+    let (me, other) = (h.store(), h.peer());
+    let t = now_ms();
+    let keyed = |epoch, seq, log, key| {
+        let mut b = batch(ev, seq, log);
+        b.epoch = epoch;
+        b.idempotency = vec![key_record(key, 1, t, Err(Failure::Forbidden))];
+        b
+    };
+
+    let first = me.acquire(ev).await.unwrap();
+    assert_eq!(first.epoch, 1);
+    assert_eq!(first.chart_version, h.chart_version(ev).await);
+    assert!(h.lease_left(ev).await.unwrap() > 14_000);
+    assert_eq!(other.acquire(ev).await, Err(StoreError::Leased));
+    assert_eq!(load(h, ev).await.epoch, 1, "a refusal changes nothing");
+
+    // 08 §4.6: a commit of only idempotency records, timed out at epoch 1,
+    // lands after the same node reloaded the event. Reloading raised the
+    // epoch, so the late write is refused instead of slipping in unnoticed.
+    assert_eq!(me.acquire(ev).await.unwrap().epoch, 2);
+    let late = keyed(1, 0, vec![], "late");
+    assert_eq!(me.commit_batch(late).await, Err(StoreError::Fenced));
+    assert!(load(h, ev).await.idempotency.is_empty());
+
+    // A lapsed lease that nobody took still commits, and the commit renews it.
+    h.lapse(ev).await;
+    let b1 = keyed(2, 1, vec![record(1, Op::ChangeStatus)], "k1");
+    me.commit_batch(b1).await.unwrap();
+    assert!(h.lease_left(ev).await.unwrap() > 14_000);
+    h.lapse(ev).await;
+    me.heartbeat(ev, 2).await.unwrap();
+    assert!(h.lease_left(ev).await.unwrap() > 14_000);
+
+    // Takeover after the lease lapses.
+    h.lapse(ev).await;
+    assert_eq!(other.acquire(ev).await.unwrap().epoch, 3);
+    let b2 = keyed(2, 2, vec![record(2, Op::ChangeStatus)], "k2");
+    assert_eq!(me.commit_batch(b2).await, Err(StoreError::Fenced));
+    assert_eq!(me.heartbeat(ev, 2).await, Err(StoreError::Fenced));
+    assert_eq!(me.release(ev, 2).await, Err(StoreError::Fenced));
+    assert_eq!(me.acquire(ev).await, Err(StoreError::Leased));
+    let b2 = keyed(3, 2, vec![record(2, Op::ChangeStatus)], "k2");
+    other.commit_batch(b2).await.unwrap();
+    let seqs: Vec<u64> = h.log(ev).await.iter().map(|r| r.0).collect();
+    assert_eq!(seqs, [1, 2]);
+
+    // A released event is free to any node at once.
+    other.release(ev, 3).await.unwrap();
+    assert_eq!(h.lease_left(ev).await, None);
+    assert_eq!(me.acquire(ev).await.unwrap().epoch, 4);
+    assert_eq!(
+        me.acquire(EventId(0xdead)).await,
+        Err(StoreError::UnknownEvent)
+    );
+}
+
 async fn conformance<H: Harness>(h: &H) {
     round_trip(h).await;
     idempotency_records(h).await;
     refusals(h).await;
+    ownership(h).await;
 }
 
 #[tokio::test]
@@ -570,7 +696,7 @@ async fn pg_store_conformance() {
     with_db(|options| async move {
         let pool = migrated_pool(&options).await;
         let pg = Pg {
-            store: PgStore::new(pool.clone()),
+            store: pg_store(&pool, "node-1"),
             pool,
         };
         conformance(&pg).await;
@@ -609,7 +735,7 @@ async fn pg_store_conformance() {
 async fn pg_store_failed_commit_writes_nothing() {
     with_db(|options| async move {
         let pool = migrated_pool(&options).await;
-        let store = PgStore::new(pool.clone());
+        let store = pg_store(&pool, "node-1");
         let ev = EventId(0x2001);
         insert_event(&pool, ev, 1).await;
         let before = store.load_event(ev).await.unwrap();
@@ -792,7 +918,7 @@ fn fingerprint(s: &EventState) -> Fingerprint {
 async fn the_actor_on_postgres_reloads_to_its_live_state() {
     with_db(|options| async move {
         let pool = migrated_pool(&options).await;
-        let store = Arc::new(PgStore::new(pool.clone()));
+        let store = Arc::new(pg_store(&pool, "node-1"));
         insert_event(&pool, EV, 1).await;
         let loaded = store.load_event(EV).await.unwrap();
         // `mirror` applies every command the actor gets, at the same time.
@@ -891,6 +1017,70 @@ async fn the_actor_on_postgres_reloads_to_its_live_state() {
     .await;
 }
 
+/// Two nodes' registries on one database (08 §4.8, §14): the second node is
+/// refused while the first holds the lease, and takes the event at once when
+/// the first shuts down and releases it, continuing its log.
+#[tokio::test]
+#[ignore = "needs PostgreSQL: set CAVEA_TEST_DATABASE_URL, pass --include-ignored"]
+async fn registries_on_postgres_hand_an_event_over_at_shutdown() {
+    with_db(|options| async move {
+        let pool = migrated_pool(&options).await;
+        insert_event(&pool, EV, 0).await;
+        let charts = MemoryCharts::new();
+        charts.insert(chart_version(&pool, EV).await, chart(20));
+        let charts = Arc::new(charts);
+        let clock = ManualClock::new(Timestamp(now_ms()));
+        let node = |name| {
+            let store = Arc::new(pg_store(&pool, name));
+            Registry::new(
+                store,
+                charts.clone(),
+                clock.clone(),
+                RegistryConfig::default(),
+            )
+        };
+        let (a, b) = (node("node-1"), node("node-2"));
+        let owner = || async {
+            sqlx::query_as::<_, (Option<String>, i64, bool)>(
+                "SELECT owner_node, owner_epoch, lease_until IS NOT NULL FROM events",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        };
+
+        assert!(a.send(EV, req(create(1, None))).await.is_ok());
+        assert!(a.send(EV, req(hold(1, &[2]))).await.is_ok());
+        assert_eq!(owner().await, (Some("node-1".into()), 1, true));
+        assert_eq!(
+            b.send(EV, req(create(2, None))).await,
+            Err(Failure::Unavailable)
+        );
+        assert_eq!(owner().await.1, 1, "the refusal changed nothing");
+
+        a.shutdown().await;
+        assert_eq!(owner().await, (Some("node-1".into()), 1, false));
+        // Past the pause B's refused load imposes on retries.
+        clock.advance_ms(RegistryConfig::default().retry_ms);
+        let reply = b.send(EV, req(create(2, None))).await;
+        assert!(
+            matches!(reply, Ok(Outcome::HoldCreated { seq: 3, .. })),
+            "{reply:?}"
+        );
+        assert_eq!(owner().await, (Some("node-2".into()), 2, true));
+        b.shutdown().await;
+
+        let pg = Pg {
+            store: pg_store(&pool, "node-3"),
+            pool: pool.clone(),
+        };
+        let ops: Vec<(u64, u8)> = pg.log(EV).await.iter().map(|r| (r.0, r.1)).collect();
+        let expected = [Op::CreateHold, Op::Hold, Op::CreateHold].map(|op| op as u8);
+        assert_eq!(ops, [(1, expected[0]), (2, expected[1]), (3, expected[2])]);
+    })
+    .await;
+}
+
 // ---- Measurements (print, assert nothing) ----
 
 fn percentile(sorted: &[Duration], p: f64) -> Duration {
@@ -905,7 +1095,7 @@ fn percentile(sorted: &[Duration], p: f64) -> Duration {
 async fn measure_commit_latency() {
     with_db(|options| async move {
         let pool = migrated_pool(&options).await;
-        let store = PgStore::new(pool.clone());
+        let store = pg_store(&pool, "node-1");
         insert_event(&pool, EV, 1).await;
         let seats = 200_000;
         let mut s = EventState::restore(EV, chart(seats), store.load_event(EV).await.unwrap()).unwrap();
@@ -962,7 +1152,7 @@ async fn measure_commit_latency() {
 async fn measure_actor_throughput() {
     with_db(|options| async move {
         let pool = migrated_pool(&options).await;
-        let store = Arc::new(PgStore::new(pool.clone()));
+        let store = Arc::new(pg_store(&pool, "node-1"));
         insert_event(&pool, EV, 1).await;
         let seats = 100_000u32;
         let state =
@@ -1023,7 +1213,7 @@ async fn measure_actor_throughput() {
 async fn measure_load() {
     with_db(|options| async move {
         let pool = migrated_pool(&options).await;
-        let store = PgStore::new(pool.clone());
+        let store = pg_store(&pool, "node-1");
         insert_event(&pool, EV, 1).await;
         sqlx::query(
             "INSERT INTO object_state (event_id, oid, status, order_ref, ticket_type, seq)

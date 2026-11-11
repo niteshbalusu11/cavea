@@ -16,6 +16,10 @@ pub type Oid = u32;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EventId(pub u128);
 
+/// A published chart version's database id (`chart_versions.id`, a UUID).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ChartVersionId(pub u128);
+
 /// A hold's id: the `seq` of the `CreateHold` command that made it (08 §5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct HoldId(pub u64);

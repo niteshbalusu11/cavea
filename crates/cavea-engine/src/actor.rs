@@ -1,14 +1,16 @@
 //! The event actor: a bounded mailbox in front of [`EventState`], with natural
 //! batching, acknowledge-after-commit and hold expiry on the injected clock
-//! (08 §4.3, §4.6, §7.3).
+//! (08 §4.3, §4.6, §7.3), lease renewal when idle (§4.8) and idle eviction
+//! (§4.7).
 
 use std::future::{Future, poll_fn};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
-use tokio::sync::{mpsc, oneshot};
-use tracing::{Instrument, Span, debug, error, info_span};
+use tokio::sync::{mpsc, oneshot, watch};
+use tracing::{Instrument, Span, debug, error, info, info_span};
 
 use crate::state::{EventState, InvariantViolation};
 use crate::store::{SeatStore, StoreError};
@@ -21,6 +23,13 @@ pub struct ActorConfig {
     pub mailbox: usize,
     /// Most commands in one batch.
     pub max_batch: usize,
+    /// How long after its last commit or renewal an idle actor renews its
+    /// lease. Well under the store's lease (15 s).
+    pub heartbeat_ms: u64,
+    /// An actor with no command, no hold and no [`KeepAlive`] for this long
+    /// stops. It is checked once per period, so after the last command, hold
+    /// expiry or `KeepAlive` it can take up to twice this.
+    pub idle_ms: u64,
 }
 
 impl Default for ActorConfig {
@@ -28,6 +37,8 @@ impl Default for ActorConfig {
         Self {
             mailbox: 10_000,
             max_batch: 2_000,
+            heartbeat_ms: 5_000,
+            idle_ms: 600_000,
         }
     }
 }
@@ -66,6 +77,46 @@ type Queued = (oneshot::Sender<Reply>, Reply, Span, Span);
 #[derive(Debug, Clone)]
 pub struct ActorHandle {
     tx: mpsc::Sender<Envelope>,
+    control: Arc<Control>,
+}
+
+#[derive(Debug)]
+struct Control {
+    /// Set to ask the actor to finish its work and stop.
+    stop: watch::Sender<bool>,
+    /// Live [`KeepAlive`] guards.
+    keep: AtomicUsize,
+    /// How many [`KeepAlive`] guards have dropped: one dropping is activity.
+    released: AtomicU64,
+}
+
+/// Keeps an actor from being evicted while it exists: what a realtime
+/// subscriber holds. It does not keep a stopped actor alive.
+#[derive(Debug)]
+pub struct KeepAlive(Arc<Control>);
+
+impl Clone for KeepAlive {
+    fn clone(&self) -> Self {
+        self.0.keep.fetch_add(1, Ordering::SeqCst);
+        Self(self.0.clone())
+    }
+}
+
+impl Drop for KeepAlive {
+    fn drop(&mut self) {
+        // Counted as released before it stops counting as held: an idle
+        // check that sees the guard gone also sees it released (below).
+        self.0.released.fetch_add(1, Ordering::SeqCst);
+        self.0.keep.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Why a command could not be enqueued.
+#[derive(Debug)]
+pub(crate) enum Rejected {
+    Overloaded,
+    /// The actor has stopped or is stopping; the request was not applied.
+    Closed(Box<Request>),
 }
 
 impl std::fmt::Debug for Envelope {
@@ -92,6 +143,13 @@ impl Future for PendingReply {
 impl ActorHandle {
     /// Enqueue without waiting. Commands are applied in submission order.
     pub fn submit(&self, request: Request) -> Result<PendingReply, Failure> {
+        self.try_submit(request).map_err(|r| match r {
+            Rejected::Overloaded => Failure::Overloaded,
+            Rejected::Closed(_) => Failure::Unavailable,
+        })
+    }
+
+    pub(crate) fn try_submit(&self, request: Request) -> Result<PendingReply, Rejected> {
         let (reply, rx) = oneshot::channel();
         let parent = Span::current();
         let wait = info_span!("mailbox_wait", op = request.command.op().name());
@@ -103,19 +161,40 @@ impl ActorHandle {
         };
         match self.tx.try_send(envelope) {
             Ok(()) => Ok(PendingReply(rx)),
-            Err(mpsc::error::TrySendError::Full(_)) => Err(Failure::Overloaded),
-            Err(mpsc::error::TrySendError::Closed(_)) => Err(Failure::Unavailable),
+            Err(mpsc::error::TrySendError::Full(_)) => Err(Rejected::Overloaded),
+            Err(mpsc::error::TrySendError::Closed(e)) => Err(Rejected::Closed(Box::new(e.request))),
         }
     }
 
     pub async fn send(&self, request: Request) -> Reply {
         self.submit(request)?.await
     }
+
+    /// Ask the actor to stop taking commands, apply and commit what it has
+    /// accepted, and end with `Ok`.
+    pub fn stop(&self) {
+        self.control.stop.send_replace(true);
+    }
+
+    /// Keep the actor from being evicted while the guard lives.
+    #[must_use]
+    pub fn keep_alive(&self) -> KeepAlive {
+        self.control.keep.fetch_add(1, Ordering::SeqCst);
+        KeepAlive(self.control.clone())
+    }
+
+    /// Whether both handles lead to the same actor.
+    pub(crate) fn same_actor(&self, other: &Self) -> bool {
+        self.tx.same_channel(&other.tx)
+    }
 }
 
 /// Create an actor for `state`. The caller drives the returned future on its
-/// runtime; it ends with `Ok` once every handle is dropped and all work is
-/// committed, or with the error that stopped it.
+/// runtime; it ends with `Ok` once every handle is dropped, it is stopped, or
+/// it has been idle for [`ActorConfig::idle_ms`], and all its work is
+/// committed; or with the error that stopped it. Its lease is renewed by every
+/// commit and, when no commit has done it for [`ActorConfig::heartbeat_ms`],
+/// by a heartbeat; a failed heartbeat stops it like a failed commit.
 pub fn actor<S: SeatStore, C: Clock>(
     state: EventState,
     store: Arc<S>,
@@ -126,8 +205,13 @@ pub fn actor<S: SeatStore, C: Clock>(
     impl Future<Output = Result<(), ActorError>> + Send,
 ) {
     let (tx, rx) = mpsc::channel(config.mailbox.max(1));
-    let run = run(state, store, clock, rx, config.max_batch.max(1));
-    (ActorHandle { tx }, run)
+    let control = Arc::new(Control {
+        stop: watch::Sender::new(false),
+        keep: AtomicUsize::new(0),
+        released: AtomicU64::new(0),
+    });
+    let run = run(state, store, clock, rx, control.clone(), config);
+    (ActorHandle { tx, control }, run)
 }
 
 #[allow(
@@ -140,23 +224,49 @@ enum Next {
     Committed(Result<(), StoreError>),
     /// The clock reached the earliest hold expiry.
     Expiry,
+    /// The clock reached the next heartbeat or idle check.
+    Chore,
+    /// [`ActorHandle::stop`] was called.
+    Stop,
 }
+
+/// A commit or a heartbeat.
+type Write<'a> = Pin<Box<dyn Future<Output = Result<(), StoreError>> + Send + 'a>>;
 
 async fn run<S: SeatStore, C: Clock>(
     mut state: EventState,
     store: Arc<S>,
     clock: C,
     mut rx: mpsc::Receiver<Envelope>,
-    max_batch: usize,
+    control: Arc<Control>,
+    config: ActorConfig,
 ) -> Result<(), ActorError> {
+    let max_batch = config.max_batch.max(1);
+    let (event, epoch) = (state.event(), state.epoch());
     // Replies applied to memory, waiting for the next commit to start.
     let mut pending: Vec<Queued> = Vec::new();
     // Replies of the batch being committed.
     let mut committing: Vec<Queued> = Vec::new();
-    let mut in_flight = None;
+    let mut in_flight: Option<Write<'_>> = None;
+    // The write in flight is a heartbeat.
+    let mut renewing = false;
     let mut open = true;
     // The wait for the earliest expiry, rebuilt when that expiry changes.
     let mut timer = None;
+    // When the lease is next renewed if no commit does it, and when the actor
+    // is next checked for idleness; one timer waits for the earlier.
+    let mut renew_at = after(clock.now(), config.heartbeat_ms);
+    let mut idle_at = after(clock.now(), config.idle_ms);
+    // `control.released` at the last idle check.
+    let mut released = 0;
+    let mut chore = None;
+    let mut stop_signal = Some(Box::pin({
+        let mut stop = control.stop.subscribe();
+        async move {
+            // The sender lives in `control`, as long as this future.
+            let _ = stop.wait_for(|&stop| stop).await;
+        }
+    }));
 
     loop {
         // Expiries change state without a caller, so a batch may have no
@@ -194,6 +304,17 @@ async fn run<S: SeatStore, C: Clock>(
         if timer.as_ref().map(|(at, _)| *at) != next_expiry {
             timer = next_expiry.map(|at: Timestamp| (at, Box::pin(clock.sleep_until(at))));
         }
+        // A write in flight renews the lease itself; a stopping actor needs
+        // no renewal.
+        let may_renew = in_flight.is_none() && open && stop_signal.is_some();
+        let next_chore = if may_renew {
+            renew_at.min(idle_at)
+        } else {
+            idle_at
+        };
+        if chore.as_ref().map(|(at, _)| *at) != Some(next_chore) {
+            chore = Some((next_chore, Box::pin(clock.sleep_until(next_chore))));
+        }
 
         let next = poll_fn(|cx| {
             if let Some(commit) = in_flight.as_mut()
@@ -205,6 +326,16 @@ async fn run<S: SeatStore, C: Clock>(
                 && sleep.as_mut().poll(cx).is_ready()
             {
                 return Poll::Ready(Next::Expiry);
+            }
+            if let Some((_, sleep)) = chore.as_mut()
+                && sleep.as_mut().poll(cx).is_ready()
+            {
+                return Poll::Ready(Next::Chore);
+            }
+            if let Some(stop) = stop_signal.as_mut()
+                && stop.as_mut().poll(cx).is_ready()
+            {
+                return Poll::Ready(Next::Stop);
             }
             // A full batch stops intake; the mailbox absorbs the rest.
             if open && pending.len() < max_batch {
@@ -219,15 +350,57 @@ async fn run<S: SeatStore, C: Clock>(
         match next {
             Next::Committed(Ok(())) => {
                 in_flight = None;
-                debug!(commands = committing.len(), "batch committed");
+                renew_at = after(clock.now(), config.heartbeat_ms);
+                if std::mem::take(&mut renewing) {
+                    debug!("lease renewed");
+                } else {
+                    debug!(commands = committing.len(), "batch committed");
+                }
                 release(&mut committing);
             }
             Next::Committed(Err(e)) => {
                 return Err(stop(ActorError::Store(e), pending, committing, rx));
             }
             Next::Closed => open = false,
+            Next::Stop => {
+                stop_signal = None;
+                debug!("stopping");
+                // Commands already accepted are still received, then `None`.
+                rx.close();
+            }
+            Next::Chore => {
+                chore = None;
+                let now = clock.now();
+                if now >= idle_at {
+                    // A guard dropped since the last check started a new
+                    // idle period. `keep` is read before `released`, the
+                    // reverse of `KeepAlive::drop`: a drop that has made
+                    // `keep` zero has already counted itself in `released`.
+                    // A heartbeat is not activity.
+                    let held = control.keep.load(Ordering::SeqCst) > 0;
+                    let last =
+                        std::mem::replace(&mut released, control.released.load(Ordering::SeqCst));
+                    let idle = (in_flight.is_none() || renewing)
+                        && pending.is_empty()
+                        && state.next_expiry().is_none()
+                        && !held
+                        && released == last;
+                    if idle && stop_signal.take().is_some() {
+                        info!("actor idle; evicting");
+                        rx.close();
+                    }
+                    idle_at = after(now, config.idle_ms);
+                }
+                if may_renew && stop_signal.is_some() && now >= renew_at {
+                    renew_at = Timestamp(u64::MAX);
+                    renewing = true;
+                    let span = info_span!("heartbeat");
+                    in_flight = Some(Box::pin(store.heartbeat(event, epoch).instrument(span)));
+                }
+            }
             Next::Expiry => {
                 timer = None;
+                idle_at = after(clock.now(), config.idle_ms);
                 let span = info_span!("apply", op = Op::Expire.name());
                 match span.in_scope(|| state.expire_due(clock.now())) {
                     Ok(expired) => span.in_scope(|| debug!(expired, "holds expired")),
@@ -242,6 +415,7 @@ async fn run<S: SeatStore, C: Clock>(
                     wait,
                 } = envelope;
                 drop(wait);
+                idle_at = after(clock.now(), config.idle_ms);
                 let span = info_span!(parent: &parent, "apply", op = request.command.op().name());
                 let applied = span.in_scope(|| state.apply(&request, clock.now()));
                 match applied {
@@ -254,6 +428,10 @@ async fn run<S: SeatStore, C: Clock>(
             }
         }
     }
+}
+
+fn after(t: Timestamp, ms: u64) -> Timestamp {
+    Timestamp(t.0.saturating_add(ms))
 }
 
 fn release(queued: &mut Vec<Queued>) {

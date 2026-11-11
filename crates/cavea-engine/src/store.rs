@@ -4,7 +4,8 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::types::{EventId, HoldId, Oid, Op, Reply, Status, Timestamp, TokenHash};
+use crate::chart::ChartView;
+use crate::types::{ChartVersionId, EventId, HoldId, Oid, Op, Reply, Status, Timestamp, TokenHash};
 
 /// A row of `holds`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,6 +122,15 @@ pub struct Batch {
     pub idempotency: Vec<IdempotencyRecord>,
 }
 
+/// Ownership of an event, taken before its state is read (08 §4.7 step 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Acquired {
+    /// The new `owner_epoch`: every later commit and renewal is fenced on it.
+    pub epoch: u64,
+    /// The chart version the event is pinned to.
+    pub chart_version: ChartVersionId,
+}
+
 /// An event's stored state, read when its actor is loaded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedEvent {
@@ -140,6 +150,8 @@ pub enum StoreError {
     Unavailable(String),
     /// The fencing update matched no row: another node owns the event.
     Fenced,
+    /// Ownership was refused: another node holds a live lease on the event.
+    Leased,
     UnknownEvent,
     /// The batch does not follow the stored state (for example a `seq` gap).
     Inconsistent(String),
@@ -150,6 +162,7 @@ impl std::fmt::Display for StoreError {
         match self {
             Self::Unavailable(why) => write!(f, "store unavailable: {why}"),
             Self::Fenced => f.write_str("fencing check failed: event owned by another node"),
+            Self::Leased => f.write_str("event leased by another node"),
             Self::UnknownEvent => f.write_str("unknown event"),
             Self::Inconsistent(why) => write!(f, "batch inconsistent with stored state: {why}"),
         }
@@ -158,13 +171,48 @@ impl std::fmt::Display for StoreError {
 
 impl std::error::Error for StoreError {}
 
-/// Where an actor loads its event and commits its batches.
+/// Where an actor loads its event and commits its batches. Each store speaks
+/// for one node (`owner_node`), and judges leases by its own clock: the
+/// database's, never the node's (08 §4.8).
 pub trait SeatStore: Send + Sync + 'static {
+    /// Take ownership of the event (08 §4.7 step 1): raise `owner_epoch`, set
+    /// the owner to this node and the lease to the store's lease period.
+    /// Refused with [`StoreError::Leased`] while another node holds a live
+    /// lease. Taking it again from this node always succeeds and fences this
+    /// node's earlier actor, including a commit of it that lands late.
+    fn acquire(&self, event: EventId) -> impl Future<Output = Result<Acquired, StoreError>> + Send;
+
+    /// Read the event's stored state in one snapshot. Takes no ownership.
     fn load_event(
         &self,
         event: EventId,
     ) -> impl Future<Output = Result<LoadedEvent, StoreError>> + Send;
 
-    /// Commit one batch as one atomic unit (08 §4.4).
+    /// Commit one batch as one atomic unit (08 §4.4), fenced on `batch.epoch`,
+    /// and renew the lease.
     fn commit_batch(&self, batch: Batch) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Renew the lease held at `epoch`; [`StoreError::Fenced`] if it was lost.
+    fn heartbeat(
+        &self,
+        event: EventId,
+        epoch: u64,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// End the lease held at `epoch`, so that any node may take the event at
+    /// once. [`StoreError::Fenced`] if it was already lost.
+    fn release(
+        &self,
+        event: EventId,
+        epoch: u64,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+}
+
+/// Where a loading actor gets its chart (08 §4.7 step 2). An implementation
+/// caches one [`ChartView`] per version: every event on a version shares it.
+pub trait ChartProvider: Send + Sync + 'static {
+    fn chart(
+        &self,
+        version: ChartVersionId,
+    ) -> impl Future<Output = Result<Arc<ChartView>, StoreError>> + Send;
 }
