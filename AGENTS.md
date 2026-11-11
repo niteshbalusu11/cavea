@@ -33,7 +33,7 @@ Toolchains: Rust is pinned in `rust-toolchain.toml` (with the `wasm32-unknown-un
 - `cargo test --workspace`
 - `cargo xtask check-deps`: enforces the dependency rule in `docs/01-architecture.md` §3
 - `cargo xtask build-web`: builds `cavea-web` for wasm32 with the `wasm-release` profile, writes the bindings to `packages/renderer/wasm/` (gitignored), runs `wasm-opt` if present, and prints raw and brotli sizes. `--demo` adds the debug-only exports `apps/demo` needs (synthetic seats); never measure or ship that build
-- `CAVEA_LISTEN=127.0.0.1:<port> cargo run -p cavea-server`: the server; `GET /healthz` answers `ok`. Settings are `CAVEA_` environment variables (`docs/08-server.md` §13); add `CAVEA_LOG_FORMAT=text` for readable logs
+- `CAVEA_DATABASE_URL=postgres://cavea:cavea@127.0.0.1:5432/cavea CAVEA_LISTEN=127.0.0.1:<port> cargo run -p cavea-server`: the server; it migrates the database at startup and refuses to start without `CAVEA_DATABASE_URL`. `GET /healthz` answers `ok`. Settings are `CAVEA_` environment variables (`docs/08-server.md` §13); add `CAVEA_LOG_FORMAT=text` for readable logs
 
 **TypeScript** (run `cargo xtask build-web` first; `typecheck`, `build` and `test` need the WASM output)
 
@@ -50,6 +50,9 @@ Toolchains: Rust is pinned in `rust-toolchain.toml` (with the `wasm32-unknown-un
 
 - `docker compose -f deploy/compose.yaml up -d --wait`: PostgreSQL 18 on `127.0.0.1:${CAVEA_PG_PORT:-5432}`, user, password and database all `cavea`
 - `docker compose -f deploy/compose.yaml down`
+- `CAVEA_TEST_DATABASE_URL=postgres://cavea:cavea@127.0.0.1:5432/cavea cargo test -p cavea-server --test store -- --include-ignored --skip measure_`: the database tests (migrations, `PgStore`, the actor on PostgreSQL). Each creates and drops its own database. Without the variable `cargo test` lists them as ignored
+- The same with `--release` and `measure_ -- --ignored --nocapture --test-threads=1`: prints commit latency, actor throughput and load time
+- A schema change is a new file in `crates/cavea-server/migrations/`, listed in `crates/cavea-server/src/store/migrations.rs`; never edit a released one
 
 CI (`.github/workflows/ci.yml`) runs the Rust checks, `check-deps` and `build-web`, then the TypeScript `lint`, `format:check`, `typecheck` and `build`. It runs no tests.
 

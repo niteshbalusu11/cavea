@@ -115,13 +115,15 @@ Properties:
 
 ### 4.4 Commit
 
-One transaction per batch:
+One transaction per batch. The parts, in order:
 
 ```sql
--- 1. Fence and advance. Zero rows updated means we lost ownership: abort.
+-- 1. Fence and advance. Zero rows updated means we lost ownership, or the batch
+--    does not continue the stored seq, or extends or deletes a missing hold:
+--    nothing is written.
 UPDATE events
    SET seq = $new_seq, lease_until = now() + $lease
- WHERE id = $event AND owner_epoch = $epoch;
+ WHERE id = $event AND owner_epoch = $epoch AND seq = $new_seq - $commands;
 
 -- 2. New and changed holds.
 INSERT INTO holds (...) SELECT ... FROM UNNEST(...);
@@ -155,10 +157,10 @@ INSERT INTO webhook_deliveries (...) SELECT ...;
 INSERT INTO idempotency (workspace_id, event_id, key, request_hash, status, response, created_at)
 SELECT (SELECT workspace_id FROM events WHERE id = $event), $event, * FROM UNNEST(...)
 ON CONFLICT (workspace_id, key) DO UPDATE SET ...
- WHERE idempotency.created_at < EXCLUDED.created_at - interval '24 hours';
+ WHERE idempotency.created_at <= EXCLUDED.created_at - interval '24 hours';
 ```
 
-All eight statements go in one round trip (a pipelined transaction).
+All eight parts go in one round trip as one statement: each is a data-modifying CTE fed by `UNNEST` arrays, every write is gated on the fence (`WHERE EXISTS (SELECT FROM fence)`), and the statement returns how many rows the fence updated. A single statement is its own transaction, so it needs no `BEGIN` or `COMMIT`; any error in any part aborts all of it. `sqlx` cannot pipeline separate statements (D-23). When the fence matches nothing, a second query reads the event's epoch and `seq` to report `fenced`, a `seq` mismatch or a missing hold. The lease renewal in statement 1 arrives with ownership (ENG-012); until then the statement sets `seq` only. A record is replaced once the stored one is 24 hours old or more, matching the engine, for which a record is expired from that instant.
 
 A batch carries the net effect of its commands as of its last one: each object appears at most once, in either the upsert list (with the `seq` of the last command that changed it) or the freed list, and a hold created and extended in the same batch is inserted once with its final expiry; a hold created and deleted in the same batch is not written at all. The statement order above is then correct without the store knowing engine internals.
 
@@ -179,13 +181,15 @@ A batch carries the net effect of its commands as of its last one: each object a
 
 There is no in-memory rollback path. Reloading from the database is the single recovery mechanism, which keeps it tested.
 
+A commit that takes longer than 5 s, from waiting for a connection to the reply, fails as `unavailable`. Whether it was written is then unknown, and the statement may still commit on the server after the actor has stopped. That is safe: if it commits before the reload reads the event, the reloaded state includes it; if after, it either fails its own fence (the reloaded actor has already advanced `seq`) or advances `seq` itself, so the reloaded actor's next commit fails its fence and the event is reloaded again. Nothing is acknowledged that is not durable (INV-7) and no delta is published for it (INV-8). One case remains until loading takes ownership and raises the epoch (§4.7 step 1, ENG-012): a late batch of only idempotency records leaves `seq` unchanged, so it can land after the reload without being noticed, and a retry served by the reloaded actor in between may get a different reply than later retries.
+
 ### 4.7 Loading and eviction
 
 Load:
 
 1. Acquire ownership: `UPDATE events SET owner_node = $me, owner_epoch = owner_epoch + 1, lease_until = now() + $lease WHERE id = $1 AND (owner_node = $me OR lease_until IS NULL OR lease_until < now()) RETURNING owner_epoch, seq, chart_version_id`.
 2. Load the full CCF for the pinned version (cached per version).
-3. Read `object_state`, `holds`, `area_alloc`, `channels`, and the event's `idempotency` records younger than 24 hours; map `oid` to `idx`; fill the arrays.
+3. Read `object_state`, `holds`, `area_alloc`, `channels`, and the event's `idempotency` records younger than 24 hours by the database clock, all in one `REPEATABLE READ` snapshot; map `oid` to `idx`; fill the arrays.
 4. Schedule expiries, including any already past.
 
 Eviction: an actor with no subscribers, no outstanding holds and no command for 10 minutes is dropped. At startup the server loads every event that has rows in `holds`.
@@ -199,7 +203,9 @@ Eviction: an actor with no subscribers, no outstanding holds and no command for 
 
 ## 5. Storage
 
-PostgreSQL 15 or newer. Migrations are embedded and run at startup under an advisory lock.
+PostgreSQL 15 or newer. Migrations are embedded and run at startup under an advisory lock (`sqlx`'s migrator, recording each migration's SHA-384 in `cavea_migrations`). The server refuses to start if the database holds a migration it does not know (a newer server migrated it) or one whose content differs from its own. The schema below is migration 1.
+
+Times cross the boundary as Unix milliseconds converted in SQL, event ids as hex text cast to `uuid`, JSON as text.
 
 ```sql
 CREATE TABLE workspaces (
@@ -315,13 +321,13 @@ CREATE TABLE holds (
 -- A row exists only for objects that are not free, or that have a channel.
 CREATE TABLE object_state (
   event_id    uuid NOT NULL REFERENCES events,
-  oid         int  NOT NULL,
+  oid         int  NOT NULL,                     -- u32 stored bit for bit: values from 2^31 read as negative
   status      smallint NOT NULL,
   hold_id     bigint,
   channel     smallint,
   order_ref   text,
   ticket_type text,
-  extra       jsonb,
+  extra       json,                              -- json, not jsonb: kept byte for byte as the engine gave it
   seq         bigint NOT NULL,
   PRIMARY KEY (event_id, oid)
 );
@@ -352,6 +358,10 @@ CREATE TABLE event_log (
   detail    jsonb,
   PRIMARY KEY (event_id, seq, at)
 ) PARTITION BY RANGE (at);                       -- monthly partitions, configurable retention
+-- Until monthly partitions are created (SRV-040), every row lands here, so an
+-- insert never fails for lack of a partition. SRV-040 must move the rows a new
+-- monthly partition covers out of it first, or create partitions ahead of use.
+CREATE TABLE event_log_default PARTITION OF event_log DEFAULT;
 
 CREATE TABLE webhook_endpoints (
   id           uuid PRIMARY KEY,
@@ -382,9 +392,9 @@ CREATE TABLE idempotency (
   workspace_id uuid NOT NULL,
   event_id     uuid,                             -- set for seat commands; loaded with the event
   key          text NOT NULL,
-  request_hash bytea NOT NULL,
-  status       int NOT NULL,
-  response     jsonb NOT NULL,
+  request_hash bytea NOT NULL,                   -- the caller's fingerprint of the request
+  status       int NOT NULL,                     -- the reply's HTTP status, for reports
+  response     jsonb NOT NULL,                   -- the engine's reply, as the store encodes it
   created_at   timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (workspace_id, key)
 );

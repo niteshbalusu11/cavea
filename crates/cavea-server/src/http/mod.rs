@@ -7,16 +7,20 @@ use std::sync::Arc;
 use axum::Router;
 use axum::routing::get;
 use cavea_telemetry::RequestLayer;
+use sqlx::PgPool;
 
 use crate::config::Config;
 
 pub use error::{ApiError, Code, Json};
 
 /// Shared with every handler through `State<AppState>`. Cheap to clone. Later
-/// slices add the actor registry and the database pool here.
+/// slices add the actor registry here.
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
+    /// The PostgreSQL pool (`CAVEA_DB_POOL` connections). Wrap each call in
+    /// `cavea_telemetry::db_span`.
+    pub db: PgPool,
 }
 
 /// The whole HTTP surface.
