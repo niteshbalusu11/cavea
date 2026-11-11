@@ -13,7 +13,9 @@
 //! property, a row or a seat override is kept and later ones are dropped,
 //! since the first alone restores the state at the start; so a drag of any
 //! length holds one old transform per node. [`Editor::cancel_gesture`]
-//! restores the start and leaves no entry.
+//! restores the start and leaves no entry, and hands back the ids the
+//! gesture took: nothing holds them, so a tool may re-create a preview with
+//! the same ids, and Escape leaves the saved `nextOid` as it was.
 
 use std::collections::{HashSet, VecDeque};
 
@@ -40,6 +42,8 @@ struct Gesture {
     inverse: Vec<Op>,
     /// Membership only; never iterated.
     keys: HashSet<Key>,
+    /// The id counter and high-water mark at the start.
+    ids: (u64, u32),
 }
 
 /// What an applied command did that its sender cannot know in advance.
@@ -92,7 +96,10 @@ impl Editor {
         if self.gesture.is_some() {
             return Err(CommandError::GestureOpen);
         }
-        self.gesture = Some(Gesture::default());
+        self.gesture = Some(Gesture {
+            ids: (self.doc.fresh, self.doc.high_water),
+            ..Gesture::default()
+        });
         Ok(())
     }
 
@@ -103,11 +110,12 @@ impl Editor {
         Ok(())
     }
 
-    /// Restores the state at the start of the gesture; leaves no entry, and
-    /// redo as it was.
+    /// Restores the state at the start of the gesture, the id counter
+    /// included; leaves no entry, and redo as it was.
     pub fn cancel_gesture(&mut self) -> Result<(), CommandError> {
         let g = self.gesture.take().ok_or(CommandError::NoGesture)?;
         self.doc.unwind(g.inverse);
+        (self.doc.fresh, self.doc.high_water) = g.ids;
         Ok(())
     }
 

@@ -1,15 +1,20 @@
 //! The select tool (`docs/07-designer.md` §5.1): click, shift-click, box
-//! selection, entering and leaving levels, dragging and nudging nodes.
+//! selection, entering and leaving levels, dragging and nudging nodes, and
+//! the rotate, pivot and resize handles.
 
 use std::collections::BTreeSet;
 use std::mem::take;
 
-use super::{Button, Context, Cursor, Input, Key, Modifiers, Overlay, Pointer, Tool, tuning};
+use super::draw::{Live, budget};
+use super::handles::{self, HandleKind, Step};
+use super::{
+    Button, Context, Cursor, Input, Key, Modifiers, Overlay, Pointer, Readout, Tool, tuning,
+};
 use cavea_compiler::document::Node;
 
 use crate::command::{Command, NodeTransform};
 use crate::document::each_node;
-use crate::index::{P, Rect, Select};
+use crate::index::{P, Place, Rect, Select};
 use crate::selection::{self, Level, Selection, View, pickable};
 
 #[derive(Debug, Default)]
@@ -20,6 +25,8 @@ pub(crate) struct SelectTool {
     last_click: Option<(f64, P)>,
     /// The pointer is over a selected item (hover, nothing pressed).
     over_selected: bool,
+    /// A pivot the user moved, for the selection it was moved for.
+    pivot: Option<(Level, BTreeSet<u32>, P)>,
 }
 
 #[derive(Debug, Default)]
@@ -50,6 +57,35 @@ enum State {
         nodes: Vec<(u32, P, f64)>,
         parent: Option<u32>,
     },
+    /// Pressed on a handle: a drag takes the handle, a release without one
+    /// is an ordinary click there.
+    Handle { down: Pointer, kind: HandleKind },
+    /// Dragging the pivot; the moved pivot before the press.
+    Pivot {
+        before: Option<(Level, BTreeSet<u32>, P)>,
+    },
+    /// Rotating inside a gesture about `pivot` (world): each node's origin
+    /// and rotation at the start, their section, the pointer's start angle
+    /// and the angle turned so far, in degrees.
+    Rotating {
+        pivot: P,
+        start: f64,
+        nodes: Vec<(u32, P, f64)>,
+        parent: Option<u32>,
+        angle: f64,
+    },
+    /// Resizing one node with a handle: the node and its place at the start,
+    /// the press in its own space, and the seats the chart may still take.
+    Resizing {
+        id: u32,
+        kind: HandleKind,
+        base: Box<Node>,
+        place: Place,
+        start: P,
+        room: u64,
+        readout: Option<Readout>,
+        live: Live,
+    },
     /// A press already acted on (a double click) or abandoned (a second
     /// press): nothing happens until it is released.
     Swallow,
@@ -70,14 +106,16 @@ impl Tool for SelectTool {
     fn reset(&mut self, cx: &mut Context<'_>) {
         self.last_click = None;
         match take(&mut self.state) {
-            State::Moving { .. } => {
+            State::Moving { .. } | State::Rotating { .. } => {
                 let _ = cx.editor.cancel_gesture();
             }
+            State::Resizing { mut live, .. } => live.hide(cx),
+            State::Pivot { before } => self.pivot = before,
             State::Pressed { before, .. } | State::Marquee { before, .. } => {
                 *cx.selection = before;
                 cx.selection.reconcile(cx.editor.document());
             }
-            State::Idle | State::Swallow => {}
+            State::Idle | State::Handle { .. } | State::Swallow => {}
         }
     }
 
@@ -90,14 +128,90 @@ impl Tool for SelectTool {
         }
     }
 
-    fn overlay(&self, out: &mut Overlay) {
-        if let State::Marquee { start, end, .. } = self.state {
-            out.marquee = Some(Rect::new(start, end));
+    fn overlay(&self, view: &View<'_>, sel: &Selection, out: &mut Overlay) {
+        match &self.state {
+            State::Marquee { start, end, .. } => out.marquee = Some(Rect::new(*start, *end)),
+            State::Rotating { angle, .. } => out.readout = Some(Readout::Rotate { angle: *angle }),
+            State::Resizing { readout, .. } => out.readout = *readout,
+            _ => {}
         }
+        out.handles = handles::handles(view, sel, self.pivot_for(sel));
     }
 }
 
 impl SelectTool {
+    /// The pivot the user moved, if it was moved for this selection.
+    fn pivot_for(&self, sel: &Selection) -> Option<P> {
+        self.pivot
+            .as_ref()
+            .filter(|(level, items, _)| *level == sel.level() && items == sel.items())
+            .map(|p| p.2)
+    }
+
+    /// The handle under a press, if any.
+    fn handle_at(&self, cx: &mut Context<'_>, p: &Pointer) -> Option<HandleKind> {
+        let (view, sel) = cx.split(p.tolerance());
+        let found = handles::handles(&view, sel, self.pivot_for(sel));
+        handles::hit(&found, p).map(|h| h.kind)
+    }
+
+    /// Starts the gesture of the handle pressed at `p`.
+    fn start_handle(&mut self, cx: &mut Context<'_>, p: Pointer, kind: HandleKind) -> State {
+        let room = budget(cx);
+        let (view, sel) = cx.split(p.tolerance());
+        let pivot = self.pivot_for(sel);
+        let Some((ids, parent)) = handles::targets(&view, sel) else {
+            return State::Swallow;
+        };
+        let doc = view.doc;
+        match kind {
+            HandleKind::Pivot => State::Pivot {
+                before: self.pivot.clone(),
+            },
+            HandleKind::Rotate => {
+                let pivot = pivot
+                    .or_else(|| handles::frame(&view, &ids).map(|q| handles::centre(&q)))
+                    .unwrap_or(p.world);
+                let nodes = ids
+                    .iter()
+                    .filter_map(|&id| {
+                        let node = doc.node(id)?;
+                        Some(each_node!(node, n => (id, n.origin, n.rotation)))
+                    })
+                    .collect();
+                if cx.editor.begin_gesture().is_err() {
+                    return State::Swallow;
+                }
+                let start = (p.world[1] - pivot[1]).atan2(p.world[0] - pivot[0]);
+                State::Rotating {
+                    pivot,
+                    start: start.to_degrees(),
+                    nodes,
+                    parent,
+                    angle: 0.0,
+                }
+            }
+            kind => {
+                let [id] = ids[..] else {
+                    return State::Swallow;
+                };
+                let (Some(base), Some(place)) = (doc.node(id), view.index.place(id)) else {
+                    return State::Swallow;
+                };
+                State::Resizing {
+                    id,
+                    kind,
+                    base: Box::new(base.clone()),
+                    place,
+                    start: place.invert(p.world),
+                    room,
+                    readout: None,
+                    live: Live::default(),
+                }
+            }
+        }
+    }
+
     fn down(&mut self, cx: &mut Context<'_>, p: Pointer) {
         if !matches!(self.state, State::Idle) {
             // A second press during a drag abandons it (04 §14).
@@ -108,6 +222,15 @@ impl SelectTool {
         if p.button != Button::Primary {
             return;
         }
+        if let Some(kind) = self.handle_at(cx, &p) {
+            self.state = State::Handle { down: p, kind };
+            return;
+        }
+        self.press(cx, p);
+    }
+
+    /// A press that is not on a handle.
+    fn press(&mut self, cx: &mut Context<'_>, p: Pointer) {
         let double = self.last_click.take().is_some_and(|(time, at)| {
             let near = (p.screen[0] - at[0]).hypot(p.screen[1] - at[1]);
             (0.0..=tuning::DOUBLE_CLICK_MS).contains(&(p.time - time))
@@ -219,6 +342,59 @@ impl SelectTool {
                 // A step that would leave the finite range is skipped.
                 let _ = cx.editor.apply(Command::TransformNodes { nodes });
             }
+            State::Handle { down, kind } => {
+                if p.dragged_from(down) {
+                    let (down, kind) = (*down, *kind);
+                    self.state = self.start_handle(cx, down, kind);
+                    self.drag(cx, p);
+                }
+            }
+            State::Pivot { .. } => {
+                let sel = &cx.selection;
+                self.pivot = Some((sel.level(), sel.items().clone(), p.world));
+            }
+            State::Rotating {
+                pivot,
+                start,
+                nodes,
+                parent,
+                angle,
+            } => {
+                let now = (p.world[1] - pivot[1]).atan2(p.world[0] - pivot[0]);
+                let mut a = crate::draft::normalise(now.to_degrees() - *start);
+                if p.mods.shift {
+                    a = (a / 15.0).round() * 15.0;
+                }
+                *angle = snap_angle(a);
+                let centre = cx.index.to_local(*parent, *pivot);
+                let command = handles::rotate(nodes, centre, *angle);
+                let _ = cx.editor.apply(command);
+            }
+            State::Resizing {
+                id,
+                kind,
+                base,
+                place,
+                start,
+                room,
+                readout,
+                live,
+            } => {
+                let q = place.invert(p.world);
+                let d = [q[0] - start[0], q[1] - start[1]];
+                match handles::resize(base, *id, *kind, d, q, p.mods, *room) {
+                    Step::Base => {
+                        live.hide(cx);
+                        *readout = None;
+                    }
+                    Step::Show(command, shown) => {
+                        if live.show(cx, command) {
+                            *readout = Some(shown);
+                        }
+                    }
+                    Step::Keep => {}
+                }
+            }
             State::Swallow => {}
         }
     }
@@ -240,10 +416,24 @@ impl SelectTool {
                 }
                 self.last_click = Some((p.time, p.screen));
             }
-            State::Moving { .. } => {
+            State::Moving { start, .. } => {
+                let _ = cx.editor.end_gesture();
+                // A moved pivot moves with its selection.
+                let delta = snap_translation([p.world[0] - start[0], p.world[1] - start[1]]);
+                if let Some((_, _, at)) = &mut self.pivot {
+                    *at = [at[0] + delta[0], at[1] + delta[1]];
+                }
+            }
+            State::Rotating { .. } => {
                 let _ = cx.editor.end_gesture();
             }
-            State::Idle | State::Marquee { .. } | State::Swallow => {}
+            State::Resizing { mut live, .. } => drop(live.commit(cx)),
+            // Not dragged: an ordinary click.
+            State::Handle { down, .. } => {
+                self.press(cx, down);
+                self.up(cx, p);
+            }
+            State::Idle | State::Marquee { .. } | State::Pivot { .. } | State::Swallow => {}
         }
     }
 
@@ -262,7 +452,7 @@ impl SelectTool {
             Key::ArrowRight => nudge(cx, [step, 0.0]),
             Key::ArrowUp => nudge(cx, [0.0, -step]),
             Key::ArrowDown => nudge(cx, [0.0, step]),
-            Key::Char(_) => {}
+            Key::Char(_) | Key::Backspace => {}
         }
     }
 }
@@ -293,6 +483,11 @@ fn locate(view: &View<'_>, mut level: Level, point: P) -> (Level, Option<u32>) {
 /// Where snapping (DSN-030) will adjust a proposed move.
 fn snap_translation(delta: P) -> P {
     delta
+}
+
+/// Where snapping (DSN-030) will adjust a proposed rotation, in degrees.
+fn snap_angle(angle: f64) -> f64 {
+    angle
 }
 
 /// Opens a gesture for dragging the selected nodes that can be picked.

@@ -683,7 +683,7 @@ impl Document {
     }
 
     /// Bookable objects in the chart (02 §14).
-    fn objects(&self) -> u64 {
+    pub(crate) fn objects(&self) -> u64 {
         self.slots.values().map(|s| own_objects(&s.node)).sum()
     }
 
