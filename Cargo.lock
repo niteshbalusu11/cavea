@@ -315,6 +315,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cavea-sim"
+version = "0.0.0"
+dependencies = [
+ "cavea-engine",
+]
+
+[[package]]
 name = "cavea-telemetry"
 version = "0.0.0"
 dependencies = [

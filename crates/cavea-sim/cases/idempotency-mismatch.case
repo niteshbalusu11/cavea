@@ -1,0 +1,5 @@
+# A key reused with another fingerprint is a mismatch, even when the first
+# request was refused (08 §6.1).
+objects 6
+s hold t4 key=k0:a
+s hold t1 key=k0:b

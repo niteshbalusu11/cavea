@@ -1,0 +1,5 @@
+# A token is expired from its expiry instant on: the step that reaches it
+# expires the hold (seq 2). Caught an engine that expired only after it.
+objects 6
+s create t1 ttl=900
+advance 900000
