@@ -12,6 +12,7 @@ use sqlx::postgres::{PgConnectOptions, PgPool};
 use sqlx::{AssertSqlSafe, ConnectOptions as _, Connection as _, Executor as _, PgConnection};
 
 use super::*;
+use crate::console::{Role, SessionId, sessions};
 use crate::http::auth::PublishableKey;
 use crate::http::openapi::Needs;
 use crate::http::{AdminKey, routes};
@@ -297,6 +298,74 @@ fn assert_no_secrets(logs: &Captured, secrets: &[&str]) {
 
 fn sha256(s: &str) -> Vec<u8> {
     Sha256::digest(s.as_bytes()).to_vec()
+}
+
+/// Every console user's password in these tests. Obviously fake.
+const PASSWORD: &str = "not-a-real-password-0000";
+
+/// [`PASSWORD`]'s argon2id hash, computed once.
+fn password_hash() -> &'static str {
+    static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HASH.get_or_init(|| crate::console::password::hash(PASSWORD).unwrap())
+}
+
+/// A console user `email` with `role` in workspace `ws` (`ws_…`), and a new
+/// session of theirs: the user's UUID as 32 hex digits, and the session.
+async fn member(pool: &PgPool, ws: &str, role: Role, email: &str) -> (String, SessionId) {
+    let user: String = sqlx::query_scalar(
+        "INSERT INTO users (id, email, password_hash) VALUES (gen_random_uuid(), $1, $2)
+         RETURNING replace(id::text, '-', '')",
+    )
+    .bind(email)
+    .bind(password_hash())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO memberships (user_id, workspace_id, role) VALUES ($1::uuid, $2::uuid, $3)",
+    )
+    .bind(&user)
+    .bind(&ws[3..])
+    .bind(role.as_str())
+    .execute(pool)
+    .await
+    .unwrap();
+    let id = session_of(pool, &user).await;
+    (user, id)
+}
+
+/// A new session for `user`.
+async fn session_of(pool: &PgPool, user: &str) -> SessionId {
+    let id = SessionId::generate().unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    sessions::insert(&mut tx, &id.hash(), user).await.unwrap();
+    tx.commit().await.unwrap();
+    id
+}
+
+/// The headers of a console request: the cookie, the CSRF token, and the
+/// workspace when one is named.
+fn console(id: &SessionId, workspace: Option<&str>) -> Vec<(header::HeaderName, String)> {
+    let mut headers = vec![
+        (
+            header::COOKIE,
+            format!("__Host-cavea_console={}", id.as_str()),
+        ),
+        (crate::http::staff::CSRF, id.csrf()),
+    ];
+    if let Some(ws) = workspace {
+        // Ignored until `/v1` takes console sessions (CON-004).
+        let name = header::HeaderName::from_static("cavea-workspace");
+        headers.push((name, ws.to_owned()));
+    }
+    headers
+}
+
+fn refs(headers: &[(header::HeaderName, String)]) -> Vec<(header::HeaderName, &str)> {
+    headers
+        .iter()
+        .map(|(n, v)| (n.clone(), v.as_str()))
+        .collect()
 }
 
 /// Create a workspace and its first key, rotate to a second key, revoke the
@@ -629,6 +698,7 @@ fn route_of(template: &str) -> String {
         .next()
         .unwrap()
         .replace("{hash}.ccf", "{file}")
+        .replace("{asset}", "{hash}")
         .replace("{key}", "{id}")
 }
 
@@ -647,7 +717,7 @@ fn op_of(method: &Method, template: &str) -> (Needs, bool) {
 
 /// One row per operation, with what a successful call sends and answers. A
 /// path's `{key}` is filled with an identifier of the tenant under test (see
-/// [`Tenant::path`]). [`every_route_has_a_row`]
+/// [`Tenant::path`]); `{png}` as a body is an image. [`every_route_has_a_row`]
 /// fails until a new route has its row.
 const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
     (Method::GET, "/healthz", 200, None),
@@ -680,7 +750,7 @@ const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
         Method::POST,
         "/v1/charts",
         201,
-        Some(r#"{"key":"new","name":"n"}"#),
+        Some(r#"{"key":"new-{n}","name":"n"}"#),
     ),
     (Method::GET, "/v1/charts/{chart}", 200, None),
     (Method::GET, "/v1/charts/{chart}/draft", 200, None),
@@ -695,12 +765,16 @@ const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
     (Method::POST, "/v1/charts/{chart}/publish", 200, None),
     (Method::GET, "/v1/charts/{chart}/versions", 200, None),
     (Method::GET, "/v1/public/charts/{hash}.ccf", 200, None),
+    // Each cell uploads its own image (see `png`); another workspace's key
+    // uploads into its own workspace.
+    (Method::POST, "/v1/assets", 201, Some("{png}")),
+    (Method::GET, "/v1/public/assets/{asset}", 200, None),
     (Method::GET, "/v1/events", 200, None),
     (
         Method::POST,
         "/v1/events",
         201,
-        Some(r#"{"key":"new-event","chart":"{chart}"}"#),
+        Some(r#"{"key":"new-event-{n}","chart":"{chart}"}"#),
     ),
     (Method::GET, "/v1/events/{event}", 200, None),
     (
@@ -726,7 +800,7 @@ const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
         Method::POST,
         "/v1/events/{event}/hold",
         200,
-        Some(r#"{"hold_token":"{token}","objects":{"version":"{hash}","idx":[0]}}"#),
+        Some(r#"{"hold_token":"{token}","objects":{"version":"{hash}","idx":[{n}]}}"#),
     ),
     (
         Method::POST,
@@ -734,23 +808,25 @@ const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
         200,
         Some(r#"{"hold_token":"{token}"}"#),
     ),
+    // `{m}` is `{n}` + 100, `{k}` `{n}` + 200: each cell books, releases and
+    // blocks its own object.
     (
         Method::POST,
         "/v1/events/{event}/book",
         200,
-        Some(r#"{"objects":{"version":"{hash}","idx":[1]},"order_ref":"o-1"}"#),
+        Some(r#"{"objects":{"version":"{hash}","idx":[{m}]},"order_ref":"o-1"}"#),
     ),
     (
         Method::POST,
         "/v1/events/{event}/release",
         200,
-        Some(r#"{"objects":{"version":"{hash}","idx":[1]}}"#),
+        Some(r#"{"objects":{"version":"{hash}","idx":[{m}]}}"#),
     ),
     (
         Method::POST,
         "/v1/events/{event}/change-status",
         200,
-        Some(r#"{"objects":{"version":"{hash}","idx":[2]},"status":"blocked"}"#),
+        Some(r#"{"objects":{"version":"{hash}","idx":[{k}]},"status":"blocked"}"#),
     ),
     (
         Method::GET,
@@ -777,7 +853,7 @@ const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
         Method::POST,
         "/v1/public/events/{event}/hold",
         200,
-        Some(r#"{"hold_token":"{token}","objects":{"version":"{hash}","idx":[3]}}"#),
+        Some(r#"{"hold_token":"{token}","objects":{"version":"{hash}","idx":[{p}]}}"#),
     ),
     (
         Method::POST,
@@ -800,6 +876,31 @@ const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
     (Method::DELETE, "/v1/hold-tokens/{token}", 200, None),
     (Method::DELETE, "/v1/events/{event}", 200, None),
     (Method::DELETE, "/v1/charts/{chart}", 200, None),
+    // Setup is done (an owner exists): refused for everyone alike.
+    (
+        Method::POST,
+        "/console/api/setup",
+        401,
+        Some(r#"{"token":"0000","email":"x@example.org","password":"not-a-real-password-1"}"#),
+    ),
+    (
+        Method::POST,
+        "/console/api/session",
+        200,
+        Some(r#"{"email":"owner@a.example","password":"not-a-real-password-0000"}"#),
+    ),
+    (Method::GET, "/console/api/me", 200, None),
+    // These two end the sessions they are sent with; the matrix starts new
+    // ones after each.
+    (
+        Method::POST,
+        "/console/api/password",
+        200,
+        Some(
+            r#"{"current_password":"not-a-real-password-0000","new_password":"not-a-real-password-0000"}"#,
+        ),
+    ),
+    (Method::DELETE, "/console/api/session", 204, None),
 ];
 
 /// 13 §10 "tenant isolation": two workspaces with identical chart and event
@@ -918,6 +1019,12 @@ const HEADER_TOKEN: &str = "/v1/public/hold-tokens/current";
 const HOLD_TOKEN: header::HeaderName = header::HeaderName::from_static("cavea-hold-token");
 const SESSION: header::HeaderName = header::HeaderName::from_static("cavea-session");
 
+/// The image cell `n` uploads: its own bytes, so that each upload is new to
+/// its workspace.
+fn png(n: usize) -> Vec<u8> {
+    crate::assets::tests::png(64, 48 + u32::try_from(n).unwrap())
+}
+
 /// A credential, as one cell's column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Cred {
@@ -932,12 +1039,21 @@ enum Cred {
     Publishable,
     ForeignSecret,
     ForeignPublishable,
+    /// A console session of a member of the tenant with this role, naming the
+    /// tenant's workspace.
+    Member(Role),
+    /// The owner of another workspace, naming theirs: like another
+    /// workspace's key.
+    ForeignMember,
+    /// Another owner of another workspace, naming the tenant's, which they are
+    /// not a member of.
+    Outsider,
 }
 
-/// In the order they are tried: refusals change nothing, so the tenant's own
-/// keys, of which one succeeds and may change state (a key revoked, an event
-/// archived), come last; a refusal after it is decided before the handler.
-const CREDS: [Cred; 12] = [
+/// In the order they are tried: refusals change nothing, so credentials that
+/// may succeed, and change state (a key revoked, an event archived), come
+/// last; a refusal after one is decided before the handler.
+const CREDS: [Cred; 19] = [
     Cred::None,
     Cred::Malformed(0),
     Cred::Malformed(1),
@@ -945,36 +1061,109 @@ const CREDS: [Cred; 12] = [
     Cred::Invalid(0),
     Cred::Invalid(1),
     Cred::Invalid(2),
+    Cred::Outsider,
     Cred::ForeignSecret,
     Cred::ForeignPublishable,
+    Cred::ForeignMember,
     Cred::Admin,
     Cred::Secret,
     Cred::Publishable,
+    Cred::Member(Role::Owner),
+    Cred::Member(Role::Admin),
+    Cred::Member(Role::Editor),
+    Cred::Member(Role::Operator),
+    Cred::Member(Role::Viewer),
 ];
 
 /// The declared table (13 §10): what each credential gets on a route that
 /// needs `needs`, as the refusal's code and `reason`. `None` is allowed: the
-/// route's success, or for another workspace's key `404` when the route names
-/// one of the tenant's identifiers.
+/// route's success, or for another workspace's credential `404` when the
+/// route names one of the tenant's identifiers. A console session is a
+/// credential on the console's routes only: on every other it is none.
 fn expect(needs: Needs, cred: Cred) -> Option<(Code, &'static str)> {
     use Cred as C;
+    let member = matches!(cred, C::Member(_) | C::ForeignMember | C::Outsider);
     match (needs, cred) {
         (Needs::Nothing, _)
         | (Needs::Admin, C::Admin)
         | (Needs::Secret, C::Secret | C::ForeignSecret)
+        | (Needs::Console, C::Member(_) | C::ForeignMember | C::Outsider)
         | (Needs::Publishable | Needs::QueryKey, C::Publishable | C::ForeignPublishable) => None,
+        (Needs::Console, _) => Some((Code::Unauthorized, "console_session")),
+        // A cookie is no credential on key routes.
         (_, C::None) => Some((Code::Unauthorized, "missing")),
+        _ if member => Some((Code::Unauthorized, "missing")),
         (_, C::Malformed(_)) => Some((Code::Unauthorized, "malformed")),
         (_, C::Invalid(_)) => Some((Code::Unauthorized, "invalid")),
         _ => Some((Code::Forbidden, "key_kind")),
     }
 }
 
+/// The console sessions of the matrix: one per role in A, B's owner.
+struct Members {
+    users: Vec<(Cred, String)>,
+    sessions: Vec<(Cred, SessionId)>,
+}
+
+impl Members {
+    async fn create(pool: &PgPool, a: &Tenant, b: &Tenant) -> Self {
+        let mut users = Vec::new();
+        for role in Role::ALL {
+            let email = format!("{}@a.example", role.as_str());
+            let (user, _) = member(pool, &a.id, role, &email).await;
+            users.push((Cred::Member(role), user));
+        }
+        let (user, _) = member(pool, &b.id, Role::Owner, "owner@b.example").await;
+        users.push((Cred::ForeignMember, user));
+        let (user, _) = member(pool, &b.id, Role::Owner, "outsider@b.example").await;
+        users.push((Cred::Outsider, user));
+        let mut members = Self {
+            users,
+            sessions: Vec::new(),
+        };
+        members.sign_in(pool).await;
+        members
+    }
+
+    /// A new session for every member, as after a password change or a
+    /// sign-out.
+    async fn sign_in(&mut self, pool: &PgPool) {
+        self.sessions.clear();
+        for (cred, user) in &self.users {
+            self.sessions.push((*cred, session_of(pool, user).await));
+        }
+    }
+
+    fn session(&self, cred: Cred) -> Option<&SessionId> {
+        self.sessions
+            .iter()
+            .find(|(c, _)| *c == cred)
+            .map(|(_, id)| id)
+    }
+
+    /// The console headers of `cred`, which names `a`'s workspace, or `b`'s
+    /// for the foreign member.
+    fn headers(&self, cred: Cred, a: &Tenant, b: &Tenant) -> Vec<(header::HeaderName, String)> {
+        let Some(id) = self.session(cred) else {
+            return Vec::new();
+        };
+        let ws = if cred == Cred::ForeignMember {
+            &b.id
+        } else {
+            &a.id
+        };
+        console(id, Some(ws))
+    }
+}
+
 /// 13 §10 and T5: every route × every credential, compared with [`expect`];
 /// with workspace B's key of the right kind and workspace A's identifiers,
-/// `404` if the route names one, never revealing anything of A; an expired or
-/// another workspace's session token on the routes that take one; and
-/// another event's hold token where a body names a token and an event.
+/// `404` if the route names one, never revealing anything of A; console
+/// sessions of five roles and of another workspace's members, refused on
+/// every route but the console's; on every non-safe console route, the
+/// session without its CSRF token and from another site; an expired or another workspace's session
+/// token on the routes that take one; and another event's hold token where a
+/// body names a token and an event.
 #[tokio::test]
 #[ignore = "needs CAVEA_TEST_DATABASE_URL"]
 async fn authorisation_matrix() {
@@ -987,6 +1176,7 @@ async fn authorisation_matrix() {
         let app = api(&pool, Some(ADMIN));
         let a = Tenant::create(&app, "a").await;
         let b = Tenant::create(&app, "b").await;
+        let mut members = Members::create(&pool, &a, &b).await;
         // A second event of A's, with a token: another event's hold token.
         let (response, _) = call(
             &app,
@@ -1006,6 +1196,9 @@ async fn authorisation_matrix() {
         )
         .await;
         let other_token = other["hold_token"].as_str().unwrap().to_owned();
+        let secret_cell = CREDS.iter().position(|c| *c == Cred::Secret).unwrap();
+        let asset = crate::assets::hash(&png(secret_cell));
+        let asset: String = asset.iter().map(|b| format!("{b:02x}")).collect();
         let unknown = format!("sk_{}", "0".repeat(64));
         let malformed = [
             format!("Basic {}", a.secret),
@@ -1031,16 +1224,18 @@ async fn authorisation_matrix() {
             &json!({ "sub": "s", "event": a.event, "exp": exp(0) + 600 }),
         );
         let mut cells = 0;
+        let mut console_ids = Vec::new();
         for (method, template, ok, body) in ROUTES {
             let (needs, takes_session) = op_of(method, template);
             let names_identifier = *template == HEADER_TOKEN
                 || IDENTIFIERS
                     .iter()
                     .any(|p| template.contains(p) || body.is_some_and(|b| b.contains(p)));
-            let path = a.path(template);
+            let path = a.path(template).replace("{asset}", &asset);
             let send_with = async |authorization: Option<&str>,
                                    extra: &[(header::HeaderName, &str)],
-                                   body: Option<&str>| {
+                                   body: Option<&str>,
+                                   n: usize| {
                 // A realtime route takes whatever key it is given in its URL.
                 let (path, authorization) = match (needs, authorization) {
                     (Needs::QueryKey, Some(value)) => {
@@ -1062,16 +1257,26 @@ async fn authorisation_matrix() {
                     request = request.header(name, *value);
                 }
                 let request = match body {
-                    Some(body) => request
-                        .header(header::CONTENT_TYPE, "application/json")
-                        .body(Body::from(a.path(body))),
+                    Some("{png}") => request
+                        .header(header::CONTENT_TYPE, "image/png")
+                        .body(Body::from(png(n))),
+                    Some(body) => {
+                        let body = body
+                            .replace("{n}", &n.to_string())
+                            .replace("{m}", &(n + 100).to_string())
+                            .replace("{k}", &(n + 200).to_string())
+                            .replace("{p}", &(n + 300).to_string());
+                        request
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(a.path(&body)))
+                    }
                     None => request.body(Body::empty()),
                 };
                 send(app.clone(), request.unwrap()).await
             };
-            for cred in CREDS {
+            for (n, cred) in CREDS.into_iter().enumerate() {
                 let value = match cred {
-                    Cred::None => None,
+                    Cred::None | Cred::Member(_) | Cred::ForeignMember | Cred::Outsider => None,
                     Cred::Malformed(i) if needs == Needs::QueryKey => {
                         Some(["pk_%30", "", "pk_0&key=pk_1"][i].to_owned())
                     }
@@ -1083,9 +1288,14 @@ async fn authorisation_matrix() {
                     Cred::ForeignSecret => Some(format!("Bearer {}", b.secret)),
                     Cred::ForeignPublishable => Some(format!("Bearer {}", b.publishable)),
                 };
-                let foreign = matches!(cred, Cred::ForeignSecret | Cred::ForeignPublishable);
+                let console_headers = members.headers(cred, &a, &b);
+                let foreign = matches!(
+                    cred,
+                    Cred::ForeignSecret | Cred::ForeignPublishable | Cred::ForeignMember
+                );
                 let expected = expect(needs, cred);
-                let (response, answer) = send_with(value.as_deref(), &[], *body).await;
+                let (response, answer) =
+                    send_with(value.as_deref(), &refs(&console_headers), *body, n).await;
                 cells += 1;
                 let at = format!("{method} {template} with {cred:?}");
                 match expected {
@@ -1093,16 +1303,50 @@ async fn authorisation_matrix() {
                         assert_problem(&response, &answer, code);
                         assert_eq!(answer["details"]["reason"], reason, "{at}");
                     }
-                    None if foreign && names_identifier && needs != Needs::Nothing => {
+                    None if foreign
+                        && names_identifier
+                        && !matches!(needs, Needs::Nothing | Needs::Console) =>
+                    {
                         assert_problem(&response, &answer, Code::NotFound);
                     }
                     None => assert_eq!(response.status().as_u16(), *ok, "{at}: {answer}"),
                 }
-                if foreign {
+                if foreign && needs != Needs::Nothing {
                     let text = answer.to_string();
                     for id in a.identifiers() {
                         assert!(!text.contains(id), "{at} revealed {id:.11}");
                     }
+                }
+                if let Some(csrf) = answer["csrf_token"].as_str() {
+                    console_ids.push(csrf.to_owned());
+                }
+            }
+            // A console session on a non-safe route: refused without its CSRF
+            // token, and from another site.
+            let safe = *method == Method::GET;
+            if needs == Needs::Console && !safe {
+                let owner = members.headers(Cred::Member(Role::Owner), &a, &b);
+                let without = |name: &header::HeaderName| {
+                    owner
+                        .iter()
+                        .filter(|(n, _)| n != name)
+                        .map(|(n, v)| (n.clone(), v.as_str()))
+                        .collect::<Vec<_>>()
+                };
+                let mut cross_site = refs(&owner);
+                cross_site.push((
+                    header::HeaderName::from_static("sec-fetch-site"),
+                    "cross-site",
+                ));
+                let cases = [
+                    (without(&crate::http::staff::CSRF), Code::Forbidden, "csrf"),
+                    (cross_site, Code::Forbidden, "origin"),
+                ];
+                for (headers, code, reason) in cases {
+                    let (response, answer) = send_with(None, &headers, *body, 0).await;
+                    cells += 1;
+                    assert_problem(&response, &answer, code);
+                    assert_eq!(answer["details"]["reason"], reason, "{method} {template}");
                 }
             }
             // An expired session token, and one another workspace signed.
@@ -1110,7 +1354,7 @@ async fn authorisation_matrix() {
                 for (session, reason) in [(&expired, "expired"), (&foreign_session, "invalid")] {
                     let bearer = format!("Bearer {}", a.publishable);
                     let (response, answer) =
-                        send_with(Some(&bearer), &[(SESSION, session)], *body).await;
+                        send_with(Some(&bearer), &[(SESSION, session)], *body, 0).await;
                     cells += 1;
                     assert_problem(&response, &answer, Code::Unauthorized);
                     assert_eq!(answer["details"]["reason"], "session_token");
@@ -1127,7 +1371,7 @@ async fn authorisation_matrix() {
                 };
                 let bearer = format!("Bearer {key}");
                 let body = body.map(|b| b.replace("{token}", &other_token));
-                let (response, answer) = send_with(Some(&bearer), &[], body.as_deref()).await;
+                let (response, answer) = send_with(Some(&bearer), &[], body.as_deref(), 0).await;
                 cells += 1;
                 assert_problem(&response, &answer, Code::NotFound);
                 assert_eq!(
@@ -1135,20 +1379,40 @@ async fn authorisation_matrix() {
                     "{method} {template}"
                 );
             }
+            // Sign-in (rotating the session sent with it), sign-out and a
+            // password change end the members' sessions.
+            if template.starts_with("/console/api/password")
+                || template.starts_with("/console/api/session")
+            {
+                for (_, id) in &members.sessions {
+                    console_ids.push(id.as_str().to_owned());
+                }
+                members.sign_in(&pool).await;
+            }
         }
-        assert!(cells > 500, "{cells} cells");
+        assert!(cells > 1_000, "{cells} cells");
         let mut secrets: Vec<&str> = a.secrets().into_iter().chain(b.secrets()).collect();
         secrets.extend([
             other_token.as_str(),
             expired.as_str(),
             foreign_session.as_str(),
+            PASSWORD,
+            "@a.example",
+            "@b.example",
         ]);
+        for (_, id) in &members.sessions {
+            secrets.push(id.as_str());
+            console_ids.push(id.csrf());
+        }
+        secrets.extend(console_ids.iter().map(String::as_str));
         assert_no_secrets(&logs, &secrets);
     })
     .await;
 }
 
+mod assets;
 mod charts;
+mod console;
 mod limits;
 mod objects;
 mod realtime;

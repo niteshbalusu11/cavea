@@ -8,11 +8,17 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# argon2id for console passwords (09 §2, 12 §3 T9): the hash itself, without
+# the PHC string crate (the server writes and reads that form itself).
+argon2 = { version = "0.6.0", default-features = false, features = ["alloc"] }
 # `query` adds serde_urlencoded, for the problem+json `Query` extractor. `ws`
 # adds tokio-tungstenite and tungstenite for the realtime WebSocket (08 §8).
 axum = { workspace = true, features = ["tokio", "http1", "json", "matched-path", "query", "ws"] }
 # The SSE stream's base64 `data:` lines; already in the tree through sqlx-postgres.
 base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
+# BLAKE3, the content hash of uploaded assets as of chart artefacts (03 §4.1);
+# already built for cavea-compiler.
+blake3.workspace = true
 # Brotli (quality 11) of each published chart's public artefact (03 §4.6); the
 # workspace's version, already built for xtask.
 brotli.workspace = true

@@ -74,14 +74,17 @@ const EXPOSE_HEADERS: &str = "Cavea-Request-Id, Retry-After";
 
 /// CORS for the publishable-key routes, as a layer on the whole router (08
 /// §11). Only paths under `/v1/public/` are touched, so a secret-key route
-/// never carries a CORS header (12 §4), and the chart files keep their own
+/// never carries a CORS header (12 §4), and the chart and asset files keep their own
 /// open policy. `OPTIONS` there is a preflight: it carries no credential, so
 /// it is answered from `CAVEA_CORS_ORIGINS` alone; the key's own allow-list is
 /// checked on the request itself (`403`, with these headers). Credentials mode
 /// stays off: no `Access-Control-Allow-Credentials`, no cookies.
 pub(super) async fn cors(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let path = request.uri().path();
-    if !path.starts_with("/v1/public/") || path.starts_with("/v1/public/charts/") {
+    if !path.starts_with("/v1/public/")
+        || path.starts_with("/v1/public/charts/")
+        || path.starts_with("/v1/public/assets/")
+    {
         return next.run(request).await;
     }
     let allow = match &state.config.cors_origins {
@@ -160,13 +163,13 @@ async fn event(
 }
 
 const CCF_TYPE: &str = "application/vnd.cavea.ccf";
-const IMMUTABLE: &str = "public, max-age=31536000, immutable";
+pub(super) const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 
 /// CORS open (03 §4.6): any page may read the response, whatever
 /// `CAVEA_CORS_ORIGINS` says: the file is public, and one answer for every
 /// origin keeps it one cache entry at a CDN. A GET without custom headers
 /// needs no preflight.
-async fn cors_open(mut response: Response) -> Response {
+pub(super) async fn cors_open(mut response: Response) -> Response {
     response.headers_mut().insert(
         header::ACCESS_CONTROL_ALLOW_ORIGIN,
         HeaderValue::from_static("*"),
@@ -239,7 +242,7 @@ fn cache_headers(mut response: Response, etag: HeaderValue) -> Response {
 }
 
 /// 32 lowercase hex digits as 16 bytes.
-fn parse_hash(hex: &str) -> Option<[u8; 16]> {
+pub(crate) fn parse_hash(hex: &str) -> Option<[u8; 16]> {
     let digits = hex.as_bytes();
     if digits.len() != 32 {
         return None;

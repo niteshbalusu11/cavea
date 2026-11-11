@@ -31,6 +31,16 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "holds_session_sub",
         include_str!("../../migrations/0003_holds_session_sub.sql"),
     ),
+    (
+        4,
+        "assets_per_workspace",
+        include_str!("../../migrations/0004_assets_per_workspace.sql"),
+    ),
+    (
+        5,
+        "console_people",
+        include_str!("../../migrations/0005_console_people.sql"),
+    ),
 ];
 
 /// Where applied migrations are recorded, with each one's SHA-384.

@@ -9,9 +9,11 @@ macro_rules! rfc3339 {
     };
 }
 
+mod assets;
 pub mod auth;
 #[macro_use]
 mod charts;
+mod console;
 mod error;
 mod events;
 pub mod extract;
@@ -24,6 +26,7 @@ mod public;
 mod realtime;
 mod seats;
 mod session;
+pub mod staff;
 mod workspaces;
 
 use std::sync::Arc;
@@ -44,6 +47,7 @@ pub use auth::{AdminKey, AdminKeyAuth, Auth, PublishableKey, QueryKey, SecretKey
 pub use error::{ApiError, Code};
 pub use extract::{Json, Path, Query};
 pub use health::Health;
+pub(crate) use public::parse_hash;
 
 /// Shared with every handler through `State<AppState>`. Cheap to clone.
 #[derive(Debug, Clone)]
@@ -60,6 +64,10 @@ pub struct AppState {
     pub limiter: Arc<Limiter>,
     /// What readiness knows of the database (`GET /readyz`).
     pub health: Health,
+    /// The image bytes held in memory at once (`crate::assets::Memory`).
+    pub asset_memory: crate::assets::Memory,
+    /// The console's sign-in back-off (`crate::console::guard`).
+    pub sign_in: Arc<crate::console::guard::Guard>,
 }
 
 /// The whole HTTP surface.
@@ -77,8 +85,10 @@ fn routes() -> openapi::Routes {
         .merge(events::routes())
         .merge(seats::routes())
         .merge(objects::routes())
+        .merge(assets::routes())
         .merge(public::routes())
         .merge(realtime::routes())
+        .merge(console::routes())
 }
 
 /// Add the problem+json fallbacks, the default body limit, CORS for the public

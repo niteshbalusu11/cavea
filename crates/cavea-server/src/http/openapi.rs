@@ -36,6 +36,8 @@ pub enum Needs {
     Nothing,
     Admin,
     Secret,
+    /// A console session alone: the `/console/api` routes of a signed-in user.
+    Console,
     Publishable,
     /// A publishable key in the `key` query parameter (D-31).
     QueryKey,
@@ -208,6 +210,14 @@ impl Op {
         self
     }
 
+    /// The last response added carries `Set-Cookie` (the console session).
+    pub(super) fn sets_cookie(mut self) -> Self {
+        if let Some((_, response)) = self.responses.last_mut() {
+            response["headers"] = json!({ "Set-Cookie": component("headers", "SetCookie") });
+        }
+        self
+    }
+
     /// Error statuses beyond those [`Op::error_statuses`] derives.
     pub(super) fn errors(mut self, statuses: &[u16]) -> Self {
         self.errors.extend_from_slice(statuses);
@@ -263,6 +273,7 @@ impl Op {
             Needs::Nothing => return json!([]),
             Needs::Admin => "adminKey",
             Needs::Secret => "secretKey",
+            Needs::Console => return json!([{ "consoleSession": [] }]),
             Needs::Publishable => "publishableKey",
             Needs::QueryKey => "publishableKeyQuery",
         };
@@ -280,6 +291,10 @@ impl Op {
             .path_params()
             .map(|name| component("parameters", &path_param_name(name)))
             .collect();
+        let safe = matches!(self.method, Method::GET | Method::HEAD);
+        if self.needs == Needs::Console && !safe {
+            params.push(component("parameters", "CsrfToken"));
+        }
         if self.idempotent {
             params.push(component("parameters", "IdempotencyKey"));
         }
@@ -417,6 +432,9 @@ fn tag(path: &str) -> &str {
     if path.starts_with("/v1/public/") {
         return "public";
     }
+    if path.starts_with("/console/api/") {
+        return "console";
+    }
     match path.strip_prefix("/v1/") {
         Some(rest) if !rest.ends_with(".json") => rest.split('/').next().unwrap_or(rest),
         _ => "system",
@@ -445,7 +463,9 @@ const INFO: &str = "The Cavea server's REST API (`docs/08-server.md` §6). JSON 
 send its own (1 to 64 characters of `A-Z a-z 0-9 . _ -`). Errors are `application/problem+json` \
 with a stable `code` (08 §6.4): match on `code`, not on `message`. Lists are \
 `{\"data\": [..], \"next\": <cursor or null>}`, oldest first; pass `next` back as `after`. The \
-WebSocket protocol of `GET /v1/public/rt` is 08 §8, which OpenAPI cannot describe.";
+WebSocket protocol of `GET /v1/public/rt` is 08 §8, which OpenAPI cannot describe. The \
+`/console/api` routes take the console session cookie (09 §10); their non-safe methods send \
+`Cavea-Csrf-Token`.";
 
 /// The whole document.
 #[must_use]
@@ -493,6 +513,12 @@ key with another request is `409 idempotency_mismatch`.",
                 "description": "The draft's etag as `draft_etag` gives it, or `*`.",
                 "schema": { "type": "string" },
             },
+            "CsrfToken": {
+                "name": "Cavea-Csrf-Token", "in": "header", "required": true,
+                "description": "Required: the session's `csrf_token` from `GET /console/api/me` (or \
+sign-in).",
+                "schema": { "type": "string" },
+            },
             "IfMatchRequired": {
                 "name": "If-Match", "in": "header", "required": true,
                 "description": "The draft's etag as `draft_etag` gives it, or `*` to overwrite \
@@ -528,6 +554,12 @@ whatever is there.",
                     "description": "The representation's entity tag.",
                     "schema": { "type": "string" },
                 },
+                "SetCookie": {
+                    "description": "The console session: `__Host-cavea_console=cs_…; Path=/; \
+    Max-Age=604800; HttpOnly; SameSite=Lax; Secure` (without `__Host-` and `Secure` when \
+    `CAVEA_CONSOLE_COOKIE_SECURE=false`); `Max-Age=0` clears it.",
+                    "schema": { "type": "string" },
+                },
             },
             "responses": problem_responses(&statuses),
             "securitySchemes": {
@@ -555,6 +587,13 @@ whatever is there.",
                 "holdToken": {
                     "type": "apiKey", "in": "header", "name": "Cavea-Hold-Token",
                     "description": "The buyer's hold token.",
+                },
+                "consoleSession": {
+                    "type": "apiKey", "in": "cookie", "name": "__Host-cavea_console",
+                    "description": "A staff member's console session (09 §2), set by \
+    `POST /console/api/session` or `/console/api/setup`; `cavea_console` when \
+    `CAVEA_CONSOLE_COOKIE_SECURE=false`. Not the buyer's session token. With it, a non-safe method \
+    sends `Cavea-Csrf-Token`.",
                 },
             },
         },
