@@ -66,7 +66,7 @@ fn a_snapshot_is_one_upload_and_waits_for_the_chart() {
         assert_eq!(errors(&e.drain_events().collect::<Vec<_>>()), 1);
     }
     let frame = wire::encode_snapshot(View::Public, 9, &[0; 20], &[]).unwrap();
-    assert!(Command::from_frame(&frame[..frame.len() - 1], 20).is_err());
+    assert!(Command::from_frame(&frame[..frame.len() - 1], Some(20)).is_err());
     tick(&mut e, 16.0);
     assert_eq!(
         (e.backend.buffer_writes.len(), e.state.seq),
@@ -78,7 +78,7 @@ fn a_snapshot_is_one_upload_and_waits_for_the_chart() {
     let mut statuses = [0; 20];
     statuses[10] = 4;
     let frame = wire::encode_snapshot(View::Public, 9, &statuses, &[]).unwrap();
-    let command = Command::from_frame(&frame, 20).unwrap().unwrap();
+    let command = Command::from_frame(&frame, Some(20)).unwrap().unwrap();
     e.handle(command);
     tick(&mut e, 32.0);
     assert_eq!(uploads(&e, dynamic, writes), [(0, 80)]);
@@ -125,7 +125,7 @@ fn deltas_apply_only_in_sequence() {
 fn frames_decode_to_state_commands() {
     let delta = wire::encode_delta(View::Public, 3, 4, &[Change { idx: 2, code: 9 }], 20, &[]);
     assert_eq!(
-        Command::from_frame(&delta.unwrap(), 20),
+        Command::from_frame(&delta.unwrap(), Some(20)),
         Ok(Some(Command::ApplyDelta {
             from_seq: 3,
             to_seq: 4,
@@ -134,7 +134,7 @@ fn frames_decode_to_state_commands() {
     );
     let private = wire::encode_private(99, &[1, 5], 20, &[]).unwrap();
     assert_eq!(
-        Command::from_frame(&private, 20),
+        Command::from_frame(&private, Some(20)),
         Ok(Some(Command::SetPrivateHolds {
             objects: vec![1, 5],
             expires_at_ms: 99,
@@ -145,13 +145,22 @@ fn frames_decode_to_state_commands() {
     let area = [wire::Area { idx: 99, value: 1 }];
     let delta = wire::encode_delta(View::Public, 3, 4, &[], 100, &area).unwrap();
     assert_eq!(
-        Command::from_frame(&delta, 20),
+        Command::from_frame(&delta, Some(20)),
         Err(wire::WireError::OutOfRange)
     );
-    assert!(Command::from_frame(&delta, 100).is_ok());
+    assert!(Command::from_frame(&delta, Some(100)).is_ok());
+    // Before the chart, area entries could never be checked: refused. A
+    // frame without them is kept for the engine to check.
+    let private = wire::encode_private(9, &[0], 100, &area).unwrap();
+    assert_eq!(
+        Command::from_frame(&private, None),
+        Err(wire::WireError::OutOfRange)
+    );
+    let private = wire::encode_private(9, &[0], 100, &[]).unwrap();
+    assert!(matches!(Command::from_frame(&private, None), Ok(Some(_))));
     // The adapter's frames and unknown types are not state.
     for frame in [wire::encode_ping(1), wire::encode_resync(), vec![0x7f, 1]] {
-        assert_eq!(Command::from_frame(&frame, 20), Ok(None));
+        assert_eq!(Command::from_frame(&frame, Some(20)), Ok(None));
     }
 }
 
@@ -230,7 +239,9 @@ fn measure_state() {
         .collect();
     let frame = wire::encode_snapshot(View::Public, 1, &state, &[]).unwrap();
     let start = std::time::Instant::now();
-    let command = Command::from_frame(&frame, n as u32).unwrap().unwrap();
+    let command = Command::from_frame(&frame, Some(n as u32))
+        .unwrap()
+        .unwrap();
     let decoded = start.elapsed();
     e.handle(command);
     let applied = start.elapsed();
@@ -251,7 +262,9 @@ fn measure_state() {
     let frame = wire::encode_delta(View::Public, 1, 2, &changes, n as u32, &[]).unwrap();
     let writes = e.backend.buffer_writes.len();
     let start = std::time::Instant::now();
-    let command = Command::from_frame(&frame, n as u32).unwrap().unwrap();
+    let command = Command::from_frame(&frame, Some(n as u32))
+        .unwrap()
+        .unwrap();
     e.handle(command);
     let applied = start.elapsed();
     tick(&mut e, 32.0);

@@ -280,8 +280,7 @@ impl View {
     /// malformed or does not fit the chart, which then changes nothing.
     #[wasm_bindgen(js_name = applyFrame)]
     pub fn apply_frame(&mut self, frame: &[u8]) -> Result<bool, JsError> {
-        // Before a chart, the decoder's own bound (08 §8.6) is the only one.
-        let objects = self.engine.objects().map_or(u32::MAX, |n| n as u32);
+        let objects = self.engine.objects().map(|n| n as u32);
         match Command::from_frame(frame, objects) {
             Ok(Some(command)) => self.send(command).map(|()| true),
             Ok(None) => Ok(false),

@@ -258,10 +258,22 @@ impl Command {
     /// the adapter handles itself and for unknown frame types, which are
     /// skipped (08 §8.6). Every `idx`, ignored area entries included, is
     /// checked against `objects`, the receiver's object count; the engine
-    /// checks the rest.
-    pub fn from_frame(frame: &[u8], objects: u32) -> Result<Option<Self>, WireError> {
-        let all = objects.min(cavea_core::limits::MAX_OBJECTS);
-        Ok(Some(match decode_server(frame, View::Public) {
+    /// checks the rest. Before a chart (`None`) the area entries a DELTA or
+    /// PRIVATE carries could never be checked, so such a frame is refused
+    /// with `OutOfRange`; servers send none yet.
+    pub fn from_frame(frame: &[u8], objects: Option<u32>) -> Result<Option<Self>, WireError> {
+        let limit = cavea_core::limits::MAX_OBJECTS;
+        let all = objects.map_or(limit, |n| n.min(limit));
+        let frame = decode_server(frame, View::Public);
+        let areas = match frame {
+            Ok(ServerFrame::Delta(d)) => d.areas(all)?.next(),
+            Ok(ServerFrame::Private(p)) => p.areas(all)?.next(),
+            _ => None,
+        };
+        if objects.is_none() && areas.is_some() {
+            return Err(WireError::OutOfRange);
+        }
+        Ok(Some(match frame {
             Ok(ServerFrame::Snapshot(s)) => {
                 let mut state = vec![0; s.objects as usize];
                 s.write_into(&mut state)?;
