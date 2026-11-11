@@ -292,6 +292,19 @@ async fn image_bytes_in_memory_are_bounded() {
         assert_eq!(budget as usize - memory.serves.available_permits(), held);
         drop(pieces);
         assert_eq!(memory.serves.available_permits(), budget as usize);
+
+        // An image larger than the whole serving budget, stored before the
+        // limit was lowered, is refused rather than read.
+        sqlx::query("UPDATE assets SET size = $1 WHERE hash = decode($2, 'hex')")
+            .bind(i32::try_from(budget).unwrap() + 1)
+            .bind(hex(&image))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (response, problem) = call(&app, Method::GET, &uri, None, None).await;
+        assert_problem(&response, &problem, Code::Overloaded);
+        assert_eq!(problem["details"]["reason"], "asset_memory");
+        assert_eq!(memory.serves.available_permits(), budget as usize);
     })
     .await;
 }

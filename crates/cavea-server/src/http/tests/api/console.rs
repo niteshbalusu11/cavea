@@ -427,6 +427,37 @@ async fn a_password_change_ends_every_session() {
     .await;
 }
 
+/// R1-2: a sign-in's check that the password it verified is still the
+/// user's holds the user's row until the session is in, so a password change
+/// waits for it (and then ends that session); once a change is committed, the
+/// old hash no longer passes.
+#[tokio::test]
+#[ignore = "needs CAVEA_TEST_DATABASE_URL"]
+async fn a_sign_in_and_a_password_change_serialise() {
+    let _serial = serial();
+    with_db(async move |pool| {
+        let app = api(&pool, Some(ADMIN));
+        let a = Tenant::create(&app, "a").await;
+        let (user, _) = member(&pool, &a.id, Role::Viewer, "ada@example.org").await;
+        let mut sign_in = pool.begin().await.unwrap();
+        let current =
+            crate::http::console::still_current(&mut sign_in, &user, Some(password_hash()));
+        assert!(current.await.unwrap());
+        let change = sqlx::query("UPDATE users SET password_hash = 'changed' WHERE id = $1::uuid")
+            .bind(&user)
+            .execute(&pool);
+        let mut change = std::pin::pin!(change);
+        let waited = tokio::time::timeout(Duration::from_millis(300), &mut change).await;
+        assert!(waited.is_err(), "the change did not wait for the sign-in");
+        sign_in.commit().await.unwrap();
+        change.await.unwrap();
+        let mut late = pool.begin().await.unwrap();
+        let current = crate::http::console::still_current(&mut late, &user, Some(password_hash()));
+        assert!(!current.await.unwrap());
+    })
+    .await;
+}
+
 /// SEC-003: failures from one address make its next attempts wait, doubling,
 /// and a refused attempt checks no password; the same for an email nobody
 /// has; another address, the member's own, is untouched; the per-address

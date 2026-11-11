@@ -194,9 +194,21 @@ async fn asset(
         let (content_type, size) = assets::size(&state.db, &hash)
             .await?
             .ok_or_else(not_found)?;
-        // Room for the bytes until they have been written to the client.
+        // Room for the bytes until they have been written to the client. An
+        // image larger than the whole budget (stored before
+        // `CAVEA_ASSET_MAX_BYTES` was lowered) is never read into memory.
         let budget = &state.asset_memory;
-        let wanted = u32::try_from(size).unwrap_or(0).min(budget.budget);
+        let wanted = u32::try_from(size)
+            .ok()
+            .filter(|&n| n <= budget.budget)
+            .ok_or_else(|| {
+                tracing::warn!(
+                    size,
+                    budget = budget.budget,
+                    "an asset is larger than the serving budget; raise CAVEA_ASSET_MAX_BYTES to serve it"
+                );
+                busy()
+            })?;
         let permit = tokio::time::timeout(
             assets::SERVE_WAIT,
             budget.serves.clone().acquire_many_owned(wanted),

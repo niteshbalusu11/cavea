@@ -391,7 +391,7 @@ const CURRENT_HASH: &str =
 /// Whether `user`'s password hash is still `verified`, locking the row until
 /// the transaction ends, so that a sign-in and a password change on the same
 /// user serialise.
-async fn still_current(
+pub(super) async fn still_current(
     tx: &mut sqlx::PgConnection,
     user: &str,
     verified: Option<&str>,
