@@ -2,7 +2,7 @@
 //! (05 §3, §5): the engine's events as `View.takeEvents` writes them, the
 //! object `View.object` writes, and the option values the SDK passes in.
 //! `cargo xtask types` reads these definitions and writes
-//! `packages/renderer/src/generated/engine.ts` (D-41, D-69), so the SDK's
+//! `packages/renderer/src/generated/engine.ts` (D-41, D-70), so the SDK's
 //! types have one source.
 //!
 //! Compiled for tests only: the WASM writes its JSON by hand (`events.rs`)

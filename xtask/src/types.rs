@@ -61,7 +61,7 @@ const DESIGNER: Target = Target {
     edit: "change the Rust types or the call table in crates/cavea-designer/src/calls.rs",
 };
 
-/// The buyer SDK's side of the WASM (FND-007, D-69): the events and the
+/// The buyer SDK's side of the WASM (FND-007, D-70): the events and the
 /// object the WASM writes as JSON, and the option names it takes. The
 /// definitions are test-only mirrors in `cavea-web`, tied to the engine's
 /// protocol and to the hand-written JSON by that crate's tests.
