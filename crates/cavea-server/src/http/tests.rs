@@ -1,0 +1,495 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test helpers outside #[test] functions; a panic is a test failure"
+)]
+#![allow(
+    clippy::await_holding_lock,
+    reason = "the serial lock is held across a whole test; each test has its own runtime"
+)]
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+use axum::Router;
+use axum::body::Body;
+use axum::extract::DefaultBodyLimit;
+use axum::http::{HeaderValue, Request, Response, StatusCode, header};
+use axum::routing::{get, post};
+use cavea_engine::{
+    ActorConfig, ChartView, Command, EventId, EventState, Failure, InvalidReason, LoadedEvent,
+    ManualClock, MemoryStore, Missing, ObjectFailure, ObjectReason, ObjectRef, Outcome,
+    Request as EngineRequest, Timestamp, TokenHash,
+};
+use cavea_telemetry::{LogFormat, REQUEST_ID_HEADER, span};
+use serde_json::{Value, json};
+use tower::ServiceExt as _;
+use tracing::span::{Attributes, Id, Record};
+use tracing::subscriber::DefaultGuard;
+use tracing_subscriber::layer::{Context, SubscriberExt as _};
+use tracing_subscriber::registry::LookupSpan;
+
+use super::{ApiError, AppState, Code, Json, finish, router};
+use crate::config::Config;
+
+/// Tests in this module run one at a time. `tracing` caches per callsite,
+/// process-wide, whether any subscriber wants it; a test thread with no
+/// subscriber can race another test's capture into caching "never".
+fn serial() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn state() -> AppState {
+    AppState {
+        config: Arc::new(Config {
+            listen: ([127, 0, 0, 1], 0).into(),
+            log: "info".to_owned(),
+            log_format: LogFormat::Json,
+        }),
+    }
+}
+
+fn app(routes: Router<AppState>) -> Router {
+    finish(routes, state())
+}
+
+async fn send(app: Router, request: Request<Body>) -> (Response<Body>, Value) {
+    let response = app.oneshot(request).await.unwrap();
+    let (parts, body) = response.into_parts();
+    let bytes = axum::body::to_bytes(body, 1 << 20).await.unwrap();
+    let json = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (Response::from_parts(parts, Body::empty()), json)
+}
+
+fn get_req(uri: &str) -> Request<Body> {
+    Request::get(uri).body(Body::empty()).unwrap()
+}
+
+fn request_id(response: &Response<Body>) -> &str {
+    response
+        .headers()
+        .get(REQUEST_ID_HEADER)
+        .expect("Cavea-Request-Id on every response")
+        .to_str()
+        .unwrap()
+}
+
+/// Checks the problem+json shape and returns the body.
+fn assert_problem(response: &Response<Body>, body: &Value, code: Code) {
+    assert_eq!(response.status(), code.status(), "{body}");
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "application/problem+json"
+    );
+    let object = body.as_object().unwrap();
+    let mut keys: Vec<_> = object.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["code", "details", "message", "request_id", "status"]);
+    assert_eq!(body["code"], code.as_str());
+    assert_eq!(body["status"], code.status().as_u16());
+    assert!(body["message"].as_str().is_some_and(|m| !m.is_empty()));
+    assert!(body["details"].is_object());
+    assert_eq!(body["request_id"], request_id(response));
+}
+
+/// Log output captured through the production JSON formatter.
+#[derive(Clone, Default)]
+struct Captured(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Captured {
+    fn install(&self) -> DefaultGuard {
+        let writer = self.clone();
+        let subscriber =
+            cavea_telemetry::subscriber("debug", LogFormat::Json, move || writer.clone()).unwrap();
+        tracing::subscriber::set_default(subscriber)
+    }
+
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+
+    fn records(&self) -> Vec<Value> {
+        self.text()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    /// The request span of the completion record for `id`.
+    fn completed(&self, id: &str) -> Value {
+        self.records()
+            .into_iter()
+            .filter(|r| r["message"] == "request completed")
+            .map(|r| r["spans"][0].clone())
+            .find(|s| s["request_id"] == id)
+            .unwrap_or_else(|| panic!("no completion record for {id} in {}", self.text()))
+    }
+}
+
+#[tokio::test]
+async fn healthz_responds_ok() {
+    let _serial = serial();
+    let response = router(state()).oneshot(get_req("/healthz")).await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(response.headers().contains_key(REQUEST_ID_HEADER));
+    let body = axum::body::to_bytes(response.into_body(), 64)
+        .await
+        .unwrap();
+    assert_eq!(&body[..], b"ok");
+}
+
+#[tokio::test]
+async fn request_span_logs_id_and_route_template_not_path() {
+    let _serial = serial();
+    let logs = Captured::default();
+    let _guard = logs.install();
+    let app = app(Router::new().route("/v1/events/{event_key}", get(|| async { "ok" })));
+
+    let (response, _) = send(app.clone(), get_req("/v1/events/customer-key-1")).await;
+    assert_eq!(response.status(), 200);
+    let id = request_id(&response);
+    assert!(id.starts_with("req_") && id.len() == 36, "{id}");
+    let span = logs.completed(id);
+    assert_eq!(span["name"], span::REQUEST);
+    assert_eq!(span["method"], "GET");
+    assert_eq!(span["route"], "/v1/events/{event_key}");
+    assert_eq!(span["status"], 200);
+    assert!(span["duration_ms"].is_f64());
+
+    let (response, _) = send(app, get_req("/v2/customer-key-2")).await;
+    let span = logs.completed(request_id(&response));
+    assert_eq!(span["route"], cavea_telemetry::UNMATCHED_ROUTE);
+    assert_eq!(span["status"], 404);
+
+    let text = logs.text();
+    assert!(!text.contains("customer-key"), "raw path logged: {text}");
+}
+
+#[tokio::test]
+async fn inbound_request_id_is_adopted_only_when_well_formed() {
+    let _serial = serial();
+    let app = app(Router::new().route("/r", get(|| async { "ok" })));
+    let long = "a".repeat(65);
+    let cases: [(&[u8], bool); 7] = [
+        (b"upstream-1.2_X", true),
+        (&[b'b'; 64], true),
+        (long.as_bytes(), false),
+        (b"", false),
+        (b"a b", false),
+        (b"x\",\"level\":\"ERROR", false),
+        (b"caf\xc3\xa9", false),
+    ];
+    for (inbound, adopted) in cases {
+        let request = Request::get("/r")
+            .header(REQUEST_ID_HEADER, HeaderValue::from_bytes(inbound).unwrap())
+            .body(Body::empty())
+            .unwrap();
+        let (response, _) = send(app.clone(), request).await;
+        let id = request_id(&response);
+        if adopted {
+            assert_eq!(id.as_bytes(), inbound);
+        } else {
+            assert!(
+                id.starts_with("req_") && id.len() == 36,
+                "{inbound:?} -> {id}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn every_code_renders_as_problem_json() {
+    let _serial = serial();
+    for code in Code::ALL {
+        let app = app(Router::new().route("/e", get(move || async move { ApiError::new(code) })));
+        let (response, body) = send(app, get_req("/e")).await;
+        assert_problem(&response, &body, code);
+        assert_eq!(body["details"], json!({}));
+        assert_eq!(
+            response.headers().get(header::RETRY_AFTER).is_some(),
+            code == Code::Overloaded,
+            "{code:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn internal_error_logs_cause_and_returns_generic_body() {
+    let _serial = serial();
+    let logs = Captured::default();
+    let _guard = logs.install();
+    let app = app(Router::new().route(
+        "/e",
+        get(|| async { ApiError::internal("pool closed while committing") }),
+    ));
+    let (response, body) = send(app, get_req("/e")).await;
+    assert_problem(&response, &body, Code::InternalError);
+    assert!(!body.to_string().contains("pool closed"));
+    let id = request_id(&response);
+    let record = logs
+        .records()
+        .into_iter()
+        .find(|r| r["message"] == "internal error")
+        .unwrap();
+    assert_eq!(record["error"], "pool closed while committing");
+    assert_eq!(record["code"], "internal_error");
+    assert_eq!(record["spans"][0]["request_id"], id);
+}
+
+#[tokio::test]
+async fn engine_failures_convert_without_loss() {
+    let _serial = serial();
+    let failures = [
+        (
+            Failure::InvalidRequest(InvalidReason::TtlOutOfRange),
+            json!({"reason": "ttl_out_of_range"}),
+        ),
+        (
+            Failure::NotFound(Missing::HoldToken),
+            json!({"missing": "hold_token"}),
+        ),
+        (
+            Failure::NotFound(Missing::Objects(vec![
+                ObjectRef::Label("A-1".into()),
+                ObjectRef::Idx(7),
+            ])),
+            json!({"missing": "objects", "objects": [{"label": "A-1"}, {"idx": 7}]}),
+        ),
+        (
+            Failure::ObjectNotFree(vec![ObjectFailure {
+                idx: 3,
+                reason: ObjectReason::NotFree,
+            }]),
+            json!({"objects": [{"idx": 3, "reason": "not_free"}]}),
+        ),
+        (
+            Failure::ObjectNotHeldByToken(vec![
+                ObjectFailure {
+                    idx: 4,
+                    reason: ObjectReason::NotHeldByToken,
+                },
+                ObjectFailure {
+                    idx: 5,
+                    reason: ObjectReason::NotFree,
+                },
+            ]),
+            json!({"objects": [
+                {"idx": 4, "reason": "not_held_by_token"},
+                {"idx": 5, "reason": "not_free"},
+            ]}),
+        ),
+        (Failure::HoldTokenExpired, json!({})),
+        (
+            Failure::HoldLimitExceeded {
+                limit: 4,
+                requested: 6,
+            },
+            json!({"limit": 4, "requested": 6}),
+        ),
+        (Failure::Overloaded, json!({})),
+        (Failure::Unavailable, json!({})),
+    ];
+    for (failure, details) in failures {
+        let error = ApiError::from(failure.clone());
+        let code = error.code();
+        assert_eq!(code.as_str(), failure.code());
+        assert_eq!(code.status().as_u16(), failure.http_status());
+        let app = app(Router::new().route(
+            "/e",
+            get(move || {
+                let failure = failure.clone();
+                async move { ApiError::from(failure) }
+            }),
+        ));
+        let (response, body) = send(app, get_req("/e")).await;
+        assert_problem(&response, &body, code);
+        assert_eq!(body["details"], details);
+    }
+}
+
+#[tokio::test]
+async fn axum_rejections_are_problem_json() {
+    let _serial = serial();
+    let app = app(Router::new()
+        .route(
+            "/json",
+            post(|Json(v): Json<Value>| async move { axum::Json(v) }),
+        )
+        .layer(DefaultBodyLimit::max(64)));
+    let post_json = |body: &str| {
+        Request::post("/json")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_owned()))
+            .unwrap()
+    };
+
+    let (response, body) = send(app.clone(), get_req("/missing")).await;
+    assert_problem(&response, &body, Code::NotFound);
+    let (response, body) = send(app.clone(), get_req("/json")).await;
+    assert_problem(&response, &body, Code::NotFound);
+
+    let cases = [
+        (post_json("{\"a\":"), "json_syntax"),
+        (
+            post_json(&format!("\"{}\"", "x".repeat(100))),
+            "body_too_large",
+        ),
+        (
+            Request::post("/json").body(Body::from("{}")).unwrap(),
+            "content_type",
+        ),
+    ];
+    for (request, reason) in cases {
+        let (response, body) = send(app.clone(), request).await;
+        assert_problem(&response, &body, Code::InvalidRequest);
+        assert_eq!(body["details"]["reason"], reason);
+    }
+    let (response, body) = send(app, post_json("{\"a\":1}")).await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(body, json!({"a": 1}));
+}
+
+/// Every span with its fields, parent and `follows_from` links, keyed by a
+/// number that is never reused (span ids are).
+#[derive(Clone, Default)]
+struct SpanLog(Arc<Mutex<Vec<SpanRecord>>>);
+
+#[derive(Debug, Default)]
+struct SpanRecord {
+    name: &'static str,
+    parent: Option<usize>,
+    fields: HashMap<&'static str, String>,
+    follows: Vec<usize>,
+}
+
+struct Key(usize);
+
+#[derive(Default)]
+struct Fields(HashMap<&'static str, String>);
+
+impl tracing::field::Visit for Fields {
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.0.insert(field.name(), value.to_owned());
+    }
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.0.insert(field.name(), format!("{value:?}"));
+    }
+}
+
+impl<S: tracing::Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for SpanLog {
+    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+        let span = ctx.span(id).unwrap();
+        let parent = span
+            .parent()
+            .and_then(|p| p.extensions().get::<Key>().map(|k| k.0));
+        let mut fields = Fields::default();
+        attrs.record(&mut fields);
+        let mut log = self.0.lock().unwrap();
+        log.push(SpanRecord {
+            name: attrs.metadata().name(),
+            parent,
+            fields: fields.0,
+            follows: Vec::new(),
+        });
+        span.extensions_mut().insert(Key(log.len() - 1));
+    }
+
+    fn on_record(&self, id: &Id, values: &Record<'_>, ctx: Context<'_, S>) {
+        let key = ctx.span(id).unwrap().extensions().get::<Key>().unwrap().0;
+        let mut fields = Fields::default();
+        values.record(&mut fields);
+        self.0.lock().unwrap()[key].fields.extend(fields.0);
+    }
+
+    fn on_follows_from(&self, id: &Id, follows: &Id, ctx: Context<'_, S>) {
+        let key = |id| ctx.span(id).unwrap().extensions().get::<Key>().unwrap().0;
+        let (key, follows) = (key(id), key(follows));
+        self.0.lock().unwrap()[key].follows.push(follows);
+    }
+}
+
+/// A command submitted in a request handler is applied and committed on the
+/// actor's task; its `apply` span and the batch's `commit` span lead back to
+/// the submitting request's id.
+#[tokio::test]
+async fn actor_spans_lead_back_to_the_request() {
+    let _serial = serial();
+    let spans = SpanLog::default();
+    let _guard =
+        tracing::subscriber::set_default(tracing_subscriber::registry().with(spans.clone()));
+
+    let event = EventId(1);
+    let chart = Arc::new(ChartView::new([(100, "S-0")]).unwrap());
+    let loaded = LoadedEvent {
+        epoch: 1,
+        seq: 0,
+        holds: vec![],
+        objects: vec![],
+    };
+    let store = MemoryStore::new();
+    store.create_event(event, 1);
+    let (handle, run) = cavea_engine::actor(
+        EventState::restore(event, chart, loaded).unwrap(),
+        Arc::new(store),
+        ManualClock::new(Timestamp(1_000_000)),
+        ActorConfig::default(),
+    );
+    let actor = tokio::spawn(run);
+
+    let submit = handle.clone();
+    let app = app(Router::new().route(
+        "/hold",
+        post(move || async move {
+            let request = EngineRequest {
+                actor: "sk_test".into(),
+                command: Command::CreateHold {
+                    token: TokenHash([1; 32]),
+                    ttl_secs: 900,
+                    max_objects: None,
+                },
+            };
+            match submit.send(request).await {
+                Ok(Outcome::HoldCreated { .. }) => Ok(StatusCode::CREATED),
+                Ok(_) => Err(ApiError::internal("unexpected outcome")),
+                Err(failure) => Err(ApiError::from(failure)),
+            }
+        }),
+    ));
+    let (response, _) = send(app, Request::post("/hold").body(Body::empty()).unwrap()).await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let id = request_id(&response).to_owned();
+    drop(handle);
+    actor.await.unwrap().unwrap();
+
+    let log = spans.0.lock().unwrap();
+    let request_of = |key: usize| {
+        let mut at = &log[key];
+        while let Some(parent) = at.parent {
+            at = &log[parent];
+        }
+        (at.name == span::REQUEST).then(|| at.fields["request_id"].clone())
+    };
+    let named = |name| log.iter().enumerate().filter(move |(_, s)| s.name == name);
+
+    let (wait, _) = named(span::MAILBOX_WAIT).next().expect("mailbox_wait span");
+    assert_eq!(request_of(wait), Some(id.clone()));
+    let (apply, _) = named(span::APPLY).next().expect("apply span");
+    assert_eq!(request_of(apply), Some(id.clone()));
+    let (_, commit) = named(span::COMMIT).next().expect("commit span");
+    assert_eq!(commit.follows, [apply]);
+    assert_eq!(request_of(commit.follows[0]), Some(id));
+}

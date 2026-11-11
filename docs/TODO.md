@@ -185,13 +185,13 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 ### Server
 
-- [ ] **SRV-001** Server scaffold: axum, configuration, tracing, request ids (08 §2, §13)
-- [ ] **SRV-025** `cavea-telemetry` crate: structured logging setup, HTTP request spans with request id, child spans for mailbox wait, apply and commit (AGENTS.md Logging, 08 §15)
+- [x] **SRV-001** Server scaffold: axum, configuration, tracing, request ids (08 §2, §3, §13)
+- [x] **SRV-025** `cavea-telemetry` crate: structured logging setup, HTTP request spans with request id, child spans for mailbox wait, apply and commit (AGENTS.md Logging, 08 §15)
 - [ ] **SRV-002** Schema and embedded migrations under an advisory lock (08 §5)
 - [ ] **SRV-003** PostgreSQL store: pipelined batch commit transaction (08 §4.4)
 - [ ] **SRV-004** API keys: generation, hashing, prefixes, extractors (08 §11)
 - [ ] **SRV-005** Workspaces and admin-key bootstrap (08 §11)
-- [ ] **SRV-006** Problem+json errors with the stable code table (08 §6.4)
+- [x] **SRV-006** Problem+json errors with the stable code table (08 §6.4)
 - [ ] **SRV-007** Chart endpoints: create, draft with etag, validate, publish, versions (08 §6.2)
 - [ ] **SRV-008** Compile on publish; store public, precompressed and full artefacts (03 §4.6)
 - [ ] **SRV-009** Serve compiled charts with immutable caching and content negotiation (03 §4.6)
