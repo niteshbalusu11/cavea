@@ -135,11 +135,12 @@ Plus per-row, per-segment, per-section, per-chunk and per-floor tables: the deco
 
 - **Active floor.** Only the active floor's `idx` range is drawn, and the camera fits that floor (§13). Until `SetFloor` exists it is the first floor; the other floors' seats are loaded and uploaded but not drawn.
 - **Status.** `SetSnapshot` and `ApplyDelta` (§17) are the only ways status changes; each updates `status` and `visual` and grows the dynamic buffer's dirty range.
-- **Memory at 100,000 seats:** 18 bytes per seat, 1.8 MB, for these arrays, plus the chart's tables (about 0.2 MB for the synthetic 100,000-seat stadium, measured locally). Loading also holds the 16 bytes per seat of buffer data being uploaded until the upload returns.
+- **Memory at 100,000 seats:** 18 bytes per seat, 1.8 MB, for these arrays, plus the chart's tables (about 0.2 MB for the synthetic 100,000-seat stadium, measured locally) and 13 bytes per section for counters and tints. Loading also holds the 16 bytes per seat of buffer data being uploaded until the upload returns.
 
-Derived at load:
+Derived at load (`cavea_render::overview::Sections`):
 
-- Per-section and per-category availability counters, updated incrementally with every status change (with state application, §17).
+- **Section counters.** Per section, its *open* seats: those not drawn unavailable (visual state other than 1, §9), so available seats and the buyer's own selection (pending or held, and a seat given up whose release is not yet confirmed, §17) count as open. They are counted at load and on every snapshot (one pass over the rows' seat ranges), and updated in the same pass that changes a seat's visual state (delta, selection), by ±1 through the seat's row (`ROWS` section): no search. Only what the overview tint uses is built: per-category counters wait for filters and the "from" price. Cost measured locally (release build, AMD Ryzen 9 7900X, synthetic 100,000-seat stadium): a 9,502-change delta applies in 0.108 to 0.114 ms with them, against 0.107 ms without; a snapshot in 0.061 to 0.084 ms against 0.054 ms; loading the chart to its first frame takes 1.4 to 1.6 ms against 1.3 ms.
+- **Dominant category** per section: the category most of its seats have, the lower index on a tie; none for a section without seats. Computed once at load in one pass over the seats; the compiled chart does not carry it.
 - A neighbour table is not needed: seats within a row are stored in physical order, and `RSEG` marks the breaks.
 
 ## 6. GPU resources
@@ -148,7 +149,7 @@ Derived at load:
 |---|---|---|
 | Seat static buffer | 12 bytes × seats | Once |
 | Seat dynamic buffer | 4 bytes × seats | Sub-ranges on state change |
-| Decoration mesh (vertices, indices) | From `MESH` | Once |
+| Mesh vertices (12 bytes: x, y `f32`, RGBA8) and `u32` indices | From `MESH` | Indices once; vertex sub-ranges when section tints change (§10) |
 | Table and booth instance buffer | 24 bytes × objects | Once; dynamic part on state change |
 | Palette texture | 33 × (categories + 1), RGBA8 | On theme or pricing change |
 | Overlay instance buffers | 4 instances, static and dynamic layout | When a ring moves |
@@ -180,15 +181,17 @@ Five shader programs. Draw order, back to front:
 | 1 | Clear | — | — | Always |
 | 2 | Background images | `image` | Quad | Loaded and enabled |
 | 3 | Decoration, lower layer | `mesh` | Indexed triangles | Always |
-| 4 | Section fills | `mesh` | Indexed triangles | Overview and cross-fade (§10) |
+| 4 | Section fills | `mesh` | Indexed triangles | Overview and cross-fade (§10), at the fills' opacity |
 | 5 | Area fills | `mesh` | Indexed triangles | Always |
 | 6 | Tables and booths | `shape` | Instanced quad | Seats and detail levels |
-| 7 | Seats | `shape` | Instanced quad, one or more ranges | Seats and detail levels |
+| 7 | Seats | `shape` | Instanced quad, one or more ranges | Cross-fade (at the seats' opacity), seats and detail levels |
 | 8 | Seat icons (accessible, selected tick, unavailable cross) | `glyph` | Instanced quad | Detail level |
 | 9 | Seat labels | `glyph` | Instanced quad | Detail level |
 | 10 | Row labels, section labels, text objects, area labels | `glyph` or `text` | Instanced quad | By size |
 | 11 | Decoration, upper layer and icons | `mesh`, `glyph` | — | Always |
 | 12 | Overlays: hover ring, focus ring, selection box | `shape` | Instanced quad | When present |
+
+Mesh passes draw only the active floor's ranges: its `below` draw range (pass 3), the outline ranges of its sections (pass 4: the active floor's sections are consecutive in `SECT`, so their outlines are one index range and **all section fills are one draw call**) and its `above` draw range (pass 11). So a frame draws at most three mesh calls. Mesh draws are not culled: the whole mesh is small (106,896 bytes for the `stadium-100k` preset's 180 section outlines and pitch, measured locally), the GPU clips off-screen triangles, and splitting the fill range by visibility would add draw calls. Tinting by vertex colour rather than one draw per section with a tint uniform keeps it one call and adds no vertex attribute; the cost is a vertex sub-range upload when a tint changes (§10).
 
 The hover and focus rings are drawn in screen space (CSS pixels), so they are the same width at any zoom: for each, a halo in the background colour from the seat's edge out 2 px, then the ring 2 px wide outside it (`RING_WIDTH_PX`), together the two-tone ring of `11-accessibility.md` §3. Each is a `shape` instance of the seat's shape and angle (a chair's ring is a rounded square) whose fill is transparent and whose stroke is the ring; at most four instances, uploaded only when they change. The focus ring is drawn over the hover ring.
 
@@ -197,7 +200,7 @@ Programs:
 | Program | Vertex inputs | Fragment work |
 |---|---|---|
 | `shape` | Corner from vertex id; per-instance position, size, angle, shape, category, visual, fx | Signed-distance shape, fill, stroke, anti-aliasing |
-| `mesh` | Position, colour | Flat colour × tint × layer alpha; the tint is the section's for section fills, white otherwise (`03-chart-format.md` §4.2.3) |
+| `mesh` | Position, colour | Vertex colour × pass opacity, premultiplied; section outline vertices hold their section's tint (§10), written by the engine over the white of `03-chart-format.md` §4.2.3 |
 | `glyph` | Corner; per-instance position, size, atlas rectangle, colour index | MSDF median, anti-aliased edge |
 | `text` | Same as `glyph` | Alpha from R8 bitmap atlas |
 | `image` | Corner; rectangle | Texture × opacity |
@@ -216,8 +219,9 @@ Programs:
 | 3 diamond | `abs(uv.x) + abs(uv.y) − 1` |
 
 - Anti-aliasing uses the on-screen pixel size passed as a uniform: `alpha = clamp(0.5 − d × half_px, 0, 1)`.
-- Stroke is drawn where `−stroke_px < d × half_px < 0`. Below 5 px on screen the stroke is skipped.
-- `fx` bit 0 (dim) multiplies alpha by the theme's dim factor. Bit 2 (pulse) blends a short highlight driven by a time uniform.
+- Stroke is drawn where `−stroke_px < d × half_px < 0`. A seat smaller than 5 px on screen, by its own size, gets no stroke (`tuning::STROKE_MIN_SEAT_PX`, the seats level's threshold, §10).
+- `fx` bit 0 (dim) multiplies alpha by the theme's dim factor. Bit 2 (pulse) blends the colour towards the seat's stroke colour by up to 70%, twice a second from a time uniform (under the three-flashes-a-second limit of `11-accessibility.md` §6), so a seat just taken flashes solid then shows hollow in every theme.
+- A per-pass opacity uniform multiplies alpha: the seats' cross-fade opacity (§10), 1 otherwise. The `mesh` program reads the same uniform block.
 - Blending is premultiplied alpha. No depth buffer, no stencil.
 
 ## 9. Visual states and palette
@@ -254,17 +258,25 @@ States must differ by more than colour (`11-accessibility.md` §6): unavailable 
 
 Let `s` be the seat size in CSS pixels at the current zoom.
 
-| Level | Condition | Drawn |
-|---|---|---|
-| **Overview** | `s < 2.5` and the chart has sections | Section fills tinted by availability, section labels, "from" price; no seats |
-| **Cross-fade** | `2.5 ≤ s < 5` | Section fills fade out while seats fade in |
-| **Seats** | `5 ≤ s < 14` | Flat seats, no stroke, no seat labels; row labels from `s ≥ 8` |
-| **Detail** | `s ≥ 14` | Stroke, seat labels, icons |
+`s` is the chart's default seat size (`META`) times the zoom. Every threshold is a named constant in `cavea_render::tuning` (`LOD_*`).
 
-- A chart without sections skips overview and draws seats as dots at any size.
-- Thresholds have 10% hysteresis so that the level does not flicker at a boundary.
-- Section tint: the section's dominant category colour, desaturated in proportion to the share of unavailable seats; a sold-out section is neutral grey with a "sold out" label.
-- Tapping a section in overview flies the camera to that section.
+| Level | Condition (upwards) | Drawn |
+|---|---|---|
+| **Overview** | `s < 2.5` and the active floor has section fills | Section fills tinted by availability; section labels and "from" price with text and pricing; no seats |
+| **Cross-fade** | `2.5 ≤ s < 5` | Section fills fade out while seats fade in |
+| **Seats** | `5 ≤ s < 14` | Seats, each with its stroke from 5 px on screen (§8); row labels from `s ≥ 8` with text |
+| **Detail** | `s ≥ 14` | As seats, plus seat labels and icons when the text and icon passes exist |
+
+- **Stroke.** The stroke is not tied to the level: each seat gets it from 5 px on screen by its own size (rows can have larger seats than the default), which is where the seats level begins. Unavailable seats are hollow (§19), so between 5 and 14 px they need the stroke to differ from available seats by more than colour (`11-accessibility.md` §6). Selection follows the same thresholds: a mouse click selects from 5 px (`tuning::SELECT_MIN_SEAT_MOUSE_PX` is the seats threshold), a touch from 18 px (§15).
+- **Hysteresis.** It applies to the level: a level is entered upwards when `s` reaches its threshold and left downwards only when `s` falls below 90% of it (`LOD_HYSTERESIS`), so between 2.25 and 2.5, 4.5 and 5, and 12.6 and 14 px the level is the one the camera came from. After `LoadChart` the level has no history and follows the upward thresholds.
+- **Cross-fade.** A function of `s` alone, so it needs no animation and a still camera draws nothing: the seats' opacity rises linearly from 0 at 2.5 px to 1 at 4.5 px (the lower edge of the 5 px threshold's hysteresis band) and the fills' opacity is 1 minus it. It is 0 at overview and 1 at seats and detail whichever way the level was reached, so no level change makes anything jump. Seats are not drawn while their opacity is 0, nor fills while theirs is.
+- **No sections.** A chart whose active floor has no section fills skips overview and cross-fade: its level is at least seats and its seats are drawn opaque at any size (below 5 px, without stroke).
+- **Section tint** (`overview::Sections::tint`). With `C` the dominant category's colour in the current theme (a `category-<key>` override applies), `G` the sold-out grey, `k` the theme's `section-tint` strength (0 to 1) and `o / n` the section's open seats over its seats, each RGB channel is `G + (C − G) × k × o / n`, rounded, in integer arithmetic; the fill is opaque. So a fully available section shows `k` of its colour, a half-sold one `k / 2`, and a sold-out one, or one without seats, is exactly `G`.
+- **Sold-out grey** `G` is the theme's `seat-unavailable-fill` (light `#E7E5E4`, dark `#292524`, high contrast `#1F1F1F`): a sold-out section is filled close to the background like an unavailable seat, so it differs from the sections around it by lightness, not hue alone. The "sold out" label comes with text.
+- **Updates.** A counter change marks its section's tint stale; at the next frame each stale tint is computed once and written into that section's outline vertex colours, and the vertex range written is uploaded once. A delta at overview therefore redraws one frame however many changes it carries. A theme change marks every tint stale.
+- **Taps in overview.** Section drill-down (a tap flies the camera to the tapped section) is REN-053. Until then a tap at overview is handled as at any level: it hits the nearest seat within the tolerance (§15), which is too small to select at overview, so zoom-to-select flies the camera to make seats 32 px about it; a tap off every seat does nothing. REN-053 replaces this at overview only.
+- **Pulses** (§17) start only while seats are drawn (opacity above 0); a pulse running when the camera reaches overview ends at its time.
+- Measured on the demo (Chromium 157, SwiftShader software rendering, 1000 × 800 CSS px, zooming from fit to detail): with the `stadium-100k` preset (180 sections, a pitch below the seats) and a band added above them, 3 draw calls at overview (lower decoration, section fills, upper decoration), 5 to 7 in the cross-fade, 5 at seats, 4 at detail; with the 24-section synthetic stadium, 3, 9 to 14, 5 to 9 and 5 to 6.
 
 ## 11. Culling and draw calls
 
@@ -384,7 +396,7 @@ tap → hit test → rules check ──fail──▶ SelectionInvalid (no state 
 State arrives as commands with decoded data. `Command::from_frame` turns a SNAPSHOT, DELTA or PRIVATE frame of `08-server.md` §8 into `SetSnapshot`, `ApplyDelta` or `SetPrivateHolds` (one allocation, nothing per seat across the JavaScript boundary); on the web `View.applyFrame(bytes)` does that for the `caveaServer` adapter, and `View.setSnapshot(seq, codes)` takes one `Uint8Array` of codes from a custom adapter that has no server frames. A frame that does not decode is refused whole, as is one naming any `idx` at or past the chart's object count, in its area entries too (`08-server.md` §8.6). Before a chart is loaded no count is known, so a DELTA or PRIVATE frame with area entries is refused then (servers send none yet); the engine then checks the decoded state against its chart, and anything that does not fit is an `InvalidInput` error that changes nothing: a snapshot whose length is not the object count, a code above 1, a delta or private set whose `idx` are not increasing or reach past the objects, a private set of more than 100. Codes of objects past the seats (tables, booths, areas) are accepted and not drawn yet.
 
 - **Snapshot:** replaces all state. One pass copies the codes and computes `visual` for every seat, the selection's seats are then drawn as theirs, and the whole dynamic buffer is uploaded once at the next frame. It records `seq`. Selected seats it shows unavailable that are not the buyer's own (§16) leave with `ObjectUnavailable`. A snapshot (and a private set) that arrives before any chart is kept and applied when the chart loads (§4).
-- **Delta:** applied only when its `from_seq` is the engine's `seq`, which becomes `to_seq`; it may carry no changes. A gap, a repeat, or a delta before any snapshot changes nothing and emits `Resync` (once until a snapshot arrives); the adapter fetches a new snapshot and the engine never guesses. Changed seats update `status` and `visual` and grow the dirty range; selected seats it makes unavailable leave as for a snapshot. Section counters come with REN-022.
+- **Delta:** applied only when its `from_seq` is the engine's `seq`, which becomes `to_seq`; it may carry no changes. A gap, a repeat, or a delta before any snapshot changes nothing and emits `Resync` (once until a snapshot arrives); the adapter fetches a new snapshot and the engine never guesses. Changed seats update `status`, `visual` and their section's counter (§5) and grow the dirty range; selected seats it makes unavailable leave as for a snapshot.
 - **One dirty range.** All changes between two frames merge into one range, uploaded once per frame: two far-apart changes upload everything between them. Measured locally (release build, AMD Ryzen 9 7900X, synthetic 100,000-seat stadium, the test backend's upload): a 9,502-change delta spread over the chart (10,000 random changes, coalesced) decodes and applies in 0.11 ms, and with encoding the 400 KB it uploads, 0.19 ms, against the 2 ms budget for 10,000 changes; a 100,000-seat snapshot (12.5 KB frame) applies in 0.04 ms, 0.12 ms with its upload. A spread-out delta covers most of the buffer under any small set of ranges, so a set of ranges would save upload bytes only for sparse deltas; that is left until a device measurement shows the bytes matter.
 - **Own holds.** The buyer's hold makes the seat's public status unavailable, so status alone cannot tell the buyer's seats from others'. `SetPrivateHolds` carries the full set of seats the buyer's token holds, replacing the previous one:
   - A seat that enters the set and is selected becomes held (the set confirms a hold whose result has not arrived; the result then changes nothing, or reverts the seat if it failed). One that is not selected is selected as held: that restores the selection after a reload, with one `SelectionChanged`. The restore stops at 100 selected seats; it ignores the maximum rule, since the seats are already held.
@@ -393,7 +405,7 @@ State arrives as commands with decoded data. `Command::from_frame` turns a SNAPS
   - Orderings. For one tapped seat, the hold result, the private set confirming it and the delta marking it unavailable may arrive in any order: the seat is selected-pending until the first of the result and the set, then selected-held, and never drawn unavailable. A delta marking a pending or held seat unavailable never knocks it out. After a reload, the snapshot and the private set may arrive in either order, before or after the chart.
   - The one ordering the engine cannot tell apart: a seat deselected, released and selected again whose new hold result arrives before the set that confirms the release. That set looks like a lost hold, so the seat leaves with `HoldLost` and comes back held with the next set. It is transient, and nothing is left stuck.
   - The expiry of a non-empty set is reported in `SelectionChanged` (`expiresAt` on the web) whenever it changes, for the SDK's hold timer.
-- **Pulse:** objects that just became unavailable set the pulse bit for 400 ms, unless reduced motion is requested.
+- **Pulse:** seats that a delta turns from drawn available to drawn unavailable (not the buyer's own, not on a snapshot) set the pulse bit of `fx` for 400 ms (`tuning::PULSE_MS`), unless reduced motion is requested or seats are not drawn (overview, §10); turning reduced motion on ends running pulses. The seats of all deltas between two frames form one batch whose end is set by the next `Tick`, so a burst of 10,000 changes is one batch, and at most one batch per frame exists. While any batch runs the engine asks for frames (the shader animates the bit with the time uniform); when the last ends, its seats' bits are cleared in one upload of the batch's range and the frame loop goes idle.
 
 ## 18. Frame scheduling
 
@@ -489,7 +501,7 @@ At 100,000 seats:
 | GPU seat buffers | 1.6 MB |
 | Label buffers (64 chunks) | ≤ 6 MB |
 | Text and glyph atlases | ≤ 5 MB |
-| Meshes | ≤ 2 MB |
+| Meshes | ≤ 2 MB (the `stadium-100k` preset: 4,636 vertices and 12,816 indices, 106,896 bytes on the GPU and the same decoded on the CPU, measured locally) |
 | WASM code and heap overhead | ≤ 4 MB |
 
 This leaves wide margin under the 40 MB budget. Background images are the only large variable; they are capped and optional.

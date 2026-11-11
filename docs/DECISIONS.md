@@ -185,3 +185,16 @@ Each entry records what was decided, what was rejected and what would make us re
 - **Rejected:** a GitHub label read by a workflow (another workflow, and no number); warning instead of failing above 3% (a warning in a passing CI run goes unread); building the CLI in release in CI for the corpus (minutes of build time).
 - **Cost:** a deliberate increase needs a one-line change to a shared file, which conflicts when two such pull requests land together; the later one rebases and measures again. A corpus size regression is caught when the hashes are re-pinned, by the author, not by CI.
 - **Revisit if:** the compiled sizes approach their targets, or CI gains a release build of the workspace for another reason.
+
+## D-29 · REN-019 result: `naga` translates the `mesh` program too; section tints are vertex colours (2026-11-11)
+
+- **Result:** D-05 and D-22 hold for the `mesh` program. `shaders/mesh.wgsl` (position `vec2<f32>` and colour `vec4<f32>` in, colour × the block's `alpha` out, premultiplied) goes through the same `build.rs` path with no change to it: `naga` 30.0.1 writes GLSL ES 3.00 that compiled and linked in Chromium 157 (ANGLE on SwiftShader, software rendering) and drew decoration and section fills with `gl.getError() == 0`. The colour input is fed from RGBA8 with a normalised `vertexAttribPointer`; indices are `u32` (`drawElements` with `UNSIGNED_INT`, core in WebGL2). The fragment stage uses no uniforms, so `naga` emits the block in the vertex stage only (`Globals_block_0Vertex`), and `build.rs` emits only that name. Both programs read one shared uniform buffer at binding point 0. No hand-written fallback was needed.
+- **Section tints are written into the section outlines' vertex colours** (white in `MESH`, 03 §4.2.3) instead of a per-draw tint uniform: the active floor's outlines are one index range, so all section fills are one draw call (a stadium has about 120 sections), and no vertex attribute or texture is added. A tint change uploads that section's vertex span.
+- **Still not proven:** `glyph`, `text` and `image`, and a hardware GPU or another browser engine.
+
+## D-30 · Seats keep their stroke from 5 px, not only at the detail level (2026-11-11)
+
+- **Decision:** A seat's stroke is drawn from 5 px on screen by its own size, the start of the seats level, as 04 §8 already said; the detail level (14 px) adds seat labels and icons, not the stroke. 04 §10's table had "flat seats, no stroke" between 5 and 14 px.
+- **Why:** Unavailable seats are filled close to the background and drawn hollow by their stroke (04 §19). Without it, between 5 and 14 px, the most used zoom range, available and unavailable seats would differ by lightness alone (`11-accessibility.md` §6 asks for more than colour). A per-seat rule also handles rows whose seats are larger than the chart's default.
+- **Cost:** At small sizes the 1.5 px stroke is a large share of a seat.
+- **Revisit if:** a device study shows strokes at 5 to 14 px cost frame time or legibility.

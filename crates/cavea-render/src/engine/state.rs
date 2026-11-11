@@ -1,5 +1,5 @@
-//! Seat state from the host (04 §17): snapshots, deltas and the buyer's own
-//! holds.
+//! Seat state from the host (04 §17): snapshots, deltas, the buyer's own
+//! holds, and the pulse of seats that just became unavailable.
 //!
 //! State arrives decoded ([`Command::from_frame`] for server frames, or typed
 //! arrays from a custom adapter) and is checked here against the chart: a
@@ -8,7 +8,14 @@
 //! seats (tables, booths, areas) are not drawn yet; their codes are ignored.
 
 use super::*;
-use crate::{protocol::StatusChange, tuning::MAX_SELECTED};
+use crate::{
+    protocol::StatusChange,
+    theme::visual,
+    tuning::{MAX_SELECTED, PULSE_MS},
+};
+
+/// `fx` bit 2 (04 §8).
+const FX_PULSE: u8 = 4;
 
 #[derive(Debug, Default)]
 pub(super) struct State {
@@ -19,6 +26,17 @@ pub(super) struct State {
     /// State that arrived before any chart, applied when one loads (04 §4).
     early_snapshot: Option<(u64, Vec<u8>)>,
     early_private: Option<(Vec<u32>, u64)>,
+    /// Seats pulsing, oldest first, one batch per frame's deltas.
+    pub(super) pulses: Vec<Pulse>,
+}
+
+#[derive(Debug)]
+pub(super) struct Pulse {
+    seats: Vec<u32>,
+    /// The dirty range that covers `seats`.
+    span: Range<usize>,
+    /// Set by the first `Tick` after the batch began.
+    end_ms: Option<f64>,
 }
 
 impl<B: GpuBackend> Engine<B> {
@@ -65,6 +83,7 @@ impl<B: GpuBackend> Engine<B> {
         for (v, &s) in scene.visual.iter_mut().zip(&scene.status) {
             *v = picker_visual(s, Selection::None);
         }
+        loaded.sections.recount(&scene.chart, &scene.visual);
         grow_dirty(&mut loaded.dirty, 0..seats);
         self.redraw();
         for idx in self.selection.seats() {
@@ -101,30 +120,61 @@ impl<B: GpuBackend> Engine<B> {
         for &idx in &unreleased {
             self.selection.confirm_release(idx);
         }
+        // Seats pulse only where they are drawn: not at overview (04 §10),
+        // and not before the first frame has placed the camera.
+        let pulsing = !self.reduced_motion && self.camera.is_some() && self.seat_alpha() > 0.0;
         let Some(loaded) = &mut self.scene else {
             return;
         };
         let scene = &mut loaded.scene;
+        let mut pulse = Vec::new();
         let mut span: Option<Range<usize>> = None;
         for c in changes {
             let i = c.idx as usize;
+            let section = scene.section_of(i);
             let (Some(status), Some(visual)) = (scene.status.get_mut(i), scene.visual.get_mut(i))
             else {
                 break;
             };
             if *status != c.status {
                 *status = c.status;
+                let was = *visual;
+                if pulsing && was == visual::AVAILABLE {
+                    pulse.push(c.idx);
+                }
                 *visual = picker_visual(c.status, Selection::None);
+                loaded.sections.change(section, was, *visual);
                 span = Some(span.map_or(i..i + 1, |s| s.start..i + 1));
             }
         }
-        if let Some(span) = span {
+        if let Some(span) = span.clone() {
             grow_dirty(&mut loaded.dirty, span);
             self.redraw();
         }
         let seats = self.selection.seats().into_iter().filter(|&i| named(i));
         for idx in seats.chain(unreleased) {
             self.refresh(idx);
+        }
+        if let (true, Some(loaded), Some(span)) = (pulsing, &mut self.scene, span) {
+            let scene = &mut loaded.scene;
+            pulse.retain(|&i| scene.visual.get(i as usize) == Some(&visual::UNAVAILABLE));
+            for &i in &pulse {
+                if let Some(fx) = scene.fx.get_mut(i as usize) {
+                    *fx |= FX_PULSE;
+                }
+            }
+            match self.state.pulses.last_mut() {
+                Some(p) if p.end_ms.is_none() => {
+                    p.seats.extend(pulse);
+                    p.span = p.span.start.min(span.start)..p.span.end.max(span.end);
+                }
+                _ if !pulse.is_empty() => self.state.pulses.push(Pulse {
+                    seats: pulse,
+                    span,
+                    end_ms: None,
+                }),
+                _ => {}
+            }
         }
         self.knock_out(Some(changes));
     }
@@ -151,6 +201,49 @@ impl<B: GpuBackend> Engine<B> {
         if !std::mem::replace(&mut self.state.resync_asked, true) {
             let seq = self.state.seq;
             self.events.push(Event::Resync { seq });
+        }
+    }
+
+    /// Starts the newest pulse batch at `now_ms`, ends those past their time
+    /// (all of them with `None`), and keeps frames coming while any run.
+    pub(super) fn step_pulses(&mut self, now_ms: Option<f64>) {
+        let pulses = &mut self.state.pulses;
+        if let (Some(now), Some(last)) = (now_ms, pulses.last_mut()) {
+            last.end_ms.get_or_insert(now + PULSE_MS);
+        }
+        let Some(loaded) = &mut self.scene else {
+            return pulses.clear();
+        };
+        if pulses.is_empty() {
+            return;
+        }
+        let fx = &mut loaded.scene.fx;
+        let mut ended = false;
+        while let Some(p) = pulses.first() {
+            if now_ms.is_some_and(|now| p.end_ms.is_none_or(|end| now < end)) {
+                break;
+            }
+            let p = pulses.remove(0);
+            for i in p.seats {
+                if let Some(fx) = fx.get_mut(i as usize) {
+                    *fx &= !FX_PULSE;
+                }
+            }
+            grow_dirty(&mut loaded.dirty, p.span);
+            ended = true;
+        }
+        // A seat taken again since is in a newer batch: its pulse goes on.
+        if ended {
+            for i in pulses.iter().flat_map(|p| &p.seats) {
+                if let Some(fx) = fx.get_mut(*i as usize) {
+                    *fx |= FX_PULSE;
+                }
+            }
+        }
+        // The shader animates pulses with the frame time.
+        self.dirty = true;
+        if !self.state.pulses.is_empty() {
+            self.want_frame();
         }
     }
 }

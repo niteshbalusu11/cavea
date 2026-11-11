@@ -15,6 +15,9 @@ struct Globals {
     dim: f32,
     // Seconds, drives the pulse (fx bit 2).
     time: f32,
+    // The pass's opacity: seats fade in over the level-of-detail cross-fade
+    // (04 §10).
+    alpha: f32,
 }
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -102,10 +105,12 @@ fn fs_main(seat: SeatOut) -> @location(0) vec4<f32> {
         color = mix(seat.fill, seat.stroke, clamp(edge_px + stroke + 0.5, 0.0, 1.0));
     }
     if (fx & 4u) != 0u {
+        // A seat just taken flashes towards its stroke colour (twice a
+        // second, under the 3 Hz flash limit of 11 §6): solid, then hollow.
         let pulse = 0.5 + 0.5 * sin(globals.time * 12.566371);
-        color = vec4<f32>(mix(color.rgb, vec3<f32>(1.0), 0.5 * pulse), color.a);
+        color = mix(color, seat.stroke, 0.7 * pulse);
     }
-    var alpha = color.a * coverage;
+    var alpha = color.a * coverage * globals.alpha;
     if (fx & 1u) != 0u {
         alpha = alpha * globals.dim;
     }

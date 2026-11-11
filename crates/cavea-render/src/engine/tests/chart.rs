@@ -217,6 +217,7 @@ fn loading_a_second_chart_releases_the_first() {
     let mut e = loaded(compile(ARC));
     let (s, d, p) = ids(&e);
     let [o1, o2] = e.scene.as_ref().unwrap().overlay;
+    let [m1, m2] = e.scene.as_ref().unwrap().mesh.unwrap();
     load(&mut e, two_seats([0.0, 0.0], [10.0, 10.0]));
     assert_eq!(
         e.backend.destroyed,
@@ -226,6 +227,8 @@ fn loading_a_second_chart_releases_the_first() {
             ResourceId::Texture(TextureId(p)),
             ResourceId::Buffer(o1),
             ResourceId::Buffer(o2),
+            ResourceId::Buffer(m1),
+            ResourceId::Buffer(m2),
         ]
     );
     // Only the new chart's five resources are alive, and it is what is drawn.
@@ -247,8 +250,14 @@ fn deltas_between_frames_upload_one_merged_range() {
     delta(&mut e, 2, &[(5, 1)]);
     delta(&mut e, 3, &[(12, 0)]);
     tick(&mut e, 16.0);
-    // One upload per frame, covering the merged dirty range 5..13.
-    assert_eq!(e.backend.buffer_writes[writes..], [(dynamic, 5 * 4, 8 * 4)]);
+    // One upload per frame, covering the merged dirty range 5..13 (and one
+    // of the section's tint, which the changes moved).
+    let [vertices, _] = e.scene.as_ref().unwrap().mesh.unwrap();
+    let seat_writes: Vec<_> = e.backend.buffer_writes[writes..]
+        .iter()
+        .filter(|w| w.0 != vertices.0)
+        .collect();
+    assert_eq!(seat_writes, [&(dynamic, 5 * 4, 8 * 4)]);
     let visuals: Vec<u8> = e.backend.buffers[&dynamic]
         .chunks(4)
         .map(|d| d[2])
@@ -355,9 +364,15 @@ fn themes_rewrite_the_palette_and_clear_colour_and_no_instance_data() {
     assert_eq!(texels(&e, 1, visual::AVAILABLE)[2], BLACK);
     assert_eq!(e.backend.clears.last(), Some(&expected.clear()));
     assert_eq!(e.backend.dims.last(), Some(&0.5));
-    // No instance data was touched by any of it.
-    assert!(e.backend.buffer_writes.is_empty());
-    assert_eq!(e.backend.buffers, buffers);
+    // No instance data was touched by any of it, only the section tints.
+    let [vertices, _] = e.scene.as_ref().unwrap().mesh.unwrap();
+    assert!(e.backend.buffer_writes.iter().all(|w| w.0 == vertices.0));
+    let instances = |b: &BTreeMap<u32, Vec<u8>>| {
+        let mut b = b.clone();
+        b.remove(&vertices.0);
+        b
+    };
+    assert_eq!(instances(&e.backend.buffers), instances(&buffers));
 
     // Malformed tokens refuse the whole command with `InvalidInput`: nothing
     // changes and no frame is asked for.
@@ -485,8 +500,11 @@ fn culling_covers_the_view_within_the_draw_call_limit() {
     for ccf in charts {
         let mut e = loaded(ccf);
         let active = e.scene.as_ref().unwrap().scene.active.clone();
-        // Fitted: the whole floor is one range, one draw call.
-        assert_eq!(e.backend.draws.last(), Some(&one(active.clone())));
+        // Fitted: the whole floor is one range, one draw call (or none, at
+        // overview).
+        if e.lod != Some(Lod::Overview) {
+            assert_eq!(e.backend.draws.last(), Some(&one(active.clone())));
+        }
         let b = e.scene.as_ref().unwrap().scene.bounds;
         let mut ranges = one(active.clone());
         for step in 0..60 {
@@ -497,6 +515,10 @@ fn culling_covers_the_view_within_the_draw_call_limit() {
             let (draws, frames) = (e.backend.draws.len(), e.backend.targets.len());
             tick(&mut e, f64::from(step) * 16.0 + 16.0);
             // An unchanged camera draws no frame and keeps the last ranges.
+            if e.seat_alpha() == 0.0 {
+                assert_eq!(e.backend.draws.len(), draws, "no seats at overview");
+                continue;
+            }
             if e.backend.targets.len() > frames {
                 ranges = e.backend.draws.get(draws).cloned().unwrap_or_default();
             }

@@ -346,22 +346,100 @@ impl View {
         self.engine.idx_of(label)
     }
 
-    /// Demo only: a synthetic stadium of `seats` seats from `seed`, compiled
-    /// in the browser; `shape` 0 circle, 1 rounded, 2 chair. Returns public
-    /// CCF bytes for `loadChart`.
+    /// Demo only: a synthetic chart compiled in the browser: the named
+    /// `cavea-testkit` preset, or with `preset` empty a stadium of `seats`
+    /// seats with a pitch below them; from `seed`, with `shape` 0 circle, 1
+    /// rounded, 2 chair. A translucent band across the floor is added above
+    /// the seats, to see the upper mesh layer. Returns public CCF bytes for
+    /// `loadChart`.
     #[cfg(feature = "demo")]
     #[wasm_bindgen(js_name = demoChart)]
-    pub fn demo_chart(seats: u32, seed: u32, shape: u8) -> Result<Vec<u8>, JsError> {
-        use cavea_compiler::document::SeatShape;
-        let mut doc = cavea_testkit::synthetic::stadium(seats, u64::from(seed));
+    pub fn demo_chart(seats: u32, seed: u32, shape: u8, preset: &str) -> Result<Vec<u8>, JsError> {
+        use cavea_compiler::document::{
+            ChartDocument, Layer, Node, SeatShape, Shape, ShapeKind, Style,
+        };
+        let compile = |doc: &ChartDocument| {
+            cavea_compiler::compile(doc)
+                .map(|compiled| compiled.public)
+                .map_err(|e| JsError::new(&format!("{e:?}")))
+        };
+        let shape_node = |id, kind, layer, style, size, points| {
+            Node::Shape(Shape {
+                id,
+                name: None,
+                floor: None,
+                origin: [0.0, 0.0],
+                rotation: 0.0,
+                locked: false,
+                hidden: false,
+                kind,
+                size,
+                corner_radius: Some(200.0),
+                points,
+                d: None,
+                style,
+                layer,
+            })
+        };
+        let mut doc = if preset.is_empty() {
+            let mut doc = cavea_testkit::synthetic::stadium(seats, u64::from(seed));
+            let pitch = Style {
+                fill: Some("#15803D".to_owned()),
+                stroke: Some("#F8FAFC".to_owned()),
+                stroke_width: 30.0,
+                opacity: 1.0,
+            };
+            let id = doc.next_oid;
+            doc.next_oid += 1;
+            let size = Some([4400.0, 2800.0]);
+            doc.nodes.push(shape_node(
+                id,
+                ShapeKind::Rect,
+                Layer::Below,
+                pitch,
+                size,
+                None,
+            ));
+            doc
+        } else {
+            let preset = cavea_testkit::presets::find(preset)
+                .ok_or_else(|| JsError::new("unknown preset"))?;
+            preset.generate(u64::from(seed))
+        };
         doc.settings.seat_shape = match shape {
             0 => SeatShape::Circle,
             1 => SeatShape::Rounded,
             _ => SeatShape::Chair,
         };
-        cavea_compiler::compile(&doc)
-            .map(|compiled| compiled.public)
-            .map_err(|e| JsError::new(&format!("{e:?}")))
+        // The band crosses the first floor's box through its centre, 7.5°
+        // clockwise from +x.
+        let b = cavea_render::scene::Scene::decode(&compile(&doc)?)
+            .map_err(|e| JsError::new(&e.to_string()))?
+            .bounds;
+        let (cx, cy, r) = (
+            f64::from(b.x + b.width / 2.0),
+            f64::from(b.y + b.height / 2.0),
+            f64::from(b.width.max(b.height) / 2.0),
+        );
+        let (c, s) = (0.991_444_861 * r, 0.130_526_192 * r);
+        let band = Style {
+            fill: None,
+            stroke: Some("#7C3AED".to_owned()),
+            stroke_width: 120.0,
+            opacity: 0.5,
+        };
+        let id = doc.next_oid;
+        doc.next_oid += 1;
+        let ends = Some(vec![[cx - c, cy - s], [cx + c, cy + s]]);
+        doc.nodes.push(shape_node(
+            id,
+            ShapeKind::Line,
+            Layer::Above,
+            band,
+            None,
+            ends,
+        ));
+        compile(&doc)
     }
 }
 

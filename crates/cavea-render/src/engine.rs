@@ -14,7 +14,7 @@
 
 use std::ops::Range;
 
-use cavea_format::full_label::LabelIndex;
+use cavea_format::{Layer, full_label::LabelIndex};
 
 use crate::{
     backend::{
@@ -25,6 +25,7 @@ use crate::{
     camera::{self, Camera, Limits, Rect, Size},
     cull,
     gesture::{Action, Intent, Recogniser},
+    overview::{self, Sections},
     protocol::{
         Bounds, BuiltinTheme, CameraTarget, Command, ErrorCode, Event, Lod, PointerKind,
         PointerType, ThemeToken,
@@ -33,8 +34,8 @@ use crate::{
     seat::{self, SeatDynamic, SeatStatic},
     theme::{PALETTE_WIDTH, Selection, Theme, TokenError, picker_visual, status, visual},
     tuning::{
-        INERTIA_STOP_PX_PER_S, INERTIA_TIME_CONSTANT_MS, LOD_DETAIL_SEAT_PX, MAX_BACKING_PX,
-        MAX_DPR_OTHER, MAX_QUEUED_INPUT, MAX_SEAT_DRAW_CALLS, RING_WIDTH_PX,
+        INERTIA_STOP_PX_PER_S, INERTIA_TIME_CONSTANT_MS, MAX_BACKING_PX, MAX_DPR_OTHER,
+        MAX_QUEUED_INPUT, MAX_SEAT_DRAW_CALLS, RING_WIDTH_PX, STROKE_MIN_SEAT_PX,
     },
 };
 
@@ -83,6 +84,12 @@ struct Loaded {
     overlay_bytes: Vec<u8>,
     /// Label to `idx`, built on the first lookup by label.
     labels: Option<LabelIndex>,
+    /// The chart's `MESH` vertex and index buffers (04 §6), if it has any.
+    mesh: Option<[BufferId; 2]>,
+    /// Mesh vertices whose colour (a section tint) changed since the upload.
+    mesh_dirty: Option<Range<usize>>,
+    /// Per-section counters and tints (04 §5, §10).
+    sections: Sections,
 }
 
 /// Input and camera commands waiting for the next `Tick`, in arrival order.
@@ -143,6 +150,8 @@ pub struct Engine<B: GpuBackend> {
     camera: Option<Camera>,
     /// The camera last reported with `CameraChanged`.
     reported: Option<Camera>,
+    /// The level of detail (04 §10), kept for its hysteresis.
+    lod: Option<Lod>,
     scene: Option<Loaded>,
     theme: Theme,
     /// The seat ranges to draw (04 §11), kept so frames do not allocate.
@@ -183,6 +192,7 @@ impl<B: GpuBackend> Engine<B> {
             resize: None,
             camera: None,
             reported: None,
+            lod: None,
             scene: None,
             theme: Theme::builtin(BuiltinTheme::Light),
             ranges: Vec::new(),
@@ -283,6 +293,7 @@ impl<B: GpuBackend> Engine<B> {
             Command::SetReducedMotion(on) => {
                 self.reduced_motion = on;
                 if on {
+                    self.step_pulses(None);
                     // Running fly-tos land at the next frame; inertia stops.
                     self.animations.retain_mut(|animation| match animation {
                         Animation::Fly { duration_ms, .. } => {
@@ -291,7 +302,7 @@ impl<B: GpuBackend> Engine<B> {
                         }
                         Animation::Inertia { .. } => false,
                     });
-                    if !self.animations.is_empty() {
+                    if !self.animations.is_empty() || self.dirty {
                         self.want_frame();
                     }
                 }
@@ -364,7 +375,7 @@ impl<B: GpuBackend> Engine<B> {
     /// Decodes a chart and uploads its seats; the previous chart is released
     /// only once the new one is ready, so a failure leaves the engine as it was.
     fn load_chart(&mut self, ccf: &[u8]) -> Result<(), (ErrorCode, String)> {
-        let scene = Scene::decode(ccf).map_err(|e| (ErrorCode::BadChart, e.to_string()))?;
+        let mut scene = Scene::decode(ccf).map_err(|e| (ErrorCode::BadChart, e.to_string()))?;
         if !valid_bounds(&scene.bounds) {
             return Err((
                 ErrorCode::BadChart,
@@ -431,11 +442,31 @@ impl<B: GpuBackend> Engine<B> {
             )
             .map(|b| [a, b])
         });
+        let mut sections = Sections::new(&scene.chart, scene.floor, &scene.visual, &self.theme);
+        sections.write_tints(&mut scene.chart, &self.theme);
+        let mesh = &scene.chart.mesh;
         let resources = overlay.and_then(|overlay| {
+            let mesh = if mesh.indices.is_empty() {
+                None
+            } else {
+                let index = BufferDesc {
+                    kind: BufferKind::Index,
+                    usage: BufferUsage::Static,
+                };
+                let indices: Vec<u8> = mesh.indices.iter().flat_map(|i| i.to_le_bytes()).collect();
+                let vertices = encode_vertices(mesh.vertices.iter());
+                let v = self
+                    .backend
+                    .create_buffer(vertex(BufferUsage::Dynamic), &vertices)?;
+                created.push(v);
+                let i = self.backend.create_buffer(index, &indices)?;
+                created.push(i);
+                Some([v, i])
+            };
             let texture = self.backend.create_texture(desc, Some(&palette));
-            texture.map(|palette| (overlay, palette))
+            texture.map(|palette| (overlay, mesh, palette))
         });
-        let (overlay, palette) = match resources {
+        let (overlay, mesh, palette) = match resources {
             Ok(ids) => ids,
             Err(error) => {
                 for id in created {
@@ -457,11 +488,15 @@ impl<B: GpuBackend> Engine<B> {
             overlay,
             overlay_bytes: Vec::new(),
             labels: None,
+            mesh,
+            mesh_dirty: None,
+            sections,
         });
         self.flush_selection();
         self.chart_loaded();
-        // The next frame fits the new chart.
+        // The next frame fits the new chart, at a level without history.
         self.camera = None;
+        self.lod = None;
         self.culled = None;
         self.animations.clear();
         self.redraw();
@@ -473,7 +508,11 @@ impl<B: GpuBackend> Engine<B> {
             self.backend.destroy(ResourceId::Buffer(loaded.static_buf));
             self.backend.destroy(ResourceId::Buffer(loaded.dynamic_buf));
             self.backend.destroy(ResourceId::Texture(loaded.palette));
-            for id in loaded.overlay {
+            for id in loaded
+                .overlay
+                .into_iter()
+                .chain(loaded.mesh.into_iter().flatten())
+            {
                 self.backend.destroy(ResourceId::Buffer(id));
             }
         }
@@ -492,7 +531,8 @@ impl<B: GpuBackend> Engine<B> {
             }
         };
         self.theme = theme;
-        if let Some(loaded) = &self.scene {
+        if let Some(loaded) = &mut self.scene {
+            loaded.sections.set_theme(&loaded.scene.chart, &self.theme);
             let chart = &loaded.scene.chart;
             let mut palette = Vec::new();
             self.theme
@@ -553,6 +593,10 @@ impl<B: GpuBackend> Engine<B> {
         self.run_actions();
         self.flush_selection();
         self.step_animations(time_ms);
+        self.step_pulses(Some(time_ms));
+        let lod = self.level();
+        let lod_changed = lod != self.lod;
+        self.lod = lod;
         // Seats moved on screen: what is under the hover position may differ.
         let moved = self.camera != self.reported;
         if moved || self.viewport.map(|v| v.css) != css_before {
@@ -564,20 +608,13 @@ impl<B: GpuBackend> Engine<B> {
                 self.rehover();
             }
         }
-        if moved {
+        if moved || lod_changed {
             self.reported = self.camera;
-            if let (Some(camera), Some(loaded)) = (self.camera, &self.scene) {
-                let seat_px = f64::from(loaded.scene.seat_size) * camera.zoom;
+            if let (Some(camera), Some(lod)) = (self.camera, lod) {
                 self.events.push(Event::CameraChanged {
                     centre: camera.centre.map(|v| v as f32),
                     zoom: camera.zoom as f32,
-                    // Seat-only charts have no overview (04 §10); the full
-                    // level-of-detail machinery comes with REN-021.
-                    lod: if seat_px >= LOD_DETAIL_SEAT_PX {
-                        Lod::Detail
-                    } else {
-                        Lod::Seats
-                    },
+                    lod,
                 });
             }
             self.dirty = true;
@@ -603,12 +640,33 @@ impl<B: GpuBackend> Engine<B> {
         );
         let time = ((time_ms - start) / 1000.0) as f32;
         let drawn = self
-            .draw_seats(viewport, time)
+            .upload()
+            .and_then(|()| self.draw_world(viewport, time))
             .and_then(|()| self.draw_overlays(viewport, time));
         if let Err((code, message)) = drawn {
             self.error(code, message);
         }
         self.backend.end_frame();
+    }
+
+    /// The default seat's size on screen in CSS pixels, once a chart and a
+    /// camera exist.
+    fn seat_px(&self) -> Option<f64> {
+        Some(f64::from(self.scene.as_ref()?.scene.seat_size) * self.camera?.zoom)
+    }
+
+    /// The level of detail for the current camera (04 §10).
+    fn level(&self) -> Option<Lod> {
+        let fills = self.scene.as_ref()?.sections.any();
+        Some(overview::level(self.lod, self.seat_px()?, fills))
+    }
+
+    /// The seats' opacity: 0 at overview, rising over the cross-fade.
+    fn seat_alpha(&self) -> f32 {
+        match (&self.scene, self.seat_px()) {
+            (Some(loaded), Some(s)) => overview::seat_alpha(s, loaded.sections.any()),
+            _ => 1.0,
+        }
     }
 
     /// The viewport, chart and zoom limits, once a chart and a non-empty
@@ -808,14 +866,14 @@ impl<B: GpuBackend> Engine<B> {
         });
     }
 
-    /// Uploads the dynamic buffer's dirty range, then draws the active
-    /// floor's seats in the render chunks the view meets (04 §11).
-    fn draw_seats(&mut self, viewport: Viewport, time: f32) -> Result<(), (ErrorCode, String)> {
+    /// Uploads what changed since the last frame: the seats' dynamic bytes
+    /// and the section tints in the mesh vertices.
+    fn upload(&mut self) -> Result<(), (ErrorCode, String)> {
         let gpu = |error: BackendError| (ErrorCode::Gpu, error.to_string());
         let Some(loaded) = &mut self.scene else {
             return Ok(());
         };
-        let scene = &loaded.scene;
+        let scene = &mut loaded.scene;
         if let Some(range) = loaded.dirty.take() {
             let bytes = seat::encode_dynamic(
                 &scene.chart.seat_category,
@@ -829,10 +887,107 @@ impl<B: GpuBackend> Engine<B> {
                 .update_buffer(loaded.dynamic_buf, offset, &bytes)
                 .map_err(gpu)?;
         }
-        let Some(camera) = self.camera else {
+        if let Some(range) = loaded.sections.write_tints(&mut scene.chart, &self.theme) {
+            grow_dirty(&mut loaded.mesh_dirty, range);
+        }
+        if let (Some(range), Some([vertex_buf, _])) = (loaded.mesh_dirty.take(), loaded.mesh) {
+            let vertices = scene.chart.mesh.vertices.get(range.clone());
+            let bytes = encode_vertices(vertices.unwrap_or_default().iter());
+            let offset = u32::try_from(range.start * MESH_STRIDE)
+                .map_err(|_| gpu(BackendError::InvalidData))?;
+            self.backend
+                .update_buffer(vertex_buf, offset, &bytes)
+                .map_err(gpu)?;
+        }
+        Ok(())
+    }
+
+    /// Uniforms for drawing in chart units with the current camera.
+    fn world_uniforms(
+        &self,
+        camera: Camera,
+        viewport: Viewport,
+        time: f32,
+        alpha: f32,
+    ) -> Result<Uniforms, (ErrorCode, String)> {
+        let uniforms = Uniforms {
+            view: camera.matrix(viewport.css),
+            px_per_cu: (camera.zoom * f64::from(viewport.ratio)) as f32,
+            stroke_px: 1.5 * viewport.ratio,
+            stroke_min_px: STROKE_MIN_SEAT_PX * viewport.ratio,
+            dim: self.theme.dim,
+            time,
+            alpha,
+        };
+        // Extreme but finite bounds (a huge offset, a tiny size) can still overflow.
+        if !uniforms.view.iter().flatten().all(|v| v.is_finite()) || !uniforms.px_per_cu.is_finite()
+        {
+            return Err((
+                ErrorCode::InvalidInput,
+                "camera transform is not finite".to_owned(),
+            ));
+        }
+        Ok(uniforms)
+    }
+
+    /// The chart in the pass order of 04 §7: the active floor's lower
+    /// decoration, its section fills while they show (overview and
+    /// cross-fade), its seats while they show (from the cross-fade up), its
+    /// upper decoration. The fills and seats fade by seat size (04 §10).
+    fn draw_world(&mut self, viewport: Viewport, time: f32) -> Result<(), (ErrorCode, String)> {
+        let (Some(loaded), Some(camera)) = (&self.scene, self.camera) else {
             return Ok(());
         };
-        let px_per_cu = (camera.zoom * f64::from(viewport.ratio)) as f32;
+        let alpha = self.seat_alpha();
+        let floor = loaded.scene.floor;
+        let decoration = |layer| {
+            let draws = loaded.scene.chart.mesh.draws.iter();
+            draws
+                .filter(|d| d.floor == floor && d.layer == layer)
+                .map(|d| d.index_first..d.index_first + d.index_count)
+                .next()
+        };
+        let (below, above) = (decoration(Layer::Below), decoration(Layer::Above));
+        let fills = loaded.sections.fills.clone();
+        let mesh = loaded.mesh;
+        let draw_mesh = |engine: &mut Self, range: Option<Range<u32>>, alpha: f32| {
+            let (Some(range), Some(buffers)) = (range.filter(|r| !r.is_empty()), mesh) else {
+                return Ok(());
+            };
+            let call = DrawCall {
+                pipeline: Pipeline::Mesh,
+                buffers: buffers.map(Some),
+                texture: None,
+                uniforms: engine.world_uniforms(camera, viewport, time, alpha)?,
+                ranges: std::slice::from_ref(&range),
+            };
+            let gpu = |error: BackendError| (ErrorCode::Gpu, error.to_string());
+            engine.backend.draw(&call).map_err(gpu)
+        };
+        draw_mesh(self, below, 1.0)?;
+        if alpha < 1.0 {
+            draw_mesh(self, Some(fills), 1.0 - alpha)?;
+        }
+        if alpha > 0.0 {
+            self.draw_seats(camera, viewport, time, alpha)?;
+        }
+        draw_mesh(self, above, 1.0)
+    }
+
+    /// Draws the active floor's seats in the render chunks the view meets
+    /// (04 §11).
+    fn draw_seats(
+        &mut self,
+        camera: Camera,
+        viewport: Viewport,
+        time: f32,
+        alpha: f32,
+    ) -> Result<(), (ErrorCode, String)> {
+        let uniforms = self.world_uniforms(camera, viewport, time, alpha)?;
+        let Some(loaded) = &self.scene else {
+            return Ok(());
+        };
+        let scene = &loaded.scene;
         if self.culled != Some((camera, viewport)) {
             self.culled = Some((camera, viewport));
             #[cfg(test)]
@@ -846,7 +1001,7 @@ impl<B: GpuBackend> Engine<B> {
             // A seat's quad is its half size plus one device pixel for the
             // anti-aliased edge (04 §8), rotated by its angle: its corners
             // reach √2 times that from the centre.
-            let pad = std::f32::consts::SQRT_2 * (scene.max_half + 1.0 / px_per_cu);
+            let pad = std::f32::consts::SQRT_2 * (scene.max_half + 1.0 / uniforms.px_per_cu);
             cull::ranges(
                 &scene.chart.chunks,
                 &scene.active,
@@ -859,22 +1014,6 @@ impl<B: GpuBackend> Engine<B> {
         if self.ranges.is_empty() {
             return Ok(());
         }
-        let uniforms = Uniforms {
-            view: camera.matrix(viewport.css),
-            px_per_cu,
-            stroke_px: 1.5 * viewport.ratio,
-            stroke_min_px: 5.0 * viewport.ratio,
-            dim: self.theme.dim,
-            time,
-        };
-        // Extreme but finite bounds (a huge offset, a tiny size) can still overflow.
-        if !uniforms.view.iter().flatten().all(|v| v.is_finite()) || !uniforms.px_per_cu.is_finite()
-        {
-            return Err((
-                ErrorCode::InvalidInput,
-                "camera transform is not finite".to_owned(),
-            ));
-        }
         let call = DrawCall {
             pipeline: Pipeline::Shape,
             buffers: [Some(loaded.static_buf), Some(loaded.dynamic_buf)],
@@ -882,6 +1021,7 @@ impl<B: GpuBackend> Engine<B> {
             uniforms,
             ranges: &self.ranges,
         };
+        let gpu = |error: BackendError| (ErrorCode::Gpu, error.to_string());
         self.backend.draw(&call).map_err(gpu)
     }
 
@@ -969,6 +1109,7 @@ impl<B: GpuBackend> Engine<B> {
             stroke_min_px: 0.0,
             dim: self.theme.dim,
             time,
+            alpha: 1.0,
         };
         let range = 0..n as u32;
         let call = DrawCall {
@@ -980,6 +1121,21 @@ impl<B: GpuBackend> Engine<B> {
         };
         self.backend.draw(&call).map_err(gpu)
     }
+}
+
+/// Bytes per `MESH` vertex as uploaded: x, y as little-endian `f32`, RGBA8.
+const MESH_STRIDE: usize = 12;
+
+fn encode_vertices<'a>(
+    vertices: impl ExactSizeIterator<Item = &'a cavea_format::Vertex>,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(vertices.len() * MESH_STRIDE);
+    for v in vertices {
+        out.extend_from_slice(&v.pos[0].to_le_bytes());
+        out.extend_from_slice(&v.pos[1].to_le_bytes());
+        out.extend_from_slice(&v.color);
+    }
+    out
 }
 
 /// Grows the dirty range of the dynamic buffer to cover `seats`.

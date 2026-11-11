@@ -1,6 +1,8 @@
 // Draws a synthetic stadium, compiled in the browser, with the Rust renderer,
 // to see and measure it. Query parameters: `seats` (default 100000), `seed`
-// (default 1), `shape` (0 circle, 1 rounded, 2 chair), `theme`
+// (default 1), `preset` (a `cavea-testkit` preset such as `stadium-100k`
+// instead of the stadium; `seats` must then be its seat count), `shape` (0
+// circle, 1 rounded, 2 chair), `theme`
 // (light, dark, high-contrast), `camera=x:y:width:height` in chart units,
 // `sold` (fraction of seats unavailable in the first snapshot, in runs;
 // default 0.3) or `mark=start:count` to make exactly that range unavailable.
@@ -17,11 +19,22 @@
 // selects without holds. Small seats zoom instead of selecting (touch below
 // 18 px, mouse below 5 px).
 //
-// `window.caveaDemo` counts frames and WebGL errors, keeps every engine event
-// in `events`, and offers `setTheme(name)`, `resnapshot()` and
-// `take(label)` (someone else takes a seat, in a DELTA) and `gap()` (a DELTA
-// that skips a sequence number, so the view asks to resync and this host
-// answers with a SNAPSHOT) for scripted checks.
+// A simulated crowd: `crowd=ms` sends a DELTA every `ms` milliseconds taking
+// `crowdSize` (default 20) random seats and freeing as many; `snipe=1` also
+// takes one selected seat the buyer does not hold, so it is knocked out;
+// `gap=n` skips a sequence number every n-th delta, so the view asks to
+// resync and the host answers with a SNAPSHOT.
+//
+// The chart has a pitch below the seats and a translucent band above them
+// (mesh decoration). Each frame line reports the level of detail
+// (`cameraChanged`) and the WebGL draw calls the frame made.
+//
+// `window.caveaDemo` counts frames, WebGL errors and draw calls (`lod`,
+// `frameDraws`), keeps every engine event in `events`, and offers
+// `setTheme(name)`, `crowd(on)`, `resnapshot()`, `take(label)` (someone else
+// takes a seat, in a DELTA), `sell(from, count)` (the same for an `idx`
+// range) and `gap()` (a DELTA that skips a sequence number, so the view asks
+// to resync and this host answers with a SNAPSHOT) for scripted checks.
 import {
   attach,
   loadRenderer,
@@ -36,7 +49,7 @@ interface DemoExports {
   idxOf(label: string): number | undefined;
 }
 interface DemoStatics {
-  demoChart(seats: number, seed: number, shape: number): Uint8Array;
+  demoChart(seats: number, seed: number, shape: number, preset: string): Uint8Array;
 }
 
 type Theme = "light" | "dark" | "high-contrast";
@@ -69,6 +82,7 @@ const params = new URLSearchParams(location.search);
 const seats = Number(params.get("seats") ?? 100_000);
 const seed = Number(params.get("seed") ?? 1);
 const shape = Number(params.get("shape") ?? 0);
+const preset = params.get("preset") ?? "";
 const sold = Number(params.get("sold") ?? 0.3);
 const mark = params.get("mark")?.split(":").map(Number);
 const camera = params.get("camera")?.split(":").map(Number);
@@ -83,6 +97,10 @@ const min = Number(params.get("min") ?? 0);
 const manual = params.get("manual") === "1";
 const failEvery = Number(params.get("fail") ?? 0);
 const holdMs = Number(params.get("holdMs") ?? 400);
+const crowdMs = Number(params.get("crowd") ?? 0);
+const crowdSize = Number(params.get("crowdSize") ?? 20);
+const snipe = params.get("snipe") === "1";
+const gapEvery = Number(params.get("gap") ?? 0);
 if (gestures === "cooperative") {
   document.body.classList.add("scrolling");
 }
@@ -108,14 +126,38 @@ const events: RendererEvent[] = [];
 const stats = {
   frames: 0,
   glErrors: 0,
+  lod: "",
+  drawCalls: 0,
+  frameDraws: 0,
   setTheme,
   events,
+  crowd: (on: boolean) => crowd(on),
   resnapshot: () => sendSnapshot(),
   take: (label: string) => sendDelta(new Map(idxOf([label]).map((i) => [i, 1]))),
+  sell: (from: number, count: number) =>
+    sendDelta(new Map(Array.from({ length: count }, (_, k) => [from + k, 1]))),
   gap: () => sendDelta(new Map(), true),
 };
 Object.assign(window, { caveaDemo: stats });
 let afterFirstFrame: (() => void) | undefined;
+
+/** Counts the draw calls the renderer makes (seats, overlays, meshes). */
+function countDraws(context: WebGL2RenderingContext): void {
+  const instanced = context.drawArraysInstanced.bind(context);
+  context.drawArraysInstanced = (...args) => {
+    stats.drawCalls += 1;
+    instanced(...args);
+  };
+  const elements = context.drawElements.bind(context);
+  context.drawElements = (...args) => {
+    stats.drawCalls += 1;
+    elements(...args);
+  };
+}
+if (gl) {
+  countDraws(gl);
+}
+let drawsBefore = 0;
 let loadedAt = 0;
 
 function onFrame(time: number): void {
@@ -127,7 +169,16 @@ function onFrame(time: number): void {
   if (stats.frames === 1) {
     report(`first frame ${(performance.now() - loadedAt).toFixed(1)} ms after loadChart returned`);
   }
-  report(`frame ${stats.frames} at ${time.toFixed(0)}: gl.getError() = ${error}`);
+  stats.frameDraws = stats.drawCalls - drawsBefore;
+  drawsBefore = stats.drawCalls;
+  const frames = stats.frames;
+  // After this frame's events, so the level is the one it was drawn at.
+  queueMicrotask(() =>
+    report(
+      `frame ${frames} at ${time.toFixed(0)}: gl.getError() = ${error}; ` +
+        `level ${stats.lod}, ${stats.frameDraws} draw calls`,
+    ),
+  );
   const next = afterFirstFrame;
   afterFirstFrame = undefined;
   next?.();
@@ -195,6 +246,7 @@ function fill(from: number, count: number): void {
   publicState.fill(UNAVAILABLE, from, from + count);
 }
 let seq = 0;
+let deltas = 0;
 const held = new Set<number>();
 
 function apply(frame: Uint8Array): void {
@@ -231,6 +283,33 @@ function sendPrivate(): void {
 function idxOf(labels: string[]): number[] {
   return labels.flatMap((label) => view.idxOf?.(label) ?? []);
 }
+function crowdTick(): void {
+  const changes = new Map<number, number>();
+  for (let n = 0; n < crowdSize * 4 && changes.size < crowdSize * 2; n++) {
+    const i = Math.floor(random() * seats);
+    if (!held.has(i) && !changes.has(i)) {
+      changes.set(i, changes.size < crowdSize ? 1 : 0);
+    }
+  }
+  if (snipe) {
+    const target = idxOf(selected).find((i) => !held.has(i));
+    if (target !== undefined) {
+      changes.set(target, 1);
+    }
+  }
+  deltas += 1;
+  const skip = gapEvery > 0 && deltas % gapEvery === 0;
+  sendDelta(changes, skip);
+  if (skip) {
+    note(`crowd delta ${deltas} skipped a seq: expect a resync`);
+  }
+}
+let crowdTimer = 0;
+function crowd(on: boolean): void {
+  clearInterval(crowdTimer);
+  crowdTimer = on && crowdMs > 0 ? window.setInterval(crowdTick, crowdMs) : 0;
+}
+
 let selected: string[] = [];
 let expiresAt: number | null = null;
 let holds = 0;
@@ -311,6 +390,9 @@ function onEvents(batch: RendererEvent[]): void {
       case "objectHover":
         hover = event.object?.label ?? "";
         break;
+      case "cameraChanged":
+        stats.lod = event.lod;
+        break;
       default:
         break;
     }
@@ -322,7 +404,7 @@ if (statics.demoChart === undefined || view.idxOf === undefined || view.setCamer
   report("This WASM has no demo exports. Run `cargo xtask build-web --demo` and reload.");
 } else {
   const compileStart = performance.now();
-  const ccf = statics.demoChart(seats, seed, shape);
+  const ccf = statics.demoChart(seats, seed, shape, preset);
   const loadStart = performance.now();
   setTheme(theme);
   view.loadChart(ccf);
@@ -350,6 +432,7 @@ if (statics.demoChart === undefined || view.idxOf === undefined || view.setCamer
     const start = performance.now();
     sendSnapshot();
     report(`snapshot at seq ${seq} applied in ${(performance.now() - start).toFixed(1)} ms`);
+    crowd(true);
   };
   const options = { gestureHandling: gestures, onFrame, onEvents };
   host = attach(

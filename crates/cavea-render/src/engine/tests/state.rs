@@ -1,4 +1,4 @@
-//! Snapshots, deltas and frames (04 §4, §17), driven through
+//! Snapshots, deltas, frames and the pulse (04 §4, §17), driven through
 //! `Engine::handle`.
 
 use cavea_format::wire::{self, Change, View};
@@ -220,6 +220,64 @@ fn state_matches_a_direct_model() {
     let buffer = &e.backend.buffers[&dynamic];
     let shown: Vec<u8> = buffer.chunks(4).map(|d| d[2]).collect();
     assert_eq!(shown, model, "visual 1 is unavailable, 0 available");
+    assert!(buffer.chunks(4).all(|d| d[3] == 0), "pulses ended");
+}
+
+fn fx(e: &E, idx: usize) -> u8 {
+    e.scene.as_ref().unwrap().scene.fx[idx]
+}
+
+#[test]
+fn seats_taken_by_a_delta_pulse_for_400_ms() {
+    let mut e = Engine::new(Fake::default());
+    shown(&mut e, hall_ccf());
+    snapshot(&mut e, 1, &[]);
+    tick(&mut e, 10.0);
+    // Two deltas before one frame are one batch; a freed seat does not pulse.
+    delta(&mut e, 1, &[(2, 1), (3, 1)]);
+    delta(&mut e, 2, &[(3, 0), (4, 1)]);
+    assert_eq!((fx(&e, 2), fx(&e, 3), fx(&e, 4)), (4, 4, 4));
+    assert_eq!(e.state.pulses.len(), 1);
+    assert!(wants_frame(&tick(&mut e, 100.0)));
+    assert!(wants_frame(&tick(&mut e, 499.0)));
+    assert_eq!(fx(&e, 4), 4);
+    // Over at 400 ms: cleared, drawn once more, then idle.
+    let draws = e.backend.draws.len();
+    assert!(!wants_frame(&tick(&mut e, 500.0)));
+    assert_eq!(
+        (fx(&e, 2), fx(&e, 4), e.backend.draws.len()),
+        (0, 0, draws + 1)
+    );
+    assert!(tick(&mut e, 600.0).is_empty());
+
+    // No pulse on a snapshot, under reduced motion, or for the buyer's seat.
+    snapshot(&mut e, 5, &[7]);
+    e.handle(Command::Select {
+        objects: vec![crate::protocol::ObjectRef::Idx(8)],
+    });
+    delta(&mut e, 5, &[(8, 1), (9, 1)]);
+    assert_eq!((fx(&e, 7), fx(&e, 8), fx(&e, 9)), (0, 0, 4));
+    e.handle(Command::SetReducedMotion(true));
+    assert_eq!(fx(&e, 9), 0, "reduced motion ends running pulses");
+    delta(&mut e, 6, &[(10, 1)]);
+    assert_eq!((fx(&e, 10), e.state.pulses.len()), (0, 0));
+    settle(&mut e, 700.0);
+
+    // 10,000 seats taken at once: one batch.
+    let mut e = Engine::new(Fake::default());
+    let ccf = cavea_compiler::compile(&cavea_testkit::synthetic::stadium(20_000, 1))
+        .unwrap()
+        .public;
+    shown(&mut e, ccf);
+    // Seats are drawn (not overview, where nothing pulses).
+    set_camera(&mut e, [-500.0, -500.0, 1000.0, 1000.0]);
+    tick(&mut e, 8.0);
+    snapshot(&mut e, 1, &[]);
+    let changes: Vec<(u32, u8)> = (0..10_000).map(|i| (i * 2, 1)).collect();
+    delta(&mut e, 1, &changes);
+    assert_eq!(e.state.pulses.len(), 1);
+    let end = settle(&mut e, 16.0);
+    assert!((400.0..=432.0).contains(&end), "{end}");
 }
 
 /// Snapshot and delta application at 100,000 seats. Run with `cargo test
@@ -231,7 +289,16 @@ fn measure_state() {
     let ccf = cavea_compiler::compile(&cavea_testkit::synthetic::stadium(100_000, 1))
         .unwrap()
         .public;
+    let start = std::time::Instant::now();
     let dynamic = shown(&mut e, ccf);
+    println!("load to first frame: {:?}", start.elapsed());
+    let mesh = &e.scene.as_ref().unwrap().scene.chart.mesh;
+    println!(
+        "mesh: {} vertices, {} indices, {} B on the GPU",
+        mesh.vertices.len(),
+        mesh.indices.len(),
+        mesh.vertices.len() * 12 + mesh.indices.len() * 4
+    );
     let n = e.objects().unwrap();
     let mut rng = Rng(11);
     let state: Vec<u8> = (0..n)

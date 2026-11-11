@@ -10,6 +10,7 @@ use crate::{
 };
 
 mod chart;
+mod overview;
 mod select;
 mod state;
 use PointerKind::{Cancel, Down, Move, Up};
@@ -33,8 +34,10 @@ struct Fake {
     buffer_writes: Vec<(u32, u32, usize)>,
     texture_writes: Vec<(u32, TexRect)>,
     destroyed: Vec<ResourceId>,
-    /// Instance ranges of each `draw`.
+    /// Instance ranges of each `shape` draw: seats and overlays.
     draws: Vec<Vec<Range<u32>>>,
+    /// Every draw in order: pipeline, ranges and pass opacity.
+    calls: Vec<(Pipeline, Vec<Range<u32>>, f32)>,
     /// The dim factor of each `draw`.
     dims: Vec<f32>,
     targets: Vec<Target>,
@@ -104,8 +107,13 @@ impl GpuBackend for Fake {
         self.clears.push(clear);
     }
     fn draw(&mut self, call: &DrawCall<'_>) -> Result<(), BackendError> {
-        self.draws.push(call.ranges.to_vec());
-        self.dims.push(call.uniforms.dim);
+        let ranges = call.ranges.to_vec();
+        self.calls
+            .push((call.pipeline, ranges.clone(), call.uniforms.alpha));
+        if call.pipeline == Pipeline::Shape {
+            self.draws.push(ranges);
+            self.dims.push(call.uniforms.dim);
+        }
         Ok(())
     }
     fn end_frame(&mut self) {}
