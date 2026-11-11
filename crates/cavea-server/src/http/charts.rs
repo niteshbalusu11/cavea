@@ -1215,6 +1215,15 @@ type LockRow = (
     Option<String>,
 );
 
+/// Whether the chart is archived, and its lock as [`LockRow`].
+type LockState = (
+    bool,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 const READ_LOCK: &str = concat!(
     "SELECT c.archived_at IS NOT NULL, ",
     lock_columns!(),
@@ -1224,7 +1233,7 @@ const READ_LOCK: &str = concat!(
 );
 
 #[derive(Debug, Serialize)]
-struct LockState {
+struct LockReply {
     lock: Option<Lock>,
 }
 
@@ -1232,21 +1241,15 @@ async fn read_lock(
     Staff(auth): Staff,
     Path(key): Path<String>,
     State(state): State<AppState>,
-) -> Result<axum::Json<LockState>, ApiError> {
-    let row: Option<(
-        bool,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    )> = sqlx::query_as(READ_LOCK)
+) -> Result<axum::Json<LockReply>, ApiError> {
+    let row: Option<LockState> = sqlx::query_as(READ_LOCK)
         .bind(auth.workspace().uuid())
         .bind(&key)
         .fetch_optional(&state.db)
         .instrument(cavea_telemetry::db_span("read_lock"))
         .await?;
     let (_, a, e, since, until) = row.ok_or_else(not_found)?;
-    Ok(axum::Json(LockState {
+    Ok(axum::Json(LockReply {
         lock: Lock::live(&auth, a, e, since, until),
     }))
 }
@@ -1305,13 +1308,7 @@ async fn lock(
                 return Lock::live(&auth, a, e, since, until)
                     .ok_or_else(|| ApiError::internal("a lock just taken is not live"));
             }
-            let row: Option<(
-                bool,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-            )> = sqlx::query_as(READ_LOCK)
+            let row: Option<LockState> = sqlx::query_as(READ_LOCK)
                 .bind(auth.workspace().uuid())
                 .bind(&key)
                 .fetch_optional(&state.db)

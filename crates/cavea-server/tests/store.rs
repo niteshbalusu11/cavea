@@ -288,6 +288,27 @@ fn record(seq: u64, op: Op) -> LogRecord {
     }
 }
 
+/// `b` with its status counts, for a store whose objects are `before`: what
+/// the engine computes, and the memory store checks.
+fn counted(mut b: Batch, before: &[ObjectRow]) -> Batch {
+    let was = |oid| {
+        before
+            .iter()
+            .find(|o: &&ObjectRow| o.oid == oid)
+            .map_or(0, |o| o.status.code())
+    };
+    let set = b.objects_set.iter().map(|o| (o.oid, o.status.code()));
+    let mut counts = [0; 16];
+    for (oid, now) in set.chain(b.objects_freed.iter().map(|&o| (o, 0))) {
+        if was(oid) != now {
+            counts[usize::from(was(oid))] -= 1;
+            counts[usize::from(now)] += 1;
+        }
+    }
+    b.counts = counts;
+    b
+}
+
 fn batch(event: EventId, seq: u64, log: Vec<LogRecord>) -> Batch {
     Batch {
         event,
@@ -428,6 +449,7 @@ async fn round_trip<H: Harness>(h: &H) {
         key_record("k-missing", 3, t, missing),
         key_record("k-refused", 2, t, refused),
     ];
+    let b1 = counted(b1, &[]);
     h.store().commit_batch(b1.clone()).await.unwrap();
     let expected = sorted(LoadedEvent {
         epoch: 1,
@@ -464,6 +486,7 @@ async fn round_trip<H: Harness>(h: &H) {
     b2.holds_deleted = vec![HoldId(1)];
     b2.objects_freed = vec![100, 102];
     b2.objects_set = vec![object(u32::MAX, custom, None, None, 8)];
+    let b2 = counted(b2, &b1.objects_set);
     h.store().commit_batch(b2.clone()).await.unwrap();
     let expected = LoadedEvent {
         seq: 8,
@@ -555,7 +578,7 @@ async fn refusals<H: Harness>(h: &H) {
             seq,
         }];
         b.idempotency = vec![key_record("r", 1, t, Err(Failure::Forbidden))];
-        b
+        counted(b, &[])
     };
     let before = load(h, ev).await;
     let inconsistent = |r| matches!(r, Err(StoreError::Inconsistent(_)));
@@ -766,6 +789,7 @@ async fn pg_store_failed_commit_writes_nothing() {
         }];
         let r = key_record("dup", 1, now_ms(), Err(Failure::Forbidden));
         b.idempotency = vec![r.clone(), r];
+        let b = counted(b, &[]);
         assert!(matches!(
             store.commit_batch(b).await,
             Err(StoreError::Inconsistent(_))
@@ -876,23 +900,23 @@ async fn migrations_apply_once_and_refuse_an_unknown_schema() {
         a.unwrap();
         b.unwrap();
         let pool = store::connect(options.clone(), 2).await.unwrap();
-        assert_eq!(migration_rows(&pool).await, [1, 2, 3, 4, 5, 6]);
+        assert_eq!(migration_rows(&pool).await, [1, 2, 3, 4, 5, 6, 7]);
         // Again: nothing to do.
         store::migrate(&options).await.unwrap();
-        assert_eq!(migration_rows(&pool).await, [1, 2, 3, 4, 5, 6]);
+        assert_eq!(migration_rows(&pool).await, [1, 2, 3, 4, 5, 6, 7]);
 
         // A migration from a newer server.
         sqlx::query(
             "INSERT INTO cavea_migrations (version, description, success, checksum, execution_time)
-             VALUES (7, 'future', true, '\\x00', 0)",
+             VALUES (8, 'future', true, '\\x00', 0)",
         )
         .execute(&pool)
         .await
         .unwrap();
         let err = store::migrate(&options).await.unwrap_err();
-        assert!(matches!(err, MigrationError::Newer(7)), "{err}");
+        assert!(matches!(err, MigrationError::Newer(8)), "{err}");
         assert!(err.to_string().contains("newer"), "{err}");
-        sqlx::query("DELETE FROM cavea_migrations WHERE version = 7")
+        sqlx::query("DELETE FROM cavea_migrations WHERE version = 8")
             .execute(&pool)
             .await
             .unwrap();
