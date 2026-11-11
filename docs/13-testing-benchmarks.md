@@ -518,7 +518,7 @@ Browser coverage uses Playwright locally and a device cloud for what it cannot r
 | next `/` and `/direct` | Next.js 16.4.6, React 19.3.1 | Built, server-rendered with the container, hydrated, first frame; `/_next/static/media/cavea_web_bg.<hash>.wasm` |
 | react18 | React 18.3.1 | 6 of 6 tests |
 | csp-custom | — | Draws; without `'wasm-unsafe-eval'` `wasm_unavailable` at once; without `connect-src 'self'` `wasm_unavailable` after the retries |
-| csp-server, transport `auto` and `sse` | `cavea-server` | Draws, realtime frames arrive (WebSocket; EventSource); without the server's origin `chart_fetch_failed` or `state_connect_failed`; without its `ws:` origin, EventSource after two refused sockets |
+| csp-server, transport `auto` and `sse` | `cavea-server` | Draws, realtime frames arrive (WebSocket; EventSource), and the chart's background image is fetched from `/v1/public/assets/{hash}` under the same `connect-src` with no `img-src` (REN-020); without the server's origin `chart_fetch_failed` or `state_connect_failed`; without its `ws:` origin, EventSource after two refused sockets |
 | csp-cdn | — | Draws from the CDN's files; without `'wasm-unsafe-eval'` or the CDN in `connect-src`, `wasm_unavailable`; a changed WASM on the CDN, `wasm_unavailable` |
 | Trusted Types | — | No violation under `require-trusted-types-for 'script'` in any CSP row |
 

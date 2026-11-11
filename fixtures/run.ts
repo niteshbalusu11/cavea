@@ -855,14 +855,35 @@ async function caveaServer(): Promise<{ base: string; key: string; event: string
   };
   const workspace = await call("/v1/workspaces", admin, { key: "compat", name: "compat" });
   const secret = String((workspace["secret_key"] as { key: string }).key);
-  const document = JSON.parse(await readFile(join(WORK, "theatre.json"), "utf8")) as unknown;
+  // A background image (04 §7), loaded from the server after the first frame.
+  const upload = await fetch(`${base}/v1/assets`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${secret}`, "content-type": "image/png" },
+    body: await readFile(join(ROOT, "crates/cavea-render/golden/background.png")),
+  });
+  if (!upload.ok) {
+    throw new Error(`POST /v1/assets: HTTP ${upload.status} ${await upload.text()}`);
+  }
+  const asset = String(((await upload.json()) as { hash: string }).hash);
+  const document = JSON.parse(await readFile(join(WORK, "theatre.json"), "utf8")) as {
+    nextOid: number;
+    nodes: unknown[];
+  };
+  document.nodes.unshift({
+    id: document.nextOid++,
+    type: "image",
+    asset,
+    role: "background",
+    size: [3000, 1500],
+    origin: [0, 1500],
+  });
   await call("/v1/charts", secret, { key: "theatre", name: "theatre", document });
   await call("/v1/charts/theatre/publish", secret);
   await call("/v1/events", secret, { key: "show", chart: "theatre" });
   const key = String(
     (await call("/v1/keys", secret, { kind: "publishable", name: "compat" }))["key"],
   );
-  return { base, key, event: "show" };
+  return { base, key, event: "show", asset };
 }
 
 async function cspServer(): Promise<void> {
@@ -923,9 +944,11 @@ async function cspServer(): Promise<void> {
       (v) =>
         !drew(v)
           ? "the map did not draw"
-          : live(v)
-            ? null
-            : `no ${auto ? "WebSocket" : "SSE"} frames arrived`,
+          : !v.fetched.some((f) => f.url.includes(server.asset) && f.status === 200)
+            ? "the background image was not fetched"
+            : live(v)
+              ? null
+              : `no ${auto ? "WebSocket" : "SSE"} frames arrived`,
     );
   }
 }
