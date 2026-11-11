@@ -114,7 +114,20 @@ The 24-hour run of the CCF decoder for the M1 exit criterion is the same command
 
 **Runs so far** (local, on the development machine, AMD Ryzen 9 7900X, one core per target, the four at once):
 
-FUZZ_RUNS_TABLE
+Thirty minutes per target, started 2026-11-11 09:31 UTC on the code as it stood just before the commit that added `fuzz/`, each from a corpus already grown by earlier short runs. Coverage is libFuzzer's count of instrumented edges reached (`cov`), at the start of the run and at its end; the corpus is the number of inputs it kept.
+
+| Target | Duration | Executions | Executions/s | Coverage, start → end | Corpus, start → end | Result |
+|---|---|---|---|---|---|---|
+| `ccf_decode` | 1,801 s | 35,724,651 | 19,836 | 2,701 → 2,759 | 460 → 625 | Ended at its time limit; no crash, panic, timeout, leak or out-of-memory |
+| `document_parse` | 1,801 s | 11,572,836 | 6,425 | 13,542 → 16,404 | 1,271 → 5,518 | The same |
+| `wire_decode` | 1,801 s | 306,016,899 | 169,914 | 1,302 → 1,327 | 408 → 473 | The same |
+| `snapshot_apply` | 1,801 s | 936,538 | 520 | 7,263 → 7,421 | 372 → 1,577 | The same |
+
+The `wire_decode` run started before its check on Pong frames was written, so those 30 minutes did not exercise that check. A second run of 90 s per target, on the final code after rebasing onto the renderer and realtime work (from the grown corpora), also ended clean: `ccf_decode` 2,022,999 executions (coverage 2,759), `document_parse` 546,562 (16,481), `wire_decode` 14,730,333 (1,343), `snapshot_apply` 32,575 (7,855; the renderer engine has grown since the long run). None of this is the 24-hour run of the M1 exit criterion (`ROADMAP.md`), which has not been done. It is one command:
+
+```sh
+nix develop .#fuzz -c cargo fuzz run ccf_decode -- -max_total_time=86400 -timeout=10 -print_final_stats=1
+```
 
 ## 6. Renderer
 
@@ -180,9 +193,23 @@ FUZZ_RUNS_TABLE
 
 The gate compares a machine with itself: `--save <file>` writes the medians, and `--baseline <file>` compares a later run and exits 4 when any benchmark's median is more than 10% slower. A builder runs it with `--save` on `main` and `--baseline` on the branch before filing a change to the measured code; a flagged result is re-run before it is believed (the median of 5 to 15 samples absorbs most noise, but not another process taking the core). No baseline is committed and CI runs none: a number from one machine says nothing about another.
 
-Measured locally, 2026-11-11, AMD Ryzen 9 7900X, Linux, release build, with other builds running on the machine; not reference-device results:
+Measured locally, 2026-11-11, AMD Ryzen 9 7900X, Linux, release build, with no fuzzer running but other agents' work on the machine (load average about 5 on 24 threads); not reference-device results:
 
-BENCH_TABLE
+| Benchmark | Median | Minimum | Budget |
+|---|---|---|---|
+| decode (100,000 seats, 864,477 B) | 0.533 ms | 0.532 ms | 5 ms |
+| hit test (per tap, seats at 18 to 64 px) | 0.296 µs | 0.293 µs | 20 µs |
+| snapshot apply (100,000 objects, 12,509 B frame) | 0.168 ms | 0.168 ms | none |
+| delta apply (10,000 changes) | 0.187 ms | 0.186 ms | 2 ms |
+| label build (4,096 seats) | 0.160 ms | 0.160 ms | 1 ms |
+| compile `theatre` (2,000 seats) | 1.640 ms | 1.604 ms | none |
+| compile `arena` (20,000 seats) | 14.708 ms | 14.525 ms | none |
+| compile `stadium-60k` | 45.671 ms | 45.454 ms | none |
+| compile `stadium-100k` | 81.100 ms | 79.603 ms | none |
+| compile `stress-250k` | 200.248 ms | 197.074 ms | none |
+| compile `stress-500k` | 378.726 ms | 362.338 ms | none |
+
+A second run straight after, with the first as its `--baseline`, was within 6% on every benchmark (compiles from 5.6% faster to 1.4% slower, the rest within 1.5%) and passed the gate.
 
 **Payload gate.** `cargo xtask build-web` measures the renderer payload, the brotli size (quality 11) of the production JavaScript glue plus the WASM after `wasm-opt -Oz` (plus the font atlas once there is one), and compares it with `xtask/payload-baseline.json`, which records the last accepted size and the `wasm-opt` version it was measured with. The build fails when the payload is over the hard cap of 200,000 B (`01-architecture.md` §5), or more than 3% over the baseline. It refuses to compare a build made without `wasm-opt` (about a fifth larger) or with another `wasm-opt` version than the baseline's: either is an error, not a pass. CI installs binaryen 132, the version `flake.nix` provides; upgrading binaryen changes the flake, CI and the baseline together. The `--demo` build is never measured.
 
