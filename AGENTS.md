@@ -52,7 +52,8 @@ Toolchains: Rust is pinned in `rust-toolchain.toml` (with the `wasm32-unknown-un
 - `bun run typecheck`: `tsc --noEmit` in every workspace package
 - `bun run build`: builds every workspace package that has a `build` script
 - `bun run test`: `bun test`; the designer's boundary test also needs `cargo xtask build-designer` and runs `cavea gen` through cargo. `CAVEA_MEASURE=1 bun test packages/designer-core` adds its per-call timings
-- `bun run dev --port <port>` in `apps/console`: the console dev server
+- `bun run dev --port <port>` in `apps/console`: the console dev server. The designer is `/designer/local`, after `cargo xtask build-designer` (the WASM loads at run time, so `typecheck` and `build` pass without it): open a chart document from a file (`cavea gen theatre -o target/tmp/theatre.json`), by the menu or by dropping it on the window, and export it with Ctrl+S. In a dev build `window.caveaEditor` is the open chart's editor (`apps/console/src/designer/editor.ts`), for measuring in the browser's console
+- The console app's structure (`apps/console/src`): `index.tsx` (routes), `styles.css` (the design tokens; `tokens.test.ts` checks their contrast), `i18n/messages.ts` (every user-visible string), `ui/` (the base components), `console/` (the console frame), `designer/` (the designer: `loop.ts` the frame loop, `editor.ts` an open chart, `shortcuts.ts` the shortcut table, `CanvasHost.tsx` the canvas boundary)
 - `bun run dev --port <port>` in `apps/demo`, after `cargo xtask build-web --demo`: 100,000 synthetic seats through `createSeatMap` and a `customState` fake host (query parameters in `apps/demo/src/main.ts`)
 
 **Glyph atlas**

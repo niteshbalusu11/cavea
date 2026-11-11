@@ -176,6 +176,8 @@ Report charts show one measure each, label values directly, and use the same col
 | Canvas | `@cavea/renderer` and the `cavea-edit` WASM module |
 | Tests | `bun test` for units, Playwright for flows |
 
+As built (`apps/console`, CON-001 in part): Solid Router 1.0.1, Tailwind 4.3.3 through its Vite plugin, Kobalte 0.13.14, each pinned. TanStack Query, the API client, form validation and Playwright arrive with the first screen that talks to the server. Routes: `/charts`, `/events`, `/reports`, `/developers` and `/settings` in the console frame (left navigation, content at most 1,280 px; every screen but Charts says it is not built yet), and full-window tools outside it, the designer at `/designer/local` for a chart from a file. The design tokens are CSS custom properties in `src/styles.css`, light and dark; Tailwind's own palette and type scale are removed, so a component can use only tokens, and a test checks the text and control pairs for WCAG 2.2 AA contrast in both themes. The theme is the system's unless the user picks one (stored per browser), applied as `data-theme` on the root. Every user-visible string is in one English catalogue, `src/i18n/messages.ts`, by stable id; groups keyed by the edit core's values (node kinds, tools, units, command and import error codes, undo entry keys, inspector fields, the compiler's finding codes) are typed against the generated types, and a test fails when the types or the compiler gain a value without a message. Numbers and times go through `Intl`. The base components are in `src/ui`.
+
 ## 10. Console-only endpoints
 
 Under `/console/api`, cookie-authenticated:
