@@ -212,9 +212,9 @@ async fn verify_reports_each_corruption_precisely() {
         seats.shutdown().await;
         let charts = PgCharts::new(pool.clone(), 10_000);
         // One event per corruption, each written by the same sequence.
-        const KINDS: [&str; 13] = [
+        const KINDS: [&str; 17] = [
             "clean", "gap", "repeat", "reorder", "flip", "unbook", "double", "expiry", "limit",
-            "unhold", "orphan", "seq", "order",
+            "unhold", "orphan", "seq", "order", "rehold", "badop", "ghost", "tail",
         ];
         let mut events = Vec::new();
         for kind in KINDS {
@@ -305,7 +305,7 @@ async fn verify_reports_each_corruption_precisely() {
         .await;
         let f = only(&verify(&pool, e("flip")).await).clone();
         assert_eq!((f.check, f.oid, f.field), ("object", Some(booked as u32), Some("status")));
-        assert_eq!((f.stored.as_deref(), f.replayed.as_deref()), (Some("3"), Some("2")));
+        assert_eq!((f.stored.as_deref(), f.replayed.as_deref()), (Some("blocked"), Some("booked")));
         assert!(f.label.is_some());
 
         // A booked object freed without a log row.
@@ -318,7 +318,7 @@ async fn verify_reports_each_corruption_precisely() {
         .await;
         let f = only(&verify(&pool, e("unbook")).await).clone();
         assert_eq!((f.check, f.oid, f.field), ("object", Some(booked as u32), Some("missing")));
-        assert_eq!(f.replayed.as_deref(), Some("2"));
+        assert_eq!(f.replayed.as_deref(), Some("booked"));
 
         // A second booking of a booked object, logged as the next command.
         sql(
@@ -383,7 +383,7 @@ async fn verify_reports_each_corruption_precisely() {
             .unwrap();
         let f = only(&verify(&pool, e("orphan")).await).clone();
         assert_eq!((f.check, f.oid, f.field), ("object", Some(free), Some("unexpected")));
-        assert_eq!(f.stored.as_deref(), Some("3"));
+        assert_eq!(f.stored.as_deref(), Some("blocked"));
         sql(&pool, "UPDATE events SET seq = seq + 1 WHERE id = $1::uuid", e("seq")).await;
         let r = verify(&pool, e("seq")).await;
         let f = only(&r);
@@ -411,6 +411,81 @@ async fn verify_reports_each_corruption_precisely() {
         .await;
         assert_eq!(code, verify::EXIT_DIFFERENCES);
         assert!(out.contains("stored tampered log order-"), "{out}");
+
+        // A held object pointed at a hold other than the one the log gave it.
+        let (held, holder) = sqlx::query_as::<_, (i32, i64)>(
+            "SELECT oid, hold_id FROM object_state
+              WHERE event_id = $1::uuid AND status = 1 ORDER BY oid LIMIT 1",
+        )
+        .bind(format!("{:032x}", e("rehold").0))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sql(
+            &pool,
+            "UPDATE object_state SET hold_id = hold_id + 1000000 WHERE event_id = $1::uuid AND oid =
+               (SELECT min(oid) FROM object_state WHERE event_id = $1::uuid AND status = 1)",
+            e("rehold"),
+        )
+        .await;
+        let f = only(&verify(&pool, e("rehold")).await).clone();
+        assert_eq!((f.check, f.oid, f.field), ("object", Some(held as u32), Some("hold_id")));
+        assert_eq!(f.replayed, Some(holder.to_string()));
+        assert_eq!(f.stored, Some((holder + 1_000_000).to_string()));
+
+        // A log row with an `op` no version wrote: unreadable, state not compared.
+        sql(&pool, "UPDATE event_log SET op = 42 WHERE event_id = $1::uuid AND seq = 3", e("badop")).await;
+        let r = verify(&pool, e("badop")).await;
+        let f = only(&r);
+        assert_eq!((f.check, f.seq, f.detail.as_deref()), ("unreadable_record", Some(3), Some("unknown op 42")));
+        assert!(!r.state_compared && r.replayed_to == 2);
+
+        // A rogue row blocking an object the chart does not have: the object is
+        // unknown, and the log needs a row the state does not have.
+        sql(
+            &pool,
+            "WITH logged AS (
+               INSERT INTO event_log (event_id, seq, op, actor, oids, detail)
+               SELECT id, seq + 1, 6, 'key_rogue', ARRAY[7777777], '{\"status\":3}'
+                 FROM events WHERE id = $1::uuid)
+             UPDATE events SET seq = seq + 1 WHERE id = $1::uuid",
+            e("ghost"),
+        )
+        .await;
+        let r = verify(&pool, e("ghost")).await;
+        let found: Vec<_> = r.findings.iter().map(|f| (f.check, f.oid, f.field)).collect();
+        assert_eq!(found, [("unknown_object", Some(7_777_777), None), ("object", Some(7_777_777), Some("missing"))]);
+        assert_eq!(r.findings[0].seq, Some(r.log_last_seq));
+
+        // The log's tail lost (the last batch: the live hold's creation and its
+        // hold) while the rows it wrote stay: `events.seq` is ahead, and the
+        // hold and its object are unexplained.
+        let tail = verify(&pool, e("tail")).await.log_last_seq;
+        let live = scalar_for(
+            &pool,
+            "SELECT oid::int8 FROM object_state WHERE event_id = $1::uuid AND hold_id =
+               (SELECT max(id) FROM holds WHERE event_id = $1::uuid)",
+            e("tail"),
+        )
+        .await;
+        sql(
+            &pool,
+            "DELETE FROM event_log WHERE event_id = $1::uuid
+                AND seq > (SELECT seq - 2 FROM events WHERE id = $1::uuid)",
+            e("tail"),
+        )
+        .await;
+        let r = verify(&pool, e("tail")).await;
+        let found: Vec<_> = r.findings.iter().map(|f| (f.check, f.oid, f.hold_id, f.field)).collect();
+        assert_eq!(
+            found,
+            [
+                ("events_seq", None, None, None),
+                ("object", Some(live as u32), None, Some("unexpected")),
+                ("hold", None, Some(tail - 1), Some("unexpected")),
+            ]
+        );
+        assert!(r.state_compared && r.log_last_seq == tail - 2);
 
         // Every event: the JSON report's shape and the exit codes.
         let (code, out, err) = run(&["--all", "--json"], &url).await;
@@ -459,7 +534,7 @@ async fn verify_while_commits_land() {
             let pool = pool.clone();
             async move {
                 let charts = PgCharts::new(pool.clone(), 10_000);
-                fill(&pool, &charts, event, 11, 3_000).await;
+                fill(&pool, &charts, event, 11, 10_000).await;
             }
         });
         let mut runs = 0;

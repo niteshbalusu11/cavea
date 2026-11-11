@@ -616,12 +616,12 @@ fn finding(
         Difference::ObjectUnexpected(oid) => {
             let stored = objects.iter().find(|o| o.oid == oid);
             Finding {
-                stored: stored.map(|o| o.status.code().to_string()),
+                stored: stored.map(|o| status_name(o.status)),
                 ..object(oid, "unexpected")
             }
         }
         Difference::ObjectMissing(oid) => Finding {
-            replayed: replay.objects.get(&oid).map(|o| o.0.code().to_string()),
+            replayed: replay.objects.get(&oid).map(|o| status_name(o.0)),
             ..object(oid, "missing")
         },
         Difference::ObjectRowTwice(oid) => object(oid, "row_twice"),
@@ -631,8 +631,8 @@ fn finding(
             let (name, stored, replayed, secret) = match field {
                 ObjectField::Status => (
                     "status",
-                    row.map(|r| r.status.code().to_string()),
-                    log.map(|l| l.0.code().to_string()),
+                    row.map(|r| status_name(r.status)),
+                    log.map(|l| status_name(l.0)),
                     false,
                 ),
                 ObjectField::HoldId => (
@@ -706,6 +706,18 @@ fn finding(
                 },
             }
         }
+    }
+}
+
+/// A status as the API names it (08 §6.2): `free`, `held`, `booked`,
+/// `blocked`, or a custom code.
+fn status_name(status: Status) -> String {
+    match status {
+        Status::FREE => "free".into(),
+        Status::HELD => "held".into(),
+        Status::BOOKED => "booked".into(),
+        Status::BLOCKED => "blocked".into(),
+        custom => custom.code().to_string(),
     }
 }
 
