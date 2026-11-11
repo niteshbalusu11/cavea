@@ -6,6 +6,7 @@
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { useNavigate } from "@solidjs/router";
 import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
+import { checkChartList } from "../api/check.ts";
 import { call } from "../api/client.ts";
 import type { Chart, ChartDocument } from "../api/generated.ts";
 import { allows } from "../api/permissions.ts";
@@ -29,10 +30,12 @@ async function loadAll(signal: AbortSignal): Promise<Chart[]> {
   const all: Chart[] = [];
   let after: string | undefined;
   for (;;) {
-    const page = await call(
-      "listCharts",
-      { query: after === undefined ? { limit: 100 } : { limit: 100, after } },
-      signal,
+    const page = checkChartList(
+      await call(
+        "listCharts",
+        { query: after === undefined ? { limit: 100 } : { limit: 100, after } },
+        signal,
+      ),
     );
     all.push(...page.data);
     if (page.next === null) return all;
@@ -44,7 +47,7 @@ async function loadAll(signal: AbortSignal): Promise<Chart[]> {
 export function keyFrom(name: string): string {
   return name
     .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")

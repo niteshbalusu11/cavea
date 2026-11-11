@@ -5,7 +5,7 @@
 import { createMemo, createRoot, createSignal } from "solid-js";
 import { ApiError, call, configure } from "./api/client.ts";
 import type { ConsoleMe } from "./api/generated.ts";
-import { checkMe } from "./api/me.ts";
+import { checkMe } from "./api/check.ts";
 import type { MeWorkspace } from "./api/permissions.ts";
 import { asApiError } from "./api/query.ts";
 import { load as loadStored, save } from "./storage.ts";
@@ -114,19 +114,28 @@ export function watchSession(): void {
   });
 }
 
+/** Takes the answer of a sign-in, setup or password change. A `me` load
+ * that started while it was on its way read the session before it (the old
+ * CSRF token, after a password change): it is cancelled before and again
+ * now, so it cannot land afterwards. */
+function adoptNew(answer: unknown): void {
+  settle();
+  adopt(answer);
+}
+
 export async function signIn(email: string, password: string, signal: AbortSignal) {
   settle();
-  adopt(await call("consoleSignIn", { body: { email, password } }, signal));
+  adoptNew(await call("consoleSignIn", { body: { email, password } }, signal));
 }
 
 export async function setUp(token: string, email: string, password: string, signal: AbortSignal) {
   settle();
-  adopt(await call("consoleSetup", { body: { token, email, password } }, signal));
+  adoptNew(await call("consoleSetup", { body: { token, email, password } }, signal));
 }
 
 export async function changePassword(current: string, next: string, signal: AbortSignal) {
   settle();
-  adopt(
+  adoptNew(
     await call(
       "consolePassword",
       { body: { current_password: current, new_password: next } },
