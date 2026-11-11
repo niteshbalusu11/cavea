@@ -6,7 +6,10 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 
+use cavea_format::wire::Change;
+
 use crate::chart::ChartView;
+use crate::feed::Sealed;
 use crate::idempotency::{Lookup, Window};
 use crate::store::{Batch, Booking, HoldRow, IdempotencyRecord, LoadedEvent, LogRecord, ObjectRow};
 use crate::types::{
@@ -76,6 +79,8 @@ struct Pending {
     objects: Vec<(Idx, u64)>,
     log: Vec<LogRecord>,
     idempotency: Vec<IdempotencyRecord>,
+    /// Tokens whose hold a committed command changed, for PRIVATE frames.
+    tokens: Vec<TokenHash>,
 }
 
 /// One event's seat state.
@@ -233,6 +238,11 @@ impl EventState {
         self.seq
     }
 
+    /// Every object's domain status code, by `idx`.
+    pub(crate) fn statuses(&self) -> &[u8] {
+        &self.status
+    }
+
     #[must_use]
     pub fn status(&self, idx: Idx) -> Option<Status> {
         self.status
@@ -374,6 +384,25 @@ impl EventState {
     /// Seal everything applied since the last call into one batch, or `None`
     /// if nothing needs writing.
     pub fn take_batch(&mut self) -> Result<Option<Batch>, InvariantViolation> {
+        self.seal(None)
+    }
+
+    /// [`Self::take_batch`], also writing into `sealed` what the batch changes
+    /// as realtime subscribers see it: each changed object's final status and
+    /// each touched token's hold, as of the batch's last command. Memory is
+    /// exactly that state now, since nothing after the batch is applied yet.
+    pub(crate) fn take_batch_into(
+        &mut self,
+        sealed: &mut Sealed,
+    ) -> Result<Option<Batch>, InvariantViolation> {
+        sealed.clear();
+        self.seal(Some(sealed))
+    }
+
+    fn seal(
+        &mut self,
+        mut sealed: Option<&mut Sealed>,
+    ) -> Result<Option<Batch>, InvariantViolation> {
         let pending = std::mem::take(&mut self.pending);
         if pending.log.is_empty() && pending.idempotency.is_empty() {
             return Ok(None);
@@ -389,6 +418,12 @@ impl EventState {
             }
             let oid = self.chart.oid(idx).ok_or(corrupt("idx outside chart"))?;
             let status = self.status(idx).ok_or(corrupt("bad status"))?;
+            if let Some(sealed) = sealed.as_deref_mut() {
+                sealed.changes.push(Change {
+                    idx,
+                    code: status.code(),
+                });
+            }
             if status == Status::FREE {
                 objects_freed.push(oid);
             } else {
@@ -420,6 +455,22 @@ impl EventState {
                 (false, Some(h)) => holds_extended.push((id, h.expires_at)),
                 (false, None) => holds_deleted.push(id),
                 (true, None) => {} // created and deleted in this batch
+            }
+        }
+
+        if let Some(sealed) = sealed {
+            sealed.seq = self.seq;
+            let mut tokens = pending.tokens;
+            tokens.sort_unstable_by_key(|t| t.0);
+            tokens.dedup();
+            for token in tokens {
+                let hold = self.hold(&token).map(|h| {
+                    let start = sealed.held.len();
+                    sealed.held.extend_from_slice(h.objects);
+                    sealed.held[start..].sort_unstable();
+                    (h.expires_at, start..sealed.held.len())
+                });
+                sealed.holds.push((token, hold));
             }
         }
 
@@ -568,6 +619,7 @@ impl EventState {
         self.expiry.push(Reverse((expires_at, id, slot)));
         self.pending.holds.push((id, slot));
         self.pending.created.push(id);
+        self.pending.tokens.push(token);
         self.log(LogRecord {
             expires_at: Some(expires_at),
             ..record(seq, Op::CreateHold, actor, Some(id), Vec::new())
@@ -619,6 +671,7 @@ impl EventState {
         for &idx in &new {
             self.set_object(idx, Status::HELD, slot + 1, None, seq)?;
         }
+        self.pending.tokens.push(*token);
         self.log(record(seq, Op::Hold, actor, Some(id), oids));
         Ok(Outcome::Held {
             seq,
@@ -658,6 +711,7 @@ impl EventState {
         let hold = self.hold_mut(slot)?;
         hold.objects.retain(|i| idxs.binary_search(i).is_err());
         let id = hold.id;
+        self.pending.tokens.push(*token);
         self.log(record(seq, Op::Release, actor, Some(id), oids));
         Ok(Outcome::Released { seq, objects: idxs })
     }
@@ -679,6 +733,7 @@ impl EventState {
         // The old entry is now stale and is skipped when it surfaces.
         self.expiry.push(Reverse((expires_at, id, slot)));
         self.pending.holds.push((id, slot));
+        self.pending.tokens.push(*token);
         self.log(LogRecord {
             expires_at: Some(expires_at),
             ..record(seq, Op::ExtendHold, actor, Some(id), Vec::new())
@@ -769,6 +824,7 @@ impl EventState {
         }
         let mut hold_id = None;
         if let Some(slot) = slot {
+            self.pending.tokens.extend(token);
             let hold = self.hold_mut(slot)?;
             hold.objects.retain(|i| idxs.binary_search(i).is_err());
             hold_id = Some(hold.id);
@@ -857,8 +913,9 @@ impl EventState {
     /// The internal `Expire` command (08 §7.3) for the hold in `slot`.
     fn expire(&mut self, slot: u32) -> Result<(), InvariantViolation> {
         let hold = self.hold_mut(slot)?;
-        let id = hold.id;
+        let (id, token) = (hold.id, hold.token);
         let mut idxs = std::mem::take(&mut hold.objects);
+        self.pending.tokens.push(token);
         idxs.sort_unstable();
         let oids = self.oids(&idxs)?;
         let seq = self.next_seq();

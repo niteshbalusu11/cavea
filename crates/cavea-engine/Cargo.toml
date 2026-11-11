@@ -7,6 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+cavea-format.workspace = true
 # Not the workspace entry: that one enables the server's runtime features. The
 # engine needs channels, and `rt` for the registry to run each event's load
 # and actor as a task of its own.

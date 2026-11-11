@@ -63,9 +63,8 @@ struct EventActor {
     seq: u64,
     epoch: u64,                         // fencing token
     pending: Batch,                     // applied in memory, not yet committed
-    recent: RingBuffer<DeltaFrame>,     // last 60 s, for resume
-    public: ArcSwap<PublicSnapshot>,    // pre-encoded; read without the mailbox
-    tx: broadcast::Sender<Arc<Bytes>>,  // pre-encoded delta frames
+    published: Arc<Feed>,               // §4.5: snapshot, last 60 s of deltas, holds
+    tx: broadcast::Sender<Publication>, // pre-encoded delta frames, shared
 }
 ```
 
@@ -165,8 +164,11 @@ A batch carries the net effect of its commands as of its last one: each object a
 
 ### 4.5 Reads
 
-- **Public snapshot:** after each commit the actor re-encodes the public snapshot (at most every 50 ms) and swaps it into `public`. HTTP handlers read it without sending a message to the actor.
-- **Deltas:** encoded once per coalescing interval and broadcast as shared bytes. No per-subscriber encoding.
+- **Committed state only (INV-8).** When a batch is sealed, memory is exactly its end state, so the actor records then what it changes: each changed object's final status and the hold of every token it touched. That record is folded into the actor's own copy of the committed statuses only once the batch commits, and discarded if it fails. Everything published is built from that copy, never from memory, which may already hold the next, uncommitted batch. Nothing of a failed batch, or of a batch whose commit result was lost, is ever published by the actor that applied it; after the reload it is part of the loaded state, which is published as the first snapshot.
+- **Publication.** At most once per interval (§8.3) the actor publishes everything committed since its last publication: one public DELTA from the last published `seq` to the committed `seq`, the public SNAPSHOT at that same `seq`, and the committed holds of each token touched since. The first commit after a quiet interval is published at once; later ones when the interval ends, so the last commit is never left unpublished. Every snapshot's `seq` is therefore a delta boundary, and a client given any snapshot, including one cached by a CDN, resumes from it through the ring buffer (D-27). A freshly loaded actor publishes its first snapshot before it can be subscribed to, and an actor stopping without failure publishes what it committed before it ends.
+- **Readers** share the event's `Feed`: the current snapshot, the ring buffer and the committed holds sit behind one `std::sync::RwLock` that the actor takes for writing only to swap in a publication (an `Arc` swap, a push onto the ring buffer, and one map update per touched token), and readers take only to clone `Arc`s; neither holds it across an await, and no bytes are copied per reader. HTTP handlers read the snapshot without sending a message to the actor. Encoding happens before the lock is taken.
+- **Deltas:** encoded once per publication and broadcast as shared bytes on a `tokio::sync::broadcast` channel of 64 publications. No per-subscriber encoding.
+- **Ring buffer:** the published deltas of the last 60 seconds, at most 4 MiB of frames per event; older frames, then the oldest beyond 4 MiB, are dropped when a delta is published or, while none is, at the actor's idle check. A reload starts with an empty buffer.
 - **Object details and reports:** `Inspect` commands for live data; SQL for historical data.
 
 ### 4.6 Failure
@@ -865,10 +867,13 @@ Tokens are opaque bytes; a present token may be empty.
 
 ### 8.3 Behaviour
 
-- On SUBSCRIBE the server replies HELLO, then either the DELTAs since `last_seq` (if still in the 60-second ring buffer) or a SNAPSHOT, then PRIVATE if a hold token was given.
-- Deltas are coalesced every 100 ms. With more than 20,000 subscribers on an event the interval stretches, up to 500 ms.
-- If an object changes twice within an interval, only the final state is sent (`wire::coalesce`).
-- A subscriber whose send queue exceeds 64 frames is sent RESYNC and its queue is cleared.
+- On SUBSCRIBE the server replies HELLO, then either the DELTAs since `last_seq` (if still in the 60-second ring buffer) or a SNAPSHOT, then PRIVATE if a hold token was given. Nothing follows HELLO for a `last_seq` equal to the current one; a `last_seq` of 0 always gets the SNAPSHOT. The engine's `Registry::subscribe` returns these frames and a receiver of everything published after them, taken under the same lock, so no delta between the two is lost or repeated.
+- Deltas are coalesced over an interval of 100 ms: at most one publication per interval (§4.5). With more than 20,000 subscribers on an event the interval stretches in proportion to the subscriber count, 100 ms × subscribers / 20,000, up to 500 ms at 100,000 subscribers, so the frames sent per second for one event stay at 200,000.
+- If an object changes twice within an interval, only the final state is sent (`wire::coalesce`). A change the public cannot see (held to booked, or a code that went and came back within the interval) is left out of the DELTA. An interval in which `seq` advanced but nothing public changed (an extend, a hold token created, held to booked) still publishes a DELTA, with no changes, so that every subscriber's `seq` follows the committed one. An interval with no commit publishes nothing.
+- A subscriber whose send queue exceeds 64 frames is sent RESYNC and its queue is cleared. The engine's broadcast channel keeps the last 64 publications for all subscribers together, so a receiver that falls further behind costs nothing more: it is told it lagged, receives nothing until it takes the current SNAPSHOT (`Subscription::resync`), and continues from there.
+- **PRIVATE.** Each publication carries the committed hold of every token touched since the last one (holds and releases, extends, bookings, expiry, creation). A subscriber that gave a hold token gets a PRIVATE frame right after the DELTA of a publication that touched its token, and none otherwise; it is encoded by that subscriber, so a subscriber whose token did not change does no work beyond a map lookup. A PRIVATE frame is always the token's committed hold at the `seq` of the DELTA it follows (or of the frames it follows on SUBSCRIBE), never ahead of the public state the client has. A token with no hold gets an expiry of 0 and no objects.
+- When the event's actor stops, every subscription ends: after a failure (the event reloads; the transport subscribes again with the subscriber's `seq`, which resumes it or sends a SNAPSHOT), or after a clean stop at shutdown (CLOSE 3). A subscriber keeps the actor from being evicted.
+- **Polling** (`after_seq=n`, §8.4): nothing new if `n` is current; otherwise one DELTA from `n`, the buffered deltas merged, if the ring buffer reaches back to `n`, or else the SNAPSHOT.
 - PING every 25 s; a connection silent for 60 s is closed.
 - **Public streams** carry public codes only (`02-domain-model.md` §4.2). **Manager streams** (`GET /v1/events/{event}/rt`, secret key or console session) carry domain statuses.
 - Viewers with channels get a stream computed for their channel set. Channel sets are cached per event, so cost grows with distinct sets, not with viewers.
@@ -897,7 +902,7 @@ SSE and polling have no client-to-server frames: the SUBSCRIBE fields travel as 
 - **Lists.** Each `idx` is strictly above the previous one: a difference of 0 after the first item is an error. Every `idx` is below 1,000,000 (`02-domain-model.md` §14) when decoded, and below the receiver's object count before anything is applied; a frame naming an `idx` at or past the receiver's count is refused whole. A SNAPSHOT's areas are checked against its own object count when decoded.
 - **Counts and lengths.** An object or list count above 1,000,000 is an error; so is a list count the remaining bytes could not hold (two bytes per item with a code or value, one without), so a hostile count never drives a large allocation. A length past the end of the frame is an error.
 - **Object count.** A SNAPSHOT's object count must equal the receiver's (from its chart); otherwise it is refused. A client that receives the snapshot before its chart keeps the bytes and checks them when the chart is decoded (`04-renderer.md` §4).
-- **Sequence numbers.** A DELTA has `to_seq` > `from_seq`; it moves the receiver from `from_seq` to `to_seq` and is applied only by a receiver whose `seq` is `from_seq`. Anything else (a gap, a repeat) is the adapter's cue to resync; the decoder never guesses. A DELTA may carry no changes: commands that change nothing a public stream shows (held to booked) still advance `seq`.
+- **Sequence numbers.** A DELTA has `to_seq` > `from_seq`; it moves the receiver from `from_seq` to `to_seq` and is applied only by a receiver whose `seq` is `from_seq`. Anything else (a gap, a repeat) is the adapter's cue to resync; the decoder never guesses. A DELTA may carry no changes: commands that change nothing a public stream shows (held to booked) still advance `seq`. A server's DELTAs on one stream are contiguous, and every SNAPSHOT it serves has a `seq` that some DELTA starts from, so a receiver that applies every frame in order never sees a gap.
 - **PRIVATE** carries the full set of the subscriber's own holds, replacing the previous one; an empty list means none.
 - **Errors.** A frame that fails any rule is not applied. A client then resyncs (reconnects with its last `seq`); a server sends CLOSE 6 and closes.
 
@@ -1060,7 +1065,7 @@ actor {event_id}                   one per loaded event: its load, actor and lea
 
 | Failure | Effect | Recovery |
 |---|---|---|
-| PostgreSQL unreachable | Commands fail with 503. Snapshots keep being served from memory; realtime stays connected | Automatic when the database returns |
+| PostgreSQL unreachable | Commands fail with 503. An actor stops at its next failed commit or heartbeat (within 5 s, §4.8), ending its subscriptions; its event cannot be reloaded, so its snapshot and realtime are unavailable until the database returns | Automatic when the database returns |
 | Server crash | In-flight unacknowledged commands are lost (callers got no success). Subscribers reconnect | Restart; actors reload; holds expire on schedule |
 | Network partition between two nodes (P2) | The old owner's commits fail the fencing check | The new owner continues |
 | Slow webhook endpoint | Deliveries queue for that endpoint only | Retries; replay from the console |

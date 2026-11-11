@@ -14,10 +14,13 @@
 //!   commits batches, releasing replies only after their commit.
 //! - [`Registry`]: finds or loads the actor for an event, under ownership
 //!   taken from the store; drops it when it fails, evicts it when idle, and
-//!   stops every actor at shutdown.
+//!   stops every actor at shutdown. It also attaches realtime subscribers
+//!   ([`Subscription`]) and serves the published snapshot and deltas, which
+//!   the actor publishes from committed state only (`feed`, 08 §4.5, §8.3).
 
 mod actor;
 mod chart;
+mod feed;
 mod idempotency;
 mod memory;
 mod registry;
@@ -27,6 +30,10 @@ mod types;
 
 pub use actor::{ActorConfig, ActorError, ActorHandle, KeepAlive, PendingReply, actor};
 pub use chart::{ChartError, ChartView};
+pub use feed::{
+    End, Frame, INTERVAL_MS, MAX_INTERVAL_MS, QUEUE_FRAMES, RING_BYTES, RING_MS, Received,
+    STRETCH_SUBSCRIBERS, Subscription, interval_ms,
+};
 pub use memory::{Fault, MEMORY_LEASE_MS, MemoryCharts, MemoryStore};
 pub use registry::{OpenError, Registry, RegistryConfig};
 pub use state::{EventState, HoldView, InvariantViolation, LoadError};
