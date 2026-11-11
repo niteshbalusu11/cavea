@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use cavea_compiler::document::{Curve, Node};
+use cavea_compiler::document::{Curve, Node, Path, ShapeKind};
 use cavea_compiler::{ChartDocument, compile};
 
 use crate::tests::Rng;
@@ -455,6 +455,202 @@ fn rect(origin: [f64; 2], size: [f64; 2]) -> serde_json::Value {
     serde_json::json!({ "id": 0, "type": "shape", "kind": "rect", "origin": origin, "size": size })
 }
 
+#[test]
+fn single_row_tool() {
+    let mut t = T::new(empty());
+    t.s.set_tool(ToolId::Row);
+    // Two clicks, then a click on the end: straight, 11 seats over 550.
+    t.click([0.0, 0.0]);
+    t.click([550.0, 0.0]);
+    t.click([553.0, 4.0]);
+    let row = match t.node(t.selected()) {
+        Node::Row(r) => r,
+        _ => panic!("row"),
+    };
+    let Path::Polyline { points } = &row.path;
+    assert_eq!(
+        (row.origin, points.clone()),
+        ([0.0, 0.0], vec![[0.0, 0.0], [550.0, 0.0]])
+    );
+    assert_eq!((row.seats, row.label.as_deref()), (11, Some("A")));
+    assert_eq!(row.category.as_deref(), Some("std"));
+    // Dragged, then Enter: straight.
+    t.drag([0.0, 500.0], [300.0, 500.0], NONE);
+    t.key(Key::Enter);
+    assert!(matches!(t.node(t.selected()), Node::Row(r) if r.seats == 6));
+    // A third click bends it through that point.
+    t.click([0.0, 1_000.0]);
+    t.click([1_000.0, 1_000.0]);
+    t.click([500.0, 1_200.0]);
+    let row = match t.node(t.selected()) {
+        Node::Row(r) => r,
+        _ => panic!("row"),
+    };
+    let Path::Polyline { points } = &row.path;
+    // A sag of 200 needs 20 segments for 0.5 cu (sag / n²).
+    assert_eq!(points.len(), 21);
+    assert!(close(points[10], [500.0, 200.0], 1e-9));
+    let length: f64 = points
+        .windows(2)
+        .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
+        .sum();
+    assert_eq!(row.seats, (length / 55.0).floor() as u32 + 1);
+    assert!(row.seats > 19);
+    assert_eq!(t.s.editor().undo_len(), 3);
+    compiles(&ChartDocument {
+        nodes: vec![Node::Row(row)],
+        ..empty()
+    });
+    // Escape after the second click leaves nothing.
+    let before = t.state();
+    t.click([0.0, 2_000.0]);
+    t.click([500.0, 2_000.0]);
+    t.key(Key::Escape);
+    assert_eq!(t.state(), before);
+}
+
+#[test]
+fn shape_tools() {
+    let mut t = T::new(empty());
+    t.s.set_tool(ToolId::Rect);
+    t.drag([0.0, 0.0], [200.0, -100.0], NONE);
+    let s = shape(&t.node(t.selected())).clone();
+    assert_eq!(
+        (s.kind, s.origin, s.size),
+        (ShapeKind::Rect, [100.0, -50.0], Some([200.0, 100.0]))
+    );
+    assert_eq!(s.style.fill.as_deref(), Some(draft_fill()));
+    t.drag([0.0, 0.0], [200.0, 100.0], SHIFT);
+    let s = shape(&t.node(t.selected())).clone();
+    assert_eq!((s.origin, s.size), ([100.0, 100.0], Some([200.0, 200.0])));
+    t.click([0.0, 500.0]);
+    assert_eq!(t.s.document().ids().count(), 2, "a click draws nothing");
+    t.s.set_tool(ToolId::Ellipse);
+    t.drag([0.0, 0.0], [-50.0, 80.0], NONE);
+    let s = shape(&t.node(t.selected())).clone();
+    assert_eq!(
+        (s.kind, s.origin, s.size),
+        (ShapeKind::Ellipse, [-25.0, 40.0], Some([50.0, 80.0]))
+    );
+    // Lines: dragged with Shift (15° steps), or two clicks.
+    t.s.set_tool(ToolId::Line);
+    t.drag([0.0, 0.0], [100.0, 30.0], SHIFT);
+    let s = shape(&t.node(t.selected())).clone();
+    let end = s
+        .points
+        .as_deref()
+        .and_then(|p| p.last().copied())
+        .expect("end");
+    let r = 100f64.hypot(30.0);
+    assert!(close(
+        end,
+        [r * 15f64.to_radians().cos(), r * 15f64.to_radians().sin()],
+        1e-9
+    ));
+    assert!(s.style.fill.is_none() && s.style.stroke_width > 0.0);
+    t.click([0.0, 0.0]);
+    t.click([0.0, 100.0]);
+    let s = shape(&t.node(t.selected())).clone();
+    assert_eq!(s.points, Some(vec![[0.0, 0.0], [0.0, 100.0]]));
+    // A polygon closed on its first corner.
+    t.s.set_tool(ToolId::Polygon);
+    for p in [
+        [0.0, 0.0],
+        [100.0, 0.0],
+        [100.0, 100.0],
+        [0.0, 100.0],
+        [1.0, 1.0],
+    ] {
+        t.click(p);
+    }
+    let s = shape(&t.node(t.selected())).clone();
+    assert_eq!(s.kind, ShapeKind::Polygon);
+    assert_eq!(s.points.as_ref().map(Vec::len), Some(4));
+    let entries = t.s.editor().undo_len();
+    // A corner whose edge crosses the outline is refused; Enter closes.
+    for p in [[0.0, 0.0], [100.0, 100.0], [100.0, 0.0], [0.0, 100.0]] {
+        t.click(p);
+    }
+    assert!(matches!(t.s.overlay().readout, Some(Readout::Points(3))));
+    t.key(Key::Enter);
+    assert_eq!(
+        shape(&t.node(t.selected())).points.as_ref().map(Vec::len),
+        Some(3)
+    );
+    // A closing edge that would cross the outline is refused.
+    let before = t.state();
+    let spiral = [
+        [0.0, 0.0],
+        [100.0, 0.0],
+        [100.0, 100.0],
+        [10.0, 100.0],
+        [10.0, 30.0],
+        [50.0, 30.0],
+        [50.0, 70.0],
+    ];
+    spiral.iter().for_each(|&p| t.click(p));
+    t.key(Key::Enter);
+    t.click([0.0, 0.0]);
+    assert_eq!(t.state(), before);
+    t.key(Key::Escape);
+    assert_eq!(t.s.overlay().preview, Vec::<[f64; 2]>::new());
+    assert_eq!(t.s.editor().undo_len(), entries + 1);
+    for id in t.s.document().ids().collect::<Vec<_>>() {
+        compiles(&ChartDocument {
+            nodes: vec![t.node(id)],
+            ..empty()
+        });
+    }
+}
+
+fn draft_fill() -> &'static str {
+    "#D1D5DB"
+}
+
+#[test]
+fn text_tool() {
+    let mut t = T::new(empty());
+    t.s.set_tool(ToolId::Text);
+    t.click([0.0, -500.0]);
+    let field = t.s.overlay().text.expect("field");
+    assert_eq!(
+        (field.node, field.at, field.text.as_str()),
+        (None, [0.0, -500.0], "")
+    );
+    t.s.set_text("ST");
+    t.s.set_text("STAGE");
+    t.key(Key::Enter);
+    let id = t.selected();
+    assert!(matches!(t.node(id), Node::Text(x) if x.text == "STAGE" && x.origin == [0.0, -500.0]));
+    assert_eq!(t.s.editor().undo_len(), 1);
+    assert!(t.s.overlay().text.is_none());
+    // Empty on commit, or Escape: nothing.
+    let before = t.state();
+    t.click([0.0, 500.0]);
+    t.s.set_text("x");
+    t.s.set_text("");
+    t.key(Key::Enter);
+    t.click([0.0, 500.0]);
+    t.s.set_text("Hi");
+    t.key(Key::Escape);
+    assert_eq!(t.state(), before);
+    // A click away commits.
+    t.click([0.0, 900.0]);
+    t.s.set_text("Bar");
+    t.click([500.0, 900.0]);
+    assert_eq!(t.s.editor().undo_len(), 2);
+    // A double click with the select tool edits the string.
+    t.s.set_tool(ToolId::Select);
+    t.click([0.0, -500.0]);
+    t.time -= 900.0;
+    t.click([0.0, -500.0]);
+    assert_eq!(t.s.overlay().text.and_then(|f| f.node), Some(id));
+    t.s.set_text("STAGE LEFT");
+    t.key(Key::Enter);
+    assert!(matches!(t.node(id), Node::Text(x) if x.text == "STAGE LEFT"));
+    assert_eq!(t.s.editor().undo_len(), 3);
+}
+
 /// `p` turned by `degrees` about `c` (clockwise, y down).
 fn turn(p: [f64; 2], c: [f64; 2], degrees: f64) -> [f64; 2] {
     let (s, k) = degrees.to_radians().sin_cos();
@@ -804,8 +1000,18 @@ fn draw_a_theatre() {
     assert!(compiled.stats.seats > 200, "{}", compiled.stats.seats);
 }
 
-fn tools() -> [ToolId; 3] {
-    [ToolId::Select, ToolId::RowBlock, ToolId::ArcBlock]
+fn tools() -> [ToolId; 9] {
+    [
+        ToolId::Select,
+        ToolId::RowBlock,
+        ToolId::ArcBlock,
+        ToolId::Row,
+        ToolId::Rect,
+        ToolId::Ellipse,
+        ToolId::Polygon,
+        ToolId::Line,
+        ToolId::Text,
+    ]
 }
 
 /// Every id, `rid` and `oid` of a document.
@@ -872,6 +1078,7 @@ fn event(t: &mut T, r: &mut Rng) {
                 t.key(r.pick(&keys).unwrap_or(Key::Enter));
             }
         }
+        10 => t.s.set_text(["", "A", "STAGE", "Ünïcødé"][r.below(4)]),
         11 => t.s.set_tool(r.pick(&tools()).unwrap_or(ToolId::Select)),
         12 => drop(t.s.undo()),
         13 => {
@@ -921,7 +1128,7 @@ fn generated_traces() {
         for node in shapes.into_iter().take(seed as usize / 3 % 4) {
             add(&mut t.s, node);
         }
-        t.s.set_tool(tools()[(seed as usize) % 3]);
+        t.s.set_tool(tools()[(seed as usize) % 9]);
         let mut committed = t.state();
         let mut ever = ids(&t.s.document().snapshot());
         for _ in 0..60 {
@@ -1014,6 +1221,16 @@ fn hostile_drawing_input() {
     for _ in 0..3_000 {
         t.click([r.f(5_000.0), r.f(5_000.0)]);
     }
+    t.s.set_tool(ToolId::Polygon);
+    for _ in 0..10_000 {
+        t.click([r.f(5_000.0), r.f(5_000.0)]);
+    }
+    assert!(t.s.overlay().preview.len() <= 4_097);
+    t.key(Key::Enter);
+    t.s.set_tool(ToolId::Text);
+    t.click([0.0, 0.0]);
+    t.s.set_text(&"x".repeat(100_000));
+    t.key(Key::Enter);
     t.s.set_tool(ToolId::Select);
     assert!(!t.s.editor().gesture_open());
     ChartDocument::from_json(&t.state()).expect("parses");

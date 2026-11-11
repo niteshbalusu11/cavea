@@ -141,6 +141,14 @@ impl Live {
         *self = Live::default();
         created
     }
+
+    pub(crate) fn shown(&self) -> bool {
+        self.shown.is_some()
+    }
+
+    pub(crate) fn created(&self) -> Option<u32> {
+        self.created
+    }
 }
 
 /// Commits a drawing and selects the node it made, at its level.
@@ -157,6 +165,11 @@ pub(crate) fn select(sel: &mut Selection, doc: &crate::Document, level: Level, i
 /// Bookable objects the chart may still take (02 §14).
 pub(crate) fn budget(cx: &Context<'_>) -> u64 {
     u64::from(MAX_OBJECTS).saturating_sub(cx.editor.document().objects())
+}
+
+/// The world distance of `screen` CSS pixels at the pointer's zoom.
+pub(crate) fn px(p: &Pointer, screen: f64) -> f64 {
+    screen / p.zoom
 }
 
 pub(crate) fn dist(a: P, b: P) -> f64 {

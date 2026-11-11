@@ -12,7 +12,8 @@ use crate::editor::{Applied, Editor};
 use crate::index::{Rect, SpatialIndex};
 use crate::selection::{self, Level, Selection};
 use crate::tool::{
-    self, ArcTool, BlockTool, Context, Cursor, Input, Overlay, SelectTool, Tool, ToolId,
+    self, ArcTool, BlockTool, Context, Cursor, Input, Overlay, RowTool, SelectTool, ShapeKindTool,
+    ShapeTool, TextTool, Tool, ToolId,
 };
 
 #[derive(Debug)]
@@ -82,6 +83,12 @@ impl Session {
             ToolId::Select => Box::new(SelectTool::default()),
             ToolId::RowBlock => Box::new(BlockTool::default()),
             ToolId::ArcBlock => Box::new(ArcTool::default()),
+            ToolId::Row => Box::new(RowTool::default()),
+            ToolId::Rect => Box::new(ShapeTool::new(ShapeKindTool::Rect)),
+            ToolId::Ellipse => Box::new(ShapeTool::new(ShapeKindTool::Ellipse)),
+            ToolId::Polygon => Box::new(ShapeTool::new(ShapeKindTool::Polygon)),
+            ToolId::Line => Box::new(ShapeTool::new(ShapeKindTool::Line)),
+            ToolId::Text => Box::new(TextTool::default()),
         };
         self.tool_id = id;
     }
@@ -93,6 +100,12 @@ impl Session {
 
     pub fn set_category(&mut self, key: Option<String>) {
         self.category = key;
+    }
+
+    /// The whole string of the text field the tool asked for
+    /// (`Overlay::text`), on every change.
+    pub fn set_text(&mut self, text: &str) {
+        self.with_tool(|tool, cx| tool.text(cx, text));
     }
 
     /// Creates the node a drawing tool would make from these numbers, at the

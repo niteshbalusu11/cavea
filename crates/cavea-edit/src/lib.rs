@@ -29,7 +29,7 @@ pub use selection::{Level, Selection};
 pub use session::Session;
 pub use tool::{
     Button, Corner, Cursor, Handle, HandleKind, Input, Key, Modifiers, Overlay, Pointer,
-    PointerKind, Readout, Side, ToolId, tuning,
+    PointerKind, Readout, Side, TextField, ToolId, tuning,
 };
 
 #[cfg(test)]
