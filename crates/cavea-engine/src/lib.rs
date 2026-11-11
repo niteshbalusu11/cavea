@@ -24,6 +24,7 @@ mod feed;
 mod idempotency;
 mod memory;
 mod registry;
+mod replay;
 mod state;
 mod store;
 mod types;
@@ -36,6 +37,7 @@ pub use feed::{
 };
 pub use memory::{Fault, MEMORY_LEASE_MS, MemoryCharts, MemoryStore};
 pub use registry::{OpenError, Registry, RegistryConfig};
+pub use replay::{Difference, HoldField, ObjectField, Rebuilt, Replay, ReplayError, ReplayHold};
 pub use state::{EventState, HoldView, InvariantViolation, LoadError};
 pub use store::{
     Acquired, Batch, Booking, ChartProvider, HoldRow, IdempotencyRecord, LoadedEvent, LogDetail,

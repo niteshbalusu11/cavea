@@ -968,3 +968,4 @@ mod objects;
 mod realtime;
 mod seats;
 mod session;
+mod verify;

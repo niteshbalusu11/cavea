@@ -51,15 +51,15 @@ use std::task::{Context, Poll, Waker};
 use cavea_engine::{
     Acquired, ActorConfig, Authority, Batch, ChartVersionId, Clock, Command, End, EventId, Failure,
     Frame, HoldId, Idempotency, LoadedEvent, LogRecord, ManualClock, MemoryCharts, MemoryStore,
-    OpenError, Outcome, Received, Registry, RegistryConfig, Reply, Request, SeatStore, StoreError,
-    Subscription, Timestamp, TokenHash,
+    OpenError, Outcome, Received, Registry, RegistryConfig, Replay, Reply, Request, SeatStore,
+    StoreError, Subscription, Timestamp, TokenHash,
 };
 use cavea_format::wire::{self, ServerFrame, View};
 use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::case::{T0, gen_request, reply_kind, token, token_of};
-use crate::model::{Model, Replay};
+use crate::model::{Model, diff_loaded, public};
 use crate::{EVENT, Rng, Stats, TraceHash, Violation, chart, ensure, poll_now};
 
 const CHART: ChartVersionId = ChartVersionId(70);
@@ -1102,7 +1102,7 @@ impl Sim {
         for e in touched {
             let loaded = self.load(e)?;
             if let Some(ev) = self.evs.get(e) {
-                ev.replay.diff_loaded(&loaded)?;
+                diff_loaded(&ev.replay, &loaded)?;
             }
             self.stats.count("INV-6 store vs log");
         }
@@ -1852,7 +1852,7 @@ fn apply(
         ));
     };
     ensure!(
-        s.codes == state.public(OBJECTS),
+        s.codes == public(state, OBJECTS),
         "INV-8",
         "subscriber codes at {seq} differ from the committed state"
     );
@@ -1885,10 +1885,10 @@ fn check_private(s: &Sub, ev: &Ev) -> Result<(), Violation> {
             .holds
             .iter()
             .find(|(id, _)| ev.tokens.get(id) == Some(&t));
-        let expected = held.map_or((0, Vec::new()), |(_, (at, oids))| {
-            let mut idx: Vec<u32> = oids.iter().filter_map(|&o| crate::idx_of(o)).collect();
+        let expected = held.map_or((0, Vec::new()), |(_, h)| {
+            let mut idx: Vec<u32> = h.objects.iter().filter_map(|&o| crate::idx_of(o)).collect();
             idx.sort_unstable();
-            (at.0, idx)
+            (h.expires_at.0, idx)
         });
         ensure!(
             *mine == expected,

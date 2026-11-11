@@ -436,7 +436,8 @@ impl Params {
 }
 
 /// `event_log.detail`: what replaying the log needs beyond the columns. Built
-/// as text so that `extra`, already JSON, is embedded as it is.
+/// as text so that `extra`, already JSON, is embedded as it is. The
+/// reconciler reads it back (`crate::verify`).
 fn detail(r: &LogRecord) -> Option<String> {
     let mut fields = Vec::new();
     if let Some(status) = r.status {
@@ -444,6 +445,11 @@ fn detail(r: &LogRecord) -> Option<String> {
     }
     if let Some(at) = r.expires_at {
         fields.push(format!("\"expires_at\":{}", at.0));
+    }
+    // A hold's limit, so that the log rebuilds `holds`; absent for an
+    // unlimited hold. Its token hash is never logged (08 §4.4).
+    if let Some(max) = r.max_objects {
+        fields.push(format!("\"max_objects\":{max}"));
     }
     if !r.details.is_empty() {
         let mut objects = String::from("\"objects\":[");

@@ -281,6 +281,7 @@ fn record(seq: u64, op: Op) -> LogRecord {
         hold_id: None,
         oids: vec![],
         expires_at: None,
+        max_objects: None,
         order_ref: None,
         status: None,
         details: vec![],

@@ -8,8 +8,8 @@
 //! the hold token, the object references, then the per-object conditions and
 //! last the token's object limit.
 //!
-//! [`Replay`] rebuilds state from the committed log alone and refuses any
-//! record that is not a legal transition.
+//! The log replay ([`Replay`]) lives in `cavea-engine`, where the reconciler
+//! uses it too; here are the comparisons only tests make with it.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -17,7 +17,7 @@ use std::sync::Arc;
 use cavea_engine::{
     Authority, BookDetail, Booking, Command, EventState, Failure, HoldId, Idx, InvalidReason,
     LoadedEvent, LogRecord, Missing, ObjectFailure, ObjectReason, ObjectRef, Oid, Op, Outcome,
-    Reply, Request, Status, Timestamp, TokenHash, limits,
+    Replay, ReplayError, ReplayHold, Reply, Request, Status, Timestamp, TokenHash, limits,
 };
 
 use crate::{Violation, ensure, idx_of, oid};
@@ -342,6 +342,7 @@ impl Model {
             hold_id,
             oids,
             expires_at: None,
+            max_objects: None,
             order_ref: None,
             status: None,
             details: Vec::new(),
@@ -380,6 +381,7 @@ impl Model {
         self.push_log(Op::CreateHold, actor, Some(id), Vec::new());
         if let Some(r) = self.last_log() {
             r.expires_at = Some(expires_at);
+            r.max_objects = max_objects;
         }
         Ok(Outcome::HoldCreated {
             seq: self.seq,
@@ -736,301 +738,82 @@ impl Model {
     }
 }
 
-/// An object as the log rebuilds it: status, hold, booking, and the `seq` of
-/// the last command that changed it.
-pub type Rebuilt = (Status, Option<HoldId>, Option<Booking>, u64);
-
-/// State rebuilt from the committed log alone (INV-6), as the reconciler will
-/// (13 §3.3). Each record must be a legal transition from the state before
-/// it: a booking of a booked object is INV-10, a `seq` out of turn INV-5.
-///
-/// The log carries each hold's id, expiry and objects, not its token hash or
-/// object limit, which live only in `holds`: [`Replay`] rebuilds the former.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Replay {
-    pub seq: u64,
-    pub objects: BTreeMap<Oid, Rebuilt>,
-    pub holds: BTreeMap<HoldId, (Timestamp, BTreeSet<Oid>)>,
+impl From<ReplayError> for Violation {
+    fn from(e: ReplayError) -> Self {
+        Violation::new(e.invariant, format!("seq {}: {}", e.seq, e.detail))
+    }
 }
 
-impl Replay {
-    pub fn apply(&mut self, r: &LogRecord) -> Result<(), Violation> {
-        ensure!(
-            r.seq == self.seq + 1,
-            "INV-5",
-            "log seq {} after {}",
-            r.seq,
-            self.seq
-        );
-        self.seq = r.seq;
-        let seq = r.seq;
-        let hold = r.hold_id;
-        let unique: BTreeSet<Oid> = r.oids.iter().copied().collect();
-        ensure!(
-            unique.len() == r.oids.len(),
-            "INV-6",
-            "seq {seq}: an oid twice"
-        );
-        let changes_objects = !matches!(r.op, Op::CreateHold | Op::ExtendHold | Op::Expire);
-        ensure!(
-            !changes_objects || !r.oids.is_empty(),
-            "INV-6",
-            "seq {seq}: {:?} changes nothing",
-            r.op
-        );
-        let status = |objects: &BTreeMap<Oid, Rebuilt>, o: &Oid| {
-            objects.get(o).map_or(Status::FREE, |x| x.0)
-        };
-        let held_by = |objects: &BTreeMap<Oid, Rebuilt>, o: &Oid| objects.get(o).and_then(|x| x.1);
-        match r.op {
-            Op::CreateHold => {
-                ensure!(
-                    hold == Some(HoldId(seq)),
-                    "INV-6",
-                    "seq {seq}: hold id {hold:?}"
-                );
-                let Some(at) = r.expires_at else {
-                    return Err(Violation::new("INV-6", format!("seq {seq}: no expiry")));
-                };
-                self.holds.insert(HoldId(seq), (at, BTreeSet::new()));
-            }
-            Op::ExtendHold => {
-                let h = hold.and_then(|id| self.holds.get_mut(&id));
-                match (h, r.expires_at) {
-                    (Some(h), Some(at)) => h.0 = at,
-                    _ => {
-                        return Err(Violation::new(
-                            "INV-6",
-                            format!("seq {seq}: extend {hold:?}"),
-                        ));
-                    }
-                }
-            }
-            Op::Expire => {
-                let Some(id) = hold else {
-                    return Err(Violation::new(
-                        "INV-6",
-                        format!("seq {seq}: expire no hold"),
-                    ));
-                };
-                let Some((_, held)) = self.holds.remove(&id) else {
-                    return Err(Violation::new(
-                        "INV-6",
-                        format!("seq {seq}: expire unknown {id:?}"),
-                    ));
-                };
-                ensure!(
-                    held == unique,
-                    "INV-6",
-                    "seq {seq}: expiry frees {unique:?}, hold had {held:?}"
-                );
-                for o in &held {
-                    self.objects.remove(o);
-                }
-            }
-            Op::Hold => {
-                let Some(id) = hold.filter(|id| self.holds.contains_key(id)) else {
-                    return Err(Violation::new(
-                        "INV-6",
-                        format!("seq {seq}: hold for {hold:?}"),
-                    ));
-                };
-                for o in &unique {
-                    let s = status(&self.objects, o);
-                    ensure!(s == Status::FREE, "INV-6", "seq {seq}: held {o} from {s:?}");
-                    self.objects.insert(*o, (Status::HELD, Some(id), None, seq));
-                }
-                if let Some(h) = self.holds.get_mut(&id) {
-                    h.1.extend(&unique);
-                }
-            }
-            Op::Release => {
-                for o in &unique {
-                    match hold {
-                        Some(id) => ensure!(
-                            held_by(&self.objects, o) == Some(id),
-                            "INV-6",
-                            "seq {seq}: released {o} not held by {id:?}"
-                        ),
-                        None => ensure!(
-                            status(&self.objects, o) == Status::BOOKED,
-                            "INV-6",
-                            "seq {seq}: unbooked {o} that is not booked"
-                        ),
-                    }
-                    self.objects.remove(o);
-                }
-                if let Some(h) = hold.and_then(|id| self.holds.get_mut(&id)) {
-                    h.1.retain(|o| !unique.contains(o));
-                }
-            }
-            Op::Book => {
-                let Some(order_ref) = r.order_ref.clone() else {
-                    return Err(Violation::new(
-                        "INV-6",
-                        format!("seq {seq}: book without order"),
-                    ));
-                };
-                // 02 §6: details name only objects being booked, each once.
-                let detailed: BTreeSet<Oid> = r.details.iter().map(|d| d.0).collect();
-                ensure!(
-                    detailed.len() == r.details.len() && detailed.is_subset(&unique),
-                    "INV-6",
-                    "seq {seq}: booking details name {detailed:?}"
-                );
-                for o in &unique {
-                    let s = status(&self.objects, o);
-                    ensure!(
-                        s != Status::BOOKED,
-                        "INV-10",
-                        "seq {seq}: {o} booked again without a release"
-                    );
-                    match hold {
-                        Some(id) => ensure!(
-                            held_by(&self.objects, o) == Some(id),
-                            "INV-6",
-                            "seq {seq}: booked {o} not held by {id:?}"
-                        ),
-                        None => ensure!(
-                            s == Status::FREE,
-                            "INV-6",
-                            "seq {seq}: booked {o} from {s:?}"
-                        ),
-                    }
-                    let d = r.details.iter().find(|d| d.0 == *o);
-                    let booking = Booking {
-                        order_ref: order_ref.clone(),
-                        ticket_type: d.and_then(|d| d.1.clone()),
-                        extra: d.and_then(|d| d.2.clone()),
-                    };
-                    self.objects
-                        .insert(*o, (Status::BOOKED, None, Some(booking), seq));
-                }
-                if let Some(id) = hold {
-                    let Some(h) = self.holds.get_mut(&id) else {
-                        return Err(Violation::new(
-                            "INV-6",
-                            format!("seq {seq}: book for {id:?}"),
-                        ));
-                    };
-                    h.1.retain(|o| !unique.contains(o));
-                    if h.1.is_empty() {
-                        self.holds.remove(&id);
-                    }
-                }
-            }
-            Op::ChangeStatus => {
-                let target = r.status.unwrap_or(Status::HELD);
-                ensure!(
-                    target != Status::HELD && target != Status::BOOKED && hold.is_none(),
-                    "INV-6",
-                    "seq {seq}: change-status to {target:?}"
-                );
-                for o in &unique {
-                    let s = status(&self.objects, o);
-                    let legal = if target == Status::FREE {
-                        s != Status::FREE && s != Status::HELD && s != Status::BOOKED
-                    } else {
-                        s == Status::FREE
-                    };
-                    ensure!(legal, "INV-6", "seq {seq}: {o} from {s:?} to {target:?}");
-                    if target == Status::FREE {
-                        self.objects.remove(o);
-                    } else {
-                        self.objects.insert(*o, (target, None, None, seq));
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
+/// The public code of every object of a replayed log, by `idx` (02 §4.2).
+#[must_use]
+pub fn public(replay: &Replay, objects: u32) -> Vec<u8> {
+    (0..objects)
+        .map(|i| u8::from(replay.objects.contains_key(&oid(i))))
+        .collect()
+}
 
-    /// The public code of every object, by `idx` (02 §4.2).
-    #[must_use]
-    pub fn public(&self, objects: u32) -> Vec<u8> {
-        (0..objects)
-            .map(|i| u8::from(self.objects.contains_key(&oid(i))))
-            .collect()
+/// INV-6 against memory: the same objects and holds (id, expiry, limit,
+/// objects) as the replayed log.
+pub fn diff_state(replay: &Replay, state: &EventState) -> Result<(), Violation> {
+    ensure!(
+        replay.seq == state.seq(),
+        "INV-6",
+        "log ends at {}, memory at {}",
+        replay.seq,
+        state.seq()
+    );
+    for idx in 0..state.chart().len() as Idx {
+        let real = (state.status(idx), state.holder(idx), state.booking(idx));
+        let log = replay.objects.get(&oid(idx));
+        let log = log.map_or((Some(Status::FREE), None, None), |o| {
+            (Some(o.0), o.1, o.2.as_ref())
+        });
+        ensure!(
+            real == log,
+            "INV-6",
+            "object {idx}: memory {real:?}, log {log:?}"
+        );
     }
+    let real: BTreeMap<HoldId, ReplayHold> = state
+        .holds()
+        .map(|h| {
+            let hold = ReplayHold {
+                expires_at: h.expires_at,
+                max_objects: h.max_objects,
+                objects: h.objects.iter().map(|&i| oid(i)).collect(),
+            };
+            (h.id, hold)
+        })
+        .collect();
+    ensure!(
+        real == replay.holds,
+        "INV-6",
+        "holds: memory {real:?}, log {:?}",
+        replay.holds
+    );
+    Ok(())
+}
 
-    /// INV-6 against memory: the same objects and holds (id, expiry, objects).
-    pub fn diff_state(&self, state: &EventState) -> Result<(), Violation> {
+/// INV-6 against the store's rows, by the reconciler's own comparison
+/// ([`Replay::compare`]), and every row naming an object of the chart.
+pub fn diff_loaded(replay: &Replay, loaded: &LoadedEvent) -> Result<(), Violation> {
+    let holds = loaded
+        .holds
+        .iter()
+        .map(|h| (h.id, h.expires_at, h.max_objects));
+    let differences = replay.compare(loaded.seq, holds, &loaded.objects);
+    ensure!(
+        differences.is_empty(),
+        "INV-6",
+        "store differs from the log: {differences:?}"
+    );
+    for o in &loaded.objects {
         ensure!(
-            self.seq == state.seq(),
+            idx_of(o.oid).is_some(),
             "INV-6",
-            "log ends at {}, memory at {}",
-            self.seq,
-            state.seq()
+            "row for unknown oid {}",
+            o.oid
         );
-        for idx in 0..state.chart().len() as Idx {
-            let real = (state.status(idx), state.holder(idx), state.booking(idx));
-            let log = self.objects.get(&oid(idx));
-            let log = log.map_or((Some(Status::FREE), None, None), |o| {
-                (Some(o.0), o.1, o.2.as_ref())
-            });
-            ensure!(
-                real == log,
-                "INV-6",
-                "object {idx}: memory {real:?}, log {log:?}"
-            );
-        }
-        let real: BTreeMap<HoldId, (Timestamp, BTreeSet<Oid>)> = state
-            .holds()
-            .map(|h| {
-                (
-                    h.id,
-                    (h.expires_at, h.objects.iter().map(|&i| oid(i)).collect()),
-                )
-            })
-            .collect();
-        ensure!(
-            real == self.holds,
-            "INV-6",
-            "holds: memory {real:?}, log {:?}",
-            self.holds
-        );
-        Ok(())
     }
-
-    /// INV-6 against the store's rows: `object_state` (with each row's `seq`)
-    /// and `holds` (id and expiry).
-    pub fn diff_loaded(&self, loaded: &LoadedEvent) -> Result<(), Violation> {
-        ensure!(
-            loaded.seq == self.seq,
-            "INV-6",
-            "store seq {}, log {}",
-            loaded.seq,
-            self.seq
-        );
-        let rows: BTreeMap<Oid, Rebuilt> = loaded
-            .objects
-            .iter()
-            .map(|o| (o.oid, (o.status, o.hold_id, o.booking.clone(), o.seq)))
-            .collect();
-        ensure!(
-            rows.len() == loaded.objects.len(),
-            "INV-6",
-            "an object row twice"
-        );
-        ensure!(
-            rows == self.objects,
-            "INV-6",
-            "object rows {rows:?}, log {:?}",
-            self.objects
-        );
-        let holds: BTreeMap<HoldId, Timestamp> =
-            loaded.holds.iter().map(|h| (h.id, h.expires_at)).collect();
-        let log: BTreeMap<HoldId, Timestamp> =
-            self.holds.iter().map(|(id, h)| (*id, h.0)).collect();
-        ensure!(holds == log, "INV-6", "hold rows {holds:?}, log {log:?}");
-        for o in &loaded.objects {
-            ensure!(
-                idx_of(o.oid).is_some(),
-                "INV-6",
-                "row for unknown oid {}",
-                o.oid
-            );
-        }
-        Ok(())
-    }
+    Ok(())
 }

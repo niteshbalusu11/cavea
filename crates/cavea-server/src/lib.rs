@@ -10,6 +10,7 @@ pub mod net;
 pub mod realtime;
 pub mod seats;
 pub mod store;
+pub mod verify;
 
 use std::future::Future;
 use std::net::SocketAddr;
