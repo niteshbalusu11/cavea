@@ -2,6 +2,13 @@
 // Do not edit: change the server's route table, regenerate the document,
 // then run `cargo xtask types` (09 §9).
 
+export interface AcceptInvitation {
+  /** Not signed in, for an email with no account: the new user's password. */
+  password?: string;
+  /** The 64 hex digits of the link's fragment. */
+  token: string;
+}
+
 export interface Asset {
   content_type: "image/png" | "image/jpeg" | "image/webp";
   /** The content hash: 32 lowercase hex digits. */
@@ -12,6 +19,25 @@ export interface Asset {
   /** Where it is served, relative to the server. */
   url: string;
   width: number;
+}
+
+export interface AuditEntry {
+  action: "console.setup" | "console.sign_in" | "console.sign_in_failed" | "console.sign_out" | "console.password_changed" | "member.invited" | "member.joined" | "member.role_changed" | "member.removed" | "invitation.revoked" | "workspace.created" | "workspace.renamed" | "api_key.created" | "api_key.revoked" | "chart.published" | "chart.archived" | "event.created" | "event.archived";
+  /** `usr_…`, `key_…`, `admin`, or `anonymous` (a failed sign-in). */
+  actor: string;
+  at: string;
+  /** Small facts: `role`, `from` and `to`, `kind`, `version`. */
+  detail: Record<string, unknown> | null;
+  /** `aud_` and a number. */
+  id: string;
+  request_id: string | null;
+  /** What was acted on: `usr_…`, `key_…`, `inv_…`, `ws_…`, or a chart's or event's key. */
+  target: string | null;
+}
+
+export interface AuditList {
+  data: AuditEntry[];
+  next: string | null;
 }
 
 export interface Book {
@@ -100,6 +126,13 @@ export interface ConsoleSetup {
 export interface ConsoleSignIn {
   email: string;
   password: string;
+}
+
+export interface ConsoleWorkspace {
+  /** `ws_` and 32 hex digits. */
+  id: string;
+  key: string;
+  name: string;
 }
 
 export interface Counts {
@@ -238,6 +271,35 @@ export interface HoldTokenState {
   objects: ObjectLabel[];
 }
 
+export interface Invitation {
+  created_at: string;
+  email: string;
+  expires_at: string;
+  /** `inv_` and 32 hex digits. */
+  id: string;
+  role: "owner" | "admin" | "editor" | "operator" | "viewer";
+}
+
+export interface InvitationCreated {
+  invitation: Invitation;
+  /** `{CAVEA_PUBLIC_URL}/console/invite#token=<64 hex digits>`, shown only here: give it to the person invited. The console's page posts the token to `/console/api/invitations/accept`. */
+  link: string;
+}
+
+export interface InvitationList {
+  data: Invitation[];
+  next: string | null;
+}
+
+export interface InviteMember {
+  email: string;
+  role: "owner" | "admin" | "editor" | "operator" | "viewer";
+}
+
+export interface InviteOwner {
+  email: string;
+}
+
 export interface Key {
   /** Publishable keys only; `null` accepts every origin. */
   allowed_origins: string[] | null;
@@ -343,6 +405,10 @@ export interface Release {
   objects?: ObjectRefs;
 }
 
+export interface RenameWorkspace {
+  name: string;
+}
+
 export interface SeatReply {
   objects: ObjectLabel[];
   seq: number;
@@ -422,6 +488,22 @@ export interface WorkspaceMember {
 /** Each operation's input (path and query parameters, headers other than
  * the request layer's, body) and reply. */
 export interface Operations {
+  listAudit: {
+    input: { query?: { limit?: number; after?: string } };
+    reply: AuditList;
+  };
+  listInvitations: {
+    input: { query?: { limit?: number; after?: string } };
+    reply: InvitationList;
+  };
+  acceptInvitation: {
+    input: { body: AcceptInvitation };
+    reply: ConsoleMe;
+  };
+  revokeInvitation: {
+    input: { path: { invitation: string } };
+    reply: undefined;
+  };
   consoleMe: {
     input: Record<string, never>;
     reply: ConsoleMe;
@@ -429,6 +511,10 @@ export interface Operations {
   listMembers: {
     input: { query?: { limit?: number; after?: string } };
     reply: MemberList;
+  };
+  inviteMember: {
+    input: { body: InviteMember };
+    reply: InvitationCreated;
   };
   removeMember: {
     input: { path: { user: string } };
@@ -453,6 +539,10 @@ export interface Operations {
   consoleSetup: {
     input: { body: ConsoleSetup };
     reply: ConsoleMe;
+  };
+  renameWorkspace: {
+    input: { body: RenameWorkspace };
+    reply: ConsoleWorkspace;
   };
   healthz: {
     input: Record<string, never>;
@@ -626,6 +716,10 @@ export interface Operations {
     input: { body: CreateWorkspace };
     reply: WorkspaceCreated;
   };
+  inviteWorkspaceOwner: {
+    input: { path: { workspace: string }; body: InviteOwner };
+    reply: InvitationCreated;
+  };
   mintWorkspaceKey: {
     input: { path: { workspace: string }; body: MintKey };
     reply: KeyCreated;
@@ -638,14 +732,20 @@ export type OperationId = keyof Operations;
  * a console session's workspace must grant, `null` when the route takes
  * no staff credential. */
 export const OPERATIONS = {
+  listAudit: { method: "GET", path: "/console/api/audit", permission: "settings", roles: ["owner", "admin"] },
+  listInvitations: { method: "GET", path: "/console/api/invitations", permission: "settings", roles: ["owner", "admin"] },
+  acceptInvitation: { method: "POST", path: "/console/api/invitations/accept", permission: null, roles: [] },
+  revokeInvitation: { method: "DELETE", path: "/console/api/invitations/{invitation}", permission: "settings", roles: ["owner", "admin"] },
   consoleMe: { method: "GET", path: "/console/api/me", permission: null, roles: [] },
   listMembers: { method: "GET", path: "/console/api/members", permission: "settings", roles: ["owner", "admin"] },
+  inviteMember: { method: "POST", path: "/console/api/members", permission: "settings", roles: ["owner", "admin"] },
   removeMember: { method: "DELETE", path: "/console/api/members/{user}", permission: "settings", roles: ["owner", "admin"] },
   changeMemberRole: { method: "PATCH", path: "/console/api/members/{user}", permission: "settings", roles: ["owner", "admin"] },
   consolePassword: { method: "POST", path: "/console/api/password", permission: null, roles: [] },
   consoleSignOut: { method: "DELETE", path: "/console/api/session", permission: null, roles: [] },
   consoleSignIn: { method: "POST", path: "/console/api/session", permission: null, roles: [] },
   consoleSetup: { method: "POST", path: "/console/api/setup", permission: null, roles: [] },
+  renameWorkspace: { method: "PATCH", path: "/console/api/workspace", permission: "settings", roles: ["owner", "admin"] },
   healthz: { method: "GET", path: "/healthz", permission: null, roles: [] },
   metrics: { method: "GET", path: "/metrics", permission: null, roles: [] },
   readyz: { method: "GET", path: "/readyz", permission: null, roles: [] },
@@ -689,5 +789,6 @@ export const OPERATIONS = {
   publicRealtime: { method: "GET", path: "/v1/public/rt", permission: null, roles: [] },
   listWorkspaces: { method: "GET", path: "/v1/workspaces", permission: null, roles: [] },
   createWorkspace: { method: "POST", path: "/v1/workspaces", permission: null, roles: [] },
+  inviteWorkspaceOwner: { method: "POST", path: "/v1/workspaces/{workspace}/invitations", permission: null, roles: [] },
   mintWorkspaceKey: { method: "POST", path: "/v1/workspaces/{workspace}/keys", permission: null, roles: [] },
 } as const;
