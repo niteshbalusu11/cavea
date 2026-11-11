@@ -119,6 +119,7 @@ Carry these into every brief:
    - Every CI check is green on the head commit.
    - GitHub reports the pull request mergeable, with no conflicts against `main`.
    - The diff stays inside the slice's scope, the task ids are ticked in `docs/TODO.md`, and no unjustified dependency was added.
+   - No decision number is used twice in `docs/DECISIONS.md` after the rebase. The file merges by union (`.gitattributes`), so two pull requests that each append an entry no longer conflict, and a clash of numbers has to be caught here.
 3. After merging, confirm GitHub reports it merged and that the `main` workflow run is green. Note any decision that later briefs must carry, then start the next slice.
 4. If the gate fails (CI red, conflict with `main`, scope creep, missing proof): do not fix it yourself. Start a new builder on the same branch with a brief that states exactly what failed and what to do, and that it must rebase onto current `main`, re-run its tests, and get Sol's approval again if behaviour changed.
 5. If a builder stopped without filing: read why. Then re-brief, split the slice, or, if the blocker is a genuine question for the owner, ask (§9).
