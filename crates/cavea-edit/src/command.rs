@@ -494,11 +494,14 @@ impl Document {
                 if index as usize > rows.len() {
                     return Err(CommandError::IndexOutOfRange);
                 }
-                if !(1..=MAX_SEATS_PER_ROW).contains(&seats) {
+                if count == 0 || seats == 0 {
+                    return Err(CommandError::InvalidValue("count"));
+                }
+                if seats > MAX_SEATS_PER_ROW {
                     return Err(CommandError::Limit("seats per row"));
                 }
                 let total = u64::from(count) * u64::from(seats);
-                if count == 0 || self.objects() + total > u64::from(MAX_OBJECTS) {
+                if self.objects() + total > u64::from(MAX_OBJECTS) {
                     return Err(CommandError::Limit("objects"));
                 }
                 let ids = total + u64::from(count);
@@ -521,6 +524,10 @@ impl Document {
             Command::RemoveRows { id, mut rids } => {
                 rids.sort_unstable();
                 rids.dedup();
+                // A block keeps a row: deleting it is `deleteNodes`.
+                if rids.len() >= self.rows(id)?.len() {
+                    return Err(CommandError::Limit("rows removed"));
+                }
                 for rid in rids {
                     let (row, overrides) = self.row(id, rid)?;
                     let gone: Vec<u32> = row
@@ -552,7 +559,10 @@ impl Document {
                 let (row, _) = self.row(id, rid)?;
                 let mut oids = expand_runs(row, id)?;
                 let mut row = row.clone();
-                if count == 0 || row.seats.saturating_add(count) > MAX_SEATS_PER_ROW {
+                if count == 0 {
+                    return Err(CommandError::InvalidValue("count"));
+                }
+                if row.seats.saturating_add(count) > MAX_SEATS_PER_ROW {
                     return Err(CommandError::Limit("seats per row"));
                 }
                 if self.objects() + u64::from(count) > u64::from(MAX_OBJECTS) {
@@ -571,6 +581,7 @@ impl Document {
                     }
                     End::End => oids.extend(new),
                 }
+                row.offset = self.kept_offset(id, &row, end, f64::from(count))?;
                 row.seats += count;
                 row.oids = compress(&oids);
                 run(self, Op::SetRow { id, row })?;
@@ -585,9 +596,13 @@ impl Document {
                 let (row, overrides) = self.row(id, rid)?;
                 let mut oids = expand_runs(row, id)?;
                 let mut row = row.clone();
-                if count == 0 || count >= row.seats {
+                if count == 0 {
+                    return Err(CommandError::InvalidValue("count"));
+                }
+                if count >= row.seats {
                     return Err(CommandError::Limit("seats removed"));
                 }
+                row.offset = self.kept_offset(id, &row, end, -f64::from(count))?;
                 let keep = row.seats - count;
                 let gone: Vec<u32> = match end {
                     End::Start => {
@@ -718,6 +733,27 @@ impl Document {
             }
         }
         ops.into_iter().try_for_each(|op| run(self, op))
+    }
+
+    /// The row's `offset` once `added` seats (negative: removed) change it at
+    /// `end`, such that the seats it keeps stay where they are (03 §2.4: the
+    /// alignment moves the row's start by the change in its length).
+    fn kept_offset(&self, id: u32, row: &BlockRow, end: End, added: f64) -> Result<f64> {
+        let Some(Node::RowBlock(b)) = self.node(id) else {
+            return Err(CommandError::NotARowBlock(id));
+        };
+        let length = added * b.seat_pitch;
+        let align = match b.align {
+            Align::Left => 0.0,
+            Align::Center => 0.5,
+            Align::Right => 1.0,
+        };
+        let front = if end == End::Start { length } else { 0.0 };
+        let offset = row.offset + align * length - front;
+        if !offset.is_finite() {
+            return Err(CommandError::InvalidValue("offset"));
+        }
+        Ok(offset)
     }
 
     fn rows(&self, id: u32) -> Result<&[BlockRow]> {

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cavea_compiler::ChartDocument;
 use cavea_compiler::document::{Category, Curve, Floor, Node, SeatOverride};
@@ -540,6 +540,93 @@ fn seat_identity() {
         .expect("restore");
     assert_eq!(rows(&editor)[1].removed, vec![7, 8]);
     assert_eq!(rows(&editor)[1].oids[1], [200, 22]);
+}
+
+/// Seats added or removed at either end leave every kept seat where it was,
+/// whatever the alignment, on a curved, staggered block; rows added at the
+/// front or back keep every other row as it was; a block keeps one row.
+#[test]
+fn row_edits_keep_seats_in_place() {
+    for align in ["left", "center", "right"] {
+        for end in [End::Start, End::End] {
+            let doc: ChartDocument = serde_json::from_value(serde_json::json!({
+                "schema": 1, "name": "r", "nextOid": 100,
+                "nodes": [{ "id": 1, "type": "rowBlock", "origin": [10, 20], "rotation": 15,
+                    "seatPitch": 50, "rowPitch": 90, "align": align, "stagger": 0.5,
+                    "curve": { "kind": "arc", "radius": 900 },
+                    "rows": [{ "rid": 2, "seats": 5, "oids": [[10, 5]], "removed": [1] },
+                             { "rid": 3, "seats": 5, "oids": [[20, 5]] }] }]
+            }))
+            .expect("doc");
+            let mut editor = Editor::load(doc).expect("load");
+            let seats = |e: &Editor| {
+                let mut index = SpatialIndex::new();
+                index.sync(e.document());
+                index
+                    .seats(1)
+                    .iter()
+                    .map(|s| (s.oid, (s.pos, s.removed)))
+                    .collect::<BTreeMap<_, _>>()
+            };
+            let before = seats(&editor);
+            let rows = block(&editor, 1).rows;
+            for (cmd, kept) in [
+                (
+                    Command::AddSeats {
+                        id: 1,
+                        rid: 2,
+                        end,
+                        count: 2,
+                    },
+                    12,
+                ),
+                (
+                    Command::RemoveSeats {
+                        id: 1,
+                        rid: 2,
+                        end,
+                        count: 3,
+                    },
+                    9,
+                ),
+            ] {
+                editor.apply(cmd).expect("apply");
+                let now = seats(&editor);
+                assert_eq!(now.len(), kept, "{align} {end:?}");
+                for (oid, (pos, removed)) in &before {
+                    if let Some((p, r)) = now.get(oid) {
+                        let d = (p[0] - pos[0]).hypot(p[1] - pos[1]);
+                        assert!(d < 1e-9 && r == removed, "{align} {end:?} oid {oid}: {d}");
+                    }
+                }
+            }
+            editor
+                .apply(Command::AddRows {
+                    id: 1,
+                    index: 0,
+                    count: 2,
+                    seats: 3,
+                })
+                .expect("front");
+            editor
+                .apply(Command::AddRows {
+                    id: 1,
+                    index: 4,
+                    count: 1,
+                    seats: 3,
+                })
+                .expect("back");
+            let now = block(&editor, 1).rows;
+            assert_eq!(now.len(), 5);
+            assert_eq!(now[3], rows[1]);
+            assert_eq!(now[2].rid, rows[0].rid);
+            let rids: Vec<u32> = now.iter().map(|r| r.rid).collect();
+            assert_eq!(
+                editor.apply(Command::RemoveRows { id: 1, rids }),
+                Err(CommandError::Limit("rows removed"))
+            );
+        }
+    }
 }
 
 /// `nextOid` is restored by undo, so the document returns byte for byte, but

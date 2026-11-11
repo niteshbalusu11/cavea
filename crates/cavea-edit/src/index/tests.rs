@@ -65,6 +65,7 @@ fn index_matches_brute_force() {
             fresh.sync(doc);
             for id in doc.ids() {
                 assert_eq!(index.bounds(id), fresh.bounds(id), "step {step} node {id}");
+                assert_eq!(index.quad(id), fresh.quad(id), "step {step} node {id}");
             }
             let area = extent(&fresh, doc);
             let sections: Vec<u32> = doc
@@ -90,33 +91,36 @@ fn index_matches_brute_force() {
                 let p = point(&mut r);
                 let rect = Rect::new(p, point(&mut r));
                 let candidates = level(doc, scope);
+                let tol = [0.0, 4.0, 60.0][r.below(3)];
+                let pick = |id| !hidden(doc, id);
                 let expected_hit = candidates
                     .iter()
                     .rev()
-                    .find(|&&(_, id)| fresh.bounds(id).is_some_and(|b| b.contains_point(p)))
+                    .find(|&&(_, id)| fresh.on_node(doc, id, p, tol))
                     .map(|&(_, id)| id);
                 assert_eq!(
-                    index.hit(doc, p, scope),
+                    index.hit(doc, scope, p, tol, pick),
                     expected_hit,
-                    "step {step} scope {scope:?} {candidates:?} {:?}",
-                    candidates
-                        .iter()
-                        .map(|&(_, id)| fresh.bounds(id))
-                        .collect::<Vec<_>>()
+                    "step {step} scope {scope:?} {candidates:?}"
                 );
-                for mode in [Select::Contain, Select::Touch] {
-                    let expected: Vec<u32> = candidates
+                let contained: Vec<u32> = candidates
+                    .iter()
+                    .filter(|&&(_, id)| fresh.bounds(id).is_some_and(|b| rect.contains(&b)))
+                    .map(|&(_, id)| id)
+                    .collect();
+                assert_eq!(
+                    index.select(doc, rect, scope, Select::Contain, pick),
+                    contained
+                );
+                let touched = index.select(doc, rect, scope, Select::Touch, pick);
+                assert_eq!(touched, fresh.select(doc, rect, scope, Select::Touch, pick));
+                // What a box contains it touches; what it touches meets its bounds.
+                assert!(contained.iter().all(|id| touched.contains(id)));
+                assert!(
+                    touched
                         .iter()
-                        .filter(|&&(_, id)| {
-                            fresh.bounds(id).is_some_and(|b| match mode {
-                                Select::Contain => rect.contains(&b),
-                                Select::Touch => rect.intersects(&b),
-                            })
-                        })
-                        .map(|&(_, id)| id)
-                        .collect();
-                    assert_eq!(index.select(doc, rect, scope, mode), expected);
-                }
+                        .all(|&id| { fresh.bounds(id).is_some_and(|b| b.intersects(&rect)) })
+                );
                 assert_eq!(index.anchors(rect, &[]), fresh.anchors(rect, &[]));
             }
             // A seat's own position picks it in seat-edit mode.
@@ -130,7 +134,7 @@ fn index_matches_brute_force() {
                 // Random moves by f64::MAX leave nodes where seats cannot be told apart.
                 && world.iter().all(|v| v.abs() < 1e9)
             {
-                assert_eq!(index.seat_at(b, world, 1.0), Some(seat.oid));
+                assert_eq!(index.seat_at(b, world, 1.0).map(|s| s.oid), Some(seat.oid));
             }
             let cmd = command(&mut r, editor.document());
             let _ = editor.apply(cmd);
@@ -139,6 +143,50 @@ fn index_matches_brute_force() {
             }
         }
     }
+}
+
+/// A rotated node is hit on its own box, not on the corners of its world
+/// bounds; a row block between its seats but not past its reach; a path
+/// shape through the box of its end and control points, reflected ones
+/// included.
+#[test]
+fn node_geometry() {
+    let doc: ChartDocument = serde_json::from_value(serde_json::json!({
+        "schema": 1, "name": "g", "nextOid": 100,
+        "settings": { "seatSize": 40 },
+        "nodes": [
+            { "id": 1, "type": "booth", "size": [200, 20], "oid": 2,
+              "origin": [0, 0], "rotation": 45 },
+            { "id": 3, "type": "rowBlock", "origin": [1000, 0], "seatPitch": 50, "rowPitch": 100,
+              "align": "left",
+              "rows": [{ "rid": 4, "seats": 3, "oids": [[10, 3]] },
+                       { "rid": 5, "seats": 3, "oids": [[13, 3]] }] },
+            { "id": 6, "type": "shape", "kind": "path", "origin": [0, 1000],
+              "d": "M0 0 C 0 -50 100 -50 100 0 s 10 0 10 0 h-300 v 10 z m 5 5 l 1 1 Q 0 0" }
+        ]
+    }))
+    .expect("doc");
+    let editor = Editor::load(doc).expect("load");
+    let doc = editor.document();
+    let mut index = SpatialIndex::new();
+    index.sync(doc);
+    let on = |id, p| index.on_node(doc, id, p, 0.0);
+    // Along the booth's diagonal, and at a corner of its world bounds.
+    assert!(on(1, [60.0, 60.0]));
+    assert!(!on(1, [65.0, -65.0]));
+    let quad = index.quad(1).expect("quad");
+    let h = 100.0 * std::f64::consts::FRAC_1_SQRT_2;
+    assert!((quad[2][0] - (h - 10.0 * std::f64::consts::FRAC_1_SQRT_2)).abs() < 1e-9);
+    // Between four seats of the block, and beyond its last seat.
+    assert!(on(3, [1025.0, 50.0]));
+    assert!(on(3, [1120.0, 0.0]));
+    assert!(!on(3, [1160.0, 0.0]));
+    // The reflected control point of `s`, (100, 50), sets the bottom; the
+    // unfinished `Q` is left out.
+    assert_eq!(
+        index.bounds(6),
+        Some(Rect::new([-190.0, 950.0], [110.0, 1050.0]))
+    );
 }
 
 /// The world position of a point in a node's space, from the node chain.
@@ -256,13 +304,13 @@ fn measure_edit() {
     for i in 0..n {
         let d = f64::from(i);
         let rect = Rect::new([area.min[0] + d, area.min[1]], mid);
-        found += index.select(doc, rect, None, Select::Touch).len();
+        found += index.select(doc, rect, None, Select::Touch, |_| true).len();
     }
     let select = ms(t, n);
     let t = Instant::now();
     for i in 0..n {
         let p = [area.min[0] + f64::from(i) * 10.0, mid[1]];
-        found += usize::from(index.hit(doc, p, None).is_some());
+        found += usize::from(index.hit(doc, None, p, 4.0, |_| true).is_some());
     }
     let hit = ms(t, n);
     let t = Instant::now();

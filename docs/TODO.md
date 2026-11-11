@@ -267,7 +267,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 ### Tools
 
-- [ ] **DSN-011** Select tool: click, shift-click, box, enter and exit nested levels (07 §5.1)
+- [x] **DSN-011** Select tool: click, shift-click, box, enter and exit nested levels (07 §5.1)
 - [ ] **DSN-012** Move, nudge, rotate with pivot, resize semantics for blocks and shapes (07 §5.1)
 - [ ] **DSN-013** Hand tool, zoom shortcuts, zoom to selection (07 §4)
 - [ ] **DSN-014** Row block tool with live counts and numeric entry (07 §4)
