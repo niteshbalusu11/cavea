@@ -9,6 +9,7 @@ import {
   blockers,
   deltaFor,
   eligible,
+  learnSeats,
   mergeRead,
   refusedSeats,
   statusesToRead,
@@ -134,6 +135,19 @@ test("a whole read does not undo what was learnt seat by seat after it began", (
     "A-3": "blocked",
     "A-4": "blocked",
   });
+});
+
+test("an answer to a request sent before a newer one leaves what was learnt since", () => {
+  const nonFree = new Map<string, EventObject>();
+  const learnt = new Map<string, number>();
+  // A poll is sent (stamp 1); the operator books A-1 (answer at stamp 2);
+  // the poll's answer, from before the booking, then arrives.
+  expect(learnSeats(nonFree, learnt, [o("A-1", "booked")], ["A-1"], 2)).toEqual(["A-1"]);
+  expect(learnSeats(nonFree, learnt, [], ["A-1", "A-2"], 1)).toEqual(["A-2"]);
+  expect(nonFree.get("A-1")?.status).toBe("booked");
+  // A read sent after the booking is taken, free included.
+  expect(learnSeats(nonFree, learnt, [], ["A-1"], 3)).toEqual(["A-1"]);
+  expect(nonFree.has("A-1")).toBe(false);
 });
 
 test("a whole read pages only statuses some seat has, and waits in proportion to its cost", () => {

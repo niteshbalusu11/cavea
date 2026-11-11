@@ -110,6 +110,32 @@ export function mergeRead(
   return out;
 }
 
+/**
+ * What a read or an action stamped `at` says of `labels` (`objects`: those
+ * of them that are not free), into `nonFree` and `learnt` in place. A seat
+ * learnt about by a later stamp is left alone: an answer to a poll sent
+ * before the operator's booking must not undo it. Returns the labels taken.
+ */
+export function learnSeats(
+  nonFree: Map<string, EventObject>,
+  learnt: Map<string, number>,
+  objects: readonly EventObject[],
+  labels: readonly string[],
+  at: number,
+): string[] {
+  const given = new Map(objects.map((o) => [o.label, o]));
+  const taken: string[] = [];
+  for (const label of labels) {
+    if ((learnt.get(label) ?? -1) > at) continue;
+    taken.push(label);
+    const o = given.get(label);
+    if (o === undefined || o.status === "free") nonFree.delete(label);
+    else nonFree.set(label, o);
+    learnt.set(label, at);
+  }
+  return taken;
+}
+
 /** The statuses a whole read must page through: those the counts say some
  * seat has (free seats have no row, and are every seat not listed). */
 export function statusesToRead(counts: Counts): string[] {

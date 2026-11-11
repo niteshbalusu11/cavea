@@ -23,6 +23,7 @@ import type { Counts, Event, EventObject } from "../../api/generated.ts";
 import { asApiError } from "../../api/query.ts";
 import {
   deltaFor,
+  learnSeats,
   mergeRead,
   refusedSeats,
   sameCounts,
@@ -90,13 +91,22 @@ export function createLive(options: {
 }): Live {
   const { event, signal } = options;
   let nonFree = new Map<string, EventObject>();
-  /** When each seat was last read or changed one by one. */
+  /** When (by `tick()`) each seat was last read or changed one by one. */
   const learnt = new Map<string, number>();
+  /** Orders reads and actions: a request's stamp is taken when it is sent
+   * (an action's when its answer arrives), so an answer to a request sent
+   * before something newer was learnt about a seat leaves that seat alone. */
+  let clock = 0;
+  const stamp = () => ++clock;
   const drawn = new Set<string>();
   let selected = new Set<string>();
   let inspected: string | null = null;
   let ctx: AdapterContext | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  /** This connection's requests (a map that failed to start disconnects;
+   * Retry connects again), and the pages of the whole read under way. */
+  let conn = new AbortController();
+  let pages: AbortController | null = null;
   let paused = false;
   let stopped = false;
   let reading = false;
@@ -119,28 +129,20 @@ export function createLive(options: {
     }
   };
 
-  const learn = (objects: readonly EventObject[], labels: readonly string[], at: number) => {
-    const given = new Map(objects.map((o) => [o.label, o]));
-    for (const label of labels) {
-      const o = given.get(label);
-      if (o === undefined || o.status === "free") nonFree.delete(label);
-      else nonFree.set(label, o);
-      learnt.set(label, at);
-    }
-  };
+  const learn = (objects: readonly EventObject[], labels: readonly string[], at: number) =>
+    learnSeats(nonFree, learnt, objects, labels, at);
 
   async function read(labels: readonly string[]): Promise<void> {
     const unique = [...new Set(labels)];
     for (let i = 0; i < unique.length; i += LABELS_PER_READ) {
       const chunk = unique.slice(i, i + LABELS_PER_READ);
-      const at = Date.now();
+      const at = stamp();
       const answer = checkObjectsByLabel(
-        await call("listObjects", { path: { event }, query: { label: chunk } }, signal),
+        await call("listObjects", { path: { event }, query: { label: chunk } }, conn.signal),
       );
       // Unknown labels are not in the chart: nothing to learn about them.
       const known = chunk.filter((l) => !answer.unknown.includes(l));
-      learn(answer.data, known, at);
-      sync(known);
+      sync(learn(answer.data, known, at));
     }
     bump();
   }
@@ -148,7 +150,11 @@ export function createLive(options: {
   /** Every seat that is not free, a status at a time, in pages. */
   async function whole(counts: Counts): Promise<void> {
     reading = true;
-    const started = Date.now();
+    const started = stamp();
+    const startedMs = Date.now();
+    const mine = new AbortController();
+    pages = mine;
+    const paging = AbortSignal.any([conn.signal, mine.signal]);
     let requests = 0;
     const found = new Map<string, EventObject>();
     try {
@@ -164,7 +170,7 @@ export function createLive(options: {
                   query:
                     after === undefined ? { status, limit: 100 } : { status, limit: 100, after },
                 },
-                signal,
+                paging,
               ),
             );
             requests += 1;
@@ -179,18 +185,19 @@ export function createLive(options: {
       sync(new Set([...drawn, ...nonFree.keys()]));
       countsAtRead = counts;
       const endedAt = Date.now();
-      last = { requests, objects: found.size, tookMs: endedAt - started, endedAt };
+      last = { requests, objects: found.size, tookMs: endedAt - startedMs, endedAt };
       history.push(last);
       wholeFailed = null;
       if (history.length > 20) history.shift();
       bump();
     } finally {
       reading = false;
+      if (pages === mine) pages = null;
     }
   }
 
   const failed = (e: unknown): number | null => {
-    if (isAbort(e) || signal.aborted) return null;
+    if (isAbort(e) || conn.signal.aborted) return null;
     const error = asApiError(e);
     setHealth((h) => ({ ...h, error }));
     return error.retryAfter === null ? null : error.retryAfter * 1000;
@@ -201,7 +208,7 @@ export function createLive(options: {
     if (stopped || paused) return;
     let delay = TICK_MS;
     try {
-      const answer = checkEvent(await call("getEvent", { path: { event } }, signal));
+      const answer = checkEvent(await call("getEvent", { path: { event } }, conn.signal));
       options.onEvent(answer);
       const watched = [...selected];
       if (inspected !== null) watched.push(inspected);
@@ -214,7 +221,7 @@ export function createLive(options: {
       ) {
         void whole(counts).catch((e: unknown) => {
           failed(e);
-          if (!isAbort(e) && !signal.aborted) wholeFailed = asApiError(e);
+          if (!isAbort(e) && !conn.signal.aborted) wholeFailed = asApiError(e);
         });
       }
       setHealth({ checkedAt: Date.now(), error: wholeFailed });
@@ -225,7 +232,7 @@ export function createLive(options: {
   }
 
   function schedule(ms: number): void {
-    if (stopped || paused || signal.aborted) return;
+    if (stopped || paused || conn.signal.aborted) return;
     if (timer !== null) clearTimeout(timer);
     timer = setTimeout(() => void tick(), ms);
   }
@@ -234,12 +241,27 @@ export function createLive(options: {
     stopped = true;
     if (timer !== null) clearTimeout(timer);
     timer = null;
+    conn.abort();
   }
   signal.addEventListener("abort", stop, { once: true });
 
   const adapter: StateAdapter = {
     async connect(context) {
-      const answer = checkEvent(await call("getEvent", { path: { event } }, signal));
+      // A fresh start: after a map that failed to start, Retry connects again.
+      conn.abort();
+      conn = new AbortController();
+      if (signal.aborted) conn.abort();
+      stopped = signal.aborted;
+      paused = false;
+      ctx = null;
+      nonFree = new Map();
+      learnt.clear();
+      drawn.clear();
+      selected = new Set();
+      last = null;
+      countsAtRead = null;
+      wholeFailed = null;
+      const answer = checkEvent(await call("getEvent", { path: { event } }, conn.signal));
       options.onEvent(answer);
       // The first read fills `drawn` without telling the map: the snapshot
       // below is what it starts from.
@@ -253,6 +275,8 @@ export function createLive(options: {
       paused = true;
       if (timer !== null) clearTimeout(timer);
       timer = null;
+      // The rest of a whole read's pages too: it runs again when due.
+      pages?.abort();
     },
     resume() {
       paused = false;
@@ -311,17 +335,17 @@ export function createLive(options: {
                   headers,
                   body: { objects, status: action === "block" ? "blocked" : "free" },
                 },
-                signal,
+                conn.signal,
               )
             : action === "release"
-              ? await call("release", { path, headers, body: { objects } }, signal)
+              ? await call("release", { path, headers, body: { objects } }, conn.signal)
               : await call(
                   "book",
                   { path, headers, body: { objects, order_ref: orderRef ?? "" } },
-                  signal,
+                  conn.signal,
                 ),
         );
-        const at = Date.now();
+        const at = stamp();
         const patched = answer.objects
           .map((o) => PATCH[action](o.label, o.oid, orderRef))
           .filter((o): o is EventObject => o !== null);
