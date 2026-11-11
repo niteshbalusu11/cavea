@@ -94,10 +94,15 @@ export function attach(
   const rasteriser = createRasteriser();
   const images = createImageLoader(
     options.images,
+    // A throw (an image the view refuses) goes to the loader, which reports
+    // it as `image`, like any other failed image.
     (id, image) => {
       if (!detached) {
-        guard(() => view.setImage(id, image));
-        update();
+        try {
+          view.setImage(id, image);
+        } finally {
+          update();
+        }
       }
     },
     (error) => options.onEvents?.([{ type: "error", code: "image", message: String(error) }]),
