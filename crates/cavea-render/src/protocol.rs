@@ -4,6 +4,8 @@
 //! later run in a worker or behind FFI unchanged. A wire encoding is added when
 //! the first such boundary exists.
 
+use cavea_format::wire::{ServerFrame, View, WireError, decode_server};
+
 /// A rectangle in chart units (04 §13 targets, bounds).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bounds {
@@ -24,13 +26,6 @@ pub enum ObjectRef {
 pub struct StatusChange {
     pub idx: u32,
     pub status: u8,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PrivateHold {
-    pub idx: u32,
-    /// Unix time in milliseconds.
-    pub expires_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +98,17 @@ pub struct PriceRange {
     pub max: u64,
 }
 
+/// Whether a selection asks the host to hold (04 §16, `session` in 05 §4).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SessionMode {
+    /// A tap selects at once and emits `HoldRequest`; deselecting emits
+    /// `ReleaseRequest`.
+    #[default]
+    Hold,
+    /// No hold or release requests: the host holds at checkout.
+    Manual,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Picker,
@@ -137,17 +143,24 @@ pub enum Command {
     LoadChart {
         ccf: Vec<u8>,
     },
+    /// The public state of every object (04 §17): one code per object, in
+    /// `idx` order, 0 available or 1 unavailable. Kept until a chart is
+    /// loaded if none is.
     SetSnapshot {
         seq: u64,
         state: Vec<u8>,
     },
+    /// Changes in strictly increasing `idx`, applied only at `from_seq`.
     ApplyDelta {
         from_seq: u64,
         to_seq: u64,
         changes: Vec<StatusChange>,
     },
+    /// Every object the buyer's hold token holds, and the token's expiry
+    /// (Unix ms); replaces the previous set.
     SetPrivateHolds {
-        holds: Vec<PrivateHold>,
+        objects: Vec<u32>,
+        expires_at_ms: u64,
     },
     /// Canvas size in CSS pixels, the device pixel ratio, and the highest
     /// ratio to render at (`maxDpr`, 04 §21). Applied at the next `Tick`.
@@ -217,6 +230,9 @@ pub enum Command {
         tokens: Vec<ThemeToken>,
     },
     SetMode(Mode),
+    /// Refused with `InvalidInput` while anything is selected or a request
+    /// is outstanding.
+    SetSessionMode(SessionMode),
     /// `max`: at most this many objects, 1 to `tuning::MAX_SELECTED` (the
     /// default). `min`: at least this many before checkout.
     SetRules {
@@ -234,6 +250,39 @@ pub enum Command {
     },
     ContextLost,
     ContextRestored,
+}
+
+impl Command {
+    /// The state command a realtime server frame carries (08 §8.1):
+    /// `SetSnapshot`, `ApplyDelta` or `SetPrivateHolds`. `None` for the frames
+    /// the adapter handles itself and for unknown frame types, which are
+    /// skipped (08 §8.6). The engine checks counts and `idx` against its chart.
+    pub fn from_frame(frame: &[u8]) -> Result<Option<Self>, WireError> {
+        let all = cavea_core::limits::MAX_OBJECTS;
+        Ok(Some(match decode_server(frame, View::Public) {
+            Ok(ServerFrame::Snapshot(s)) => {
+                let mut state = vec![0; s.objects as usize];
+                s.write_into(&mut state)?;
+                Self::SetSnapshot { seq: s.seq, state }
+            }
+            Ok(ServerFrame::Delta(d)) => Self::ApplyDelta {
+                from_seq: d.from_seq,
+                to_seq: d.to_seq,
+                changes: (d.changes(all)?)
+                    .map(|c| StatusChange {
+                        idx: c.idx,
+                        status: c.code,
+                    })
+                    .collect(),
+            },
+            Ok(ServerFrame::Private(p)) => Self::SetPrivateHolds {
+                objects: p.objects(all)?.collect(),
+                expires_at_ms: p.expires_at_ms,
+            },
+            Ok(_) | Err(WireError::UnknownType) => return Ok(None),
+            Err(e) => return Err(e),
+        }))
+    }
 }
 
 /// A floor, in chart order; its index is its id in `SetFloor`.
@@ -340,8 +389,11 @@ pub enum Event {
         request: u32,
         labels: Vec<String>,
     },
+    /// `expires_at_ms`: when the buyer's holds expire (Unix ms), from the
+    /// last non-empty `SetPrivateHolds`.
     SelectionChanged {
         selected: Vec<ObjectInfo>,
+        expires_at_ms: Option<u64>,
     },
     SelectionInvalid {
         rule: String,
@@ -355,9 +407,20 @@ pub enum Event {
     SectionEnter {
         section: String,
     },
-    /// A selected object was taken by someone else; it is no longer selected.
+    /// A selected object was taken by someone else, or its hold was refused
+    /// because it is not free; it is no longer selected.
     ObjectUnavailable {
         label: String,
+    },
+    /// The buyer's hold on these selected objects is gone (expired, or
+    /// released elsewhere); they are no longer selected.
+    HoldLost {
+        labels: Vec<String>,
+    },
+    /// A delta did not follow the state shown (`seq`, if any): fetch a new
+    /// snapshot. Emitted once until one arrives.
+    Resync {
+        seq: Option<u64>,
     },
     CameraChanged {
         centre: [f32; 2],

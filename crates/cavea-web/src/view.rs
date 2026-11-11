@@ -9,8 +9,8 @@ use cavea_render::{
     backend::glow::GlowBackend,
     backing_size,
     protocol::{
-        BuiltinTheme, Command, Event, GestureHandling, Modifiers, ObjectRef, PointerKind,
-        PointerType,
+        BuiltinTheme, Command, Event, GestureHandling, HoldOutcome, Modifiers, ObjectFailure,
+        ObjectRef, PointerKind, PointerType, SessionMode,
     },
     tuning::{MAX_DPR_OTHER, MAX_DPR_TOUCH},
 };
@@ -241,6 +241,60 @@ impl View {
         self.send(Command::ClearSelection)
     }
 
+    /// The hold of `request` (a `holdRequest` event) succeeded.
+    #[wasm_bindgen(js_name = holdOk)]
+    pub fn hold_ok(&mut self, request: u32) -> Result<(), JsError> {
+        let outcome = HoldOutcome::Ok;
+        self.send(Command::HoldResult { request, outcome })
+    }
+
+    /// The hold of `request` failed with the server's `code` (`not_free`
+    /// makes a seat unavailable; `not_found`, a token that expired or never
+    /// existed, drops the whole selection). `labels`: the objects the server
+    /// named (08 §6.4: `label` of each failing object); empty for the whole
+    /// request.
+    #[wasm_bindgen(js_name = holdFailed)]
+    pub fn hold_failed(
+        &mut self,
+        request: u32,
+        code: String,
+        labels: Vec<String>,
+    ) -> Result<(), JsError> {
+        let failure = |object| ObjectFailure {
+            object,
+            code: code.clone(),
+        };
+        let mut failures: Vec<ObjectFailure> = (labels.into_iter())
+            .map(|l| failure(ObjectRef::Label(l)))
+            .collect();
+        if failures.is_empty() {
+            failures.push(failure(ObjectRef::Label(String::new())));
+        }
+        let outcome = HoldOutcome::Failed(failures);
+        self.send(Command::HoldResult { request, outcome })
+    }
+
+    /// A SNAPSHOT, DELTA or PRIVATE frame of the realtime protocol (08 §8),
+    /// as received. Returns `false` for the frames the adapter handles itself
+    /// (HELLO, RESYNC, PING, CLOSE) and unknown types; throws if the frame is
+    /// malformed or does not fit the chart, which then changes nothing.
+    #[wasm_bindgen(js_name = applyFrame)]
+    pub fn apply_frame(&mut self, frame: &[u8]) -> Result<bool, JsError> {
+        match Command::from_frame(frame) {
+            Ok(Some(command)) => self.send(command).map(|()| true),
+            Ok(None) => Ok(false),
+            Err(e) => Err(JsError::new(&e.to_string())),
+        }
+    }
+
+    /// The public state of every object at `seq`, one code per object (0
+    /// available, 1 unavailable): what a custom adapter sends.
+    #[wasm_bindgen(js_name = setSnapshot)]
+    pub fn set_snapshot(&mut self, seq: f64, codes: Vec<u8>) -> Result<(), JsError> {
+        let seq = whole(seq)?;
+        self.send(Command::SetSnapshot { seq, state: codes })
+    }
+
     /// `max` (1 to 100, default 100) and `min` (default 0) selection (02 §12).
     #[wasm_bindgen(js_name = setRules)]
     pub fn set_rules(&mut self, max: Option<u32>, min: Option<u32>) -> Result<(), JsError> {
@@ -250,6 +304,17 @@ impl View {
             validators: Vec::new(),
             group_size: None,
         })
+    }
+
+    /// `manual`: taps send no hold requests; the host holds at checkout.
+    #[wasm_bindgen(js_name = setManualSession)]
+    pub fn set_manual_session(&mut self, manual: bool) -> Result<(), JsError> {
+        let mode = if manual {
+            SessionMode::Manual
+        } else {
+            SessionMode::Hold
+        };
+        self.send(Command::SetSessionMode(mode))
     }
 
     /// Whether a frame is wanted, after a call other than `frame`.
@@ -273,14 +338,11 @@ impl View {
         })
     }
 
-    /// Demo only: sets the public status (0 available, 1 unavailable) of
-    /// `count` seats from `start`, which uploads only that dynamic sub-range.
+    /// Demo only: the `idx` of a seat's full label, for the fake host.
     #[cfg(feature = "demo")]
-    #[wasm_bindgen(js_name = setStatus)]
-    pub fn set_status(&mut self, start: u32, count: u32, status: u8) -> Result<(), JsError> {
-        self.engine
-            .set_status(start..start.saturating_add(count), status);
-        self.drain()
+    #[wasm_bindgen(js_name = idxOf)]
+    pub fn idx_of(&mut self, label: &str) -> Option<u32> {
+        self.engine.idx_of(label)
     }
 
     /// Demo only: a synthetic stadium of `seats` seats from `seed`, compiled
@@ -324,5 +386,14 @@ impl View {
             }
         }
         error.map_or(Ok(()), Err)
+    }
+}
+
+/// A whole number of at most 2^53, as JavaScript numbers hold exactly.
+fn whole(v: f64) -> Result<u64, JsError> {
+    if (0.0..=9_007_199_254_740_992.0).contains(&v) && v.fract() == 0.0 {
+        Ok(v as u64)
+    } else {
+        Err(JsError::new("expected a whole number"))
     }
 }

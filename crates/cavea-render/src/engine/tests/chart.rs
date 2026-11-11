@@ -237,15 +237,18 @@ fn loading_a_second_chart_releases_the_first() {
 }
 
 #[test]
-fn a_status_change_uploads_only_its_sub_range() {
+fn deltas_between_frames_upload_one_merged_range() {
     let mut e = loaded(compile(ARC));
     let (_, dynamic, _) = ids(&e);
-    e.apply_status(10..13, theme::status::UNAVAILABLE);
-    e.apply_status(5..6, theme::status::UNAVAILABLE);
-    e.apply_status(12..13, theme::status::AVAILABLE);
+    snapshot(&mut e, 1, &[]);
+    tick(&mut e, 8.0);
+    let writes = e.backend.buffer_writes.len();
+    delta(&mut e, 1, &[(10, 1), (11, 1), (12, 1)]);
+    delta(&mut e, 2, &[(5, 1)]);
+    delta(&mut e, 3, &[(12, 0)]);
     tick(&mut e, 16.0);
     // One upload per frame, covering the merged dirty range 5..13.
-    assert_eq!(e.backend.buffer_writes, [(dynamic, 5 * 4, 8 * 4)]);
+    assert_eq!(e.backend.buffer_writes[writes..], [(dynamic, 5 * 4, 8 * 4)]);
     let visuals: Vec<u8> = e.backend.buffers[&dynamic]
         .chunks(4)
         .map(|d| d[2])
@@ -261,18 +264,6 @@ fn a_status_change_uploads_only_its_sub_range() {
     }
     let scene = &e.scene.as_ref().unwrap().scene;
     assert_eq!(&scene.status[9..13], [0, 1, 1, 0]);
-    // A range past the last seat changes nothing.
-    e.drain_events().for_each(drop);
-    e.apply_status(20..40, 1);
-    assert!(matches!(
-        e.drain_events().next(),
-        Some(Event::Error {
-            code: ErrorCode::InvalidInput,
-            ..
-        })
-    ));
-    tick(&mut e, 32.0);
-    assert_eq!(e.backend.buffer_writes.len(), 1);
 }
 
 const WHITE: theme::Rgba = [255, 255, 255, 255];
@@ -549,7 +540,7 @@ fn visible_ranges_are_computed_only_when_the_view_or_chart_changes() {
     // Idle: no frame, nothing computed.
     assert!(tick(&mut e, 16.0).is_empty());
     // State and theme changes redraw with the same ranges.
-    e.apply_status(3..5, theme::status::UNAVAILABLE);
+    snapshot(&mut e, 1, &[3, 4]);
     tick(&mut e, 32.0);
     set_theme(&mut e, BuiltinTheme::Dark, &[]);
     tick(&mut e, 48.0);

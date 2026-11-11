@@ -18,11 +18,16 @@ export interface ObjectInfo {
 }
 
 export type RendererEvent =
-  | { type: "selectionChanged"; selected: ObjectInfo[] }
+  /** Hold these labels, then answer with `holdOk` or `holdFailed`. */
+  | { type: "holdRequest"; request: number; labels: string[] }
+  /** Release these labels; there is no answer. */
+  | { type: "releaseRequest"; request: number; labels: string[] }
+  /** `expiresAt`: when the buyer's holds expire (Unix ms), if known. */
+  | { type: "selectionChanged"; expiresAt: number | null; selected: ObjectInfo[] }
   /**
    * Rule `min`: the selection is not ready for checkout (`objects` is the
-   * selection). Any other rule (`max`, `not_free`): `objects` were refused
-   * and the selection is as it was.
+   * selection). Any other rule (`max`, `not_free`, a server code): `objects`
+   * were refused and the selection is as it was.
    */
   | { type: "selectionInvalid"; rule: string; objects: string[] }
   /** The selection meets the minimum again. */
@@ -34,6 +39,10 @@ export type RendererEvent =
   | { type: "objectFocus"; object: null; at: null }
   /** A selected object was taken; it is no longer selected. */
   | { type: "objectUnavailable"; label: string }
+  /** The buyer's hold on these selected objects is gone (expired, or released elsewhere). */
+  | { type: "holdLost"; labels: string[] }
+  /** A delta did not follow the state at `seq`: fetch a new snapshot. */
+  | { type: "resync"; seq: number | null }
   | {
       type: "cameraChanged";
       centre: [number, number];

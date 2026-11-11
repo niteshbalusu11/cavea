@@ -2,19 +2,26 @@
 // to see and measure it. Query parameters: `seats` (default 100000), `seed`
 // (default 1), `shape` (0 circle, 1 rounded, 2 chair), `theme`
 // (light, dark, high-contrast), `camera=x:y:width:height` in chart units,
-// `sold` (fraction of seats made unavailable after the first frame, in runs;
+// `sold` (fraction of seats unavailable in the first snapshot, in runs;
 // default 0.3) or `mark=start:count` to make exactly that range unavailable.
-// Status changes upload only the dynamic sub-range they touch. Pan and zoom
+// State reaches the view as realtime protocol frames (08 §8) built here. Pan and zoom
 // with mouse, wheel, trackpad or touch; `gestures=greedy|cooperative|none`
 // sets gesture handling (cooperative makes the page scroll around the map),
 // `reducedMotion=1` turns animation off.
 //
-// Tap or click seats to select and deselect them; `max` and `min` set the
-// selection rules (default 4 and 0). Hold requests come with REN-034; until
-// then selection works as in a manual session. Small seats zoom instead of
-// selecting (touch below 18 px, mouse below 5 px).
+// Tap or click seats to select and deselect them. A fake host answers each
+// hold request after `holdMs` (default 400) milliseconds, then marks the seats
+// unavailable in a DELTA and lists them in a PRIVATE frame, as the server does;
+// `fail=n` makes every n-th hold fail as taken by someone else, so the revert
+// shows. `max` and `min` set the selection rules (default 4 and 0); `manual=1`
+// selects without holds. Small seats zoom instead of selecting (touch below
+// 18 px, mouse below 5 px).
+//
 // `window.caveaDemo` counts frames and WebGL errors, keeps every engine event
-// in `events`, and offers `setTheme(name)` for scripted checks.
+// in `events`, and offers `setTheme(name)`, `resnapshot()` and
+// `take(label)` (someone else takes a seat, in a DELTA) and `gap()` (a DELTA
+// that skips a sequence number, so the view asks to resync and this host
+// answers with a SNAPSHOT) for scripted checks.
 import {
   attach,
   loadRenderer,
@@ -26,7 +33,7 @@ import {
 /** Exports present only in `cargo xtask build-web --demo` builds. */
 interface DemoExports {
   setCamera(x: number, y: number, width: number, height: number): void;
-  setStatus(start: number, count: number, status: number): void;
+  idxOf(label: string): number | undefined;
 }
 interface DemoStatics {
   demoChart(seats: number, seed: number, shape: number): Uint8Array;
@@ -73,6 +80,9 @@ const gestures: GestureHandling =
 const reducedMotion = params.has("reducedMotion") ? params.get("reducedMotion") === "1" : undefined;
 const max = Number(params.get("max") ?? 4);
 const min = Number(params.get("min") ?? 0);
+const manual = params.get("manual") === "1";
+const failEvery = Number(params.get("fail") ?? 0);
+const holdMs = Number(params.get("holdMs") ?? 400);
 if (gestures === "cooperative") {
   document.body.classList.add("scrolling");
 }
@@ -95,7 +105,15 @@ function setTheme(name: Theme): void {
   host?.update();
 }
 const events: RendererEvent[] = [];
-const stats = { frames: 0, glErrors: 0, setTheme, events };
+const stats = {
+  frames: 0,
+  glErrors: 0,
+  setTheme,
+  events,
+  resnapshot: () => sendSnapshot(),
+  take: (label: string) => sendDelta(new Map(idxOf([label]).map((i) => [i, 1]))),
+  gap: () => sendDelta(new Map(), true),
+};
 Object.assign(window, { caveaDemo: stats });
 let afterFirstFrame: (() => void) | undefined;
 let loadedAt = 0;
@@ -115,15 +133,16 @@ function onFrame(time: number): void {
   next?.();
 }
 
+let rngState = seed >>> 0 || 1;
+function random(): number {
+  rngState ^= rngState << 13;
+  rngState ^= rngState >>> 17;
+  rngState ^= rngState << 5;
+  return (rngState >>> 0) / 2 ** 32;
+}
+
 /** Seeded runs of unavailable seats covering about `fraction` of the chart. */
 function soldRuns(fraction: number, set: (start: number, count: number) => void): number {
-  let state = seed >>> 0 || 1;
-  const random = (): number => {
-    state ^= state << 13;
-    state ^= state >>> 17;
-    state ^= state << 5;
-    return (state >>> 0) / 2 ** 32;
-  };
   let runs = 0;
   for (let at = 0; at < seats;) {
     const count = 1 + Math.floor(random() * 24);
@@ -139,16 +158,92 @@ function soldRuns(fraction: number, set: (start: number, count: number) => void)
   return runs;
 }
 
-/** What the host shows: the counter, readiness and the hovered seat. */
+/** Unsigned LEB128 (08 §8), for numbers up to 2^53. */
+function varint(out: number[], value: number): void {
+  let v = value;
+  while (v >= 0x80) {
+    out.push((v % 0x80) | 0x80);
+    v = Math.floor(v / 0x80);
+  }
+  out.push(v);
+}
+
+/** A `list()` of increasing `idx`, each followed by `field` bytes, then no areas. */
+function list(out: number[], idx: number[], field?: (i: number) => number): Uint8Array {
+  varint(out, idx.length);
+  let previous = 0;
+  idx.forEach((value, i) => {
+    varint(out, value - previous);
+    previous = value;
+    if (field !== undefined) {
+      out.push(field(i));
+    }
+  });
+  out.push(0);
+  return Uint8Array.from(out);
+}
+
+/** Numbers in increasing order (a typed array sorts numerically). */
+function sorted(values: Iterable<number>): Uint32Array {
+  // oxlint-disable-next-line unicorn/no-array-sort -- sorts its own fresh copy; toSorted is ES2023
+  return Uint32Array.from(values).sort();
+}
+
+/** The fake host: the public state, the buyer's holds, and late answers. */
+const publicState = new Uint8Array(seats);
+function fill(from: number, count: number): void {
+  publicState.fill(UNAVAILABLE, from, from + count);
+}
+let seq = 0;
+const held = new Set<number>();
+
+function apply(frame: Uint8Array): void {
+  try {
+    view.applyFrame(frame);
+  } catch (error) {
+    note(`frame refused: ${String(error)}`);
+  }
+  host?.update();
+}
+function sendSnapshot(): void {
+  const out = [0x02];
+  varint(out, seq);
+  varint(out, seats);
+  out.push(0);
+  varint(out, seats);
+  apply(Uint8Array.from([...out, ...publicState, 0]));
+}
+/** Sets codes and sends them as one DELTA; `skip` leaves a sequence gap. */
+function sendDelta(changes: Map<number, number>, skip = false): void {
+  const idx = [...sorted(changes.keys())];
+  idx.forEach((i) => (publicState[i] = changes.get(i) ?? 0));
+  const out = [0x03];
+  varint(out, skip ? seq + 1 : seq);
+  seq += 1;
+  varint(out, skip ? seq + 1 : seq);
+  apply(list(out, idx, (i) => changes.get(idx[i] ?? 0) ?? 0));
+}
+function sendPrivate(): void {
+  const out = [0x04];
+  varint(out, Date.now() + 15 * 60_000);
+  apply(list(out, [...sorted(held)]));
+}
+function idxOf(labels: string[]): number[] {
+  return labels.flatMap((label) => view.idxOf?.(label) ?? []);
+}
 let selected: string[] = [];
+let expiresAt: number | null = null;
+let holds = 0;
+let pending = 0;
 let hover = "";
 let ready = true;
 let lastNote = "";
 function showSelection(): void {
+  const expiry = expiresAt === null ? "none" : new Date(expiresAt).toLocaleTimeString();
   selectionLine.textContent =
     `selected ${selected.length}/${max}: ${selected.join(" ")}\n` +
-    `checkout ${ready ? "ready" : "not ready"}; ` +
-    `hover: ${hover || "none"}\n${lastNote}`;
+    `holds in flight: ${pending}; held: ${held.size}, expire ${expiry}; ` +
+    `checkout ${ready ? "ready" : "not ready"}; hover: ${hover || "none"}\n${lastNote}`;
 }
 function note(line: string): void {
   lastNote = line;
@@ -160,8 +255,40 @@ function onEvents(batch: RendererEvent[]): void {
     switch (event.type) {
       case "selectionChanged":
         selected = event.selected.map((o) => o.label);
+        expiresAt = event.expiresAt;
         note(`selection: ${selected.join(", ") || "empty"}`);
         break;
+      case "holdRequest": {
+        holds += 1;
+        pending += 1;
+        const fails = failEvery > 0 && holds % failEvery === 0;
+        note(`hold ${event.request} requested: ${event.labels.join(", ")}`);
+        setTimeout(() => {
+          pending -= 1;
+          const idx = idxOf(event.labels);
+          if (fails) {
+            note(`hold ${event.request} failed: ${event.labels.join(", ")} taken`);
+            view.holdFailed(event.request, "object_not_free", []);
+            sendDelta(new Map(idx.map((i) => [i, 1])));
+          } else {
+            note(`hold ${event.request} ok`);
+            view.holdOk(event.request);
+            idx.forEach((i) => held.add(i));
+            sendDelta(new Map(idx.map((i) => [i, 1])));
+            sendPrivate();
+          }
+          host?.update();
+        }, holdMs);
+        break;
+      }
+      case "releaseRequest": {
+        note(`release ${event.request}: ${event.labels.join(", ")}`);
+        const idx = idxOf(event.labels);
+        idx.forEach((i) => held.delete(i));
+        sendPrivate();
+        sendDelta(new Map(idx.map((i) => [i, 0])));
+        break;
+      }
       case "selectionInvalid":
         if (event.rule === "min") {
           ready = false;
@@ -174,6 +301,13 @@ function onEvents(batch: RendererEvent[]): void {
       case "objectUnavailable":
         note(`${event.label} was taken`);
         break;
+      case "holdLost":
+        note(`hold lost: ${event.labels.join(", ")}`);
+        break;
+      case "resync":
+        note(`resync from seq ${String(event.seq)}: sending a snapshot at ${seq}`);
+        setTimeout(sendSnapshot, 0);
+        break;
       case "objectHover":
         hover = event.object?.label ?? "";
         break;
@@ -184,14 +318,9 @@ function onEvents(batch: RendererEvent[]): void {
   showSelection();
 }
 
-if (
-  statics.demoChart === undefined ||
-  view.setStatus === undefined ||
-  view.setCamera === undefined
-) {
+if (statics.demoChart === undefined || view.idxOf === undefined || view.setCamera === undefined) {
   report("This WASM has no demo exports. Run `cargo xtask build-web --demo` and reload.");
 } else {
-  const setStatus = view.setStatus.bind(view);
   const compileStart = performance.now();
   const ccf = statics.demoChart(seats, seed, shape);
   const loadStart = performance.now();
@@ -203,21 +332,24 @@ if (
       `loadChart ${(loadedAt - loadStart).toFixed(1)} ms; theme ${theme}`,
   );
   view.setRules(max, min);
+  if (manual) {
+    view.setManualSession(true);
+  }
   if (camera !== undefined && camera.length === 4) {
     const [x = 0, y = 0, width = 1, height = 1] = camera;
     view.setCamera(x, y, width, height);
   }
   afterFirstFrame = () => {
-    const start = performance.now();
     if (mark !== undefined && mark.length === 2) {
       const [from = 0, count = 0] = mark;
-      setStatus(from, count, UNAVAILABLE);
-      report(`set seats ${from}..${from + count} unavailable`);
+      fill(from, count);
+      report(`seats ${from}..${from + count} unavailable`);
     } else if (sold > 0) {
-      const runs = soldRuns(sold, (from, count) => setStatus(from, count, UNAVAILABLE));
-      report(`set ${runs} runs unavailable in ${(performance.now() - start).toFixed(1)} ms`);
+      report(`${soldRuns(sold, fill)} runs unavailable`);
     }
-    host?.update();
+    const start = performance.now();
+    sendSnapshot();
+    report(`snapshot at seq ${seq} applied in ${(performance.now() - start).toFixed(1)} ms`);
   };
   const options = { gestureHandling: gestures, onFrame, onEvents };
   host = attach(

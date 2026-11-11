@@ -1,10 +1,11 @@
 //! The engine: takes [`Command`]s, emits [`Event`]s, draws through a
-//! [`GpuBackend`]. Implemented so far: `LoadChart`, `SetTheme`, `Resize`,
-//! `Pointer`, `Wheel`, `SetCamera` and `FlyTo` with bounds,
-//! `SetGestureHandling`, `SetReducedMotion`, `Select`, `Deselect`,
-//! `ClearSelection`, `SetRules`, `Tick` and `ContextLost`; every other command
+//! [`GpuBackend`]. Implemented so far: `LoadChart`, `SetSnapshot`,
+//! `ApplyDelta`, `SetPrivateHolds`, `SetTheme`, `Resize`, `Pointer`, `Wheel`,
+//! `SetCamera` and `FlyTo` with bounds, `SetGestureHandling`,
+//! `SetReducedMotion`, `Select`, `Deselect`, `ClearSelection`, `HoldResult`,
+//! `SetRules`, `SetSessionMode`, `Tick` and `ContextLost`; every other command
 //! is answered with an `Unsupported` error event. Taps, hover and selection
-//! are in [`select`].
+//! are in [`select`], seat state in [`state`].
 //!
 //! Frames (04 §18): input, camera commands and resizes are queued and applied
 //! at the start of the next `Tick`. A frame is drawn only when something is
@@ -30,7 +31,7 @@ use crate::{
     },
     scene::Scene,
     seat::{self, SeatDynamic, SeatStatic},
-    theme::{PALETTE_WIDTH, Selection, Theme, TokenError, picker_visual, visual},
+    theme::{PALETTE_WIDTH, Selection, Theme, TokenError, picker_visual, status, visual},
     tuning::{
         INERTIA_STOP_PX_PER_S, INERTIA_TIME_CONSTANT_MS, LOD_DETAIL_SEAT_PX, MAX_BACKING_PX,
         MAX_DPR_OTHER, MAX_QUEUED_INPUT, MAX_SEAT_DRAW_CALLS, RING_WIDTH_PX,
@@ -38,6 +39,7 @@ use crate::{
 };
 
 mod select;
+mod state;
 use select::SelectState;
 
 /// Overlay instances at most: a halo and a ring each for hover and focus.
@@ -154,6 +156,7 @@ pub struct Engine<B: GpuBackend> {
     animations: Vec<Animation>,
     reduced_motion: bool,
     selection: SelectState,
+    state: state::State,
     hover: Option<u32>,
     /// The last mouse or pen position over the canvas, hit-tested again when
     /// the camera moves.
@@ -190,6 +193,7 @@ impl<B: GpuBackend> Engine<B> {
             animations: Vec::new(),
             reduced_motion: false,
             selection: SelectState::default(),
+            state: state::State::default(),
             hover: None,
             hover_at: None,
             focus: None,
@@ -216,6 +220,16 @@ impl<B: GpuBackend> Engine<B> {
                     self.error(code, message);
                 }
             }
+            Command::SetSnapshot { seq, state } => self.set_snapshot(seq, state),
+            Command::ApplyDelta {
+                from_seq,
+                to_seq,
+                changes,
+            } => self.apply_delta(from_seq, to_seq, &changes),
+            Command::SetPrivateHolds {
+                objects,
+                expires_at_ms,
+            } => self.set_private_holds(objects, expires_at_ms),
             Command::SetTheme { base, tokens } => self.set_theme(base, &tokens),
             Command::Resize {
                 width,
@@ -285,12 +299,14 @@ impl<B: GpuBackend> Engine<B> {
             Command::Select { objects } => self.select_objects(&objects),
             Command::Deselect { objects } => self.deselect_objects(&objects),
             Command::ClearSelection => self.clear_selection(),
+            Command::HoldResult { request, outcome } => self.hold_result(request, &outcome),
             Command::SetRules {
                 max,
                 min,
                 validators,
                 group_size,
             } => self.set_rules(max, min, &validators, group_size),
+            Command::SetSessionMode(mode) => self.set_session_mode(mode),
             Command::Tick { time_ms } => self.frame(time_ms),
             Command::ContextLost => self.context_lost = true,
             _ => self.error(
@@ -298,48 +314,6 @@ impl<B: GpuBackend> Engine<B> {
                 "command not implemented in this build",
             ),
         }
-    }
-
-    /// Demo and test entry point to [`Engine::apply_status`], until state
-    /// arrives through `SetSnapshot` and `ApplyDelta`.
-    #[cfg(feature = "demo")]
-    pub fn set_status(&mut self, range: Range<u32>, status: u8) {
-        self.apply_status(range, status);
-    }
-
-    /// Sets the public status of the seats in `range` and derives their visual
-    /// state (04 §9). Only that sub-range of the dynamic buffer is uploaded,
-    /// at the next frame. `SetSnapshot` and `ApplyDelta` (04 §17) will call
-    /// this, once per run of equal status. Selected seats keep their state or
-    /// leave the selection ([`select`]).
-    #[cfg_attr(
-        not(any(test, feature = "demo")),
-        expect(
-            dead_code,
-            reason = "called by SetSnapshot and ApplyDelta, a later slice"
-        )
-    )]
-    fn apply_status(&mut self, range: Range<u32>, status: u8) {
-        let Some(loaded) = &mut self.scene else {
-            return;
-        };
-        let seats = range.start as usize..range.end as usize;
-        let scene = &mut loaded.scene;
-        let (Some(statuses), Some(visuals)) = (
-            scene.status.get_mut(seats.clone()),
-            scene.visual.get_mut(seats.clone()),
-        ) else {
-            self.error(ErrorCode::InvalidInput, "seat range out of bounds");
-            return;
-        };
-        if seats.is_empty() {
-            return;
-        }
-        statuses.fill(status);
-        visuals.fill(picker_visual(status, Selection::None));
-        grow_dirty(&mut loaded.dirty, seats);
-        self.redraw();
-        self.status_changed(range);
     }
 
     fn error(&mut self, code: ErrorCode, message: impl Into<String>) {
@@ -485,6 +459,7 @@ impl<B: GpuBackend> Engine<B> {
             labels: None,
         });
         self.flush_selection();
+        self.chart_loaded();
         // The next frame fits the new chart.
         self.camera = None;
         self.culled = None;

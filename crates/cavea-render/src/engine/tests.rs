@@ -11,6 +11,7 @@ use crate::{
 
 mod chart;
 mod select;
+mod state;
 use PointerKind::{Cancel, Down, Move, Up};
 
 const MOUSE: PointerType = PointerType::Mouse;
@@ -220,6 +221,29 @@ fn wheel(e: &mut E, [dx, dy]: [f32; 2], [x, y]: [f32; 2], ctrl: bool, time_ms: f
         modifiers,
         time_ms,
     });
+}
+
+/// A snapshot at `seq`: every object available but `unavailable`.
+fn snapshot(e: &mut E, seq: u64, unavailable: &[u32]) -> Vec<Event> {
+    let mut state = vec![0; e.objects().unwrap()];
+    unavailable.iter().for_each(|&i| state[i as usize] = 1);
+    e.drain_events().for_each(drop);
+    e.handle(Command::SetSnapshot { seq, state });
+    e.drain_events().collect()
+}
+
+/// A delta from `seq` to `seq + 1` of (`idx`, code) changes.
+fn delta(e: &mut E, seq: u64, changes: &[(u32, u8)]) -> Vec<Event> {
+    let changes = (changes.iter())
+        .map(|&(idx, status)| crate::protocol::StatusChange { idx, status })
+        .collect();
+    e.drain_events().for_each(drop);
+    e.handle(Command::ApplyDelta {
+        from_seq: seq,
+        to_seq: seq + 1,
+        changes,
+    });
+    e.drain_events().collect()
 }
 
 fn cam(e: &E) -> Camera {
