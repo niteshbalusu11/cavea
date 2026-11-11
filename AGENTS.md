@@ -39,7 +39,7 @@ Toolchains: Rust is pinned in `rust-toolchain.toml` (with the `wasm32-unknown-un
 
 - `bun install` (CI uses `bun install --frozen-lockfile`)
 - `bun run lint`: oxlint, warnings denied (`.oxlintrc.json`)
-- `bun run format` / `bun run format:check`: oxfmt (`.oxfmtrc.json`; Markdown is not formatted)
+- `bun run format` / `bun run format:check`: oxfmt (`.oxfmtrc.json`; Markdown is not formatted). oxfmt also checks TOML files such as `Cargo.toml`, so run `bun run format:check` for every change, including Rust-only ones
 - `bun run typecheck`: `tsc --noEmit` in every workspace package
 - `bun run build`: builds every workspace package that has a `build` script
 - `bun run test`: `bun test`
