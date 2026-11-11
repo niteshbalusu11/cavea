@@ -7,7 +7,8 @@ use cavea_render::{
     Engine,
     backend::glow::GlowBackend,
     backing_size,
-    protocol::{Command, Event},
+    protocol::{Command, Event, GestureHandling, Modifiers, PointerKind, PointerType},
+    tuning::{MAX_DPR_OTHER, MAX_DPR_TOUCH},
 };
 use wasm_bindgen::{JsCast as _, JsError, JsValue, prelude::wasm_bindgen};
 use web_sys::{
@@ -19,6 +20,16 @@ pub struct View {
     engine: Engine<GlowBackend>,
     canvas: HtmlCanvasElement,
     need_frame: bool,
+    gestures: GestureHandling,
+    /// The latest `resize`, applied to the canvas at the next frame together
+    /// with the engine's viewport, so the canvas is never cleared between frames.
+    resize: Option<[f32; 4]>,
+}
+
+/// The default `maxDpr` (04 §21) for a touch device or another.
+#[wasm_bindgen(js_name = defaultMaxDpr)]
+pub fn default_max_dpr(touch: bool) -> f32 {
+    if touch { MAX_DPR_TOUCH } else { MAX_DPR_OTHER }
 }
 
 #[wasm_bindgen]
@@ -44,26 +55,128 @@ impl View {
             .map_err(|_| JsError::new("context is not WebGL2"))?;
         let backend = GlowBackend::new(glow::Context::from_webgl2_context(context))
             .map_err(|e| JsError::new(&e.to_string()))?;
-        Ok(View {
+        let mut view = View {
             engine: Engine::new(backend),
             canvas,
             need_frame: false,
+            gestures: GestureHandling::Greedy,
+            resize: None,
+        };
+        view.set_gesture_handling(0)?;
+        Ok(view)
+    }
+
+    /// The canvas's CSS size and device pixel ratio changed. Applied at the next
+    /// frame; `max_dpr` caps the ratio (04 §21).
+    pub fn resize(
+        &mut self,
+        width: f32,
+        height: f32,
+        dpr: f32,
+        max_dpr: f32,
+    ) -> Result<(), JsError> {
+        self.resize = Some([width, height, dpr, max_dpr]);
+        self.send(Command::Resize {
+            width,
+            height,
+            dpr,
+            max_dpr,
         })
     }
 
-    /// Sets the canvas backing store for a CSS size and device pixel ratio.
-    pub fn resize(&mut self, width: f32, height: f32, dpr: f32) -> Result<(), JsError> {
-        let (px_width, px_height, _) = backing_size(width, height, dpr);
-        self.canvas.set_width(px_width);
-        self.canvas.set_height(px_height);
-        self.send(Command::Resize { width, height, dpr })
-    }
-
-    /// Draws if anything changed. Returns whether the engine wants another frame.
+    /// Applies input and draws if anything changed. Returns whether the engine
+    /// wants another frame.
     pub fn frame(&mut self, time_ms: f64) -> Result<bool, JsError> {
+        if let Some([width, height, dpr, max_dpr]) = self.resize.take() {
+            let (px_width, px_height, _) = backing_size(width, height, dpr, max_dpr);
+            self.canvas.set_width(px_width);
+            self.canvas.set_height(px_height);
+        }
         self.need_frame = false;
         self.send(Command::Tick { time_ms })?;
         Ok(self.need_frame)
+    }
+
+    /// A pointer event: `kind` 0 down, 1 move, 2 up, 3 cancel (or leave);
+    /// `pointer_type` 0 mouse, 1 touch, 2 pen. Position in CSS pixels on the
+    /// canvas, time from `event.timeStamp`.
+    pub fn pointer(
+        &mut self,
+        kind: u8,
+        id: u32,
+        pointer_type: u8,
+        x: f32,
+        y: f32,
+        time_ms: f64,
+    ) -> Result<(), JsError> {
+        let kind = match kind {
+            0 => PointerKind::Down,
+            1 => PointerKind::Move,
+            2 => PointerKind::Up,
+            3 => PointerKind::Cancel,
+            _ => return Err(JsError::new("unknown pointer event kind")),
+        };
+        let pointer_type = match pointer_type {
+            0 => PointerType::Mouse,
+            1 => PointerType::Touch,
+            _ => PointerType::Pen,
+        };
+        self.send(Command::Pointer {
+            kind,
+            id,
+            pointer_type,
+            x,
+            y,
+            time_ms,
+        })
+    }
+
+    /// A wheel event with its delta in CSS pixels. Returns whether the map took
+    /// it; if not, the page should scroll, so the caller must not prevent it.
+    pub fn wheel(
+        &mut self,
+        dx: f32,
+        dy: f32,
+        x: f32,
+        y: f32,
+        ctrl: bool,
+        time_ms: f64,
+    ) -> Result<bool, JsError> {
+        let modifiers = Modifiers {
+            ctrl,
+            ..Modifiers::default()
+        };
+        self.send(Command::Wheel {
+            dx,
+            dy,
+            x,
+            y,
+            modifiers,
+            time_ms,
+        })?;
+        Ok(self.gestures.takes_wheel(ctrl))
+    }
+
+    /// `mode` 0 greedy, 1 cooperative, 2 none (04 §14). Sets the canvas's
+    /// `touch-action` to match.
+    #[wasm_bindgen(js_name = setGestureHandling)]
+    pub fn set_gesture_handling(&mut self, mode: u8) -> Result<(), JsError> {
+        self.gestures = match mode {
+            0 => GestureHandling::Greedy,
+            1 => GestureHandling::Cooperative,
+            2 => GestureHandling::None,
+            _ => return Err(JsError::new("unknown gesture handling mode")),
+        };
+        self.canvas
+            .style()
+            .set_property("touch-action", self.gestures.touch_action())
+            .map_err(|_| JsError::new("cannot set touch-action"))?;
+        self.send(Command::SetGestureHandling(self.gestures))
+    }
+
+    #[wasm_bindgen(js_name = setReducedMotion)]
+    pub fn set_reduced_motion(&mut self, on: bool) -> Result<(), JsError> {
+        self.send(Command::SetReducedMotion(on))
     }
 
     /// Whether a frame is wanted, after a call other than `frame`.

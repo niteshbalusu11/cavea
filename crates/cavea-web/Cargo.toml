@@ -23,7 +23,9 @@ cavea-render = { workspace = true, features = ["glow"] }
 glow.workspace = true
 js-sys.workspace = true
 web-sys = { workspace = true, features = [
+  "CssStyleDeclaration",
   "HtmlCanvasElement",
+  "HtmlElement",
   "WebGl2RenderingContext",
   "WebGlContextAttributes",
   "WebGlPowerPreference",

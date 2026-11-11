@@ -36,7 +36,10 @@ Not goals: 3D, arbitrary vector graphics, effects.
       └───────────────────┴──────────────────┘
 ```
 
-The host supplies five services through traits: `Clock`, `FrameScheduler`, `TextRasteriser`, `ImageSource`, `GpuBackend`. The engine performs no I/O itself.
+The engine performs no I/O itself. The host supplies five services:
+
+- **Clock and frame scheduler: through the protocol, not traits.** The host's clock stamps every timed command (`Pointer`, `Wheel`, `Tick`); the engine asks for a frame with the `NeedFrame` event and the host's scheduler (`requestAnimationFrame`, a display link) answers with one `Tick`. The protocol is the only mechanism: the engine never reads a clock or schedules anything, so a recorded command trace replays to the same events (§26).
+- **`TextRasteriser`, `ImageSource`, `GpuBackend`: traits** (`cavea_render::host`, `cavea_render::backend`), for work the engine needs done synchronously in a frame. Image loading is asynchronous, so `ImageSource` only starts a load; the pixels come back as a command.
 
 ## 3. Engine protocol
 
@@ -50,11 +53,13 @@ The engine is driven only by commands and emits only events. Both are plain data
 | `SetSnapshot` | `seq`, state bytes |
 | `ApplyDelta` | `from_seq`, `to_seq`, changes |
 | `SetPrivateHolds` | List of `idx`, expiry |
-| `Resize` | Width, height, device pixel ratio |
+| `Resize` | Width, height, device pixel ratio, maximum ratio (`maxDpr`) |
 | `Pointer` | Kind (down, move, up, cancel), pointer id, type, position, time |
-| `Wheel` | Delta, position, modifier flags |
+| `Wheel` | Delta in CSS pixels, position, modifier flags, time |
 | `Key` | Key, modifiers |
-| `SetCamera` / `FlyTo` | Target bounds, object or section; duration |
+| `SetCamera` / `FlyTo` | Target bounds, object or section; `FlyTo`: duration, or none for 250–600 ms by distance (§13) |
+| `SetGestureHandling` | `greedy`, `cooperative`, `none` (§14) |
+| `SetReducedMotion` | On or off (§13, `11-accessibility.md` §6) |
 | `Select` / `Deselect` / `ClearSelection` | Labels or `idx` |
 | `HoldResult` | Request id, success or per-object failures |
 | `SetPricing` | Category keys with display prices |
@@ -263,9 +268,11 @@ Let `s` be the seat size in CSS pixels at the current zoom.
 - State: centre in world space, zoom in CSS pixels per cu. Rotation is fixed at zero in v1; the matrix supports it.
 - `fit`: the zoom at which the active floor fills the viewport with 24 px padding.
 - Limits: minimum `0.8 × fit`; maximum where a default seat is 64 px.
-- The centre is clamped so that at least a third of the viewport shows the chart.
-- `FlyTo` interpolates the centre linearly and the zoom in log space, with an ease-out curve, for 250–600 ms depending on distance.
-- With reduced motion requested, all camera changes are instant.
+- The centre is clamped so that, in each axis, at least a third of the viewport shows the chart (or the whole chart, where it is smaller than that on screen).
+- `FlyTo` interpolates the centre linearly and the zoom in log space, with a cubic ease-out curve. Its duration is 250 ms plus 100 ms per doubling of zoom and per viewport diagonal of travel (at the closer zoom), at most 600 ms, unless the command gives one.
+- One zoom step (double tap, two-finger tap) is a factor of 2, animated like `FlyTo`.
+- With reduced motion requested, all camera changes are instant and drags have no inertia.
+- The camera maths has no renderer dependencies (`cavea_render::camera`) so it can move to `cavea-core`.
 
 ## 14. Input and gestures
 
@@ -283,11 +290,19 @@ Let `s` be the seat size in CSS pixels at the current zoom.
 | Hover (mouse) | Hover ring and tooltip |
 | Keyboard | See `11-accessibility.md` §3 |
 
-- Pointer events are the single input source on the web. Each active pointer is tracked by id.
-- A press becomes a drag after 8 px of movement (touch) or 4 px (mouse).
-- Inertia: velocity decays exponentially with a 325 ms time constant and stops below 10 px/s.
-- `gestureHandling`: `greedy` (default; the map takes all gestures), `cooperative` (page scrolls on one finger or plain wheel; two fingers or ctrl+wheel move the map), `none`.
-- `touch-action` is set on the canvas to match the mode.
+- Pointer events are the single input source on the web, with pointer capture on press so a drag that leaves the canvas continues. Each active pointer is tracked by id (up to 10). A lost capture, a hidden page or a second mouse press cancels the pointers left down.
+- A press becomes a drag after 8 px of movement (touch, pen) or 4 px (mouse). The drag grabs the chart where the press began.
+- Inertia: release velocity is measured over the drag's last 100 ms; it decays exponentially with a 325 ms time constant and stops below 10 px/s.
+- A pinch zooms about the previous midpoint by the change in finger distance and pans by the midpoint's movement, so the chart point under the midpoint follows it.
+- Wheel: with ctrl (a trackpad pinch, or ctrl+mouse wheel) it zooms about the cursor. Without ctrl, a stream of wheel events (gaps under 300 ms) that starts vertical-only with a delta of 50 px or more, or a multiple of the macOS notch (4.000244 px), is a mouse wheel and zooms (300 px per doubling); anything else is a trackpad and pans. Browsers do not say which device it is, so this is a heuristic. The host converts line deltas to 50 px.
+- Tap: a press released without becoming a drag; a touch or pen held 500 ms or more is a long press instead (recognised on the first `Tick` past 500 ms, or at release if no `Tick` came). A mouse press is a click however long it is held.
+- Double tap: a second tap that goes down within 300 ms of the first one's release and within 24 px of it. The first tap is reported as a tap (selection is not delayed); the second zooms instead.
+- Two-finger tap: two pointers, neither moved past the threshold, the last lifted within 300 ms of the first press; zooms out one step about their midpoint.
+- Recognised taps (with the pointer type), long presses and hover positions (mouse or pen moving with nothing pressed; cleared when it leaves) go to the engine's intent handler, where hit testing and selection (§15, §16) take them.
+- A cancelled pointer ends the gesture: no tap, no inertia, and any other pointers are ignored until all have lifted.
+- `gestureHandling`: `greedy` (default; the map takes all gestures), `cooperative` (page scrolls on one finger or plain wheel; two fingers, ctrl+wheel and mouse drags move the map), `none` (no gesture moves the camera). Taps, long presses and hover are recognised in every mode; a double tap that cannot zoom is two taps.
+- `touch-action` is set on the canvas to match the mode: `none`, `pan-x pan-y`, `auto`. The wheel listener is not passive and prevents the default only for wheels the map takes.
+- Every gesture constant is in `cavea_render::tuning` (§26).
 
 ## 15. Hit testing
 
@@ -334,8 +349,11 @@ tap → hit test → rules check ──fail──▶ SelectionInvalid (no state 
 
 - The engine draws only when a dirty flag is set (camera, state, selection, theme, size, text) or an animation is running.
 - It asks the host for a frame with `NeedFrame`; the host calls `Tick` from `requestAnimationFrame` or the platform's display link.
-- Input received between frames is applied at the start of the next `Tick`, so pointer-to-photon latency is one frame.
-- Resizes are observed, coalesced, and applied at the next frame.
+- Input received between frames is applied at the start of the next `Tick`, so pointer-to-photon latency is one frame. Input, `SetCamera` and `FlyTo` are queued in arrival order (at most 256; a fuller queue is applied at once) and each requests a frame.
+- Resizes are observed, coalesced, and applied at the next frame; the web host resizes the canvas in the same frame, so it is never cleared between frames.
+- Inertia and `FlyTo` are entries in one animation list; a gesture start or a new camera move replaces them.
+- `NeedFrame` is emitted at most once per `Tick`, and only for queued work, a dirty flag, a running animation or a pending long press. With none of these, no frame is requested and none is drawn.
+- The web host stops `requestAnimationFrame` while the page is hidden and resumes it if the engine still wants a frame.
 
 ## 19. Theming
 
@@ -399,8 +417,9 @@ The chosen step is reported in `Ready` and in metrics.
 
 ## 21. Resolution and power
 
-- The backing store is `min(devicePixelRatio, maxDpr)` × CSS size. `maxDpr` defaults to 2 on touch devices and 3 otherwise.
+- The backing store is `min(devicePixelRatio, maxDpr)` × CSS size. `maxDpr` defaults to 2 on touch devices (`(pointer: coarse)` on the web) and 3 otherwise; the host sends it with every `Resize`.
 - The backing store is capped at 4,096 px on its long side.
+- A change of device pixel ratio (a window moved between screens, browser zoom) is a resize; the web host watches it with a `(resolution: …dppx)` media query.
 - **Dynamic resolution:** if the 95th-percentile frame time exceeds the budget for 30 consecutive frames during a gesture, the engine renders at a lower ratio until the gesture ends, then redraws at full resolution.
 - When the page is hidden, animations stop and the realtime adapter may pause (host's choice).
 
