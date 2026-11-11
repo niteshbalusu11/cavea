@@ -37,7 +37,7 @@ Desktop browsers only. Minimum viewport 1280 × 720. Tablets are P2.
 - **Tools** are state machines in Rust that turn pointer and key input into commands, with a live preview while dragging.
 - **View models** are small, purpose-built snapshots (selection summary, inspector fields, layer tree page, validation list). The chrome pulls them: once per animation frame it asks `Session::changed` which are out of date and re-reads only those (§2.3, shell views; D-40).
 - TypeScript types for commands and view models are generated from the Rust definitions (§2.4, D-41).
-- The **live scene** is the document's nodes compiled one by one by the compiler and merged into one chart the renderer's engine draws as it draws a published chart; an edit compiles again only the node it changed, a drag draws the moved nodes with a transform until it ends (`04-renderer.md` §25, D-46, D-47).
+- The **live scene** is the document's nodes compiled one by one by the compiler and merged into one chart the renderer's engine draws as it draws a published chart; an edit compiles again only the node it changed, a drag draws the moved nodes with a transform until it ends (`04-renderer.md` §25, D-55, D-56).
 
 ### 2.1 Document model
 
