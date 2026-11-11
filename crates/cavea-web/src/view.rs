@@ -254,7 +254,6 @@ impl View {
     }
 }
 
-
 impl View {
     fn send(&mut self, command: Command) -> Result<(), JsError> {
         self.engine.handle(command);
