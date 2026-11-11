@@ -36,6 +36,66 @@ fn read(s: &mut Session, view: ViewName) -> String {
     }
 }
 
+/// Every section's outline, from the cache and computed afresh.
+fn outlines_agree(s: &Session, seed: u64, step: usize) {
+    let doc = s.document();
+    for &id in doc.children(None) {
+        let fresh = match doc.node(id) {
+            Some(Node::Section(sec)) => match &sec.outline {
+                cavea_compiler::document::Outline::Points(p) => Some(p.points.clone()),
+                cavea_compiler::document::Outline::Auto => {
+                    crate::section::outline(doc, s.index(), id)
+                }
+            },
+            _ => None,
+        };
+        assert_eq!(
+            s.section_outline(id),
+            fresh,
+            "seed {seed} step {step} section {id}"
+        );
+    }
+}
+
+/// The outline cache (07 §14): after random edits, selections and undo
+/// steps, on the presets and the edit tests' chart, every section's cached
+/// outline equals the one computed afresh, so `overlay()` gives what it gave
+/// before the cache.
+#[test]
+fn outline_cache_matches() {
+    let mut subjects = vec![chart()];
+    subjects.extend(
+        ["theatre", "arena"]
+            .iter()
+            .filter_map(|n| cavea_testkit::presets::find(n))
+            .map(|p| p.generate(2)),
+    );
+    for (n, doc) in subjects.into_iter().enumerate() {
+        let mut t = T::new(doc);
+        let seed = n as u64 + 61_000;
+        let mut r = Rng(seed);
+        outlines_agree(&t.s, seed, 0);
+        for step in 0..120 {
+            match r.below(6) {
+                0 => random_selection(&mut t, &mut r),
+                1 => {
+                    let _ = t.s.undo();
+                }
+                2 | 3 => {
+                    let cmd = crate::tests::command(&mut r, t.s.document());
+                    let _ = t.s.apply(cmd);
+                }
+                _ => {
+                    random_edit(&mut t, &mut r);
+                }
+            }
+            // Reading the overlay fills the cache as the shell would.
+            let _ = t.s.overlay();
+            outlines_agree(&t.s, seed, step + 1);
+        }
+    }
+}
+
 /// One random call of the shell's own.
 fn random_shell_call(t: &mut T, r: &mut Rng) {
     let ids: Vec<u32> = t.s.document().ids().collect();
@@ -821,6 +881,23 @@ fn measure_shell() {
         out.len(),
         ms(t0)
     );
+    // Everything selected: the select-all overlay, uncached first, then
+    // with the outline cache warm (07 §14).
+    s.select_all();
+    let t0 = Instant::now();
+    let first = s.overlay();
+    let cold = ms(t0);
+    let t0 = Instant::now();
+    let again = s.overlay();
+    println!(
+        "overlay() with all {} top-level nodes selected: {cold:.2} ms cold, {:.3} ms with \
+         the outline cache ({} section outlines)",
+        s.selection().items().len(),
+        ms(t0),
+        again.sections.len()
+    );
+    assert_eq!(first, again);
+    s.select(Level::Top, []);
     let _ = s.changed();
     let t0 = Instant::now();
     let quiet = s.changed();

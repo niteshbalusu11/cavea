@@ -29,7 +29,7 @@ use crate::tool::{
 };
 use crate::validation::{self, Progress, ValidationView, Validator};
 use crate::views::Seen;
-use cavea_compiler::document::{Node, Outline, Points};
+use cavea_compiler::document::{AlphaOverflow, Node, Outline, Points};
 
 mod shell;
 
@@ -57,6 +57,8 @@ pub struct Session {
     /// with the last command it showed.
     scrub: Option<Option<Command>>,
     watch: Watch,
+    /// Automatic section outlines, cached.
+    outlines: section::Outlines,
 }
 
 /// What `changed` compares the views' sources with (07 §14).
@@ -92,6 +94,17 @@ pub struct ToolView {
     /// The active category (07 §7).
     pub category: Option<String>,
     pub snap: SnapSettings,
+}
+
+/// The nodes a numbering preview shows ([`Session::numbering_nodes`]).
+#[derive(Debug, Clone, Copy)]
+pub struct Renumbered<'a> {
+    /// Changes with every new preview.
+    pub preview: u64,
+    /// Each target's id and the node as the numbering would leave it.
+    pub nodes: &'a [(u32, Node)],
+    /// The alphabet overflow the numbering uses (`afterZ`).
+    pub overflow: AlphaOverflow,
 }
 
 /// A numbering previewed: for the selection and document it was made on.
@@ -146,6 +159,7 @@ impl Session {
             middle: None,
             scrub: None,
             watch: Watch::default(),
+            outlines: section::Outlines::default(),
         };
         session.settle();
         session
@@ -277,7 +291,7 @@ impl Session {
             self.document().node(id),
             Some(Node::Section(s)) if s.outline == Outline::Auto
         );
-        let points = section::outline(self.document(), &self.index, id)
+        let points = (self.outlines.get(self.document(), &self.index, id))
             .filter(|p| auto && !p.is_empty())
             .ok_or(CommandError::InvalidValue("outline"))?;
         self.apply(Command::SetProperty {
@@ -470,6 +484,19 @@ impl Session {
     /// and the selection.
     pub fn numbering_preview(&self) -> Option<&Preview> {
         self.proposal().map(|p| &p.preview)
+    }
+
+    /// The nodes as the numbering previewed would leave them, with the
+    /// alphabet overflow it uses and a number that changes with every new
+    /// preview, while [`Self::numbering_preview`] is shown: the canvas
+    /// draws them in place of the document's (07 §6, 04 §25).
+    pub fn numbering_nodes(&self) -> Option<Renumbered<'_>> {
+        let p = self.proposal()?;
+        Some(Renumbered {
+            preview: self.watch.previews,
+            nodes: &p.nodes,
+            overflow: p.overflow,
+        })
     }
 
     fn proposal(&self) -> Option<&Proposal> {
@@ -881,7 +908,6 @@ impl Session {
     /// The outlines, in the world, of the selected sections and of the one
     /// whose children are selected.
     fn section_outlines(&self) -> Vec<Vec<[f64; 2]>> {
-        let doc = self.document();
         let held = match self.selection.level() {
             Level::Section(s) => Some(s),
             _ => None,
@@ -893,17 +919,27 @@ impl Session {
                 .flatten(),
         );
         ids.filter_map(|id| {
-            let points = match doc.node(id) {
-                Some(Node::Section(s)) => match &s.outline {
-                    Outline::Points(p) => p.points.clone(),
-                    Outline::Auto => section::outline(doc, &self.index, id)?,
-                },
-                _ => return None,
-            };
+            let points = self.section_outline(id)?;
             points.iter().map(|&p| self.index.to_world(id, p)).collect()
         })
         .filter(|p: &Vec<_>| !p.is_empty())
         .collect()
+    }
+
+    /// Section `id`'s outline in its own space: its explicit points, or
+    /// the automatic outline the compiler would compute now (03 §2.3),
+    /// cached until a child of the section changes. Empty for an automatic
+    /// outline without seats; `None` for a node that is not a section or an
+    /// outline the compiler would refuse.
+    pub fn section_outline(&self, id: u32) -> Option<Vec<P>> {
+        let doc = self.document();
+        match doc.node(id) {
+            Some(Node::Section(s)) => match &s.outline {
+                Outline::Points(p) => Some(p.points.clone()),
+                Outline::Auto => self.outlines.get(doc, &self.index, id),
+            },
+            _ => None,
+        }
     }
 
     fn reset_tool(&mut self) {
@@ -935,6 +971,7 @@ impl Session {
         let doc = self.editor.document();
         self.index.sync(doc);
         self.validator.sync(doc);
+        self.outlines.prune(doc);
         self.selection.reconcile(doc);
         // The active category is one of the chart's, also after an undo or
         // redo of a category edit: else the first.

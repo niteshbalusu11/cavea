@@ -16,6 +16,12 @@ use serde::Serialize;
 use wasm_bindgen::prelude::wasm_bindgen;
 
 pub mod calls;
+#[cfg(target_arch = "wasm32")]
+pub mod canvas;
+pub mod paint;
+pub mod scene;
+#[cfg(test)]
+mod tests;
 
 /// One designer session behind the module boundary. It holds no session
 /// until [`Designer::import`] opens a chart.

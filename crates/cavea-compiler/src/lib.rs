@@ -18,7 +18,7 @@ mod tessellate;
 
 pub use compile::warnings::{BACKGROUNDS, MIN_CONTRAST, contrast, luminance, too_similar};
 pub use compile::{
-    CompileError, Compiled, DEFAULT_PADDING, RANK_ALGO, Stats, compile, write_full_label,
+    CompileError, Compiled, DEFAULT_PADDING, RANK_ALGO, Stats, build, compile, write_full_label,
 };
 pub use document::{ChartDocument, DocumentError};
 pub use expand::{ExpandError, ExpandErrorKind, ExpandedRow, Expansion, Seat};

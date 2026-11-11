@@ -1,0 +1,581 @@
+//! The canvas against the buyer's renderer and against itself (04 §25,
+//! 07 §14): the live scene of a preset's draft equals the scene the buyer
+//! loads from its compiled chart, order aside; after random edits the scene
+//! kept up to date equals one built from scratch, and the GPU holds exactly
+//! its bytes; pieces moved in a gesture are drawn where baking puts them;
+//! a lost context comes back without compiling anything.
+
+use cavea_compiler::ChartDocument;
+use cavea_compiler::document::{LabelStart, SeatLabels};
+use cavea_edit::random::{Rng, command};
+use cavea_edit::{Button, Input, Level, Modifiers, Pointer, PointerKind, Session, ToolId};
+use cavea_format::{Chart, full_label::seat_label};
+use cavea_render::{backend::record::Recorder, protocol::Command, scene::Scene};
+
+use crate::paint::{Painter, View};
+
+fn preset(name: &str) -> ChartDocument {
+    cavea_testkit::presets::find(name)
+        .expect("preset")
+        .generate(cavea_testkit::presets::DEFAULT_SEED)
+}
+
+fn painter(view: View) -> Painter<Recorder> {
+    let mut p = Painter::new(Recorder::default());
+    p.set_theme(false);
+    assert!(p.set_view(view));
+    p
+}
+
+const VIEW: View = View {
+    centre: [0.0, 0.0],
+    zoom: 0.05,
+    width: 1000.0,
+    height: 800.0,
+    dpr: 1.0,
+};
+
+/// Draws until the scene has nothing left to bake (and at most a few
+/// frames for labels the engine builds over frames).
+fn settle(p: &mut Painter<Recorder>, s: &Session) {
+    for t in 0..64 {
+        let again = p.draw(s, f64::from(t) * 16.0);
+        if !again && !p.sync().pending() {
+            break;
+        }
+    }
+}
+
+/// Everything a scene draws on its floor, resolved to values and sorted,
+/// so two scenes laid out in different orders compare equal.
+#[derive(Debug, PartialEq)]
+struct Drawn {
+    seat_size: u16,
+    fills: bool,
+    seats: Vec<String>,
+    rows: Vec<String>,
+    sections: Vec<String>,
+    texts: Vec<String>,
+    icons: Vec<String>,
+    decoration: Vec<String>,
+}
+
+fn drawn(scene: &Scene) -> Drawn {
+    let c: &Chart = &scene.chart;
+    let s = |i: u32| c.strings.get(i).unwrap_or_default().to_owned();
+    let floor = scene.floor;
+    let cat = |i: u32| {
+        c.categories
+            .get(i as usize)
+            .map_or(String::new(), |k| s(k.key))
+    };
+    let section_label = |i: u32| {
+        c.sections
+            .get(i as usize)
+            .map_or(String::new(), |x| s(x.label))
+    };
+    let mut seats = Vec::new();
+    for idx in scene.active.clone() {
+        let i = idx as usize;
+        let row = &c.rows[scene.row[i] as usize];
+        let label = seat_label(c, idx).expect("label");
+        let p = scene.pos[i];
+        seats.push(format!(
+            "{:?} {} {:?} {} {} {}|{}|{} {}",
+            [(p[0] * 4.0) as i64, (p[1] * 4.0) as i64],
+            row.seat_size,
+            row.shape,
+            cat(u32::from(c.seat_category[i])),
+            c.seat_flags[i],
+            label.section,
+            label.row,
+            label.seat.as_str(),
+            section_label(row.section),
+        ));
+    }
+    let rows = (c.rows.iter())
+        .filter(|r| scene.active.contains(&r.seat_first))
+        .map(|r| {
+            format!(
+                "{} {:?} {:?} {:?} {} {} {:?} {} {}",
+                s(r.label),
+                r.label_start,
+                r.label_end,
+                r.bounds,
+                r.seat_count,
+                r.positions,
+                r.direction,
+                r.ordinal_base,
+                section_label(r.section),
+            )
+        })
+        .collect();
+    let triangles = |range: std::ops::Range<u32>, colour: bool| {
+        let idx = &c.mesh.indices[range.start as usize..range.end as usize];
+        let mut tris: Vec<String> = idx
+            .chunks(3)
+            .map(|t| {
+                let mut v: Vec<String> = t
+                    .iter()
+                    .map(|&i| {
+                        let v = &c.mesh.vertices[i as usize];
+                        let colour = if colour { v.color } else { [0; 4] };
+                        format!("{:?}{:?}", v.pos.map(f32::to_bits), colour)
+                    })
+                    .collect();
+                v.sort();
+                v.join(" ")
+            })
+            .collect();
+        tris.sort();
+        tris
+    };
+    let sections = (c.sections.iter())
+        .filter(|x| x.floor == floor)
+        .map(|x| {
+            format!(
+                "{} {:?} {} {:?} {} {} {} {} {:?}",
+                s(x.label),
+                x.label_anchor,
+                x.label_size,
+                x.bounds,
+                x.seat_count,
+                x.row_count,
+                cat(x.category),
+                s(x.entrance),
+                triangles(x.mesh_first..x.mesh_first + x.mesh_count, false),
+            )
+        })
+        .collect();
+    let texts = (c.texts.iter())
+        .filter(|t| t.floor == floor)
+        .map(|t| {
+            format!(
+                "{} {:?} {} {} {:?} {:?} {} {}",
+                s(t.text),
+                t.pos,
+                t.size,
+                t.angle,
+                t.color,
+                t.align,
+                t.weight,
+                t.min_zoom
+            )
+        })
+        .collect();
+    let icons = (c.icons.iter())
+        .filter(|i| i.floor == floor)
+        .map(|i| format!("{} {:?} {} {}", s(i.key), i.pos, i.size, i.angle))
+        .collect();
+    let mut decoration: Vec<String> = (c.mesh.draws.iter())
+        .filter(|d| d.floor == floor)
+        .flat_map(|d| {
+            triangles(d.index_first..d.index_first + d.index_count, true)
+                .into_iter()
+                .map(move |t| format!("{:?} {t}", d.layer))
+        })
+        .collect();
+    decoration.sort();
+    let mut d = Drawn {
+        seat_size: c.meta.seat_size,
+        fills: c
+            .sections
+            .iter()
+            .any(|x| x.floor == floor && x.mesh_count > 0),
+        seats,
+        rows,
+        sections,
+        texts,
+        icons,
+        decoration,
+    };
+    d.seats.sort();
+    d.rows.sort();
+    d.sections.sort();
+    d.texts.sort();
+    d.icons.sort();
+    d
+}
+
+/// The buyer's scene of the compiled chart, showing floor `floor`.
+fn buyer(doc: &ChartDocument, floor: usize) -> Scene {
+    let compiled = cavea_compiler::compile(doc).expect("compiles");
+    let mut scene = Scene::decode(&compiled.public).expect("decodes");
+    let f = &scene.chart.floors[floor];
+    scene.active = f.seat_first..f.seat_first + f.seat_count;
+    scene.floor = floor as u32;
+    scene
+}
+
+/// 04 §25: for the presets, the designer draws what the buyer draws, on
+/// every floor: the same seats (position, size, shape, category, flags,
+/// labels), rows, sections (label, anchor, size, box, fill), text objects,
+/// icons and decoration, and the same seat size and fills, so the same
+/// levels of detail.
+#[test]
+fn presets_match_the_buyer() {
+    for name in ["theatre", "arena", "stadium-60k"] {
+        let doc = preset(name);
+        let mut s = Session::load(doc.clone()).expect("load");
+        let floors: Vec<u32> = s.document().floors().iter().map(|f| f.id).collect();
+        for (i, &f) in floors.iter().enumerate().take(2) {
+            assert!(s.set_floor(f));
+            let mut p = painter(VIEW);
+            settle(&mut p, &s);
+            let live = p.engine().scene().expect("scene");
+            let want = buyer(&doc, i);
+            let (a, b) = (drawn(live), drawn(&want));
+            assert!(!b.seats.is_empty() || name == "theatre", "{name}");
+            assert_eq!(a.seat_size, b.seat_size, "{name} floor {f}");
+            assert_eq!(a.fills, b.fills, "{name} floor {f}");
+            assert_eq!(a.seats, b.seats, "{name} floor {f}: seats");
+            assert_eq!(a.rows, b.rows, "{name} floor {f}: rows");
+            assert_eq!(a.sections, b.sections, "{name} floor {f}: sections");
+            assert_eq!(a.texts, b.texts, "{name} floor {f}: texts");
+            assert_eq!(a.icons, b.icons, "{name} floor {f}: icons");
+            assert_eq!(a.decoration, b.decoration, "{name} floor {f}: decoration");
+        }
+    }
+}
+
+/// What the GPU holds equals the scene's own bytes: the seats' static and
+/// dynamic buffers and the mesh.
+fn gpu_matches(p: &Painter<Recorder>, what: &str) {
+    let engine = p.engine();
+    let scene = engine.scene().expect("scene");
+    let ([st, dy], mesh) = engine.live_buffers().expect("buffers");
+    let rec = engine.backend();
+    let n = scene.pos.len();
+    let statics = scene.encode_static();
+    assert_eq!(
+        &rec.buffer(st).expect("static")[..statics.len()],
+        &statics[..],
+        "{what}: static seat bytes"
+    );
+    let c = &scene.chart;
+    let dynamics =
+        cavea_render::seat::encode_dynamic(&c.seat_category, &scene.visual, &scene.fx, 0..n);
+    assert_eq!(
+        &rec.buffer(dy).expect("dynamic")[..dynamics.len()],
+        &dynamics[..],
+        "{what}: dynamic seat bytes"
+    );
+    if let Some([v, i]) = mesh {
+        let indices: Vec<u8> = c
+            .mesh
+            .indices
+            .iter()
+            .flat_map(|x| x.to_le_bytes())
+            .collect();
+        assert_eq!(
+            rec.buffer(i).expect("indices"),
+            &indices[..],
+            "{what}: indices"
+        );
+        let vertices: Vec<u8> = c
+            .mesh
+            .vertices
+            .iter()
+            .flat_map(|v| {
+                let mut b = v.pos[0].to_le_bytes().to_vec();
+                b.extend_from_slice(&v.pos[1].to_le_bytes());
+                b.extend_from_slice(&v.color);
+                b
+            })
+            .collect();
+        assert_eq!(
+            rec.buffer(v).expect("vertices"),
+            &vertices[..],
+            "{what}: vertices"
+        );
+    } else {
+        assert!(c.mesh.indices.is_empty(), "{what}: a mesh without buffers");
+    }
+}
+
+fn pointer(world: [f64; 2], time: f64) -> Pointer {
+    Pointer {
+        world,
+        screen: [world[0] * VIEW.zoom, world[1] * VIEW.zoom],
+        zoom: VIEW.zoom,
+        button: Button::Primary,
+        kind: PointerKind::Mouse,
+        mods: Modifiers::default(),
+        time,
+    }
+}
+
+/// A drag in a few steps, drawing after each move; returns whether a
+/// gesture was open during it.
+fn drag(s: &mut Session, p: &mut Painter<Recorder>, from: [f64; 2], by: [f64; 2], t: &mut f64) {
+    *t += 1000.0;
+    s.input(Input::PointerDown(pointer(from, *t)));
+    for k in 1..=4 {
+        *t += 16.0;
+        let f = f64::from(k) / 4.0;
+        let at = [from[0] + by[0] * f, from[1] + by[1] * f];
+        s.input(Input::PointerMove(pointer(at, *t)));
+        p.draw(s, *t);
+    }
+    *t += 16.0;
+    let end = [from[0] + by[0], from[1] + by[1]];
+    s.input(Input::PointerUp(pointer(end, *t)));
+}
+
+/// 04 §25: after random edits, gestures (moves, rotations, drawing a row
+/// block), undo, redo, numbering previews and floor changes, the live scene
+/// kept up to date piece by piece equals one built from scratch, and the
+/// seat and mesh buffers hold exactly its bytes.
+#[test]
+fn incremental_equals_from_scratch() {
+    let subjects = [
+        preset("theatre"),
+        cavea_testkit::synthetic::stadium(3_000, 5),
+    ];
+    for (n, doc) in subjects.into_iter().enumerate() {
+        let seed = 7_000 + n as u64;
+        let mut r = Rng(seed);
+        let mut s = Session::load(doc).expect("load");
+        let mut p = painter(VIEW);
+        settle(&mut p, &s);
+        let mut t = 0.0;
+        for step in 0..160 {
+            let ids: Vec<u32> = s.document().children(None).to_vec();
+            match r.below(12) {
+                0..=4 => {
+                    let cmd = command(&mut r, s.document());
+                    let _ = s.apply(cmd);
+                }
+                5 => {
+                    let _ = s.undo();
+                }
+                6 => {
+                    let _ = s.redo();
+                }
+                7 | 8 => {
+                    // Drag a top-level node by its middle.
+                    if let Some(id) = r.pick(&ids)
+                        && let Some(b) = s.index().bounds(id)
+                    {
+                        s.set_tool(ToolId::Select);
+                        s.select(Level::Top, [id]);
+                        let c = [(b.min[0] + b.max[0]) / 2.0, (b.min[1] + b.max[1]) / 2.0];
+                        drag(&mut s, &mut p, c, [r.f(400.0), r.f(400.0)], &mut t);
+                    }
+                }
+                9 => {
+                    s.set_tool(ToolId::RowBlock);
+                    let at = [r.f(3000.0), r.f(3000.0)];
+                    drag(&mut s, &mut p, at, [300.0 + r.f(200.0), 200.0], &mut t);
+                    s.set_tool(ToolId::Select);
+                }
+                10 => {
+                    s.select_all();
+                    let numbering = cavea_edit::Numbering {
+                        rows: None,
+                        seats: Some(SeatLabels {
+                            start: Some(LabelStart::Number(11 + r.below(5) as u32)),
+                            ..SeatLabels::default()
+                        }),
+                        after_z: None,
+                        across: None,
+                        keep_overrides: false,
+                    };
+                    let _ = s.preview_numbering(&numbering);
+                }
+                _ => {
+                    let floors: Vec<u32> = s.document().floors().iter().map(|f| f.id).collect();
+                    if let Some(f) = r.pick(&floors) {
+                        s.set_floor(f);
+                    }
+                }
+            }
+            settle(&mut p, &s);
+            let what = format!("seed {seed} step {step}");
+            let mut fresh = painter(VIEW);
+            settle(&mut fresh, &s);
+            match (p.engine().scene(), fresh.engine().scene()) {
+                (Some(a), Some(b)) => assert_eq!(drawn(a), drawn(b), "{what}"),
+                (a, b) => assert_eq!(a.is_some(), b.is_some(), "{what}"),
+            }
+            if p.engine().scene().is_some() {
+                gpu_matches(&p, &what);
+            }
+        }
+        assert!(p.sync().merges > 1);
+    }
+}
+
+/// 04 §25: while a drag is open nothing is compiled and no seat byte is
+/// uploaded; each moved piece is drawn with a transform that puts its
+/// seats where compiling it at the new place puts them (within the quarter
+/// unit positions are stored in, turned).
+#[test]
+fn transforms_match_baked_positions() {
+    let doc = preset("arena");
+    let mut s = Session::load(doc).expect("load");
+    let mut p = painter(VIEW);
+    settle(&mut p, &s);
+    let mut r = Rng(42);
+    let mut t = 0.0;
+    let mut tested = (0, 0);
+    for round in 0..16 {
+        let ids: Vec<u32> = s.document().children(None).to_vec();
+        let picked: Vec<u32> = (0..1 + r.below(6)).filter_map(|_| r.pick(&ids)).collect();
+        s.set_tool(ToolId::Select);
+        s.select(Level::Top, picked.iter().copied());
+        let overlay = s.overlay();
+        // A seat of a node picked whose topmost node there is that node (a
+        // section's seat through its child).
+        let doc = s.document();
+        let tol = 4.0 / VIEW.zoom;
+        let on_top = picked.iter().find_map(|&id| {
+            let holders = doc.children(Some(id));
+            let holders = if holders.is_empty() {
+                &[id][..]
+            } else {
+                holders
+            };
+            holders.iter().find_map(|&h| {
+                let seats = s.index().seats(h).iter().filter(|x| !x.removed);
+                seats.take(20).find_map(|x| {
+                    let at = s.index().to_world(h, x.pos)?;
+                    (s.index().hit(doc, None, at, tol, |_| true) == Some(id)).then_some(at)
+                })
+            })
+        });
+        let Some(centre) = on_top else { continue };
+        // A move by its body, or a turn by the rotate handle.
+        let rotate = round % 2 == 1;
+        let from = if rotate {
+            let h = (overlay.handles.iter())
+                .find(|h| h.kind == cavea_edit::HandleKind::Rotate)
+                .expect("rotate handle");
+            [
+                h.at[0] + h.offset[0] / VIEW.zoom,
+                h.at[1] + h.offset[1] / VIEW.zoom,
+            ]
+        } else {
+            centre
+        };
+        // At least 300 cu (15 CSS px at this zoom): past the drag threshold.
+        let by = [300.0 + r.f(250.0).abs(), -(300.0 + r.f(250.0).abs())];
+        t += 1000.0;
+        s.input(Input::PointerDown(pointer(from, t)));
+        t += 16.0;
+        s.input(Input::PointerMove(pointer(
+            [from[0] + by[0], from[1] + by[1]],
+            t,
+        )));
+        p.draw(&s, t);
+        let compiled = p.sync().compiled;
+        p.engine_mut().backend_mut().clear();
+        t += 16.0;
+        let end = [from[0] + by[0] * 1.5, from[1] + by[1] * 1.5];
+        s.input(Input::PointerMove(pointer(end, t)));
+        assert!(s.editor().gesture_open(), "round {round}: {:?}", s.cursor());
+        p.draw(&s, t);
+        assert_eq!(
+            p.sync().compiled,
+            compiled,
+            "round {round}: nothing compiled"
+        );
+        let ([st, dy], _) = p.engine().live_buffers().expect("buffers");
+        let seat_writes = (p.engine().backend().writes.iter())
+            .filter(|w| w.0 == st.0 || w.0 == dy.0)
+            .count();
+        assert_eq!(seat_writes, 0, "round {round}: no seat upload");
+        // Where the transforms draw each moved piece's seats now.
+        let scene = p.engine().scene().expect("scene");
+        let pieces = p.engine().pieces();
+        let mut moved: Vec<[f64; 2]> = Vec::new();
+        for (a, spans) in p.engine().moving() {
+            for span in spans {
+                for idx in pieces[span].1.seats.clone() {
+                    let [x, y] = scene.pos[idx as usize].map(f64::from);
+                    moved.push([
+                        a[0][0] * x + a[1][0] * y + a[2][0],
+                        a[0][1] * x + a[1][1] * y + a[2][1],
+                    ]);
+                }
+            }
+        }
+        assert!(!moved.is_empty(), "round {round}: something moved");
+        t += 16.0;
+        s.input(Input::PointerUp(pointer(end, t)));
+        settle(&mut p, &s);
+        assert!(p.engine().moving().is_empty());
+        let baked = p.engine().scene().expect("scene");
+        let mut at: Vec<[f64; 2]> = baked.pos.iter().map(|q| q.map(f64::from)).collect();
+        // Each transformed seat lies on a baked seat.
+        let key = |q: &[f64; 2]| ((q[0] * 4.0).round() as i64, (q[1] * 4.0).round() as i64);
+        at.sort_by_key(key);
+        for q in &moved {
+            let near = at.partition_point(|b| key(b) < (key(q).0 - 2, i64::MIN));
+            let hit = at[near..]
+                .iter()
+                .take_while(|b| key(b).0 <= key(q).0 + 2)
+                .any(|b| (b[0] - q[0]).hypot(b[1] - q[1]) <= 0.36);
+            assert!(hit, "round {round}: {q:?} has no baked seat within 0.36 cu");
+        }
+        gpu_matches(&p, &format!("round {round}"));
+        if rotate {
+            tested.1 += 1;
+        } else {
+            tested.0 += 1;
+        }
+    }
+    assert!(
+        tested.0 >= 4 && tested.1 >= 4,
+        "moves and turns tested: {tested:?}"
+    );
+}
+
+/// 04 §20.2 for the canvas: after a lost context comes back, its first frame
+/// makes the scene's resources once from the CPU copies, compiling nothing,
+/// and the GPU holds the scene's bytes again.
+#[test]
+fn context_restores_once() {
+    let doc = preset("theatre");
+    let s = Session::load(doc).expect("load");
+    let mut p = painter(VIEW);
+    settle(&mut p, &s);
+    let compiled = p.sync().compiled;
+    p.handle(Command::ContextLost);
+    assert!(p.engine().backend().buffers.is_empty() || p.engine().live_buffers().is_none());
+    p.engine_mut().backend_mut().clear();
+    // While lost: no frame.
+    p.draw(&s, 1.0);
+    assert_eq!(p.engine().backend().frames, 0);
+    assert!(p.handle(Command::ContextRestored));
+    p.draw(&s, 2.0);
+    let rec = p.engine().backend();
+    assert_eq!(rec.restores, 1);
+    assert_eq!(rec.frames, 1);
+    // Seats (2), overlay rings (2), mesh (2) once; labels and overlay as
+    // drawn.
+    let made = rec.created;
+    p.engine_mut().backend_mut().clear();
+    p.draw(&s, 3.0);
+    assert_eq!(
+        p.engine().backend().created,
+        0,
+        "made {made} once, then none"
+    );
+    assert_eq!(p.sync().compiled, compiled, "nothing compiled");
+    gpu_matches(&p, "restored");
+}
+
+/// 04 §18: a frame that changes nothing draws nothing and uploads nothing.
+#[test]
+fn idle_frames_cost_nothing() {
+    let s = Session::load(preset("theatre")).expect("load");
+    let mut p = painter(VIEW);
+    settle(&mut p, &s);
+    p.engine_mut().backend_mut().clear();
+    for t in 0..10 {
+        assert!(!p.draw(&s, 1e4 + f64::from(t)));
+    }
+    let rec = p.engine().backend();
+    assert_eq!((rec.frames, rec.uploaded), (0, 0));
+}
