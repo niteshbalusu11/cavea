@@ -10,7 +10,7 @@
 //! so a decompression bomb costs it nothing, and the dimensions in the header
 //! are bounded for the browsers that will decode it.
 //!
-//! The bytes are stored in PostgreSQL (`assets.bytes`, D-10, D-47) by [`put`]
+//! The bytes are stored in PostgreSQL (`assets.bytes`, D-10, D-49) by [`put`]
 //! and read by [`get`]; S3-compatible storage (SRV-054) would change those
 //! two. [`Memory`] bounds the image bytes a node holds at once.
 

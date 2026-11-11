@@ -8,7 +8,7 @@
 //! the same asset.
 //!
 //! An asset is served to anyone who has its hash, without a credential, as
-//! the compiled charts are (D-26, D-47): a buyer's browser fetches a chart's
+//! the compiled charts are (D-26, D-49): a buyer's browser fetches a chart's
 //! background images from the URL alone. The response can do no harm if a
 //! browser is sent to it: the type the server sniffed, `nosniff`, and a
 //! sandboxing Content Security Policy.
