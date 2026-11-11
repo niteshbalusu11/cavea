@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cavea demo</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        font:
+          14px system-ui,
+          sans-serif;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: calc(100% - 2.5em);
+      }
+      output {
+        display: block;
+        padding: 0.5em;
+        white-space: pre;
+      }
+    </style>
+  </head>
+  <body>
+    <output id="status">Loading…</output>
+    <canvas id="seats"></canvas>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

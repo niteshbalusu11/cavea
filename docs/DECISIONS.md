@@ -134,3 +134,11 @@ Each entry records what was decided, what was rejected and what would make us re
 
 - **Decision:** The engine is driven only by serialisable commands and emits serialisable events. v1 runs on the main thread; a worker with `OffscreenCanvas` comes later without changing the engine.
 - **Why:** A worker protects frame rate from a busy host page, but it complicates text rasterisation and the accessibility layer. The protocol keeps the option open at no cost.
+
+## D-22 · REN-002 result: `naga` produces working GLSL ES 3.00 for the seat shader (2026-11-10)
+
+- **Result:** D-05 holds for the `shape` program. `crates/cavea-render/build.rs` parses and validates `shaders/shape.wgsl` with `naga` 30.0.1 (features `wgsl-in` and `glsl-out` only, a build dependency) and writes GLSL ES 3.00 with `Version::Embedded { version: 300, is_webgl: true }` and no writer flags. The output compiled and linked in Chromium 157 (WebGL 2.0, ANGLE on SwiftShader, software rendering) and drew 100,000 seats with `gl.getError() == 0`. No hand-written fallback was needed.
+- **What the risky features became:** `@builtin(vertex_index)` → `uint(gl_VertexID)`; `textureLoad` on a `texture_2d<f32>` → `texelFetch` on a `highp sampler2D`; `@interpolate(flat)` → `flat` varyings, including `uvec2`; `u32` and `vec2<u32>` vertex inputs → `layout(location = N) in uint`/`uvec2`, fed with `vertexAttribIPointer`; the uniform struct → a `std140` block.
+- **What the backend must do because of GLSL ES 3.00:** it has no `layout(binding)`, so uniform blocks and samplers are bound by name. `naga` names each stage's block separately (`Globals_block_0Vertex`, `Globals_block_0Fragment`) and the sampler `_group_0_binding_1_vs`. `build.rs` reads these names from `naga`'s reflection output and emits them as constants, so nothing hard-codes them. Varyings are matched by `naga`'s generated names, which agree between stages.
+- **Not yet proven:** the `mesh`, `glyph`, `text` and `image` programs, and a hardware GPU or another browser engine. (A Firefox headless screenshot was attempted; it is taken at the `load` event, before the WASM has started, so it proved nothing.) Revisit if one of those fails to translate.
+

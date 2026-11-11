@@ -5,6 +5,9 @@
 
 use wasm_bindgen::prelude::wasm_bindgen;
 
+#[cfg(target_arch = "wasm32")]
+mod view;
+
 /// The version of this crate, so the host page can tell which build it loaded.
 #[wasm_bindgen]
 pub fn version() -> String {

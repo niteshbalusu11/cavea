@@ -356,18 +356,18 @@ Built-in themes: `light`, `dark`, `high-contrast`, and a `colorblind` modifier t
 ```rust
 pub trait GpuBackend {
     fn caps(&self) -> Caps;
-    fn create_buffer(&mut self, desc: BufferDesc, data: &[u8]) -> BufferId;
-    fn update_buffer(&mut self, id: BufferId, offset: u32, data: &[u8]);
-    fn create_texture(&mut self, desc: TextureDesc, data: Option<&[u8]>) -> TextureId;
-    fn update_texture(&mut self, id: TextureId, region: Rect, data: &[u8]);
+    fn create_buffer(&mut self, desc: BufferDesc, data: &[u8]) -> Result<BufferId, BackendError>;
+    fn update_buffer(&mut self, id: BufferId, offset: u32, data: &[u8]) -> Result<(), BackendError>;
+    fn create_texture(&mut self, desc: TextureDesc, data: Option<&[u8]>) -> Result<TextureId, BackendError>;
+    fn update_texture(&mut self, id: TextureId, region: Rect, data: &[u8]) -> Result<(), BackendError>;
     fn begin_frame(&mut self, target: Target, clear: [f32; 4]);
-    fn draw(&mut self, call: &DrawCall);   // fixed pipeline enum, uniforms, buffers, ranges
+    fn draw(&mut self, call: &DrawCall) -> Result<(), BackendError>;   // fixed pipeline enum, uniforms, buffers, ranges
     fn end_frame(&mut self);
     fn destroy(&mut self, id: ResourceId);
 }
 ```
 
-Pipelines are a fixed enum. Backends compile them at start; nothing creates pipelines at run time.
+Pipelines are a fixed enum. Backends compile them at start; nothing creates pipelines at run time. Operations that can fail (a lost context, an unknown id, data that does not fit) return an error instead of panicking; the engine reports it as an `Error` event.
 
 ### 20.2 `glow` (web, WebGL2)
 

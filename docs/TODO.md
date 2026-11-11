@@ -32,10 +32,10 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 ### Rendering spike
 
-- [ ] **FMT-001** Synthetic stadium generator emitting raw position and category arrays (03 §7)
-- [ ] **REN-001** Spike: draw 100,000 instanced seats with WebGL2 from Rust through `glow` (04 §7, §8)
-- [ ] **REN-002** Spike: translate WGSL to GLSL ES 3.00 in `build.rs` with `naga`; record whether it works for the seat shader (DECISIONS D-05)
-- [ ] **REN-003** Spike: measure the WASM and JavaScript size of the minimal renderer after `wasm-opt` and brotli; record it (01 §5)
+- [x] **FMT-001** Synthetic stadium generator emitting raw position and category arrays (03 §7)
+- [x] **REN-001** Spike: draw 100,000 instanced seats with WebGL2 from Rust through `glow` (04 §7, §8)
+- [x] **REN-002** Spike: translate WGSL to GLSL ES 3.00 in `build.rs` with `naga`; record whether it works for the seat shader (DECISIONS D-05)
+- [x] **REN-003** Spike: measure the WASM and JavaScript size of the minimal renderer after `wasm-opt` and brotli; record it (01 §5)
 - [ ] **REN-004** Spike: pan, pinch and wheel zoom with inertia (04 §14)
 - [ ] **REN-005** Spike: hit test and tap-to-select with local state (04 §15)
 - [ ] **REN-006** Spike: frame-time meter and timing marks on the page (04 §24)
@@ -87,14 +87,14 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 ### Renderer engine
 
-- [ ] **REN-010** Engine command and event types (04 §3)
+- [x] **REN-010** Engine command and event types (04 §3)
 - [ ] **REN-011** Host service traits: clock, frame scheduler, text rasteriser, image source (04 §2)
 - [ ] **REN-012** Scene arrays loaded from CCF; per-row, segment, section, chunk tables (04 §5)
-- [ ] **REN-013** `GpuBackend` trait and fixed pipeline enum (04 §20.1)
-- [ ] **REN-014** `glow` backend for WebGL2 with the specified context attributes (04 §20.2)
-- [ ] **REN-015** Shader build pipeline: WGSL sources, generated GLSL, or the hand-written fallback (DECISIONS D-05)
-- [ ] **REN-016** `shape` program: instanced quads, signed-distance shapes, stroke, anti-aliasing (04 §8)
-- [ ] **REN-017** Seat static and dynamic buffers with the specified layout (04 §6)
+- [x] **REN-013** `GpuBackend` trait and fixed pipeline enum (04 §20.1)
+- [x] **REN-014** `glow` backend for WebGL2 with the specified context attributes (04 §20.2)
+- [x] **REN-015** Shader build pipeline: WGSL sources, generated GLSL, or the hand-written fallback (DECISIONS D-05)
+- [x] **REN-016** `shape` program: instanced quads, signed-distance shapes, stroke, anti-aliasing (04 §8)
+- [x] **REN-017** Seat static and dynamic buffers with the specified layout (04 §6)
 - [ ] **REN-018** Palette texture and visual state mapping (04 §9)
 - [ ] **REN-019** `mesh` program: decoration layers and section fills (04 §7)
 - [ ] **REN-020** `image` program and lazy background image loading (04 §7)

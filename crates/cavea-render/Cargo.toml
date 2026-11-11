@@ -6,5 +6,16 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# The WebGL2 backend. Enabled by `cavea-web` for wasm32 only, so native builds of
+# the workspace never compile it.
+glow = ["dep:glow"]
+
+[dependencies]
+glow = { workspace = true, optional = true }
+
+[build-dependencies]
+naga.workspace = true
+
 [lints]
 workspace = true

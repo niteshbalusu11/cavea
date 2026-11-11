@@ -1,0 +1,229 @@
+//! The GPU backend boundary (`docs/04-renderer.md` §20.1). Nothing here names a
+//! graphics API, so the WebGL2 backend (`glow`) and a later `wgpu` backend
+//! implement the same trait.
+
+#[cfg(feature = "glow")]
+pub mod glow;
+
+use std::{fmt, ops::Range};
+
+/// The fixed set of shader programs (04 §7). Backends compile them at start;
+/// nothing creates pipelines at run time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pipeline {
+    /// Instanced signed-distance quads: seats, tables, booths, overlays.
+    Shape,
+    /// Indexed triangles: decoration and section fills.
+    Mesh,
+    /// MSDF glyph quads.
+    Glyph,
+    /// Bitmap text quads from the dynamic atlas.
+    Text,
+    /// Textured quads: background images.
+    Image,
+}
+
+/// What a backend can do, read once after creation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Caps {
+    /// Largest texture side in pixels.
+    pub max_texture_size: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BufferId(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextureId(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceId {
+    Buffer(BufferId),
+    Texture(TextureId),
+}
+
+/// How often a buffer's contents change, as a hint to the driver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BufferUsage {
+    /// Written once.
+    Static,
+    /// Rewritten in sub-ranges.
+    Dynamic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BufferKind {
+    /// Per-vertex or per-instance attributes.
+    Vertex,
+    /// Triangle indices.
+    Index,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BufferDesc {
+    pub kind: BufferKind,
+    pub usage: BufferUsage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextureFormat {
+    Rgba8,
+    Rgb8,
+    R8,
+}
+
+impl TextureFormat {
+    pub const fn bytes_per_pixel(self) -> u32 {
+        match self {
+            Self::Rgba8 => 4,
+            Self::Rgb8 => 3,
+            Self::R8 => 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sampling {
+    /// Exact texels, for lookup tables such as the palette.
+    Nearest,
+    Linear,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextureDesc {
+    pub width: u32,
+    pub height: u32,
+    pub format: TextureFormat,
+    pub sampling: Sampling,
+}
+
+/// A pixel rectangle in a texture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// The surface a frame is drawn to: the default framebuffer, in device pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Target {
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Per-draw values shared by every program. The GL backend uploads them as a
+/// std140 uniform block (80 bytes).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Uniforms {
+    /// World (chart units) to clip space, column-major 3×3.
+    pub view: [[f32; 3]; 3],
+    /// Device pixels per chart unit.
+    pub px_per_cu: f32,
+    /// Stroke width in device pixels.
+    pub stroke_px: f32,
+    /// Shapes smaller than this on screen, in device pixels, get no stroke.
+    pub stroke_min_px: f32,
+    /// Alpha factor for dimmed objects.
+    pub dim: f32,
+    /// Seconds since the engine started, for pulses.
+    pub time: f32,
+}
+
+impl Uniforms {
+    /// Size of the std140 block (WGSL uniform layout is the same).
+    pub const STD140_SIZE: usize = 80;
+
+    /// Little-endian std140 bytes: three 16-byte matrix columns, then the scalars.
+    pub fn to_std140(&self) -> [u8; Self::STD140_SIZE] {
+        let mut out = [0; Self::STD140_SIZE];
+        let scalars = [
+            self.px_per_cu,
+            self.stroke_px,
+            self.stroke_min_px,
+            self.dim,
+            self.time,
+        ];
+        let columns = self.view.iter().enumerate().flat_map(|(i, column)| {
+            column
+                .iter()
+                .enumerate()
+                .map(move |(j, v)| (i * 16 + j * 4, *v))
+        });
+        let tail = scalars.iter().enumerate().map(|(i, v)| (48 + i * 4, *v));
+        for (offset, value) in columns.chain(tail) {
+            if let Some(slot) = out.get_mut(offset..offset + 4) {
+                slot.copy_from_slice(&value.to_le_bytes());
+            }
+        }
+        out
+    }
+}
+
+/// One draw: a fixed pipeline, its resources and the instance range to draw.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrawCall {
+    pub pipeline: Pipeline,
+    /// Vertex buffers in the order the pipeline defines. `Shape`: the 12-byte
+    /// static and the 4-byte dynamic instance buffers (04 §6).
+    pub buffers: [Option<BufferId>; 2],
+    /// `Shape`: the palette texture.
+    pub texture: Option<TextureId>,
+    pub uniforms: Uniforms,
+    /// Instances to draw. WebGL2 has no base instance, so the GL backend
+    /// rebinds attribute offsets per range (04 §11).
+    pub instances: Range<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackendError {
+    /// A shader failed to compile or link; carries the driver's log.
+    Shader(String),
+    /// The API refused to create an object (often a lost context).
+    Create(String),
+    /// The id does not name a live resource of the right kind.
+    UnknownResource,
+    /// The data does not fit the resource or its description.
+    InvalidData,
+    /// The pipeline is not implemented by this backend yet.
+    Unsupported(Pipeline),
+}
+
+impl fmt::Display for BackendError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Shader(log) => write!(f, "shader failed: {log}"),
+            Self::Create(what) => write!(f, "cannot create {what}"),
+            Self::UnknownResource => f.write_str("unknown GPU resource"),
+            Self::InvalidData => f.write_str("data does not fit the GPU resource"),
+            Self::Unsupported(pipeline) => write!(f, "pipeline {pipeline:?} is not implemented"),
+        }
+    }
+}
+
+impl std::error::Error for BackendError {}
+
+/// A GPU API. Operations that can fail return `Result` instead of panicking.
+pub trait GpuBackend {
+    fn caps(&self) -> Caps;
+    fn create_buffer(&mut self, desc: BufferDesc, data: &[u8]) -> Result<BufferId, BackendError>;
+    /// Overwrites `data.len()` bytes starting at byte `offset`.
+    fn update_buffer(&mut self, id: BufferId, offset: u32, data: &[u8])
+    -> Result<(), BackendError>;
+    fn create_texture(
+        &mut self,
+        desc: TextureDesc,
+        data: Option<&[u8]>,
+    ) -> Result<TextureId, BackendError>;
+    fn update_texture(
+        &mut self,
+        id: TextureId,
+        region: Rect,
+        data: &[u8],
+    ) -> Result<(), BackendError>;
+    fn begin_frame(&mut self, target: Target, clear: [f32; 4]);
+    fn draw(&mut self, call: &DrawCall) -> Result<(), BackendError>;
+    fn end_frame(&mut self);
+    fn destroy(&mut self, id: ResourceId);
+}
