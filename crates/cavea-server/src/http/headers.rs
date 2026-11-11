@@ -59,7 +59,7 @@ pub fn family(path: &str) -> Family {
 
 /// The console's policy. Scripts: this origin's files and WebAssembly
 /// compilation only. Styles: this origin's stylesheets, and `style`
-/// attributes (`style-src-attr 'unsafe-inline'`, D-66), which Solid writes
+/// attributes (`style-src-attr 'unsafe-inline'`, D-67), which Solid writes
 /// into its compiled templates for a constant `style={{…}}`; no `<style>`
 /// element. `connect-src 'self'` covers the API, the WebAssembly and atlas
 /// fetches (the atlas is decoded from a fetched blob, which `img-src` does
