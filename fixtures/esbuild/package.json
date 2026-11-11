@@ -1,0 +1,11 @@
+{
+  "name": "cavea-fixture-esbuild",
+  "private": true,
+  "scripts": {
+    "//": "esbuild leaves new URL('./x', import.meta.url) as it is, so the WASM and the atlas are copied beside the bundle; ESM output keeps import.meta.url (an IIFE has none)",
+    "build": "esbuild src/main.js --bundle --format=esm --minify --outdir=dist && cp node_modules/@cavea/renderer/cavea_web_bg.wasm node_modules/@cavea/renderer/glyphs.png dist/"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

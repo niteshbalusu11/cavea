@@ -130,6 +130,10 @@ function world(options: Partial<CaveaServerOptions> = {}, store = new Map<string
     drop(): void {
       this.dispatchEvent(new Event("close"));
     }
+    /** A socket a Content Security Policy refuses, in Chromium: `error` and no `close`. */
+    refuse(): void {
+      this.dispatchEvent(new Event("error"));
+    }
   }
   class Source extends EventTarget {
     closed = false;
@@ -395,6 +399,17 @@ describe("reconnection", () => {
       await kept.advance(60_000);
     }
     expect([kept.sockets.length, kept.sources.length]).toEqual([6, 0]);
+  });
+
+  test("a socket that only errors (refused by a CSP) counts as failed at once, without the silence timer", async () => {
+    const w = world();
+    await w.adapter.connect(w.ctx);
+    w.socket().refuse();
+    await w.advance(1_000);
+    w.socket().refuse();
+    w.socket().drop();
+    await w.settle();
+    expect([w.sockets.length, w.sources.length]).toEqual([2, 1]);
   });
 
   test("a forced transport is the only one tried", async () => {

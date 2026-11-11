@@ -1,0 +1,7 @@
+<!doctype html>
+<!-- The script-tag build alone: no bundler, no module. `run.ts` fills in the
+     script's URL and its integrity, and serves this page with and without a
+     Content Security Policy, the script from the page's origin or a CDN's. -->
+<div id="map"></div>
+<script src="{{script}}" integrity="{{integrity}}" crossorigin="anonymous"></script>
+<script src="page.js"></script>

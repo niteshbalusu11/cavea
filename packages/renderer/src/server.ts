@@ -751,6 +751,9 @@ export function serverAdapter(input: CaveaServerOptions, platform: () => Platfor
       on,
     );
     ws.addEventListener("close", () => dropped(), on);
+    // Chromium fires only `error`, never `close`, for a socket a Content
+    // Security Policy refuses; `dropped` closes the link, so one of the two counts.
+    ws.addEventListener("error", () => dropped(), on);
     later("silence", SILENCE_MS, () => dropped());
   }
 
