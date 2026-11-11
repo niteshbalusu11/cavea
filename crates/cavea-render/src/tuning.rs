@@ -81,6 +81,8 @@ pub const ZOOM_TO_SELECT_SEAT_PX: f64 = 32.0;
 /// Most objects a buyer can select: the largest object limit of a hold token
 /// for publishable keys (`02-domain-model.md` §5), and the default maximum.
 pub const MAX_SELECTED: u32 = 100;
+/// How long a seat that just became unavailable pulses (04 §17).
+pub const PULSE_MS: f64 = 400.0;
 
 // Overlays (04 §7 pass 12).
 

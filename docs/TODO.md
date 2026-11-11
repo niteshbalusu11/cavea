@@ -120,7 +120,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [ ] **REN-040** Context loss and restoration (04 §20.2)
 - [x] **REN-041** Theme tokens to palette; light, dark and high-contrast themes (04 §19)
 - [x] **REN-042** Overlay pass: hover ring and focus ring (04 §7)
-- [ ] **REN-043** Pulse on change, and reduced-motion handling (04 §17, §13)
+- [x] **REN-043** Pulse on change, and reduced-motion handling (04 §17, §13)
 - [ ] **REN-044** Timing marks and frame statistics (04 §24)
 - [ ] **REN-045** Headless render to a pixel buffer for golden tests (04 §26)
 

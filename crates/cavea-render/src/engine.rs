@@ -283,6 +283,7 @@ impl<B: GpuBackend> Engine<B> {
             Command::SetReducedMotion(on) => {
                 self.reduced_motion = on;
                 if on {
+                    self.step_pulses(None);
                     // Running fly-tos land at the next frame; inertia stops.
                     self.animations.retain_mut(|animation| match animation {
                         Animation::Fly { duration_ms, .. } => {
@@ -291,7 +292,7 @@ impl<B: GpuBackend> Engine<B> {
                         }
                         Animation::Inertia { .. } => false,
                     });
-                    if !self.animations.is_empty() {
+                    if !self.animations.is_empty() || self.dirty {
                         self.want_frame();
                     }
                 }
@@ -553,6 +554,7 @@ impl<B: GpuBackend> Engine<B> {
         self.run_actions();
         self.flush_selection();
         self.step_animations(time_ms);
+        self.step_pulses(Some(time_ms));
         // Seats moved on screen: what is under the hover position may differ.
         let moved = self.camera != self.reported;
         if moved || self.viewport.map(|v| v.css) != css_before {
