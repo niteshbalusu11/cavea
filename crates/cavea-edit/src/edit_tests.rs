@@ -13,7 +13,7 @@ use crate::tests::Rng;
 use crate::tool::draw_tests::unsnapped;
 use crate::*;
 
-const NONE: Modifiers = Modifiers {
+pub(crate) const NONE: Modifiers = Modifiers {
     shift: false,
     alt: false,
     ctrl: false,
@@ -25,7 +25,7 @@ const CTRL: Modifiers = Modifiers { ctrl: true, ..NONE };
 /// category `vip`) holding a 2 × 4 block (31) without a category; a
 /// rectangle (40), a text (41), a polygon (42) and a free-form row (50) of
 /// 7 seats. Zoom 1.
-fn chart() -> ChartDocument {
+pub(crate) fn chart() -> ChartDocument {
     serde_json::from_value(serde_json::json!({
         "schema": 1, "name": "e", "nextOid": 500, "settings": { "seatSize": 40 },
         "categories": [{ "key": "std", "label": "Standard", "color": "#2563EB" },
@@ -55,20 +55,20 @@ fn chart() -> ChartDocument {
     .expect("chart")
 }
 
-struct T {
-    s: Session,
+pub(crate) struct T {
+    pub(crate) s: Session,
     time: f64,
 }
 
 impl T {
-    fn new(doc: ChartDocument) -> Self {
+    pub(crate) fn new(doc: ChartDocument) -> Self {
         Self {
             s: Session::load(doc).map(unsnapped).expect("load"),
             time: 0.0,
         }
     }
 
-    fn input(&mut self, kind: fn(Pointer) -> Input, at: [f64; 2], mods: Modifiers) {
+    pub(crate) fn input(&mut self, kind: fn(Pointer) -> Input, at: [f64; 2], mods: Modifiers) {
         self.time += 1_000.0;
         let p = Pointer {
             world: at,
@@ -82,7 +82,7 @@ impl T {
         self.s.input(kind(p));
     }
 
-    fn drag(&mut self, path: &[[f64; 2]]) {
+    pub(crate) fn drag(&mut self, path: &[[f64; 2]]) {
         let (Some(&first), Some(&last)) = (path.first(), path.last()) else {
             return;
         };
@@ -889,7 +889,7 @@ fn touched(s: &Session, all: &BTreeMap<u32, (u32, [f64; 2])>) -> BTreeSet<u32> {
 }
 
 /// A random selection: some rows or seats of a block, or some nodes.
-fn random_selection(t: &mut T, r: &mut Rng) {
+pub(crate) fn random_selection(t: &mut T, r: &mut Rng) {
     let doc = t.s.document();
     let nodes: Vec<u32> = doc.ids().collect();
     let pick = r.pick(&nodes).unwrap_or(10);
@@ -915,7 +915,7 @@ fn random_selection(t: &mut T, r: &mut Rng) {
 
 /// One random edit of the selection through the session, sometimes with
 /// hostile values. False for undo, which restores what earlier edits did.
-fn random_edit(t: &mut T, r: &mut Rng) -> bool {
+pub(crate) fn random_edit(t: &mut T, r: &mut Rng) -> bool {
     let at = [r.f(800.0), r.f(800.0)];
     let wild = [f64::NAN, f64::INFINITY, 1e300, -0.0][r.below(4)];
     let end = [End::Start, End::End][r.below(2)];

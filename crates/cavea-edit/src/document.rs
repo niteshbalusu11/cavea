@@ -73,6 +73,10 @@ pub struct Document {
     pub(crate) revision: u64,
     pub(crate) chart_stamp: u64,
     pub(crate) roots_stamp: u64,
+    /// The revision of the last change that was not only a transform: the
+    /// tree, a node's content or chart-level data (views that show no
+    /// position need nothing else).
+    pub(crate) structure: u64,
     pub(crate) removed: BTreeMap<u32, u64>,
     /// The next id to allocate: never decreases, and is above every id the
     /// document held when loaded. Undo does not touch it.
@@ -105,6 +109,7 @@ impl Document {
             revision: 0,
             chart_stamp: 0,
             roots_stamp: 0,
+            structure: 0,
             removed: BTreeMap::new(),
             fresh: u64::from(next_oid),
             high_water: 0,
@@ -157,6 +162,11 @@ impl Document {
     /// The current revision; every change raises it.
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// The revision of the last change other than a node's transform.
+    pub fn structure_revision(&self) -> u64 {
+        self.structure
     }
 
     pub fn changes_since(&self, revision: u64) -> Changes {

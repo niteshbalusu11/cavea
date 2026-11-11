@@ -191,6 +191,50 @@ pub enum Command {
     },
 }
 
+impl Command {
+    /// A stable key naming the command in the undo history, for the shell
+    /// to translate: its `op`; for `setProperty` the field (`rowPitch`), for
+    /// `setChart` `chartName` or `chartSettings`; for `composite` its first
+    /// command's.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::CreateNode { .. } => "createNode",
+            Self::DeleteNodes { .. } => "deleteNodes",
+            Self::MoveNodes { .. } => "moveNodes",
+            Self::TransformNodes { .. } => "transformNodes",
+            Self::PlaceNode { .. } => "placeNode",
+            Self::SetProperty { property, .. } => property.field(),
+            Self::SetChart {
+                property: ChartProperty::Name(_),
+            } => "chartName",
+            Self::SetChart {
+                property: ChartProperty::Settings(_),
+            } => "chartSettings",
+            Self::AddCategory { .. } => "addCategory",
+            Self::UpdateCategory { .. } => "updateCategory",
+            Self::RemoveCategory { .. } => "removeCategory",
+            Self::MoveCategory { .. } => "moveCategory",
+            Self::AddFloor { .. } => "addFloor",
+            Self::UpdateFloor { .. } => "updateFloor",
+            Self::RemoveFloor { .. } => "removeFloor",
+            Self::AddRows { .. } => "addRows",
+            Self::RemoveRows { .. } => "removeRows",
+            Self::AddSeats { .. } => "addSeats",
+            Self::RemoveSeats { .. } => "removeSeats",
+            Self::ResizeRows { .. } => "resizeRows",
+            Self::RemoveSeat { .. } => "removeSeat",
+            Self::RestoreSeat { .. } => "restoreSeat",
+            Self::SetSeatOverride { .. } => "setSeatOverride",
+            Self::EditSeats { .. } => "editSeats",
+            Self::ShiftRows { .. } => "shiftRows",
+            Self::SetRowLabel { .. } => "setRowLabel",
+            Self::InsertGap { .. } => "insertGap",
+            Self::FlipNodes { .. } => "flipNodes",
+            Self::Composite { commands } => commands.first().map_or("composite", Self::label),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum End {

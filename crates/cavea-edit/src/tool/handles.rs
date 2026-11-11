@@ -42,6 +42,8 @@ pub enum HandleKind {
     Corner(Corner),
     /// A line's first (0) or last (1) point.
     End(u8),
+    /// The middle of a row block's front row: drag to curve it (07 §5.3).
+    Curve,
 }
 
 /// A handle: drawn at `at` (chart units) moved by `offset` CSS pixels.
@@ -138,8 +140,21 @@ pub(crate) fn handles(view: &View<'_>, sel: &Selection, pivot: Option<P>) -> Vec
         (Corner::BottomLeft, q[3]),
     ];
     match view.doc.node(id) {
-        Some(Node::RowBlock(_)) => {
+        Some(Node::RowBlock(b)) => {
             out.extend(sides.map(|(s, at)| handle(HandleKind::Side(s), at)));
+            // After the sides, which win where they meet on a small block.
+            // Two positions have no middle to move.
+            let curved = b.rows.first().is_some_and(|r| r.seats > 2);
+            let middle = front_middle(view, id).filter(|_| curved);
+            if let Some(at) = middle.and_then(|p| view.index.to_world(id, p)) {
+                let (sin, cos) = b.rotation.to_radians().sin_cos();
+                let k = tuning::CURVE_OFFSET;
+                out.push(Handle {
+                    kind: HandleKind::Curve,
+                    at,
+                    offset: [-sin * k, cos * k],
+                });
+            }
         }
         Some(Node::Shape(s)) => match s.kind {
             ShapeKind::Rect | ShapeKind::Ellipse | ShapeKind::Polygon => {
@@ -261,6 +276,7 @@ pub(crate) fn resize(
     (room, rows): (u64, Option<&BTreeSet<u32>>),
 ) -> Step {
     match (base, kind) {
+        (Node::RowBlock(b), HandleKind::Curve) if rows.is_none() => curve(b, id, d),
         (Node::RowBlock(_), HandleKind::Side(Side::Top | Side::Bottom)) if rows.is_some() => {
             Step::Keep
         }
@@ -308,7 +324,7 @@ fn align(b: &RowBlock) -> f64 {
 /// Whether the compiler accepts the block's arc (03 §2.4): no row's radius
 /// reaches zero or changes sign, and no seat is more than half a turn from
 /// the apex. The same test as the compiler's, on the same numbers.
-fn arc_ok(b: &RowBlock) -> bool {
+pub(crate) fn arc_ok(b: &RowBlock) -> bool {
     let Curve::Arc { radius } = b.curve else {
         return true;
     };
@@ -597,6 +613,177 @@ fn pitch(b: &RowBlock, id: u32, side: Side, d: P) -> Step {
 /// its own space (Shift keeps a corner drag's aspect ratio), each side at
 /// least [`MIN_SIZE`]; a line's end dragged (Shift: 15° steps about the
 /// other end).
+/// The middle of the block's front row in its own space: its middle
+/// position, or between the two middle ones.
+fn front_middle(view: &View<'_>, id: u32) -> Option<P> {
+    let front: Vec<P> = view
+        .index
+        .seats(id)
+        .iter()
+        .filter(|s| s.row == 0)
+        .map(|s| s.pos)
+        .collect();
+    let (a, b) = (
+        front.get((front.len().max(1) - 1) / 2)?,
+        front.get(front.len() / 2)?,
+    );
+    Some([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0])
+}
+
+/// Where the front row's positions lie along it (03 §2.4: `s = a + offset
+/// + k × seatPitch`; row 0 is never staggered): its first, its middle one
+/// or two (where the handle is, `front_middle`), and its last.
+#[derive(Debug, Clone, Copy)]
+struct Span {
+    first: f64,
+    middle: [f64; 2],
+    last: f64,
+    /// A bulge's weight at the middle, `1 − (2t − 1)²` (03 §2.4).
+    weight: f64,
+}
+
+fn front_span(b: &RowBlock) -> Option<Span> {
+    let n = b.rows.first()?.seats;
+    let offset = b.rows.first()?.offset;
+    let last = n.saturating_sub(1);
+    let first = -align(b) * f64::from(last) * b.seat_pitch + offset;
+    let at = |k: u32| first + f64::from(k) * b.seat_pitch;
+    let (ma, mb) = (last / 2, (n / 2).min(last));
+    let w = |k: u32| {
+        let t = f64::from(k) / f64::from(last.max(1));
+        1.0 - (2.0 * t - 1.0).powi(2)
+    };
+    Some(Span {
+        first,
+        middle: [at(ma), at(mb)],
+        last: at(last),
+        weight: (w(ma) + w(mb)) / 2.0,
+    })
+}
+
+/// The y of the front row's position at `s` on an arc of curvature `k`
+/// (`1 / radius`): `R cos(s / R) − R` (03 §2.4), 0 when straight.
+fn arc_y(k: f64, s: f64) -> f64 {
+    if k == 0.0 {
+        0.0
+    } else {
+        ((k * s).cos() - 1.0) / k
+    }
+}
+
+/// On an arc of curvature `k`: how far the front row's middle lies behind
+/// (+y) the midpoint of its ends, and that midpoint's y.
+fn arc_depth(k: f64, s: Span) -> (f64, f64) {
+    let ends = (arc_y(k, s.first) + arc_y(k, s.last)) / 2.0;
+    let middle = (arc_y(k, s.middle[0]) + arc_y(k, s.middle[1])) / 2.0;
+    (middle - ends, ends)
+}
+
+/// The curvature in (0, π / reach] whose front row has depth `target`
+/// (above 0), the farthest seat staying within half a turn of the apex:
+/// the first crossing of 64 samples, refined by bisection, else the
+/// sample of greatest depth (the depth is not monotonic up to half a turn).
+fn curvature(span: Span, target: f64) -> Option<f64> {
+    let reach = span.first.abs().max(span.last.abs());
+    if !(reach > 0.0 && reach.is_finite()) {
+        return None;
+    }
+    let max = std::f64::consts::PI / reach;
+    let depth = |k: f64| arc_depth(k, span).0;
+    let mut best = (0.0, 0.0);
+    let mut lo = 0.0;
+    for i in 1..=64 {
+        let k = max * f64::from(i) / 64.0;
+        let d = depth(k);
+        if d >= target {
+            let mut hi = k;
+            for _ in 0..60 {
+                let mid = (lo + hi) / 2.0;
+                if depth(mid) < target {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            return Some(hi);
+        }
+        if d > best.1 {
+            best = (k, d);
+        }
+        lo = k;
+    }
+    (best.0 > 0.0).then_some(best.0)
+}
+
+/// The curve handle dragged by `d` in the block's own space (07 §5.3): the
+/// front row's depth, how far its middle lies behind the midpoint of its
+/// ends, becomes its depth at the press plus the pointer's travel along
+/// the block's y axis. A bulge takes it as its amount. A straight block or
+/// an arc becomes the arc of the nearest depth it can have, straight again
+/// within half a chart unit, and its origin moves along y so that the
+/// midpoint of the front row's ends stays where it was: its middle follows
+/// the pointer.
+fn curve(b: &RowBlock, id: u32, d: P) -> Step {
+    let Some(span) = front_span(b) else {
+        return Step::Keep;
+    };
+    let k0 = match b.curve {
+        Curve::Arc { radius } => 1.0 / radius,
+        _ => 0.0,
+    };
+    let start = match b.curve {
+        Curve::Bulge { amount } => amount * span.weight,
+        _ => arc_depth(k0, span).0,
+    };
+    let to = start + d[1];
+    if !to.is_finite() || d[1] == 0.0 {
+        return Step::Base;
+    }
+    let (curve, k, depth) = match b.curve {
+        Curve::Bulge { .. } if span.weight > 0.0 => (
+            Curve::Bulge {
+                amount: to / span.weight,
+            },
+            None,
+            to,
+        ),
+        Curve::Bulge { .. } => return Step::Keep,
+        _ if to.abs() < 0.5 => (Curve::None {}, Some(0.0), 0.0),
+        _ => {
+            let Some(k) = curvature(span, to.abs()).map(|k| k.copysign(to)) else {
+                return Step::Keep;
+            };
+            let curve = Curve::Arc { radius: 1.0 / k };
+            (curve, Some(k), arc_depth(k, span).0)
+        }
+    };
+    let mut changed = b.clone();
+    changed.curve = curve;
+    if !arc_ok(&changed) {
+        return Step::Keep;
+    }
+    let mut commands = vec![Command::SetProperty {
+        id,
+        property: Property::Curve(curve),
+    }];
+    if let Some(k) = k {
+        let shift = arc_depth(k0, span).1 - arc_depth(k, span).1;
+        commands.push(Command::TransformNodes {
+            nodes: vec![NodeTransform {
+                id,
+                origin: shifted(b, [0.0, shift]),
+                rotation: b.rotation,
+            }],
+        });
+    }
+    let radius = match curve {
+        Curve::Arc { radius } => Some(radius),
+        _ => None,
+    };
+    let shown = Readout::Curve { depth, radius };
+    Step::Show(Command::Composite { commands }, shown)
+}
+
 fn scale(s: &Shape, id: u32, kind: HandleKind, d: P, q: P, shift: bool) -> Step {
     let mut next = s.clone();
     let points = s.points.as_deref().unwrap_or_default();

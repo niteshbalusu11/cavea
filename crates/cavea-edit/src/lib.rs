@@ -19,7 +19,10 @@ mod draft;
 mod editor;
 mod flip;
 mod guides;
+mod import;
 mod index;
+mod inspector;
+mod layers;
 mod numbering;
 mod op;
 mod rows;
@@ -28,6 +31,7 @@ mod selection;
 mod session;
 mod tool;
 mod validation;
+mod views;
 
 pub use arrange::{AlignTo, ArrayStep, DUPLICATE_OFFSET, MAX_COPIES, MAX_NEW_NODES, Order};
 pub use categories::{CategoriesView, CategoryView, Contrast, contrast, too_similar};
@@ -39,22 +43,34 @@ pub use document::{Changes, Document, LoadError};
 pub use draft::Draft;
 pub use editor::{Applied, Editor, MAX_UNDO};
 pub use guides::{FloorGuides, GuideAxis, MAX_GUIDES, UserGuide};
+pub use import::{ImportError, MAX_DOCUMENT};
 pub use index::{Anchor, AnchorKind, CachedSeat, Quad, Rect, Select, SpatialIndex};
+pub use inspector::{
+    ChartFields, CommonFields, Field, ImageFields, InspectorView, Num, RowBlockFields, RowFields,
+    SectionFields, ShapeFields, TextFields, Unit,
+};
+pub use layers::{Drop, LayerClick, LayerRow, LayersPage};
 pub use numbering::{
     Facing, MAX_LIST, NumberedNode, Numbering, NumberingView, Preview, PreviewRow, PreviewSeat,
     RowLabelsView, SeatLabelsView, Shared,
 };
 pub use selection::{Level, Selection};
-pub use session::Session;
+pub use session::{InputResult, Session, ToolView};
 pub use tool::{
     Button, Corner, Cursor, Guide, Handle, HandleKind, Input, Key, Modifiers, Overlay, Pointer,
     PointerKind, Readout, Side, SnapSettings, TextField, ToolId, tuning,
 };
 pub use validation::{FindingView, Marker, Progress, ValidationView};
+pub use views::{
+    FloorView, FloorsView, HistoryView, KindCount, NodeKind, SelectionView, StatusView, VIEWS,
+    ViewName,
+};
 
 #[cfg(test)]
 mod edit_tests;
 #[cfg(test)]
 mod panel_tests;
+#[cfg(test)]
+mod shell_tests;
 #[cfg(test)]
 mod tests;

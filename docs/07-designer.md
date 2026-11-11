@@ -35,7 +35,7 @@ Desktop browsers only. Minimum viewport 1280 × 720. Tablets are P2.
 - The **document lives in Rust**. The chrome never mutates it directly; it sends commands and renders view models.
 - **Commands** are serialisable values (`MoveNodes`, `SetProperty`, `CreateRowBlock`, …). Each has an inverse, computed when it is applied.
 - **Tools** are state machines in Rust that turn pointer and key input into commands, with a live preview while dragging.
-- **View models** are small, purpose-built snapshots (selection summary, inspector fields, layer tree page, validation list) pushed to the chrome when they change.
+- **View models** are small, purpose-built snapshots (selection summary, inspector fields, layer tree page, validation list). The chrome pulls them: once per animation frame it asks `Session::changed` which are out of date and re-reads only those (§2.3, shell views; D-40).
 - TypeScript types for commands and view models are generated from the Rust definitions.
 
 ### 2.1 Document model
@@ -112,6 +112,15 @@ A tool is a state machine implementing one small interface:
 - **Validation** (§10). `validate(budget)` → `Progress {done, next}`, `validation()` → `ValidationView` (`findings`: `code`, `severity`, `node`, `related`, `message`, `row`, `seat`, `stale`; `errors`, `warnings`, `complete`, `publishable`, `encode`), `focus(node, row, seat)` → the world `Rect` to frame. The overlay's `markers` list the nodes of the floor shown with findings: `node`, the worse `severity`, `bounds`.
 - **Guides** (§5.2). `guides()`, `add_guide(guide)` → its index, `move_guide(index, at)`, `remove_guide(index)`, `clear_guides()`, all on the floor shown; `saved_guides()` and `restore_guides(saved)` for the shell's storage. The overlay's `user_guides` are the floor shown's.
 
+**Shell views.** The rest of the chrome (§3) reads these views, each a serde value (camelCase), and calls these calls; every call that changes the document is one undo entry.
+
+- **What changed.** `changed()` → the `ViewName`s (`history`, `title`, `floors`, `status`, `selection`, `inspector`, `layers`, `categories`, `numbering`, `validation`, `overlay`, `cursor`, `tool`, `guides`) that may differ from when it was last called, all of them the first time. The shell calls it once per animation frame and re-reads only those: that is the "one per frame" of §14, since the edit core has no clock. It builds no view: each view has a mark of the revisions and counters it is built from (the document's revision; its structure revision, which every change but a node's transform raises, so the layers, categories and floors stay quiet during a drag; the selection, compared with the last one seen; the layers' expansion; the validator's pieces; the guides; the tool, active category and snap settings; and for the overlay, any input, since the tool's own state may have changed), and a view is named when its mark differs. A view not read costs nothing. It is a property test that after random calls, re-reading only the views named gives what re-reading all gives.
+- **Top bar.** `title()`; `history()` → `{undo, redo, gesture}`: the key of the entry undo and redo would apply (`null` when there is none) and whether a gesture is open. Keys are stable names for the shell to translate, never English: a command's `op`, the field for `setProperty` (`rowPitch`, `locked`), `chartName` or `chartSettings` for `setChart`, a composite's first command's; the select tool's drags are `moveNodes` and `rotate`, the curve handle `curve`, an inspector set its field, a layers move `moveLayers`. `floors()` → `{floors: [{id, name, level, focalPoint, nodes}], shown}`; `add_floor(name, level)` → its id, `rename_floor(id, name)`, `delete_floor(id, replacement)`, `set_floor(id)` (§5.6).
+- **Status bar.** `status()` → `{seats, nodes, revision}`: seat positions not removed in nodes not hidden, every node, and the document's revision, which every edit, undo and redo changes (a shell that notes it when a save succeeds knows whether anything is left to save). `selection_view()` → `{level, count, kinds: [{kind, count}], locked, hidden, bounds}`; `bounds` is the world box of the selection's outlines, the box *zoom to selection* frames, and `fit()` the box of every node drawn on the floor shown, which *zoom to fit* frames. `tool_view()` → `{tool, held, category, snap}`.
+- **Inspector** (§5.3, §5.5). `inspector()` → `InspectorView`: `chart` (name and settings) when nothing is selected at a node level; otherwise `common` and a group per kind present when every selected node is of that kind (`rowBlock`, `row`, `section`, `shape`, `text`, `image`). A number is `{value, min, max, unit}` with `value` `{"same": v}` or `"mixed"`; other fields are the value or `"mixed"`. `set_field(field)` sets one `Field` (`{"field": "rowPitch", "value": 95}`) on every selected node, or the chart, as one entry named by the field. It acts on every selected node, locked and hidden ones included: the selection is explicit and typing a value is deliberate. It is refused with a typed error and nothing changed for a value outside the field's limits (`InvalidValue`), a node without the field (`NotApplicable`), an unknown category or floor, or a row block whose arc the change would break (03 §2.4). `rows` adds or removes rows at the back; `seats` gives every row of a block that many positions, at its end. Scrubbing: `begin_scrub()`, then `set_field` on every move, then `end_scrub()` (one undo entry) or `cancel_scrub()` (Escape: the start, no entry). Each call inside the scrub rewinds it to its start and applies its value there, as a drawing tool's preview does, so the document holds the last value shown; a refused value keeps the last good one. Anything else called on the session ends the scrub first, as a release would.
+- **Layers** (§3, §5.5, §14). The tree is the floor shown's top-level nodes in document (draw) order, and under a section its children while it is expanded (the session holds the expansion). `layers(start, count)` → `{total, start, rows}`, each row `{index, depth, id, kind, name, locked, hidden, selected, expanded, children}`; `name` is the node's `name`, else its label, else a text's string, else `null` and the shell shows its kind and id, translated. A page is found by binary search over where each top-level row starts, a list rebuilt only when the structure revision, the expansion or the floor shown changes; only the page's rows are visited. `expand_layer(id, open)`; `reveal_layer(id)` expands the section holding it and returns its row, for scrolling to a node the canvas selected. `click_layer(id, how)` selects from the tree, `replace`, `toggle` (Ctrl) or `range` (Shift: from the row last clicked among its siblings), locked and hidden nodes included (§5.1). `move_layers(ids, drop)`, with `drop` `{"kind": "before" | "after" | "into", "id": …}`, moves the nodes in document order before or after a row or to the end of a section's children, as one entry of `placeNode`s, so every seat keeps its place on the canvas, and a child leaving its section for the top level gets its section's floor if it would otherwise land on another; the moved nodes are selected. It refuses a section into a section (`Placement`), a drop into a node that is not a section (`NotASection`), into a section being moved (`Cycle`) or beside a node being moved (`InvalidValue("target")`). Locked nodes move: the panel is explicit. `lock_layer(id, on)` and `hide_layer(id, on)` set one row's flag whatever is selected.
+- **Import and export** (§12).
+
 Tools have no clock and do no I/O, and every order they produce comes from sorted sets, so the same input gives the same document, selection and overlay. A new tool is a type implementing the interface and a `ToolId` the session maps to it.
 
 ## 3. Layout
@@ -147,14 +156,14 @@ Tools have no clock and do no I/O, and every order they produce comes from sorte
 | Panels (right, bottom, tabbed) | Layers, Categories, Validation |
 | Status bar | Seat count, validation summary, cursor position, snapping toggles, zoom |
 
-Panels are resizable and collapsible. Layout preferences persist per user.
+Panels are resizable and collapsible. Layout preferences persist per user. The data of every region comes from the session's views (§2.3): the top bar from `title`, `history` and `floors`; the tool rail from `tool_view`; the canvas from `overlay` and `cursor`; the inspector from `inspector`; the panels from `layers`, `categories` and `validation`; the status bar from `status`, `selection_view` and `validation`. Cursor position, zoom and the toggles' layout are the shell's.
 
 ## 4. Tools
 
 | Tool | Key | Gesture | Result |
 |---|---|---|---|
 | Select | V | Click, shift-click, drag a box | Selection. Drag to move; handles to rotate and resize |
-| Hand | H, or hold Space | Drag | Pan |
+| Hand | H, or hold Space | Drag | Pan: `Session::input` returns the pointer's travel in CSS pixels as `pan`, and the shell moves its camera; the document is untouched. A Space key down outside a gesture switches to the hand tool and its key up switches back (`tool_view().held`); a middle-button drag pans in any tool, which does not see it |
 | Row block | R | Drag a rectangle | Rows × seats at the default pitch; counts shown live while dragging |
 | Arc block | A | Click the centre, drag the first row's radius and angle span, drag outward for rows | Concentric curved rows |
 | Single row | Shift+R | Click start, click end; optional third click bends it | One row along a line or curve |
@@ -277,13 +286,17 @@ Inspector fields:
 |---|---|
 | Rows, seats per row | Editing "seats per row" applies to all rows; individual rows can differ |
 | Seat pitch, row pitch | In cu |
-| Curve | None, arc (radius), bulge (amount). A handle on the middle of the front row adjusts it by dragging |
+| Curve | None, arc (radius), bulge (amount). A handle on the middle of the front row adjusts it by dragging (below) |
 | Alignment | Left, centre, right, for rows of different length |
 | Stagger | Off or half a pitch |
 | Skew | Degrees |
 | Seat size and shape | Defaults from the chart; overridable per block |
 | Category | For the whole block |
 | Row labels, seat labels | §6 |
+
+The schema has no per-block seat size or shape (03 §2.4): the inspector shows the chart's (`settings.seatSize`, `seatShape`) with the chart settings. Row and seat labels are set in the numbering panel (§6).
+
+**Curve handle.** One selected row block that can be picked, whose front row has three positions or more, shows a `curve` handle at the middle of its front row (its middle position, or between the two middle ones), `CURVE_OFFSET` (16 CSS px) behind it so that it does not cover the top side's handle, which wins where they meet. Its drag sets the front row's *depth*, how far its middle (the handle's point: its middle position, or the mean of the two middle ones) lies behind (+y) the midpoint of its ends, to the depth at the press plus the pointer's travel along the block's y axis. A bulge takes that depth over its weight at the middle positions (`1 − (2t − 1)²`, 03 §2.4) as its `amount`. A straight block or an arc becomes the arc with that depth, its front row's positions where alignment and offset put them along it (03 §2.4: on an arc of curvature `k`, the position at `s` lies at `y = (cos ks − 1) / k`): the curvature is the first of 64 samples up to the most the compiler accepts (the farthest position half a turn from the apex, `k = π / max |s|`) to reach the depth, refined by bisection, else the sample of greatest depth, since the depth is not monotonic up to half a turn; within half a chart unit it is straight again. Its origin moves along the block's y axis so that the midpoint of the front row's ends stays where it was, so the row's middle follows the pointer as far as the arc can bend (a left or right-aligned row, whose apex is at its end, less deeply than a centred one). A change the arc rules refuse (03 §2.4) is not shown. The readout is `curve {depth, radius}`. One gesture, one undo entry (`curve`); Escape restores.
 
 Row-level edits (after double-click): add or remove seats at either end; shift a row sideways; insert an aisle (splits the row into segments by removing a position); override a row's label; delete a row. They act on the selected rows of one block (§2.3, editing calls), each as one undo entry, and are judged by what they do to oids: no oid of a seat they did not create changes, and the seats they do not touch stay where they are.
 
@@ -314,12 +327,12 @@ A block's overrides are bounded by its seat positions (one per oid, and only for
 - A section is created around existing nodes or drawn empty (the section tool, §4, or `Session::group(ids, outline)` with top-level nodes, sections refused, and an optional explicit outline in world points). It goes where the lowest of those nodes was among the top-level nodes (draw order kept), or at the end; its `origin` is the centre of its explicit outline's box, or of its nodes' bounds, rotation 0; its label is `Section N` for the smallest N that no section's label uses (W109 warns on unlabelled sections); its `category` is the active category; `priority` 1. Creating it is one gesture of `createNode` then one `placeNode` per node, one undo entry; at most 65,535 sections, 4,096 points per outline and 262,144 in all outlines of the chart.
 - **Reparenting keeps the canvas still.** A child's `origin` and `rotation` are in its section's space; `placeNode` (§2.2) rewrites them whenever a node changes parent, so grouping, dissolving and the layers panel's moves between sections never move a seat. `Session::dissolve(id)` puts a section's children at the top level where it was, in order, and deletes it: one undo entry. A child keeps its `floor` field; one naming another floor than its section's is E007.
 - Its outline is automatic by default and follows its contents. It can be converted to an editable polygon: `Session::convert_outline(id)` sets `outline` to explicit points equal to the automatic outline as the compiler computes it now (`cavea_compiler::auto_outline` on the section's visible blocks' and rows' present seats in its space, with the compiler's padding), as one `setProperty outline`, whose inverse restores `"auto"`. The seats come from the index's cached expansion carried by each child's transform; for unturned children the points are the compiler's exactly, so the compiled chart is the same byte for byte. A section without seats, or with an explicit outline, is refused.
-- Inspector: label, default category, entrance text, best-available priority, label position.
+- Inspector: label, default category, entrance text, best-available priority (§2.3, `section` group: `priority`, `entrance`, `autoOutline`). Label position is not in schema 1 (03 §2.3): the compiler places a section's label itself, so the field waits for a schema change.
 - Dragging nodes in the layers panel moves them between sections.
 
 ### 5.6 Floors
 
-- The floor switcher lists floors; add, rename, reorder, delete.
+- The floor switcher lists floors; add, rename, reorder, delete. The edit core has `floors()`, `add_floor`, `rename_floor`, `delete_floor` and `set_floor` (§2.3); reordering waits for a command (DSN-053).
 - Other floors can be shown dimmed underneath as a reference.
 - Each floor has its own focal point.
 
@@ -402,7 +415,8 @@ On macOS, Cmd replaces Ctrl. The command palette lists every action with its sho
 
 - Every command pushes its inverse onto the undo stack. Redo is cleared by a new command.
 - A drag produces one undo entry, however many intermediate states it passed through.
-- Property scrubbing (dragging a number field) coalesces into one entry.
+- Property scrubbing (dragging a number field) coalesces into one entry (`Session::begin_scrub`, §2.3).
+- Each entry has a stable key naming what it did, which the top bar's undo and redo show translated (`Session::history`, §2.3).
 - The stack holds the last 500 entries for the session.
 - **Entries.** An entry is the list of internal operations that restores the state before it. Undo applies them, and they return the operations that redo it, so neither copies the document; an entry holds only what its command changed (a deleted block's data, a moved node's old transform). Undo or redo that fails part-way puts back what it applied and keeps the entry.
 - **Gestures.** A tool opens a gesture (pointer down on the canvas or on a number field), applies commands that change the document at once, and closes it as one entry. Within a gesture only the first inverse recorded for each node transform, node property, chart property, category list, floor list, seat override and `nextOid` is kept: it alone restores the start, so a drag of any length holds one old transform per node. Escape cancels the gesture: the document returns to its start, no entry is left and redo is kept. Undo and redo are refused while a gesture is open.
@@ -453,6 +467,8 @@ Until the full pass has run on the document as it is, the view is not `complete`
 | AI import | `10-ai-import.md` | P2 |
 | Export SVG | For printed seating plans | P2 |
 
+**JSON in the edit core.** `Session::export()` is the chart document as the server stores the draft: `Document::save` (its `nextOid` covers every id the session handed out, §9) serialised as `ChartDocument::to_json` writes it. `Session::import(text)` opens chart document JSON, and is also how the shell opens a draft. It reads the text as hostile input and refuses, with a typed `ImportError` that changes nothing: more than 16 MiB (`MAX_DOCUMENT`, the server's draft limit, so what imports can be saved) as `tooLarge`; anything the compiler's parser refuses, with its message, line and column (`json`; unknown fields included, 03 §2); a schema it does not read or a failed migration (`schema`, `migration`); a `\u0000` escape, which the server cannot store (`nulEscape`); two nodes with one id (`duplicateId`); more objects, categories, floors, sections, shapes, texts or icons than 02 §14 allows (`limit {what, count, limit}`); and a row over 4,095 positions (`seatsPerRow {node, row, seats}`). Everything else, duplicate `rid`s and `oid`s included, opens and is a validation finding (E009) to fix in the designer. Importing over an open chart makes a new session: its undo history, selection, guides, layers expansion and validation start afresh, so the shell asks first and keeps the guides it stored if it wants them.
+
 ## 13. Embedding
 
 - The designer is served at `/embed/designer` for iframes.
@@ -481,12 +497,14 @@ const designer = mountDesigner(el, {
 |---|---|
 | Dragging a large selection | Selected chunks are drawn with a per-chunk transform; positions are baked on release (`04-renderer.md` §25) |
 | Changing a block parameter | Only that block is re-expanded and re-uploaded |
-| Inspector updates during a drag | View models are throttled to one per frame |
+| Inspector updates during a drag | View models are throttled to one per frame: the shell asks `changed` per frame (§2.3) |
 | Layers panel on a large chart | Virtualised list, fed page by page |
 | Validation | Incremental per changed top-level node; the full pass runs in idle time (§10) |
 | Autosave of a large document | Serialised in the edit core; compressed before upload |
 
 Targets are in `01-architecture.md` §5.
+
+Measured locally, 2026-11-11, native release build on an AMD Ryzen 9 7900X (`cargo test --release -p cavea-edit measure_shell -- --ignored --nocapture`), not in a browser. On `stadium-100k` (370 nodes): `changed()` 0.0002 ms with nothing changed and 0.0008 ms after a selection change; the views at most 0.17 ms (the overlay 0.17, categories 0.16, the whole layers tree 0.15, status 0.035, selection 0.03, inspector 0.014); a layers window of 50 rows 0.007 ms at the top, middle or end; moving 100 blocks into one section 0.29 ms and its undo 0.23 ms; the inspector view of 180 blocks 0.013 ms, setting their seat pitch 4.4 ms and each step of a scrub of their row pitch 4.5 ms (the index re-expands the 180 blocks, 60,000 seats); import 8.9 ms and export 1.2 ms of the 399 KB document. On 5,000 top-level single rows: a window of 50 rows 0.003 to 0.007 ms anywhere, reordering 100 of them 0.71 ms, the first window after it, which rebuilds the list, 0.23 ms.
 
 ## 15. Accessibility of the designer
 

@@ -98,6 +98,9 @@ pub(crate) struct Validator {
     /// The document revision last synced.
     synced: Option<u64>,
     full: Option<Full>,
+    /// Pieces of work done: the view cannot change without it or the
+    /// document's revision.
+    pub(crate) pieces: u64,
 }
 
 /// What a step left to do.
@@ -201,6 +204,7 @@ impl Validator {
             } else {
                 break;
             };
+            self.pieces += 1;
             spent = spent.saturating_add(cost);
             if spent >= budget {
                 break;
