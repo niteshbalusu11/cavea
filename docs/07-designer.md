@@ -38,6 +38,39 @@ Desktop browsers only. Minimum viewport 1280 × 720. Tablets are P2.
 - **View models** are small, purpose-built snapshots (selection summary, inspector fields, layer tree page, validation list) pushed to the chrome when they change.
 - TypeScript types for commands and view models are generated from the Rust definitions.
 
+### 2.1 Document model
+
+`cavea-edit`'s `Document` holds the chart-level data (`name`, `settings`, `categories`, `floors`, `nextOid`) and an arena of nodes keyed by node id. Each node is stored as the compiler's own node value (`cavea_compiler::document::Node`), so nothing the schema defines is lost, except that a section's `children` is kept as parent and child links beside it; the child lists keep sibling order, which is draw order and document order. A lookup or a single-node edit by id costs a map lookup, whatever the seat count: a 100,000-seat chart is a few hundred nodes.
+
+- **Load and save are exact.** `Document::load` takes a parsed `ChartDocument`; `snapshot()` rebuilds it as it stands. A document loaded and saved without edits serialises to the same JSON that `ChartDocument::to_json` gives for the original. A document with two nodes of one id is refused at load (E009), since commands could not name either.
+- **Change tracking.** A revision counter rises with every change. Each node keeps the revision of its last change of any kind (content, transform, parent, children) and of its last change of content (anything but transform and place), and removed ids are kept with the revision that removed them. `changes_since(n)` lists the nodes changed and removed since revision `n` and whether chart-level data or the top-level order changed. A section's transform moves its children; they are not listed. The live scene re-expands a node when its content revision passes the one it last saw.
+- **Structure.** Only top-level sections hold children, and sections are top-level (the compiler does not compile nested sections). A loaded document that nests deeper is kept as it is; commands never nest further.
+
+### 2.2 Commands
+
+A command is plain data, serialised as JSON tagged by `op` (camelCase field names, unknown fields refused). The designer's tools build commands in Rust; the chrome sends the same JSON. A command applies completely or returns an error and leaves the document byte for byte as it was. The editor allocates every new id; ids in a command's payload are ignored.
+
+| `op` | Fields | Effect |
+|---|---|---|
+| `createNode` | `parent` (section id or `null`), `index`, `node` | Inserts the node (a section with its children) at `index` among `parent`'s children. Every id, `rid` and `oid` in it is replaced by a fresh one, in document order; each row's seats get one run; seat overrides follow their seats. Returns the new node's id |
+| `deleteNodes` | `ids` | Deletes the nodes with their subtrees |
+| `moveNodes` | `ids`, `delta` | Adds `delta` to each origin, in its parent's space |
+| `transformNodes` | `nodes: [{id, origin, rotation}]` | Sets each origin and rotation |
+| `placeNode` | `id`, `parent`, `index` | Reparents and reorders; `index` counts after the node has left its place |
+| `setProperty` | `id`, `property: {field, value}` | One inspector field: `name`, `floor`, `locked`, `hidden` (any node); `label` (section, row, table, booth, area); `category` (those and row blocks); `priority`, `entrance`, `outline` (section); `seatPitch` (row block, row); `rowPitch`, `curve`, `align`, `stagger`, `skew`, `rowLabels` (row block); `seatLabels` (row block, row, table); `decoration` (shape, text, icon, image: the whole node, same type, id kept) |
+| `setChart` | `property: {field, value}` | `name` or `settings` |
+| `addCategory` | `index`, `category` | Key must be new; at most 4,095 |
+| `updateCategory` | `key`, `category` | A new key is carried to every reference |
+| `removeCategory` | `key`, `replacement` | References, seat overrides included, move to `replacement`, or are cleared to inherit when it is `null` |
+| `addFloor` | `index`, `floor` | Its `id` is assigned: one above the largest; at most 255 |
+| `updateFloor` | `floor` | Replaces the floor with that `id` |
+| `removeFloor` | `id`, `replacement` | Nodes on it move to `replacement`, or to the default floor when it is `null` |
+| `composite` | `commands` | Applies them in order as one undo step |
+
+Commands are refused, with a typed error, for: a missing node; a parent that is not a section, is the node or is inside it; a placement that breaks the structure rule; an index out of range; a field the node does not have; a number that is not finite (the saved document must parse again); a node over the limits of `02-domain-model.md` §14 (4,095 seats in a row; 1,000,000 bookable objects in the chart, counting seat positions, booths, areas and tables booked whole, the chart's existing ones included), checked before any id is allocated; a duplicate category key; an unknown category or floor named by a category or floor command. References to unknown categories or floors in node fields are validation findings (E007), not refusals: users make mistakes mid-edit.
+
+Each command is translated into small internal operations (insert or remove a subtree, place a node, set a transform, swap a property value, replace the category or floor list, set a seat override, set `nextOid`), each of which returns the operation that restores the previous state exactly. Operations carry ids, so they are never accepted from outside.
+
 ## 3. Layout
 
 ```
@@ -234,6 +267,9 @@ On macOS, Cmd replaces Ctrl. The command palette lists every action with its sho
 - A drag produces one undo entry, however many intermediate states it passed through.
 - Property scrubbing (dragging a number field) coalesces into one entry.
 - The stack holds the last 500 entries for the session.
+- **Entries.** An entry is the list of internal operations that restores the state before it. Undo applies them, and they return the operations that redo it, so neither copies the document; an entry holds only what its command changed (a deleted block's data, a moved node's old transform). Undo or redo that fails part-way puts back what it applied and keeps the entry.
+- **Gestures.** A tool opens a gesture (pointer down on the canvas or on a number field), applies commands that change the document at once, and closes it as one entry. Within a gesture only the first inverse recorded for each node transform, node property, chart property, category list, floor list, seat override and `nextOid` is kept: it alone restores the start, so a drag of any length holds one old transform per node. Escape cancels the gesture: the document returns to its start, no entry is left and redo is kept. Undo and redo are refused while a gesture is open.
+- **`nextOid` across undo.** Undo restores `nextOid` with everything else, so applying and undoing returns the document byte for byte (`13-testing-benchmarks.md` §9). Ids are still never handed out twice (`02-domain-model.md` §3): new ids come from a counter in the editor that starts above every id in the loaded document and never goes back, undo included, and the saved draft writes `nextOid` as the larger of the document's value and that counter, so a draft saved after an undone creation still reserves its ids. Redo re-inserts the same nodes with the same ids. A command that fails hands its ids back, since nothing holds them.
 - **Autosave:** two seconds after the last change, the draft is sent with `If-Match`. The top bar shows "Saving…", "Saved", or "Offline — changes kept locally".
 - **Local safety net:** unsaved changes are also written to IndexedDB and offered for recovery after a crash or a closed tab.
 - **Concurrency:** one editor at a time per chart in v1. A second person opening the chart sees who is editing and may take over; the first is switched to read-only with their unsaved work kept locally. Real-time co-editing is not planned for v1.

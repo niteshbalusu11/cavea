@@ -174,6 +174,8 @@ Renderer payload measured locally, 2026-11-10 (REN-003), not a device result: th
 | Undo or redo | ≤ 16 ms |
 | Compile and preview 100,000 seats in the browser | ≤ 500 ms |
 
+Edit core measured locally, 2026-11-11 (DSN-001..003), native release build on an AMD Ryzen 9 7900X, not in a browser: on `stadium-100k` (370 nodes, 399 KB of JSON), parse 3.3 ms and load into the editor 0.25 ms; a seat-pitch change on one block 0.005 ms; one drag step of 50 blocks (18,666 seats) 0.002 ms; undo or redo of either at most 0.002 ms; deleting 50 blocks 0.016 ms and undoing it 0.011 ms (`cargo test --release -p cavea-edit measure_ -- --ignored --nocapture`). Expansion, the spatial index and drawing are not included.
+
 ### Where the time goes
 
 Drawing 100,000 seats is one instanced draw call, so the GPU is not the constraint. The budget is spent on:
