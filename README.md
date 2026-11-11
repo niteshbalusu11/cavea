@@ -9,6 +9,20 @@ A seat-map toolkit for ticketing platforms: a buyer-facing seat picker for web a
 - Task list: [`docs/TODO.md`](docs/TODO.md)
 - Instructions for coding agents: [`AGENTS.md`](AGENTS.md)
 
+## Development
+
+You need Rust (rustup reads `rust-toolchain.toml`), bun, and Docker for PostgreSQL. `wasm-opt` from binaryen is optional.
+
+```sh
+cargo xtask build-web                               # WASM renderer into packages/renderer/wasm/
+bun install
+(cd apps/console && bun run dev)                   # console at the printed URL
+docker compose -f deploy/compose.yaml up -d --wait  # PostgreSQL
+cargo run -p cavea-server                           # GET /healthz on CAVEA_LISTEN (default 0.0.0.0:8080)
+```
+
+Checks: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `bun run lint`, `format:check`, `typecheck`, `build`, `test`. The full list is in [`AGENTS.md`](AGENTS.md#commands).
+
 ## Licence
 
 No licence is granted. All rights reserved. The source is published for visibility only.

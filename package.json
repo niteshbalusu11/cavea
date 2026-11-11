@@ -1,0 +1,23 @@
+{
+  "name": "cavea",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "build:wasm": "cargo xtask build-web",
+    "lint": "oxlint --deny-warnings",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "typecheck": "bun run --filter '*' typecheck",
+    "build": "bun run --filter '*' build",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "oxfmt": "0.78.0",
+    "oxlint": "1.93.0"
+  },
+  "packageManager": "bun@1.4.2"
+}
