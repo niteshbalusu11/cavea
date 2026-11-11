@@ -1,4 +1,4 @@
-//! Uploaded images (08 §6.2, 12 §3 T21): what an upload must be, and where
+//! Uploaded images (08 §6.2, 12 §3 T7): what an upload must be, and where
 //! it is kept.
 //!
 //! Every upload is hostile. Its type is decided by its bytes, against an
@@ -10,8 +10,9 @@
 //! so a decompression bomb costs it nothing, and the dimensions in the header
 //! are bounded for the browsers that will decode it.
 //!
-//! The bytes are stored in PostgreSQL (`assets.bytes`, D-6) by [`put`] and
-//! read by [`get`]; S3-compatible storage (SRV-054) would change those two.
+//! The bytes are stored in PostgreSQL (`assets.bytes`, D-10, D-47) by [`put`]
+//! and read by [`get`]; S3-compatible storage (SRV-054) would change those
+//! two. [`Memory`] bounds the image bytes a node holds at once.
 
 use sqlx::PgPool;
 use tracing::Instrument as _;
@@ -151,7 +152,10 @@ fn png(b: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// Walk the marker segments to the first scan, taking the frame's size from
-/// its SOF segment; the file must end with EOI.
+/// its SOF segment; the file must end with EOI. What lies between the first
+/// scan and EOI is entropy-coded data that only a decoder can check, so a
+/// JPEG can carry other bytes there; the response headers make that harmless
+/// (08 §6.2).
 fn jpeg(b: &[u8]) -> Option<(u32, u32)> {
     if !b.ends_with(&[0xFF, 0xD9]) {
         return None;
@@ -177,7 +181,10 @@ fn jpeg(b: &[u8]) -> Option<(u32, u32)> {
                 }
                 // SOF0 to SOF15, but DHT, JPG and DAC.
                 if matches!(marker, 0xC0..=0xCF) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
-                    // Precision, then height and width.
+                    // Precision, then height and width, inside the segment.
+                    if len < 8 {
+                        return None;
+                    }
                     size = Some((be16(b, at + 7)?, be16(b, at + 5)?));
                 }
                 if marker == 0xDA {
@@ -265,18 +272,83 @@ pub async fn put(
     Ok(created.is_some())
 }
 
-const GET: &str =
-    "SELECT content_type, bytes FROM assets WHERE hash = $1 AND bytes IS NOT NULL LIMIT 1";
+const SIZE: &str =
+    "SELECT content_type, size FROM assets WHERE hash = $1 AND bytes IS NOT NULL LIMIT 1";
+const GET: &str = "SELECT bytes FROM assets WHERE hash = $1 AND bytes IS NOT NULL LIMIT 1";
+const HELD: &str = "SELECT encode(hash, 'hex') FROM assets
+ WHERE workspace_id = $1::uuid AND hash = ANY($2::bytea[])";
 const EXISTS: &str = "SELECT EXISTS (SELECT FROM assets WHERE hash = $1)";
 
-/// The bytes and content type of the asset with this hash, of any workspace:
+/// The content type and size of the asset with this hash, of any workspace:
 /// every row with the hash holds the same bytes.
-pub async fn get(db: &PgPool, hash: &[u8; 16]) -> Result<Option<(String, Vec<u8>)>, sqlx::Error> {
-    sqlx::query_as(GET)
+pub async fn size(db: &PgPool, hash: &[u8; 16]) -> Result<Option<(String, i32)>, sqlx::Error> {
+    sqlx::query_as(SIZE)
         .bind(hash.as_slice())
         .fetch_optional(db)
         .instrument(cavea_telemetry::db_span("read_asset"))
         .await
+}
+
+/// The bytes of the asset with this hash, of any workspace.
+pub async fn get(db: &PgPool, hash: &[u8; 16]) -> Result<Option<Vec<u8>>, sqlx::Error> {
+    sqlx::query_scalar(GET)
+        .bind(hash.as_slice())
+        .fetch_optional(db)
+        .instrument(cavea_telemetry::db_span("read_asset"))
+        .await
+}
+
+/// Which of `hashes` (32 lowercase hex digits each) the workspace holds, as
+/// they were given.
+pub async fn held(
+    db: &PgPool,
+    workspace: &str,
+    hashes: &[String],
+) -> Result<Vec<String>, sqlx::Error> {
+    let bytes: Vec<Vec<u8>> = hashes
+        .iter()
+        .filter_map(|h| crate::http::parse_hash(h).map(|b| b.to_vec()))
+        .collect();
+    sqlx::query_scalar(HELD)
+        .bind(workspace)
+        .bind(bytes)
+        .fetch_all(db)
+        .instrument(cavea_telemetry::db_span("check_assets"))
+        .await
+}
+
+/// The image bytes a node holds in memory at once, per direction: uploads
+/// being read and stored, and assets being served. Each is
+/// [`MEMORY_FACTOR`] times `CAVEA_ASSET_MAX_BYTES`, so that so many uploads,
+/// or responses, of the largest image proceed at once and more cannot grow
+/// the process: an upload over the budget is `503 overloaded`; a response
+/// waits for room up to [`SERVE_WAIT`], then is `503`. Serving holds its share
+/// until the body has been written, so slow readers count.
+#[derive(Debug, Clone)]
+pub struct Memory {
+    pub uploads: std::sync::Arc<tokio::sync::Semaphore>,
+    pub serves: std::sync::Arc<tokio::sync::Semaphore>,
+    /// Each semaphore's permits, in bytes.
+    pub budget: u32,
+}
+
+/// See [`Memory`].
+pub const MEMORY_FACTOR: u32 = 4;
+
+/// How long a response waits for room in [`Memory::serves`].
+pub const SERVE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+impl Memory {
+    #[must_use]
+    pub fn new(max_bytes: u32) -> Self {
+        let budget = max_bytes.saturating_mul(MEMORY_FACTOR);
+        let semaphore = || std::sync::Arc::new(tokio::sync::Semaphore::new(budget as usize));
+        Self {
+            uploads: semaphore(),
+            serves: semaphore(),
+            budget,
+        }
+    }
 }
 
 /// Whether an asset with this hash exists, without reading it.
@@ -310,6 +382,15 @@ pub(crate) mod tests {
         out.extend(chunk(b"IDAT", &[0; 64]));
         out.extend(chunk(b"IEND", &[]));
         out
+    }
+
+    #[test]
+    fn a_frame_header_too_short_for_its_size_is_refused() {
+        let mut short = jpeg(10, 10);
+        // SOF2's length 11 → 6: the size would be read past the segment.
+        short[23] = 6;
+        short.drain(28..33);
+        assert_eq!(sniff(&short), Err(Refused::Malformed));
     }
 
     pub(crate) fn jpeg(w: u16, h: u16) -> Vec<u8> {
@@ -413,5 +494,54 @@ pub(crate) mod tests {
         let mut no_frame = jpeg(10, 10);
         no_frame.drain(20..33);
         assert_eq!(sniff(&no_frame), Err(Refused::Malformed));
+    }
+
+    /// Hostile input (12 §3 T7): mutations of valid files (bytes changed,
+    /// inserted, removed, the file cut, a length overwritten) never panic or
+    /// hang the walkers, and anything still accepted has its sides in range.
+    /// A fixed seed, so a failure reproduces.
+    #[test]
+    fn mutated_files_never_panic() {
+        let valid = [
+            png(64, 48),
+            jpeg(640, 480),
+            webp_lossy(30, 20),
+            webp_lossless(9, 9),
+            webp_extended(7, 9),
+        ];
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let mut accepted = 0;
+        for i in 0..20_000 {
+            let mut b = valid[i % valid.len()].clone();
+            for _ in 0..=next() % 3 {
+                let at = usize::try_from(next()).unwrap() % (b.len() + 1);
+                let byte = next().to_le_bytes()[0];
+                match next() % 5 {
+                    0 if at < b.len() => b[at] = byte,
+                    1 => b.truncate(at),
+                    2 => b.insert(at, byte),
+                    3 if at < b.len() => drop(b.remove(at)),
+                    _ => {
+                        let word = next().to_le_bytes();
+                        for (slot, w) in b.iter_mut().skip(at).zip(&word[..4]) {
+                            *slot = *w;
+                        }
+                    }
+                }
+            }
+            if let Ok(image) = sniff(&b) {
+                accepted += 1;
+                assert!((1..=MAX_SIDE).contains(&image.width), "{i}");
+                assert!((1..=MAX_SIDE).contains(&image.height), "{i}");
+            }
+        }
+        // Some mutations leave a valid file (a changed pixel byte).
+        assert!(accepted > 0);
     }
 }

@@ -85,6 +85,7 @@ async fn run(config: Config, streams: tokio::runtime::Handle) -> anyhow::Result<
     let limiter = Limiter::new(config.rate_limit_holds, config.rate_limit_reads);
     let state = AppState {
         limiter: Arc::new(limiter),
+        asset_memory: cavea_server::assets::Memory::new(config.asset_max_bytes.get()),
         config: Arc::new(config),
         db,
         seats,

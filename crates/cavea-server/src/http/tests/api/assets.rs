@@ -175,3 +175,111 @@ async fn assets_are_sniffed_stored_and_served() {
     })
     .await;
 }
+
+/// E007 (03 §2.7): a background image whose asset the workspace does not hold
+/// fails validation and refuses publishing, naming its node; once uploaded,
+/// the chart publishes. Another workspace's copy does not count.
+#[tokio::test]
+#[ignore = "needs CAVEA_TEST_DATABASE_URL"]
+async fn a_chart_publishes_only_images_its_workspace_holds() {
+    let _serial = serial();
+    with_db(async move |pool| {
+        let app = api(&pool, Some(ADMIN));
+        let a = Tenant::create(&app, "a").await;
+        let b = Tenant::create(&app, "b").await;
+        let image = png(320, 200);
+        let hash = hex(&image);
+        let mut document: Value = serde_json::from_str(&a.document).unwrap();
+        let id = document["nextOid"].as_u64().unwrap();
+        document["nextOid"] = json!(id + 1);
+        document["nodes"].as_array_mut().unwrap().push(json!({
+            "type": "image", "id": id, "asset": hash, "size": [320, 200],
+            "role": "background",
+        }));
+        let uri = format!("/v1/charts/{}/draft", a.chart);
+        let request = request(
+            Method::PUT,
+            &uri,
+            Some(&a.secret),
+            &[(header::IF_MATCH, "*")],
+            Some(document.to_string()),
+        );
+        let (response, saved) = send(app.clone(), request).await;
+        assert_eq!(response.status(), 200, "{saved}");
+        let e007 = json!([{
+            "code": "E007", "severity": "error", "node": id, "related": null,
+            "message": "The image's asset is not one this workspace has uploaded.",
+        }]);
+
+        // B holds the bytes; A does not.
+        let (response, _) = upload(&app, &b.secret, None, Body::from(image.clone())).await;
+        assert_eq!(response.status(), 201);
+        let validate = format!("/v1/charts/{}/validate", a.chart);
+        let (_, validation) = call(&app, Method::POST, &validate, Some(&a.secret), None).await;
+        assert_eq!(validation["valid"], false);
+        assert_eq!(validation["findings"], e007);
+        let publish = format!("/v1/charts/{}/publish", a.chart);
+        let (response, problem) = call(&app, Method::POST, &publish, Some(&a.secret), None).await;
+        assert_problem(&response, &problem, Code::ChartInvalid);
+        assert_eq!(problem["details"]["findings"], e007);
+
+        let (response, _) = upload(&app, &a.secret, None, Body::from(image)).await;
+        assert_eq!(response.status(), 201);
+        let (_, validation) = call(&app, Method::POST, &validate, Some(&a.secret), None).await;
+        assert_eq!(
+            (&validation["valid"], &validation["findings"]),
+            (&json!(true), &json!([]))
+        );
+        let (response, version) = call(&app, Method::POST, &publish, Some(&a.secret), None).await;
+        assert_eq!(response.status(), 201, "{version}");
+    })
+    .await;
+}
+
+/// The image bytes a node holds are bounded (`assets::Memory`): an upload
+/// that would pass the budget is `503 overloaded` without waiting; a served
+/// asset holds its share until its body has been read, then gives it back.
+#[tokio::test]
+#[ignore = "needs CAVEA_TEST_DATABASE_URL"]
+async fn image_bytes_in_memory_are_bounded() {
+    let _serial = serial();
+    with_db(async move |pool| {
+        let mut state = state();
+        state.db = pool.clone();
+        let config = Arc::make_mut(&mut state.config);
+        config.admin_key = Some(ADMIN.parse::<AdminKey>().unwrap());
+        state.seats = Seats::new(pool.clone(), &state.config, ServerClock::System, None);
+        let memory = crate::assets::Memory::new(64 << 10);
+        state.asset_memory = memory.clone();
+        let app = finish(routes().into_router(), state);
+        let a = Tenant::create(&app, "a").await;
+        let image = png(64, 48);
+
+        let budget = memory.budget;
+        let taken = memory
+            .uploads
+            .clone()
+            .try_acquire_many_owned(budget - 64)
+            .unwrap();
+        let (response, problem) = upload(&app, &a.secret, None, Body::from(image.clone())).await;
+        assert_problem(&response, &problem, Code::Overloaded);
+        assert_eq!(problem["details"]["reason"], "asset_memory");
+        assert_eq!(response.headers()[header::RETRY_AFTER], "1");
+        drop(taken);
+        let (response, _) = upload(&app, &a.secret, None, Body::from(image.clone())).await;
+        assert_eq!(response.status(), 201);
+        assert_eq!(memory.uploads.available_permits(), budget as usize);
+
+        let uri = format!("/v1/public/assets/{}", hex(&image));
+        let response = app.clone().oneshot(get_req(&uri)).await.unwrap();
+        assert_eq!(response.status(), 200);
+        let held = budget as usize - memory.serves.available_permits();
+        assert_eq!(held, image.len());
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], &image[..]);
+        assert_eq!(memory.serves.available_permits(), budget as usize);
+    })
+    .await;
+}

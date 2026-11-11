@@ -64,6 +64,7 @@ fn state() -> AppState {
     // Never connects: no route under test reaches the database.
     let db = sqlx::postgres::PgPoolOptions::new().connect_lazy_with(Default::default());
     AppState {
+        asset_memory: crate::assets::Memory::new(config.asset_max_bytes.get()),
         seats: Seats::new(db.clone(), &config, ServerClock::System, None),
         realtime: Realtime::new(100, 10, Timing::default()),
         limiter: Arc::new(Limiter::new(

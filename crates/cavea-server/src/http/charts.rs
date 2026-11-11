@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json, value::RawValue};
 use tracing::Instrument as _;
 
-use super::auth::SecretKey;
+use super::auth::{Auth, SecretKey};
 use super::extract::{Json, Page, Path, Query, RawJson, check_text, invalid};
 use super::openapi::{Needs, Op, Routes};
 use super::{ApiError, AppState, Code, List};
@@ -588,7 +588,7 @@ struct Validation {
     /// No finding has error severity: the draft can be published.
     valid: bool,
     /// In the compiler's documented form (03 §3.2).
-    findings: Vec<Finding>,
+    findings: Vec<Value>,
     /// The compiled chart's statistics, when it compiled.
     stats: Option<Value>,
 }
@@ -601,21 +601,55 @@ async fn validate(
 ) -> Result<axum::Json<Validation>, ApiError> {
     let (_, draft, etag, _) = draft_for_compile(&state, &auth, &key).await?;
     let validation = match charts::compile(draft, false).await {
-        Ok(output) => Validation {
-            draft_etag: etag_text(etag),
-            valid: true,
-            findings: Vec::new(),
-            stats: Some(stats_json(&output)),
-        },
+        Ok(output) => {
+            let findings = unknown_assets(&state, &auth, &output).await?;
+            Validation {
+                draft_etag: etag_text(etag),
+                valid: findings.is_empty(),
+                findings,
+                stats: Some(stats_json(&output)),
+            }
+        }
         Err(ChartError::Invalid(findings)) => Validation {
             draft_etag: etag_text(etag),
             valid: !findings.iter().any(|f| f.severity() == Severity::Error),
-            findings,
+            findings: findings.iter().map(finding_json).collect(),
             stats: None,
         },
         Err(e) => return Err(e.into()),
     };
     Ok(axum::Json(validation))
+}
+
+fn finding_json(finding: &Finding) -> Value {
+    // The compiler's documented form (03 §3.2); it cannot fail.
+    serde_json::to_value(finding).unwrap_or_default()
+}
+
+/// E007 for each background image whose asset the workspace does not hold
+/// (03 §2.7): the compiler holds no assets, so the server checks. The message
+/// names no hash (03 §3.2).
+async fn unknown_assets(
+    state: &AppState,
+    auth: &Auth,
+    output: &charts::Output,
+) -> Result<Vec<Value>, ApiError> {
+    if output.images.is_empty() {
+        return Ok(Vec::new());
+    }
+    let hashes: Vec<String> = output.images.iter().map(|(_, a)| a.clone()).collect();
+    let held = crate::assets::held(&state.db, auth.workspace().uuid(), &hashes).await?;
+    Ok(output
+        .images
+        .iter()
+        .filter(|(_, asset)| !held.contains(asset))
+        .map(|(node, _)| {
+            json!({
+                "code": "E007", "severity": "error", "node": node, "related": null,
+                "message": "The image's asset is not one this workspace has uploaded.",
+            })
+        })
+        .collect())
 }
 
 fn stats_json(output: &charts::Output) -> Value {
@@ -681,6 +715,10 @@ async fn publish(
         return Err(version_conflict(etag));
     }
     let output = charts::compile(draft, true).await?;
+    let unknown = unknown_assets(&state, &auth, &output).await?;
+    if !unknown.is_empty() {
+        return Err(ApiError::new(Code::ChartInvalid).with_detail("findings", unknown));
+    }
     let public_br = output.public_br.as_deref().unwrap_or_default();
     let stats = stats_json(&output);
     let compiled = &output.compiled;

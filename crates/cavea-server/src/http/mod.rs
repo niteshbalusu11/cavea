@@ -45,6 +45,7 @@ pub use auth::{AdminKey, AdminKeyAuth, Auth, PublishableKey, QueryKey, SecretKey
 pub use error::{ApiError, Code};
 pub use extract::{Json, Path, Query};
 pub use health::Health;
+pub(crate) use public::parse_hash;
 
 /// Shared with every handler through `State<AppState>`. Cheap to clone.
 #[derive(Debug, Clone)]
@@ -61,6 +62,8 @@ pub struct AppState {
     pub limiter: Arc<Limiter>,
     /// What readiness knows of the database (`GET /readyz`).
     pub health: Health,
+    /// The image bytes held in memory at once (`crate::assets::Memory`).
+    pub asset_memory: crate::assets::Memory,
 }
 
 /// The whole HTTP surface.

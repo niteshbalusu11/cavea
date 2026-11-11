@@ -242,7 +242,7 @@ fn cache_headers(mut response: Response, etag: HeaderValue) -> Response {
 }
 
 /// 32 lowercase hex digits as 16 bytes.
-pub(super) fn parse_hash(hex: &str) -> Option<[u8; 16]> {
+pub(crate) fn parse_hash(hex: &str) -> Option<[u8; 16]> {
     let digits = hex.as_bytes();
     if digits.len() != 32 {
         return None;

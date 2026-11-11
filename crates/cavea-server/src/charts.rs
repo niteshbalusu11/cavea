@@ -13,6 +13,7 @@
 use std::fmt;
 use std::time::{Duration, Instant};
 
+use cavea_compiler::document::Node;
 use cavea_compiler::{ChartDocument, CompileError, Compiled, Finding, SCHEMA};
 use tokio::sync::Semaphore;
 
@@ -116,6 +117,10 @@ pub struct Output {
     pub public_br: Option<Vec<u8>>,
     pub compile_time: Duration,
     pub compress_time: Duration,
+    /// The background images the chart shows: each asset hash once, with the
+    /// first image node naming it. The compiler holds no assets; whether the
+    /// workspace holds these is the server's check (03 §2.7, E007).
+    pub images: Vec<(Option<u32>, String)>,
 }
 
 /// Compile a stored draft, and compress the public artefact if `compress`.
@@ -144,6 +149,7 @@ fn run(draft: &[u8], compress: bool) -> Result<Output, ChartError> {
         e @ CompileError::Encode(_) => internal(e),
     })?;
     let compile_time = started.elapsed();
+    let images = images(&document, &compiled.public)?;
     let started = Instant::now();
     let public_br = if compress {
         Some(brotli(&compiled.public).map_err(internal)?)
@@ -155,6 +161,33 @@ fn run(draft: &[u8], compress: bool) -> Result<Output, ChartError> {
         public_br,
         compile_time,
         compress_time: started.elapsed(),
+        images,
+    })
+}
+
+/// The asset hashes of the compiled background images, from the public
+/// artefact itself (what a buyer's renderer will fetch), each with the first
+/// image node of the document that names it.
+fn images(
+    document: &ChartDocument,
+    public: &[u8],
+) -> Result<Vec<(Option<u32>, String)>, ChartError> {
+    let chart = cavea_format::decode(public, cavea_format::Artefact::Public).map_err(internal)?;
+    let mut out: Vec<(Option<u32>, String)> = Vec::new();
+    for image in &chart.images {
+        let asset = chart.strings.get(image.asset).unwrap_or_default();
+        if !out.iter().any(|(_, a)| a == asset) {
+            out.push((node_of(&document.nodes, asset), asset.to_owned()));
+        }
+    }
+    Ok(out)
+}
+
+fn node_of(nodes: &[Node], asset: &str) -> Option<u32> {
+    nodes.iter().find_map(|node| match node {
+        Node::Image(image) if image.asset == asset => Some(image.id),
+        Node::Section(section) => node_of(&section.children, asset),
+        _ => None,
     })
 }
 

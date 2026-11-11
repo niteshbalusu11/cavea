@@ -8,19 +8,24 @@
 //! the same asset.
 //!
 //! An asset is served to anyone who has its hash, without a credential, as
-//! the compiled charts are (D-26, D-46): a buyer's browser fetches a chart's
+//! the compiled charts are (D-26, D-47): a buyer's browser fetches a chart's
 //! background images from the URL alone. The response can do no harm if a
 //! browser is sent to it: the type the server sniffed, `nosniff`, and a
 //! sandboxing Content Security Policy.
 
+use std::convert::Infallible;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
-use axum::body::{Body, HttpBody as _};
+use axum::body::{Body, Bytes, HttpBody as _};
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::map_response;
 use axum::response::{IntoResponse, Response};
+use http_body::{Frame, SizeHint};
 use serde_json::json;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::auth::SecretKey;
 use super::extract::{Path, invalid};
@@ -80,6 +85,11 @@ async fn upload(
     if declared.is_some_and(|n| n > limit) {
         return Err(too_large(max));
     }
+    // The bytes held are counted against the node's upload budget as they
+    // arrive, and released when this handler returns.
+    let budget = &state.asset_memory.uploads;
+    let mut held: Option<OwnedSemaphorePermit> = None;
+    hold(&mut held, budget, declared.unwrap_or(0))?;
     let mut bytes = Vec::with_capacity(declared.unwrap_or(0));
     while let Some(frame) = std::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await {
         let frame = frame.map_err(|_| invalid("body_unreadable", "The body could not be read."))?;
@@ -87,6 +97,7 @@ async fn upload(
             if bytes.len() + data.len() > limit {
                 return Err(too_large(max));
             }
+            hold(&mut held, budget, bytes.len() + data.len())?;
             bytes.extend_from_slice(&data);
         }
     }
@@ -111,6 +122,36 @@ async fn upload(
         StatusCode::OK
     };
     Ok((status, axum::Json(view(&hash, image, bytes.len()))).into_response())
+}
+
+/// Grow `held` to `total` bytes of `budget`, without waiting: `503` when the
+/// node holds as many upload bytes as it may.
+fn hold(
+    held: &mut Option<OwnedSemaphorePermit>,
+    budget: &Arc<Semaphore>,
+    total: usize,
+) -> Result<(), ApiError> {
+    let counted = held.as_ref().map_or(0, OwnedSemaphorePermit::num_permits);
+    let Some(more) = total.checked_sub(counted).filter(|&n| n > 0) else {
+        return Ok(());
+    };
+    let more = u32::try_from(more).map_err(|_| busy())?;
+    let permit = budget
+        .clone()
+        .try_acquire_many_owned(more)
+        .map_err(|_| busy())?;
+    match held {
+        Some(held) => held.merge(permit),
+        None => *held = Some(permit),
+    }
+    Ok(())
+}
+
+/// The node holds as many image bytes as it may (`assets::Memory`).
+fn busy() -> ApiError {
+    ApiError::new(Code::Overloaded)
+        .with_message("Too many images are being transferred; retry shortly.")
+        .with_detail("reason", "asset_memory")
 }
 
 fn hex(hash: &[u8; 16]) -> String {
@@ -148,14 +189,31 @@ async fn asset(
         }
         StatusCode::NOT_MODIFIED.into_response()
     } else {
-        let (content_type, bytes) = assets::get(&state.db, &hash).await?.ok_or_else(not_found)?;
+        let (content_type, size) = assets::size(&state.db, &hash)
+            .await?
+            .ok_or_else(not_found)?;
+        // Room for the bytes until they have been written to the client.
+        let budget = &state.asset_memory;
+        let wanted = u32::try_from(size).unwrap_or(0).min(budget.budget);
+        let permit = tokio::time::timeout(
+            assets::SERVE_WAIT,
+            budget.serves.clone().acquire_many_owned(wanted),
+        )
+        .await
+        .map_err(|_| busy())?
+        .map_err(ApiError::internal)?;
+        let bytes = assets::get(&state.db, &hash).await?.ok_or_else(not_found)?;
         let extension = match content_type.as_str() {
             "image/png" => "png",
             "image/jpeg" => "jpg",
             _ => "webp",
         };
         let disposition = format!("inline; filename=\"{hex}.{extension}\"");
-        let mut response = bytes.into_response();
+        let mut response = Body::new(Held {
+            bytes: Bytes::from(bytes),
+            _permit: permit,
+        })
+        .into_response();
         let out = response.headers_mut();
         out.insert(
             header::CONTENT_TYPE,
@@ -179,4 +237,39 @@ async fn asset(
     out.insert(header::CACHE_CONTROL, HeaderValue::from_static(IMMUTABLE));
     out.insert(header::ETAG, etag);
     Ok(response)
+}
+
+/// An asset's bytes as a response body, holding their share of
+/// [`assets::Memory::serves`] until the body is dropped: written in pieces,
+/// so that the HTTP connection takes the next only as the client reads.
+struct Held {
+    bytes: Bytes,
+    _permit: OwnedSemaphorePermit,
+}
+
+/// The largest piece of an asset written at once.
+const PIECE: usize = 64 * 1024;
+
+impl http_body::Body for Held {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
+        if self.bytes.is_empty() {
+            return Poll::Ready(None);
+        }
+        let n = self.bytes.len().min(PIECE);
+        Poll::Ready(Some(Ok(Frame::data(self.bytes.split_to(n)))))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        SizeHint::with_exact(self.bytes.len() as u64)
+    }
 }
