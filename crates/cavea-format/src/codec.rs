@@ -21,7 +21,9 @@ impl<'a> Cur<'a> {
         Ok(*head)
     }
 
-    /// An unsigned LEB128 value of at most 5 bytes that fits in a `u32`.
+    /// An unsigned LEB128 value of at most 5 bytes that fits in a `u32`. Not
+    /// inlined: one copy for every caller saves about 0.5 KB of brotli WASM.
+    #[inline(never)]
     pub fn varint(&mut self) -> Result<u32, ErrorKind> {
         let mut value = 0u32;
         for shift in [0, 7, 14, 21, 28] {
