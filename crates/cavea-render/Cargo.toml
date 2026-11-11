@@ -10,8 +10,6 @@ publish.workspace = true
 # The WebGL2 backend. Enabled by `cavea-web` for wasm32 only, so native builds of
 # the workspace never compile it.
 glow = ["dep:glow"]
-# Debug-only entry points for apps/demo and tests: `Engine::set_status`.
-demo = []
 
 [dependencies]
 cavea-core.workspace = true

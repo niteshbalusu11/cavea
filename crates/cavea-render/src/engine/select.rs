@@ -439,8 +439,8 @@ impl<B: GpuBackend> Engine<B> {
         self.refresh(idx);
     }
 
-    /// Demo hosts: the `idx` of a seat's full label.
-    #[cfg(feature = "demo")]
+    /// The `idx` of a seat's full label: for hosts that hold state by label
+    /// (05 §4), converted once per snapshot or delta, never per frame.
     pub fn idx_of(&mut self, label: &str) -> Option<u32> {
         let loaded = self.scene.as_mut()?;
         let chart = &loaded.scene.chart;
@@ -448,6 +448,14 @@ impl<B: GpuBackend> Engine<B> {
             .labels
             .get_or_insert_with(|| LabelIndex::build(chart)))
         .find(chart, label)
+    }
+
+    /// A seat's details and public status code (0 available, 1 unavailable),
+    /// for the objects the SDK reports that are not selected (05 §5).
+    pub fn object(&mut self, label: &str) -> Option<(ObjectInfo, u8)> {
+        let idx = self.idx_of(label)?;
+        let status = *self.scene.as_ref()?.scene.status.get(idx as usize)?;
+        Some((self.info(idx), status))
     }
 
     /// Resolves labels and indices to seats. Unknown objects are reported in

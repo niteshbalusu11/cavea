@@ -111,8 +111,8 @@ t0  init()  ─┬─ fetch WASM (streaming compile)
 Rules:
 
 - The four fetches start together, before any of them completes.
-- The first frame does not wait for the snapshot or the glyph atlas. The atlas reaches the engine in one `SetGlyphAtlas` whenever it arrives, and seat labels are drawn from the next frame. If it cannot be fetched, decoded or used, the map works without seat labels and the web host reports an `error` event with code `glyphAtlas` (`packages/renderer`: `loadRenderer` starts the fetch with the WASM's, `attach` hands it over).
-- If the snapshot arrives before the chart, it is kept and applied on decode.
+- The first frame does not wait for the snapshot or the glyph atlas. The atlas reaches the engine in one `SetGlyphAtlas` whenever it arrives, and seat labels are drawn from the next frame. If it cannot be fetched, decoded or used, the map works without seat labels and the web host reports an `error` event with code `glyphAtlas` (`packages/renderer`: `createSeatMap` starts the fetch with the WASM's, the host hands it over).
+- If the snapshot arrives before the chart, it is kept and applied on decode. On the web `createSeatMap` starts the WASM, chart and atlas fetches and the state adapter's `connect` in the same call, loads the chart when the WASM and the chart are in, and applies the adapter's first state, and anything it pushed meanwhile, in order once both the chart and that state are in (`05-web-sdk.md` §4).
 - Until state arrives every seat has status 0 and is drawn available: that is the neutral state of the first frame.
 - A chart that does not decode is reported as `Error` with `BadChart`; the chart already loaded, if any, stays. The old chart's GPU resources are destroyed only once the new chart's are created.
 - Shader programs are compiled before the chart arrives, where the browser allows parallel compilation.
