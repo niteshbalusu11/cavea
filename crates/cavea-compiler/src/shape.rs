@@ -18,15 +18,21 @@ const MITER_LIMIT: f64 = 4.0;
 /// One subpath: its points and whether it is closed.
 pub(crate) type Subpath = (Vec<P>, bool);
 
+/// The least whole number of steps at or above `x`, at least 1; `None`
+/// past [`MAX_SEGMENTS`] (or for NaN), when the curve is too large to keep
+/// within [`TOLERANCE`].
+fn steps(x: f64) -> Option<usize> {
+    let n = x.ceil().max(1.0);
+    (n <= MAX_SEGMENTS).then_some(n as usize)
+}
+
 /// `(cos θ, sin θ)` for θ at `m` equal steps over a quarter turn, both ends
 /// included and exact. With radius `r` and step θ the chords are within
 /// rθ²/8 of the arc, so `m` is the least that keeps `r` within
-/// [`TOLERANCE`], at most 256.
-fn quarter(r: f64) -> Vec<P> {
-    let m = (core::f64::consts::FRAC_PI_4 * (r / (2.0 * TOLERANCE)).sqrt())
-        .ceil()
-        .clamp(1.0, MAX_SEGMENTS) as usize;
-    (0..=m)
+/// [`TOLERANCE`]; `None` if that is more than 256.
+fn quarter(r: f64) -> Option<Vec<P>> {
+    let m = steps(core::f64::consts::FRAC_PI_4 * (r / (2.0 * TOLERANCE)).sqrt())?;
+    let q = (0..=m)
         .map(|k| match k {
             0 => [1.0, 0.0],
             k if k == m => [0.0, 1.0],
@@ -35,18 +41,19 @@ fn quarter(r: f64) -> Vec<P> {
                 [c, s]
             }
         })
-        .collect()
+        .collect();
+    Some(q)
 }
 
 /// A `w × h` rectangle centred on the origin, its corners rounded by
 /// `radius` (at most half the shorter side), clockwise on screen.
-pub(crate) fn rect(w: f64, h: f64, radius: f64) -> Vec<P> {
+pub(crate) fn rect(w: f64, h: f64, radius: f64) -> Option<Vec<P>> {
     let (hw, hh) = (w / 2.0, h / 2.0);
     let r = radius.min(hw).min(hh);
     if r <= 0.0 {
-        return vec![[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
+        return Some(vec![[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]]);
     }
-    let q = quarter(r);
+    let q = quarter(r)?;
     // Corner centres, and the quarter's axes, starting at the top right.
     let corners = [
         ([hw - r, -hh + r], [0.0, -1.0], [1.0, 0.0]),
@@ -69,15 +76,15 @@ pub(crate) fn rect(w: f64, h: f64, radius: f64) -> Vec<P> {
     while out.len() > 1 && out.first() == out.last() {
         out.pop();
     }
-    out
+    Some(out)
 }
 
 /// An ellipse centred on the origin with radii `a` and `b`, at equal steps
 /// of the parameter angle: the affine image of a circle flattened for the
 /// larger radius, so within [`TOLERANCE`] of the true curve.
-pub(crate) fn ellipse(a: f64, b: f64) -> Vec<P> {
-    let q = quarter(a.max(b));
-    let m = q.len() - 1;
+pub(crate) fn ellipse(a: f64, b: f64) -> Option<Vec<P>> {
+    let q = quarter(a.max(b))?;
+    let m = q.len().saturating_sub(1);
     let mut out = Vec::with_capacity(4 * m);
     // Quarters clockwise from +x; odd ones run backwards through the table:
     // cos(90° + φ) = −sin φ = −cos(90° − φ), and so on.
@@ -95,14 +102,15 @@ pub(crate) fn ellipse(a: f64, b: f64) -> Vec<P> {
             out.push([sx * a * c, sy * b * s]);
         }
     }
-    out
+    Some(out)
 }
 
 /// Points of a quadratic or cubic Bézier curve after its first, at `n`
 /// equal parameter steps. Each chord is within max|B''| / (8n²) of the
 /// curve, and |B''| is at most 2|p0 − 2p1 + p2| (quadratic) or
 /// 6 max(|p0 − 2p1 + p2|, |p1 − 2p2 + p3|) (cubic).
-fn bezier(ctrl: &[P], out: &mut Vec<P>) {
+/// `None`, adding nothing, when that takes more than 256 steps.
+fn bezier(ctrl: &[P], out: &mut Vec<P>) -> Option<()> {
     let second = |a: P, b: P, c: P| {
         let v = [a[0] - 2.0 * b[0] + c[0], a[1] - 2.0 * b[1] + c[1]];
         (v[0] * v[0] + v[1] * v[1]).sqrt()
@@ -110,12 +118,9 @@ fn bezier(ctrl: &[P], out: &mut Vec<P>) {
     let bound = match *ctrl {
         [p0, p1, p2] => 2.0 * second(p0, p1, p2),
         [p0, p1, p2, p3] => 6.0 * second(p0, p1, p2).max(second(p1, p2, p3)),
-        _ => return,
+        _ => return Some(()),
     };
-    let n = (bound / (8.0 * TOLERANCE))
-        .sqrt()
-        .ceil()
-        .clamp(1.0, MAX_SEGMENTS) as usize;
+    let n = steps((bound / (8.0 * TOLERANCE)).sqrt())?;
     for k in 1..=n {
         let t = k as f64 / n as f64;
         let u = 1.0 - t;
@@ -129,6 +134,7 @@ fn bezier(ctrl: &[P], out: &mut Vec<P>) {
         }
         out.push(p);
     }
+    Some(())
 }
 
 /// Why path data was refused.
@@ -138,6 +144,8 @@ pub(crate) enum PathError {
     Syntax,
     /// An elliptical arc command (`A`, `a`).
     Arc,
+    /// A curve that needs more than 256 steps to stay within [`TOLERANCE`].
+    CurveTooLarge,
     /// More than [`MAX_POINTS`] points once flattened.
     TooManyPoints,
 }
@@ -278,7 +286,7 @@ pub(crate) fn parse_path(d: &str) -> Result<Vec<Subpath>, PathError> {
                 };
                 let p2 = c.point(rel, cur)?;
                 let p3 = c.point(rel, cur)?;
-                bezier(&[cur, p1, p2, p3], &mut pts);
+                bezier(&[cur, p1, p2, p3], &mut pts).ok_or(PathError::CurveTooLarge)?;
                 ctrl = Some((b'C', p2));
                 cur = p3;
             }
@@ -289,7 +297,7 @@ pub(crate) fn parse_path(d: &str) -> Result<Vec<Subpath>, PathError> {
                     c.point(rel, cur)?
                 };
                 let p2 = c.point(rel, cur)?;
-                bezier(&[cur, p1, p2], &mut pts);
+                bezier(&[cur, p1, p2], &mut pts).ok_or(PathError::CurveTooLarge)?;
                 ctrl = Some((b'Q', p1));
                 cur = p2;
             }

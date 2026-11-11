@@ -1270,7 +1270,9 @@ fn bad_decoration_names_its_node() {
            {{"id":17,"type":"shape","kind":"rect","origin":[1e9,0],"size":[1,1]}},
            {{"id":18,"type":"shape","floor":99,"kind":"rect","size":[1,1]}},
            {{"id":19,"type":"shape","kind":"rect"}},
-           {{"id":21,"type":"shape","kind":"path","d":"M0 0 L10 0","style":{{"fill":"#000000"}}}}"##,
+           {{"id":21,"type":"shape","kind":"path","d":"M0 0 L10 0","style":{{"fill":"#000000"}}}},
+           {{"id":22,"type":"shape","kind":"ellipse","size":[2000000,2000000],"style":{{"fill":"#000000"}}}},
+           {{"id":23,"type":"shape","kind":"path","d":"M0 0 L10 10 L0 10 L10 0 Z M20 0 h10 v10 h-10 Z","style":{{"fill":"#000000"}}}}"##,
         many = points(4097),
     ));
     let mut got: Vec<_> = findings(&json)
@@ -1313,6 +1315,13 @@ fn bad_decoration_names_its_node() {
         (18, Code::E007, Detail::UnknownFloor { floor: 99 }),
         (19, Code::E005, invalid("size")),
         (21, Code::E005, geometry("zero size")),
+        (
+            22,
+            Code::E005,
+            geometry("curve too large to flatten within 0.5 cu"),
+        ),
+        // A bowtie: no signed area, but not flat.
+        (23, Code::E005, geometry("self-intersecting fill")),
     ]
     .map(|(n, code, detail)| (Some(n), code, detail));
     assert_eq!(got, want);

@@ -64,15 +64,22 @@ pub(crate) fn dedupe(points: impl Iterator<Item = P>) -> Vec<P> {
 /// A valid outline: at least three points not all on one line, and no two
 /// edges touching except neighbours at their shared point.
 pub(crate) fn check(poly: &[P]) -> Result<(), OutlineError> {
-    let collinear = |a: P, b: P| poly.iter().all(|&p| cross(a, b, p) == 0.0);
-    match poly {
-        [a, b, _, ..] if !collinear(*a, *b) => {}
-        _ => return Err(OutlineError::ZeroSize),
+    if flat(poly) {
+        return Err(OutlineError::ZeroSize);
     }
     if !is_simple(poly) {
         return Err(OutlineError::SelfIntersecting);
     }
     Ok(())
+}
+
+/// True for fewer than three points, or all on the line through the first
+/// two (which must differ).
+pub(crate) fn flat(poly: &[P]) -> bool {
+    match poly {
+        [a, b, _, ..] => poly.iter().all(|&p| cross(*a, *b, p) == 0.0),
+        _ => true,
+    }
 }
 
 /// The automatic outline of a section's seats, in the section's own space,

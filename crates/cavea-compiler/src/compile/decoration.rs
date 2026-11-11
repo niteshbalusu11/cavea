@@ -58,6 +58,9 @@ fn geometry(problem: &'static str) -> Failure {
     (Code::E005, Detail::Geometry { problem })
 }
 
+/// A curve that 256 steps cannot keep within 0.5 cu.
+const TOO_CURVED: &str = "curve too large to flatten within 0.5 cu";
+
 fn too_many(what: &'static str, limit: usize) -> Failure {
     let limit = limit as u32; // every limit fits
     (Code::E006, Detail::TooMany { what, limit })
@@ -187,6 +190,7 @@ fn own_paths(s: &doc::Shape) -> Result<Vec<Subpath>, Failure> {
             } else {
                 shape::ellipse(w / 2.0, h / 2.0)
             };
+            let pts = pts.ok_or(geometry(TOO_CURVED))?;
             vec![(pts, true)]
         }
         doc::ShapeKind::Polygon | doc::ShapeKind::Line => {
@@ -204,6 +208,7 @@ fn own_paths(s: &doc::Shape) -> Result<Vec<Subpath>, Failure> {
             shape::parse_path(d).map_err(|e| match e {
                 PathError::Syntax => geometry("invalid path data"),
                 PathError::Arc => geometry("elliptical arcs (A) in path data are not supported"),
+                PathError::CurveTooLarge => geometry(TOO_CURVED),
                 PathError::TooManyPoints => too_many("shape points", MAX_POINTS),
             })?
         }
@@ -256,14 +261,14 @@ fn shape(
             paths.push((ring, closed));
         }
     }
-    let flat = |r: &Vec<P>| r.len() < 3 || area2(r) == 0.0;
+    let flat = |r: &Vec<P>| geometry::flat(r);
     let closed_kind = !matches!(s.kind, doc::ShapeKind::Line | doc::ShapeKind::Path);
     if paths.is_empty() || (closed_kind && paths.iter().any(|(r, _)| flat(r))) {
         return Err(geometry("zero size"));
     }
 
     if let Some(color) = fill.filter(|_| s.kind != doc::ShapeKind::Line) {
-        // Every subpath is filled as if closed; those without area add none.
+        // Every subpath is filled as if closed; flat ones add nothing.
         let rings: Vec<Vec<P>> = paths
             .iter()
             .map(|(r, _)| r)

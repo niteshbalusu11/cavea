@@ -26,7 +26,7 @@ fn curves_stay_within_tolerance() {
         (5000.0, 900.0, 450.0),
         (10.0, 6.0, 0.4),
     ] {
-        let pts = rect(w, h, r);
+        let pts = rect(w, h, r).unwrap();
         assert!(area2(&pts) > 0.0);
         let (hw, hh) = (w / 2.0f64, h / 2.0f64);
         // Distance to the rounded rectangle's boundary, from inside.
@@ -42,7 +42,7 @@ fn curves_stay_within_tolerance() {
         assert!(chord_error(&pts, dist) <= TOLERANCE, "{w} {h} {r}");
     }
     for (a, b) in [(100.0f64, 100.0f64), (3000.0, 200.0), (0.3, 7.0)] {
-        let pts = ellipse(a, b);
+        let pts = ellipse(a, b).unwrap();
         assert!(area2(&pts) > 0.0);
         assert!(
             pts.iter()
@@ -114,6 +114,17 @@ fn path_data_follows_svg() {
     assert!(quad.iter().any(|p| p[0] > 10.0 && p[1] < 50.0));
 
     assert_eq!(parse_path("M0 0 A 5 5 0 0 1 10 0"), Err(PathError::Arc));
+    // Curves too large for 256 steps to keep within the tolerance.
+    assert_eq!(
+        parse_path("M0 0 Q500000 1000000 1000000 0 Z"),
+        Err(PathError::CurveTooLarge)
+    );
+    assert_eq!(
+        parse_path("M0 0 C1e300 1e300 -1e300 -1e300 5 5"),
+        Err(PathError::CurveTooLarge)
+    );
+    assert!(ellipse(1e6, 1e6).is_none() && rect(3e6, 3e6, 1e6).is_none());
+    assert!(ellipse(100_000.0, 10.0).is_some());
     for bad in [
         "",
         "L0 0",
