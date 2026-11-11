@@ -211,7 +211,9 @@ beforeAll(async () => {
   }
   designer = await loadDesigner({ wasm: await file.arrayBuffer() });
   theatre = preset("theatre");
-});
+  // Not bun's default of 5 s: the first `cavea gen` builds the CLI in
+  // release.
+}, 600_000);
 
 describe("the designer module", () => {
   test("matches the committed declaration of its bindings", async () => {
