@@ -237,6 +237,14 @@ fn shifted(b: &RowBlock, v: P) -> P {
     [b.origin[0] + t[0], b.origin[1] + t[1]]
 }
 
+/// What the origin moves by, in the block's own space, when the kept rows
+/// move back by `travel` in node space (rows added at the front, or the
+/// front row moved forward): they shift by the skew's shear too
+/// (03 §2.4: `x' = x − y × tan(skew)`), so the origin takes both up.
+fn front_shift(b: &RowBlock, travel: f64) -> P {
+    [travel * b.skew.to_radians().tan(), -travel]
+}
+
 fn align(b: &RowBlock) -> f64 {
     match b.align {
         Align::Left => 0.0,
@@ -398,7 +406,7 @@ fn counts(b: &RowBlock, id: u32, side: Side, d: P, room: u64) -> Step {
             commands.push(Command::TransformNodes {
                 nodes: vec![NodeTransform {
                     id,
-                    origin: shifted(b, [0.0, -travel]),
+                    origin: shifted(b, front_shift(b, travel)),
                     rotation: b.rotation,
                 }],
             });
@@ -418,24 +426,8 @@ fn counts(b: &RowBlock, id: u32, side: Side, d: P, room: u64) -> Step {
             } else {
                 End::End
             };
-            for r in &b.rows {
-                let rid = r.rid;
-                commands.push(if n > 0 {
-                    Command::AddSeats {
-                        id,
-                        rid,
-                        end,
-                        count: k,
-                    }
-                } else {
-                    Command::RemoveSeats {
-                        id,
-                        rid,
-                        end,
-                        count: k,
-                    }
-                });
-            }
+            let count = i32::try_from(n).unwrap_or(0);
+            commands.push(Command::ResizeRows { id, end, count });
         }
     }
     let shown = readout(&changed(b, side, n));
@@ -462,7 +454,7 @@ fn pitch(b: &RowBlock, id: u32, side: Side, d: P) -> Step {
             // The back row stays: the front moves, an arc's centre stays.
             let travel = (p - b.row_pitch) * gaps;
             if side == Side::Top {
-                let origin = shifted(b, [0.0, -travel]);
+                let origin = shifted(b, front_shift(b, travel));
                 c.origin = origin;
                 commands.push(Command::TransformNodes {
                     nodes: vec![NodeTransform {

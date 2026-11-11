@@ -612,6 +612,36 @@ fn resize_staggered_front() {
     assert_eq!(kept(&seats, &t.seats(id), 1e-9), 6);
 }
 
+/// A skewed block's kept seats stay put when rows are added at its front,
+/// or the row pitch is changed from there.
+#[test]
+fn resize_skewed_front() {
+    let mut t = T::new(empty());
+    let id = t.s.insert(None, &straight(2, 4)).expect("block");
+    let skew = Property::Skew(30.0);
+    t.s.apply(Command::SetProperty { id, property: skew })
+        .expect("skew");
+    t.s.select(Level::Top, [id]);
+    let seats = t.seats(id);
+    t.by(HandleKind::Side(Side::Top), [0.0, -95.0], NONE);
+    assert_eq!(block(&t.node(id)).rows.len(), 3);
+    assert_eq!(kept(&seats, &t.seats(id), 1e-9), 8);
+    let back: Vec<u32> =
+        t.s.index()
+            .seats(id)
+            .iter()
+            .filter(|s| s.row == 2)
+            .map(|s| s.oid)
+            .collect();
+    let seats = t.seats(id);
+    t.by(HandleKind::Side(Side::Top), [0.0, -20.0], CTRL);
+    assert_eq!(block(&t.node(id)).row_pitch, 105.0);
+    let now = t.seats(id);
+    for oid in back {
+        assert!(close(seats[&oid], now[&oid], 1e-9), "back seat {oid} moved");
+    }
+}
+
 /// A cancelled gesture's ids are never handed out again, even to a node
 /// made right after it; and a draft whose numbers would overflow a count
 /// is refused, not a panic.
@@ -1029,6 +1059,19 @@ fn measure_tools() {
     }
     let resize = ms(clock, frames);
     t.up([h[0], h[1] + 95.0], NONE);
+    // A seat more, and none, at the end of each of 20,000 rows: one pass.
+    let tall = t.s.insert(None, &straight(20_000, 2)).expect("tall");
+    let h = t.handle(HandleKind::Side(Side::Right));
+    t.down(h, NONE);
+    t.to([h[0] + 55.0, h[1]], NONE);
+    let clock = Instant::now();
+    for i in 0..20 {
+        let seats = if i % 2 == 0 { 0.0 } else { 1.0 };
+        t.to([h[0] + seats * 55.0, h[1]], NONE);
+    }
+    let wide = ms(clock, 20);
+    t.up(h, NONE);
+    assert_eq!(block(&t.node(tall)).rows.len(), 20_000);
     // Rotating 50 of the stadium's sections, a block each.
     let doc = t.s.document();
     let sections: Vec<u32> = doc
@@ -1058,6 +1101,7 @@ fn measure_tools() {
     println!(
         "stadium-100k: row block 50 × 100 drag move {drag:.3} ms; \
          resize step (row added to 5,000 seats) {resize:.3} ms; \
+         seats added to 20,000 rows {wide:.3} ms; \
          rotate step ({count} sections, {seats} seats) {rotate:.3} ms"
     );
 }

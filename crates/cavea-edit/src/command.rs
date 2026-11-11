@@ -114,6 +114,14 @@ pub enum Command {
         end: End,
         count: u32,
     },
+    /// Adds (`count` above 0) or removes (below 0) positions at one end of
+    /// every row of a block, as `addSeats` or `removeSeats` would row by row,
+    /// in one pass.
+    ResizeRows {
+        id: u32,
+        end: End,
+        count: i32,
+    },
     /// Leaves a gap at the seat's position; it keeps its oid (03 §2.4).
     RemoveSeat {
         id: u32,
@@ -635,6 +643,89 @@ impl Document {
                     )?;
                 }
                 run(self, Op::SetRow { id, row })
+            }
+            Command::ResizeRows { id, end, count } => {
+                let Some(Node::RowBlock(b)) = self.node(id) else {
+                    return self.rows(id).and(Err(CommandError::Internal));
+                };
+                let k = count.unsigned_abs();
+                if count == 0 {
+                    return Err(CommandError::InvalidValue("count"));
+                }
+                if count > 0
+                    && b.rows
+                        .iter()
+                        .any(|r| r.seats.saturating_add(k) > MAX_SEATS_PER_ROW)
+                {
+                    return Err(CommandError::Limit("seats per row"));
+                }
+                if count < 0 && b.rows.iter().any(|r| k >= r.seats) {
+                    return Err(CommandError::Limit("seats removed"));
+                }
+                let added = if count > 0 {
+                    u64::from(k) * b.rows.len() as u64
+                } else {
+                    0
+                };
+                let source = b.rows.clone();
+                let overrides: BTreeSet<u32> = b.seat_overrides.keys().copied().collect();
+                let align = match b.align {
+                    Align::Left => 0.0,
+                    Align::Center => 0.5,
+                    Align::Right => 1.0,
+                };
+                let length = f64::from(count) * b.seat_pitch;
+                let front = if end == End::Start { length } else { 0.0 };
+                if self.objects() + added > u64::from(MAX_OBJECTS) {
+                    return Err(CommandError::Limit("objects"));
+                }
+                let mut next = self.allocate(added).ok_or(CommandError::IdsExhausted)?;
+                let mut rows = Vec::with_capacity(source.len());
+                let mut gone = Vec::new();
+                for mut row in source {
+                    let mut oids = expand_runs(&row, id)?;
+                    row.offset += align * length - front;
+                    if !row.offset.is_finite() {
+                        return Err(CommandError::InvalidValue("offset"));
+                    }
+                    if count > 0 {
+                        let new = (0..k).map(|i| next.saturating_add(i));
+                        match end {
+                            End::Start => {
+                                oids.splice(0..0, new);
+                                row.removed
+                                    .iter_mut()
+                                    .for_each(|p| *p = p.saturating_add(k));
+                            }
+                            End::End => oids.extend(new),
+                        }
+                        next = next.saturating_add(k);
+                        row.seats += k;
+                    } else {
+                        let keep = row.seats - k;
+                        let cut: Vec<u32> = match end {
+                            End::Start => {
+                                row.removed.retain(|&p| p >= k);
+                                row.removed.iter_mut().for_each(|p| *p -= k);
+                                oids.drain(..k as usize).collect()
+                            }
+                            End::End => {
+                                row.removed.retain(|&p| p < keep);
+                                oids.drain(keep as usize..).collect()
+                            }
+                        };
+                        gone.extend(cut.into_iter().filter(|o| overrides.contains(o)));
+                        row.seats = keep;
+                    }
+                    row.oids = compress(&oids);
+                    rows.push(row);
+                }
+                for oid in gone {
+                    let value = None;
+                    run(self, Op::Override { id, oid, value })?;
+                }
+                run(self, Op::Rows { id, rows })?;
+                self.raise_next_oid(next, run)
             }
             Command::RemoveSeat { id, oid } | Command::RestoreSeat { id, oid } => {
                 let remove = matches!(command, Command::RemoveSeat { .. });

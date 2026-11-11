@@ -266,11 +266,16 @@ pub(crate) fn command(r: &mut Rng, doc: &Document) -> Command {
                 property: Property::Floor(doc.floors().first().map(|f| f.id)),
             },
         },
-        13 | 14 => Command::AddSeats {
+        13 => Command::AddSeats {
             id: bid,
             rid,
             end,
             count: 1 + r.below(4) as u32,
+        },
+        14 => Command::ResizeRows {
+            id: bid,
+            end,
+            count: r.below(7) as i32 - 3,
         },
         15 | 16 => Command::RemoveSeats {
             id: bid,
@@ -589,6 +594,22 @@ fn row_edits_keep_seats_in_place() {
                     },
                     9,
                 ),
+                (
+                    Command::ResizeRows {
+                        id: 1,
+                        end,
+                        count: 2,
+                    },
+                    13,
+                ),
+                (
+                    Command::ResizeRows {
+                        id: 1,
+                        end,
+                        count: -1,
+                    },
+                    11,
+                ),
             ] {
                 editor.apply(cmd).expect("apply");
                 let now = seats(&editor);
@@ -599,6 +620,10 @@ fn row_edits_keep_seats_in_place() {
                         assert!(d < 1e-9 && r == removed, "{align} {end:?} oid {oid}: {d}");
                     }
                 }
+            }
+            // Back to before the two `resizeRows`, which changed row 3 too.
+            for _ in 0..2 {
+                assert!(editor.undo().expect("undo"));
             }
             editor
                 .apply(Command::AddRows {
