@@ -82,12 +82,16 @@ export function attach(
   }
 
   function update(): void {
+    if (detached) {
+      return;
+    }
     // Taken even without a listener, so they do not pile up in the view.
     const events = takeEvents(view);
     if (events.length > 0) {
       options.onEvents?.(events);
     }
-    if (view.needFrame && handle === 0 && !document.hidden && !detached) {
+    // A listener may have detached the host and freed the view.
+    if (!detached && view.needFrame && handle === 0 && !document.hidden) {
       handle = requestAnimationFrame(frame);
     }
   }

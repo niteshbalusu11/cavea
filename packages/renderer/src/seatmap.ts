@@ -74,10 +74,10 @@ function attempt<T>(start: () => T | Promise<T>): Promise<T> {
 const failure = (code: CaveaErrorCode, error: unknown, fatal = false): CaveaError =>
   error instanceof CaveaError ? error : new CaveaError(code, String(error), fatal, error);
 
-/** `promise`, rejecting with a fatal `CaveaError` of `code`. */
+/** `promise`, rejecting with a fatal `CaveaError` of `code` whose cause is the original error. */
 const fatal = <T>(promise: Promise<T>, code: CaveaErrorCode): Promise<T> =>
   promise.catch((error: unknown) => {
-    throw failure(code, error, true);
+    throw new CaveaError(code, String(error), true, error);
   });
 
 const bytesOf = (b: ArrayBuffer | Uint8Array): Uint8Array =>
@@ -120,7 +120,7 @@ export async function createMap(
 
   /** Tells the host; an `onError` that throws is not called again for its own throw. */
   function report(error: CaveaError): void {
-    if (options.onError === undefined) {
+    if (options.onError === undefined || destroyed) {
       warn(`${error.code}: ${error.message}`);
       return;
     }
@@ -336,6 +336,10 @@ export async function createMap(
 
   function onEvents(batch: RendererEvent[]): void {
     for (const event of batch) {
+      // A callback may have destroyed the map.
+      if (destroyed) {
+        return;
+      }
       switch (event.type) {
         case "ready":
           chart = event;
@@ -467,11 +471,18 @@ export async function createMap(
   for (const promise of [wasm, chartBytes, state, atlas]) {
     promise.catch(() => undefined);
   }
+  // A failed chart or connect ends the start at once, whatever is still loading.
+  const failed = new Promise<never>((_, reject) => {
+    fatal(chartBytes, "chart_fetch_failed").catch(reject);
+    fatal(state, "state_connect_failed").catch(reject);
+  });
+  failed.catch(() => undefined);
+  const step = <T>(promise: Promise<T>): Promise<T> => Promise.race([promise, failed]);
   let mounted: ReturnType<Env["mount"]> | undefined;
   try {
     mounted = env.mount(element);
     const canvas = mounted.canvas;
-    const makeView = await fatal(wasm, "wasm_unavailable");
+    const makeView = await step(fatal(wasm, "wasm_unavailable"));
     mark("wasm_ready");
     const v = await fatal(
       attempt(() => makeView(canvas)),
@@ -503,7 +514,7 @@ export async function createMap(
     host = env.attach(v, canvas, attachOptions);
     applyTheme(options.theme ?? "auto");
 
-    const bytes = await fatal(chartBytes, "chart_fetch_failed");
+    const bytes = await step(fatal(chartBytes, "chart_fetch_failed"));
     mark("chart_fetched");
     try {
       v.loadChart(bytes);
@@ -512,7 +523,7 @@ export async function createMap(
     }
     host.update();
     mark("chart_decoded");
-    const first = await fatal(state, "state_connect_failed");
+    const first = await step(fatal(state, "state_connect_failed"));
     applySnapshot(v, first);
     for (const apply of pending ?? []) {
       apply(v);

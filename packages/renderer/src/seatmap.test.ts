@@ -332,7 +332,8 @@ describe("load sequence", () => {
           f.chart.reject(new Error("HTTP 404"));
         },
       ],
-      ["state_connect_failed", (f) => f.load()],
+      // While the WASM is still loading, and with the adapter's own CaveaError.
+      ["state_connect_failed", () => {}],
     ];
     for (const [code, fail] of cases) {
       const f = fakeEnv();
@@ -340,7 +341,7 @@ describe("load sequence", () => {
       const adapter = customState({
         connect: () =>
           code === "state_connect_failed"
-            ? Promise.reject(new Error("503"))
+            ? Promise.reject(new CaveaError("state_failed", "503"))
             : new Promise(() => {}),
         disconnect: () => (disconnected += 1),
       });
@@ -553,6 +554,29 @@ describe("callbacks", () => {
     });
     expect(() => drain({ type: "selectionChanged", expiresAt: null, selected: [] })).not.toThrow();
     expect(errors).toEqual(["callback_failed"]);
+  });
+
+  test("a callback that destroys the map ends the batch; no callback or error follows", async () => {
+    const got: string[] = [];
+    let ctx: Parameters<StateAdapter["connect"]>[0] | undefined;
+    const { map, drain } = await loaded({
+      state: customState({
+        connect(c) {
+          ctx = c;
+          return Promise.resolve({ kind: "map", unavailable: [] });
+        },
+        disconnect() {},
+      }),
+      onSelectionChange: () => {
+        got.push("change");
+        map.destroy();
+      },
+      onSelectionValid: () => got.push("valid"),
+      onError: (e) => got.push(e.code),
+    });
+    drain({ type: "selectionChanged", expiresAt: null, selected: [] }, { type: "selectionValid" });
+    ctx?.reportError(new Error("late"));
+    expect(got).toEqual(["change"]);
   });
 });
 
