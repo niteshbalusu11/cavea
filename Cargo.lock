@@ -247,6 +247,13 @@ version = "0.0.0"
 [[package]]
 name = "cavea-edit"
 version = "0.0.0"
+dependencies = [
+ "cavea-compiler",
+ "cavea-core",
+ "cavea-testkit",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "cavea-engine"

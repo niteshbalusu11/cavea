@@ -251,9 +251,9 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 ### Edit core
 
-- [ ] **DSN-001** `cavea-edit` crate: document arena and node types (07 §2)
-- [ ] **DSN-002** Command framework with computed inverses (07 §2)
-- [ ] **DSN-003** Undo and redo stack with coalescing for drags and scrubbing (07 §9)
+- [x] **DSN-001** `cavea-edit` crate: document arena and node types (07 §2)
+- [x] **DSN-002** Command framework with computed inverses (07 §2)
+- [x] **DSN-003** Undo and redo stack with coalescing for drags and scrubbing (07 §9)
 - [ ] **DSN-004** Live scene: incremental expansion per changed node (04 §25)
 - [ ] **DSN-005** Renderer extensions: chunk transforms and the overlay batcher (04 §25)
 - [ ] **DSN-006** View models and their generated TypeScript types; throttled to one per frame (07 §2, §14)
@@ -310,7 +310,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 ### Testing
 
-- [ ] **TST-030** Command inverse property tests (13 §9)
+- [x] **TST-030** Command inverse property tests (13 §9)
 - [ ] **TST-031** End-to-end: draw, number, publish, create event, hold a seat (13 §9)
 - [ ] **TST-032** Usability test: three new users draw the reference theatre; record times (ROADMAP M3)
 
