@@ -254,8 +254,21 @@ export function serverChart(props: {
     if (!stale(mine)) setKept(offered);
   };
 
+  /** One recovery answer at a time: a second click while the first is on
+   * its way is ignored (it would race the first for the record). */
+  let answering = false;
+  const oneAtATime = (run: () => Promise<void>) => async (): Promise<void> => {
+    if (answering) return;
+    answering = true;
+    try {
+      await run();
+    } finally {
+      answering = false;
+    }
+  };
+
   /** The person restores the record offered; the others stay for later. */
-  const restore = async () => {
+  const restore = oneAtATime(async () => {
     const mine = ++generation;
     const r = recovery();
     if (r === null) return;
@@ -287,26 +300,31 @@ export function serverChart(props: {
     }
     // No Web Locks: a copy, the original kept for later.
     if (claimed === "unlocked") await copy().catch(() => {});
+    // Gone or superseded: the editor shown keeps saving, untouched, and the
+    // copy is recoverable once its lock is let go.
+    if (stale(mine)) {
+      store.release?.();
+      return session.dispose();
+    }
     setKept([]);
     // Onto the draft as it is now: the person chose to replace it.
     const etag = (await autosave?.abandon()) ?? serverEtag;
     if (stale(mine)) {
-      // Kept: the copy is recoverable once its lock is let go.
       store.release?.();
       return session.dispose();
     }
     attach(session, { etag, revision: session.status().revision, unsaved: { stored } }, store);
-  };
+  });
 
   /** The server's draft is kept over the record offered; the next is offered. */
-  const discardRecovery = async () => {
+  const discardRecovery = oneAtATime(async () => {
     const mine = generation;
     const r = recovery();
     if (r === null) return;
     const claimed = await drafts.claim(r.record, (drop) => drop()).catch(() => "failed" as const);
     if (claimed === "changed") return reoffer(mine);
     setKept((k) => (k[0] === r.record ? k.slice(1) : k));
-  };
+  });
 
   /** The person keeps the server's draft over theirs, after a conflict. */
   const takeTheirs = async () => {
