@@ -197,3 +197,30 @@ fn corrupt_files_fail_inspect_without_a_panic() {
     }
     assert_eq!(code(&cavea(&["inspect"], b"")), 2);
 }
+
+/// A failed write to standard output (here a full disk) is exit 3, not a panic.
+#[test]
+fn output_failures_exit_3() {
+    let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") else {
+        return; // Not Linux.
+    };
+    let json = cavea(&["gen", "theatre"], b"").stdout;
+    for (args, stdin) in [
+        (&["gen", "--list"][..], &b""[..]),
+        (&["gen", "theatre"], b""),
+        (&["validate"], &json),
+        (&["--help"], b""),
+    ] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_cavea"))
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(full.try_clone().unwrap())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(stdin).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(code(&output), 3, "{args:?}: {}", stderr(&output));
+        assert!(stderr(&output).contains("cannot write standard output"));
+    }
+}

@@ -94,11 +94,11 @@ fn main() -> ExitCode {
     match run(&args) {
         Ok(code) => ExitCode::from(code),
         Err(Failure::Usage(Usage(message))) => {
-            eprintln!("cavea: {message}\nRun `cavea --help` for usage.");
+            err(&format!("cavea: {message}\nRun `cavea --help` for usage."));
             ExitCode::from(USAGE)
         }
         Err(Failure::Other(error)) => {
-            eprintln!("cavea: {error:#}");
+            err(&format!("cavea: {error:#}"));
             ExitCode::from(FAILURE)
         }
     }
@@ -116,13 +116,13 @@ fn run(args: &[String]) -> Result<u8, Failure> {
         "gen" => GEN_HELP,
         "-h" | "--help" | "help" => HELP,
         "-V" | "--version" => {
-            println!("cavea {}", env!("CARGO_PKG_VERSION"));
+            out(&format!("cavea {}\n", env!("CARGO_PKG_VERSION")))?;
             return Ok(0);
         }
         _ => return Err(Usage(format!("unknown command {command:?}")).into()),
     };
     if help == HELP || rest.iter().any(|a| a == "-h" || a == "--help") {
-        println!("{help}");
+        out(&format!("{help}\n"))?;
         return Ok(0);
     }
     match command {
@@ -241,7 +241,7 @@ fn compile(args: &Args) -> Result<u8, Failure> {
     let full = write_artefact(&dir, &compiled.full_hash, "full.ccf", &compiled.full)?;
 
     let s = compiled.stats;
-    let mut out = format!(
+    let mut text = format!(
         "compiled {:?} in {:.1} ms\n",
         doc.name,
         elapsed.as_secs_f64() * 1e3
@@ -256,21 +256,21 @@ fn compile(args: &Args) -> Result<u8, Failure> {
         ("label rules", s.label_rules),
         ("label exceptions", s.label_exceptions),
     ] {
-        let _ = writeln!(out, "  {name:<18}{value:>10}");
+        let _ = writeln!(text, "  {name:<18}{value:>10}");
     }
     for (name, bytes, path) in [
         ("public", &compiled.public, &public),
         ("full", &compiled.full, &full),
     ] {
         let _ = writeln!(
-            out,
+            text,
             "  {name:<8}{:>10} B raw {:>10} B brotli  {}",
             bytes.len(),
             brotli_len(bytes)?,
             path.display()
         );
     }
-    print!("{out}");
+    out(&text)?;
     print_findings(&compiled.findings);
     Ok(0)
 }
@@ -294,15 +294,15 @@ fn validate(args: &Args) -> Result<u8, Failure> {
         .count();
     if args.has("--json") {
         let json = serde_json::to_string_pretty(&findings).context("cannot write findings")?;
-        println!("{json}");
+        out(&format!("{json}\n"))?;
     } else {
+        let mut text = String::new();
         for finding in &findings {
-            println!("{} {finding}", finding.severity().as_str());
+            let _ = writeln!(text, "{} {finding}", finding.severity().as_str());
         }
-        println!(
-            "{errors} errors, {} warnings",
-            findings.len().saturating_sub(errors)
-        );
+        let warnings = findings.len().saturating_sub(errors);
+        let _ = writeln!(text, "{errors} errors, {warnings} warnings");
+        out(&text)?;
     }
     Ok(if errors == 0 { 0 } else { INVALID })
 }
@@ -312,16 +312,16 @@ fn report_invalid(invalid: Invalid) -> u8 {
     match invalid {
         Invalid::Findings(findings) => {
             print_findings(&findings);
-            eprintln!("cavea: the document has errors; nothing was compiled");
+            err("cavea: the document has errors; nothing was compiled");
         }
-        Invalid::Message(message) => eprintln!("cavea: {message}"),
+        Invalid::Message(message) => err(&format!("cavea: {message}")),
     }
     INVALID
 }
 
 fn print_findings(findings: &[Finding]) {
     for finding in findings {
-        eprintln!("{} {finding}", finding.severity().as_str());
+        err(&format!("{} {finding}", finding.severity().as_str()));
     }
 }
 
@@ -340,15 +340,15 @@ fn inspect(args: &Args) -> Result<u8, Failure> {
     let chart = match cavea_format::decode(&bytes, artefact) {
         Ok(chart) => chart,
         Err(e) => {
-            eprintln!("cavea: {}: {e}", path.unwrap_or("-"));
+            err(&format!("cavea: {}: {e}", path.unwrap_or("-")));
             return Ok(INVALID);
         }
     };
     let string = |i: u32| chart.strings.get(i).unwrap_or("");
     let meta = &chart.meta;
-    let mut out = String::new();
+    let mut text = String::new();
     let _ = writeln!(
-        out,
+        text,
         "{} artefact, CCF version {}, {} B raw, {} B brotli",
         if full { "full" } else { "public" },
         le::<2>(&bytes, 4),
@@ -356,20 +356,20 @@ fn inspect(args: &Args) -> Result<u8, Failure> {
         brotli_len(&bytes)?,
     );
     let _ = writeln!(
-        out,
+        text,
         "content hash  {}",
         hex(&cavea_format::content_hash(&bytes).unwrap_or_default())
     );
-    let _ = writeln!(out, "name          {:?}", string(meta.name));
-    let _ = writeln!(out, "compiler      {}", string(meta.compiler));
+    let _ = writeln!(text, "name          {:?}", string(meta.name));
+    let _ = writeln!(text, "compiler      {}", string(meta.compiler));
     let [x0, y0, x1, y1] = meta.bounds.map(|q| f64::from(q) / 4.0);
     let _ = writeln!(
-        out,
+        text,
         "bounds        ({x0}, {y0}) to ({x1}, {y1}) cu, {} × {} cu",
         x1 - x0,
         y1 - y0
     );
-    let _ = writeln!(out, "counts");
+    let _ = writeln!(text, "counts");
     for (name, count) in [
         ("floors", chart.floors.len()),
         ("sections", chart.sections.len()),
@@ -390,10 +390,10 @@ fn inspect(args: &Args) -> Result<u8, Failure> {
         ("images", chart.images.len()),
         ("strings", chart.strings.len()),
     ] {
-        let _ = writeln!(out, "  {name:<18}{count:>10}");
+        let _ = writeln!(text, "  {name:<18}{count:>10}");
     }
     let _ = writeln!(
-        out,
+        text,
         "chunks        {:>10} {:>10} {:>7}",
         "raw B", "brotli B", "share"
     );
@@ -409,14 +409,14 @@ fn inspect(args: &Args) -> Result<u8, Failure> {
             .get(offset..offset + le::<4>(&bytes, entry + 12))
             .unwrap_or_default();
         let _ = writeln!(
-            out,
+            text,
             "  {tag:<12}{:>10} {:>10} {:>6.1}%",
             payload.len(),
             brotli_len(payload)?,
             100.0 * payload.len() as f64 / bytes.len() as f64
         );
     }
-    print!("{out}");
+    out(&text)?;
     Ok(0)
 }
 
@@ -425,15 +425,14 @@ fn generate(args: &Args) -> Result<u8, Failure> {
         if !args.positional.is_empty() {
             return Err(Usage("--list takes no preset".into()).into());
         }
-        for preset in &PRESETS {
-            println!(
-                "{:<14}{:>9} seats  {}",
-                preset.name, preset.seats, preset.shape
-            );
+        let mut text = String::new();
+        for p in &PRESETS {
+            let _ = writeln!(text, "{:<14}{:>9} seats  {}", p.name, p.seats, p.shape);
         }
         for (name, note) in WAITING {
-            println!("{name:<14}{:>15}  {note}", "not yet");
+            let _ = writeln!(text, "{name:<14}{:>15}  {note}", "not yet");
         }
+        out(&text)?;
         return Ok(0);
     }
     let Some(name) = args.path()? else {
@@ -459,15 +458,29 @@ fn generate(args: &Args) -> Result<u8, Failure> {
     json.push(b'\n');
     match args.options.get("-o") {
         Some(path) => fs::write(path, &json).with_context(|| format!("cannot write {path}"))?,
-        None => {
-            let mut stdout = io::stdout().lock();
-            stdout
-                .write_all(&json)
-                .and_then(|()| stdout.flush())
-                .context("cannot write standard output")?;
-        }
+        None => out_bytes(&json)?,
     }
     Ok(0)
+}
+
+/// Writes to standard output; a failure (a closed pipe, a full disk) is an
+/// error, exit 3, not a panic.
+fn out(text: &str) -> Result<()> {
+    out_bytes(text.as_bytes())
+}
+
+fn out_bytes(bytes: &[u8]) -> Result<()> {
+    let mut stdout = io::stdout().lock();
+    stdout
+        .write_all(bytes)
+        .and_then(|()| stdout.flush())
+        .context("cannot write standard output")
+}
+
+/// Writes a line to standard error, best effort: there is nowhere left to
+/// report a failure to.
+fn err(text: &str) {
+    let _ = writeln!(io::stderr().lock(), "{text}");
 }
 
 fn hex(bytes: &[u8]) -> String {
