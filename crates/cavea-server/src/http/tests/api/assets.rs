@@ -4,6 +4,8 @@
 
 use std::sync::Arc;
 
+use axum::body::HttpBody as _;
+
 use crate::assets::tests::{jpeg, png, webp_lossy};
 
 use super::*;
@@ -238,7 +240,8 @@ async fn a_chart_publishes_only_images_its_workspace_holds() {
 
 /// The image bytes a node holds are bounded (`assets::Memory`): an upload
 /// that would pass the budget is `503 overloaded` without waiting; a served
-/// asset holds its share until its body has been read, then gives it back.
+/// asset holds its share until the last piece of its body is dropped, then
+/// gives it back.
 #[tokio::test]
 #[ignore = "needs CAVEA_TEST_DATABASE_URL"]
 async fn image_bytes_in_memory_are_bounded() {
@@ -275,10 +278,19 @@ async fn image_bytes_in_memory_are_bounded() {
         assert_eq!(response.status(), 200);
         let held = budget as usize - memory.serves.available_permits();
         assert_eq!(held, image.len());
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        assert_eq!(&body[..], &image[..]);
+        // A piece still queued after the body has ended (as in a connection's
+        // write buffer) keeps the share: it shares the image's allocation.
+        let mut body = response.into_body();
+        let mut pieces = Vec::new();
+        while let Some(frame) =
+            std::future::poll_fn(|cx| std::pin::Pin::new(&mut body).poll_frame(cx)).await
+        {
+            pieces.push(frame.unwrap().into_data().unwrap());
+        }
+        drop(body);
+        assert_eq!(pieces.concat(), image);
+        assert_eq!(budget as usize - memory.serves.available_permits(), held);
+        drop(pieces);
         assert_eq!(memory.serves.available_permits(), budget as usize);
     })
     .await;

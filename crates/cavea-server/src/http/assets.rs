@@ -101,10 +101,12 @@ async fn upload(
             bytes.extend_from_slice(&data);
         }
     }
-    let (bytes, image, hash) = tokio::task::spawn_blocking(move || {
+    // The bytes travel with their share of the budget: a cancelled request
+    // leaves both to the blocking task, which drops them together.
+    let (bytes, _held, image, hash) = tokio::task::spawn_blocking(move || {
         let image = assets::sniff(&bytes);
         let hash = assets::hash(&bytes);
-        (bytes, image, hash)
+        (bytes, held, image, hash)
     })
     .await
     .map_err(ApiError::internal)?;
@@ -209,11 +211,14 @@ async fn asset(
             _ => "webp",
         };
         let disposition = format!("inline; filename=\"{hex}.{extension}\"");
-        let mut response = Body::new(Held {
-            bytes: Bytes::from(bytes),
+        // The permit lives as long as the allocation: every piece written
+        // shares it, and the last one may outlive the body in the
+        // connection's write buffer.
+        let bytes = Bytes::from_owner(Owned {
+            bytes,
             _permit: permit,
-        })
-        .into_response();
+        });
+        let mut response = Body::new(Pieces(bytes)).into_response();
         let out = response.headers_mut();
         out.insert(
             header::CONTENT_TYPE,
@@ -239,18 +244,27 @@ async fn asset(
     Ok(response)
 }
 
-/// An asset's bytes as a response body, holding their share of
-/// [`assets::Memory::serves`] until the body is dropped: written in pieces,
-/// so that the HTTP connection takes the next only as the client reads.
-struct Held {
-    bytes: Bytes,
+/// An asset's bytes with their share of [`assets::Memory::serves`], given
+/// back when the last [`Bytes`] sharing them is dropped.
+struct Owned {
+    bytes: Vec<u8>,
     _permit: OwnedSemaphorePermit,
 }
+
+impl AsRef<[u8]> for Owned {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+/// A response body written in pieces, so that the HTTP connection takes the
+/// next only as the client reads.
+struct Pieces(Bytes);
 
 /// The largest piece of an asset written at once.
 const PIECE: usize = 64 * 1024;
 
-impl http_body::Body for Held {
+impl http_body::Body for Pieces {
     type Data = Bytes;
     type Error = Infallible;
 
@@ -258,18 +272,18 @@ impl http_body::Body for Held {
         mut self: Pin<&mut Self>,
         _: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
-        if self.bytes.is_empty() {
+        if self.0.is_empty() {
             return Poll::Ready(None);
         }
-        let n = self.bytes.len().min(PIECE);
-        Poll::Ready(Some(Ok(Frame::data(self.bytes.split_to(n)))))
+        let n = self.0.len().min(PIECE);
+        Poll::Ready(Some(Ok(Frame::data(self.0.split_to(n)))))
     }
 
     fn is_end_stream(&self) -> bool {
-        self.bytes.is_empty()
+        self.0.is_empty()
     }
 
     fn size_hint(&self) -> SizeHint {
-        SizeHint::with_exact(self.bytes.len() as u64)
+        SizeHint::with_exact(self.0.len() as u64)
     }
 }

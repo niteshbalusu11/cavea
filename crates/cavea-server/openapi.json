@@ -50,7 +50,7 @@
         "description": "Required: the session's `csrf_token` from `GET /console/api/me` (or sign-in).",
         "in": "header",
         "name": "Cavea-Csrf-Token",
-        "required": false,
+        "required": true,
         "schema": {
           "type": "string"
         }

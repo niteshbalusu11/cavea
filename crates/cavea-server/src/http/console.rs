@@ -314,7 +314,7 @@ async fn sign_in(
     let password = (body.password.chars().count() <= PASSWORD_MAX).then_some(body.password);
     let stored = user.as_ref().and_then(|(_, hash)| hash.clone());
     let verified = match password {
-        Some(password) => password::verify_bounded(password, stored)
+        Some(password) => password::verify_bounded(password, stored.clone())
             .await
             .map_err(busy)?,
         None => false,
@@ -333,12 +333,23 @@ async fn sign_in(
     let id = new_session()?;
     let start = async {
         let mut tx = state.db.begin().await?;
+        // The password verified must still be the user's: a change committed
+        // meanwhile (which ended every session) refuses this sign-in, and one
+        // starting now waits for it and then ends this session too.
+        if !still_current(&mut tx, &user, stored.as_deref()).await? {
+            return Ok(false);
+        }
         sessions::insert(&mut tx, &id.hash(), &user).await?;
-        tx.commit().await
+        tx.commit().await?;
+        Ok::<_, sqlx::Error>(true)
     };
-    start
+    let started = start
         .instrument(cavea_telemetry::db_span("start_console_session"))
         .await?;
+    if !started {
+        tracing::info!("console sign-in refused");
+        return Err(credentials());
+    }
     tracing::info!(user = %format!("usr_{user}"), "console sign-in");
     signed_in(&state, StatusCode::OK, &id).await
 }
@@ -374,6 +385,23 @@ struct PasswordChange {
 }
 
 const CREDENTIALS: &str = "SELECT email, password_hash FROM users WHERE id = $1::uuid";
+const CURRENT_HASH: &str =
+    "SELECT password_hash FROM users WHERE id = $1::uuid AND disabled_at IS NULL FOR UPDATE";
+
+/// Whether `user`'s password hash is still `verified`, locking the row until
+/// the transaction ends, so that a sign-in and a password change on the same
+/// user serialise.
+async fn still_current(
+    tx: &mut sqlx::PgConnection,
+    user: &str,
+    verified: Option<&str>,
+) -> Result<bool, sqlx::Error> {
+    let current: Option<Option<String>> = sqlx::query_scalar(CURRENT_HASH)
+        .bind(user)
+        .fetch_optional(tx)
+        .await?;
+    Ok(verified.is_some() && current.flatten().as_deref() == verified)
+}
 const SET_PASSWORD: &str = "UPDATE users SET password_hash = $2 WHERE id = $1::uuid";
 
 async fn change_password(
@@ -395,7 +423,7 @@ async fn change_password(
     let current =
         (body.current_password.chars().count() <= PASSWORD_MAX).then_some(body.current_password);
     let verified = match current {
-        Some(current) => password::verify_bounded(current, stored)
+        Some(current) => password::verify_bounded(current, stored.clone())
             .await
             .map_err(busy)?,
         None => false,
@@ -412,6 +440,11 @@ async fn change_password(
     let id = new_session()?;
     let change = async {
         let mut tx = state.db.begin().await?;
+        // Another change since the check: the current password is no longer
+        // the one verified.
+        if !still_current(&mut tx, &user, stored.as_deref()).await? {
+            return Ok(false);
+        }
         sqlx::query(SET_PASSWORD)
             .bind(&user)
             .bind(&hash)
@@ -419,11 +452,17 @@ async fn change_password(
             .await?;
         sessions::revoke_all(&mut tx, &user).await?;
         sessions::insert(&mut tx, &id.hash(), &user).await?;
-        tx.commit().await
+        tx.commit().await?;
+        Ok::<_, sqlx::Error>(true)
     };
-    change
+    let changed = change
         .instrument(cavea_telemetry::db_span("change_console_password"))
         .await?;
+    if !changed {
+        return Err(ApiError::new(Code::Forbidden)
+            .with_message("The current password is wrong.")
+            .with_detail("reason", "credentials"));
+    }
     tracing::info!(user = %format!("usr_{user}"), "console password changed; every session ended");
     signed_in(&state, StatusCode::OK, &id).await
 }

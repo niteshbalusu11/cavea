@@ -514,7 +514,7 @@ key with another request is `409 idempotency_mismatch`.",
                 "schema": { "type": "string" },
             },
             "CsrfToken": {
-                "name": "Cavea-Csrf-Token", "in": "header", "required": false,
+                "name": "Cavea-Csrf-Token", "in": "header", "required": true,
                 "description": "Required: the session's `csrf_token` from `GET /console/api/me` (or \
 sign-in).",
                 "schema": { "type": "string" },

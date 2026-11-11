@@ -123,11 +123,14 @@ async fn bounded<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -
         .await
         .map_err(|_| Busy::Timeout)?
         .map_err(|e| Busy::Failed(e.to_string()))?;
-    let result = tokio::task::spawn_blocking(work)
-        .await
-        .map_err(|e| Busy::Failed(e.to_string()));
-    drop(turn);
-    result
+    // The turn goes with the work: a cancelled request leaves it to the
+    // blocking task, so at most MAX_HASHES ever run.
+    tokio::task::spawn_blocking(move || {
+        let _turn = turn;
+        work()
+    })
+    .await
+    .map_err(|e| Busy::Failed(e.to_string()))
 }
 
 /// [`hash`], bounded.
