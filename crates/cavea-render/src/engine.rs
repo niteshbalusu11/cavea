@@ -3,7 +3,8 @@
 //! `ApplyDelta`, `SetPrivateHolds`, `SetTheme`, `Resize`, `Pointer`, `Wheel`,
 //! `SetCamera` and `FlyTo` with bounds, `SetGestureHandling`,
 //! `SetReducedMotion`, `Select`, `Deselect`, `ClearSelection`, `HoldResult`,
-//! `SetRules`, `SetSessionMode`, `Tick` and `ContextLost`; every other command
+//! `SetRules`, `SetSessionMode`, `SetGlyphAtlas`, `Tick` and `ContextLost`;
+//! every other command
 //! is answered with an `Unsupported` error event. Taps, hover and selection
 //! are in [`select`], seat state in [`state`].
 //!
@@ -32,6 +33,7 @@ use crate::{
     },
     scene::Scene,
     seat::{self, SeatDynamic, SeatStatic},
+    text::{self, LABEL_MIN_EM_PX, Labels},
     theme::{PALETTE_WIDTH, Selection, Theme, TokenError, picker_visual, status, visual},
     tuning::{
         INERTIA_STOP_PX_PER_S, INERTIA_TIME_CONSTANT_MS, MAX_BACKING_PX, MAX_DPR_OTHER,
@@ -90,6 +92,26 @@ struct Loaded {
     mesh_dirty: Option<Range<usize>>,
     /// Per-section counters and tints (04 §5, §10).
     sections: Sections,
+    /// Seat label buffers per render chunk (04 §12).
+    seat_labels: Labels,
+}
+
+/// The glyph atlas as the host sent it, kept so the texture can be made again.
+struct Atlas {
+    #[allow(dead_code, reason = "kept for context restoration, REN-046")]
+    rgba: Vec<u8>,
+    texture: TextureId,
+}
+
+/// Seat label counters, for the demo's readout and tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LabelStats {
+    /// Chunk label buffers built since the chart loaded.
+    pub built: u32,
+    /// Chunks whose label buffers are kept.
+    pub cached: u32,
+    /// Label draw calls in the last frame drawn.
+    pub draws: u32,
 }
 
 /// Input and camera commands waiting for the next `Tick`, in arrival order.
@@ -159,6 +181,12 @@ pub struct Engine<B: GpuBackend> {
     /// The camera and viewport `ranges` were computed for; `None` after a
     /// chart load. Frames drawn for state or theme changes reuse the ranges.
     culled: Option<(Camera, Viewport)>,
+    /// The render chunks the view meets, with `ranges`.
+    visible: Vec<u32>,
+    /// Seat label draw ranges and their label buffer instances (04 §12).
+    label_ranges: Vec<Range<u32>>,
+    label_bases: Vec<u32>,
+    atlas: Option<Atlas>,
     queue: Vec<Queued>,
     actions: Vec<Action>,
     recogniser: Recogniser,
@@ -197,6 +225,10 @@ impl<B: GpuBackend> Engine<B> {
             theme: Theme::builtin(BuiltinTheme::Light),
             ranges: Vec::new(),
             culled: None,
+            visible: Vec::new(),
+            label_ranges: Vec::new(),
+            label_bases: Vec::new(),
+            atlas: None,
             queue: Vec::new(),
             actions: Vec::new(),
             recogniser: Recogniser::default(),
@@ -318,6 +350,7 @@ impl<B: GpuBackend> Engine<B> {
                 group_size,
             } => self.set_rules(max, min, &validators, group_size),
             Command::SetSessionMode(mode) => self.set_session_mode(mode),
+            Command::SetGlyphAtlas { rgba } => self.set_glyph_atlas(rgba),
             Command::Tick { time_ms } => self.frame(time_ms),
             Command::ContextLost => self.context_lost = true,
             _ => self.error(
@@ -491,6 +524,7 @@ impl<B: GpuBackend> Engine<B> {
             mesh,
             mesh_dirty: None,
             sections,
+            seat_labels: Labels::default(),
         });
         self.flush_selection();
         self.chart_loaded();
@@ -512,9 +546,47 @@ impl<B: GpuBackend> Engine<B> {
                 .overlay
                 .into_iter()
                 .chain(loaded.mesh.into_iter().flatten())
+                .chain(loaded.seat_labels.buffer())
             {
                 self.backend.destroy(ResourceId::Buffer(id));
             }
+        }
+    }
+
+    /// Seat label counters (04 §12).
+    pub fn label_stats(&self) -> LabelStats {
+        let labels = self.scene.as_ref().map(|l| &l.seat_labels);
+        LabelStats {
+            built: labels.map_or(0, |l| l.built),
+            cached: labels.map_or(0, |l| l.len() as u32),
+            draws: self.label_ranges.len() as u32,
+        }
+    }
+
+    /// Takes the glyph atlas's pixels and makes its texture (04 §12). Labels
+    /// appear at the next frame; a wrong size changes nothing.
+    fn set_glyph_atlas(&mut self, rgba: Vec<u8>) {
+        let [width, height] = text::ATLAS_SIZE;
+        if rgba.len() as u64 != u64::from(width) * u64::from(height) * 4 {
+            return self.error(
+                ErrorCode::InvalidInput,
+                "glyph atlas does not match the compiled metrics",
+            );
+        }
+        let desc = TextureDesc {
+            width,
+            height,
+            format: TextureFormat::Rgba8,
+            sampling: Sampling::Linear,
+        };
+        match self.backend.create_texture(desc, Some(&rgba)) {
+            Ok(texture) => {
+                if let Some(old) = self.atlas.replace(Atlas { rgba, texture }) {
+                    self.backend.destroy(ResourceId::Texture(old.texture));
+                }
+                self.redraw();
+            }
+            Err(error) => self.error(ErrorCode::Gpu, error.to_string()),
         }
     }
 
@@ -957,9 +1029,10 @@ impl<B: GpuBackend> Engine<B> {
             let call = DrawCall {
                 pipeline: Pipeline::Mesh,
                 buffers: buffers.map(Some),
-                texture: None,
+                textures: [None; 2],
                 uniforms: engine.world_uniforms(camera, viewport, time, alpha)?,
                 ranges: std::slice::from_ref(&range),
+                bases: &[],
             };
             let gpu = |error: BackendError| (ErrorCode::Gpu, error.to_string());
             engine.backend.draw(&call).map_err(gpu)
@@ -971,6 +1044,7 @@ impl<B: GpuBackend> Engine<B> {
         if alpha > 0.0 {
             self.draw_seats(camera, viewport, time, alpha)?;
         }
+        self.draw_labels(camera, viewport, time)?;
         draw_mesh(self, above, 1.0)
     }
 
@@ -1009,6 +1083,7 @@ impl<B: GpuBackend> Engine<B> {
                 pad,
                 MAX_SEAT_DRAW_CALLS,
                 &mut self.ranges,
+                &mut self.visible,
             );
         }
         if self.ranges.is_empty() {
@@ -1017,12 +1092,69 @@ impl<B: GpuBackend> Engine<B> {
         let call = DrawCall {
             pipeline: Pipeline::Shape,
             buffers: [Some(loaded.static_buf), Some(loaded.dynamic_buf)],
-            texture: Some(loaded.palette),
+            textures: [Some(loaded.palette), None],
             uniforms,
             ranges: &self.ranges,
+            bases: &[],
         };
         let gpu = |error: BackendError| (ErrorCode::Gpu, error.to_string());
         self.backend.draw(&call).map_err(gpu)
+    }
+
+    /// Seat labels (04 §7 pass 9, §12), at the detail level once the atlas
+    /// has arrived: one draw per visible render chunk, from its label buffer,
+    /// built on first need. Runs after `draw_seats`, whose culling it reuses.
+    fn draw_labels(
+        &mut self,
+        camera: Camera,
+        viewport: Viewport,
+        time: f32,
+    ) -> Result<(), (ErrorCode, String)> {
+        self.label_ranges.clear();
+        let (Some(loaded), Some(atlas)) = (&mut self.scene, &self.atlas) else {
+            return Ok(());
+        };
+        if self.lod != Some(Lod::Detail) {
+            return Ok(());
+        }
+        let gpu = |error: BackendError| (ErrorCode::Gpu, error.to_string());
+        let waiting = loaded
+            .seat_labels
+            .prepare(
+                &mut self.backend,
+                &loaded.scene,
+                &self.visible,
+                &mut self.label_ranges,
+                &mut self.label_bases,
+            )
+            .map_err(gpu)?;
+        let (Some(buffer), atlas, palette, dynamic) = (
+            loaded.seat_labels.buffer(),
+            atlas.texture,
+            loaded.palette,
+            loaded.dynamic_buf,
+        ) else {
+            return Ok(());
+        };
+        if self.label_ranges.is_empty() {
+            return Ok(());
+        }
+        let mut uniforms = self.world_uniforms(camera, viewport, time, 1.0)?;
+        uniforms.stroke_min_px = LABEL_MIN_EM_PX * viewport.ratio;
+        let call = DrawCall {
+            pipeline: Pipeline::Glyph,
+            buffers: [Some(buffer), Some(dynamic)],
+            textures: [Some(atlas), Some(palette)],
+            uniforms,
+            ranges: &self.label_ranges,
+            bases: &self.label_bases,
+        };
+        self.backend.draw(&call).map_err(gpu)?;
+        if waiting {
+            // The other visible chunks' labels are built in the next frames.
+            self.redraw();
+        }
+        Ok(())
     }
 
     /// The overlay pass (04 §7 pass 12): a ring around the hovered and the
@@ -1115,9 +1247,10 @@ impl<B: GpuBackend> Engine<B> {
         let call = DrawCall {
             pipeline: Pipeline::Shape,
             buffers: loaded.overlay.map(Some),
-            texture: Some(loaded.palette),
+            textures: [Some(loaded.palette), None],
             uniforms,
             ranges: std::slice::from_ref(&range),
+            bases: &[],
         };
         self.backend.draw(&call).map_err(gpu)
     }

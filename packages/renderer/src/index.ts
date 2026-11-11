@@ -9,11 +9,18 @@ import init, { version, type InitInput } from "../wasm/cavea_web.js";
 export { View } from "../wasm/cavea_web.js";
 export { attach, type AttachOptions, type Attached, type GestureHandling } from "./host.ts";
 export { takeEvents, type ObjectInfo, type RendererEvent } from "./events.ts";
+export { loadGlyphAtlas, type GlyphAtlasSource } from "./atlas.ts";
+import { loadGlyphAtlas, type GlyphAtlasSource } from "./atlas.ts";
 
 /** The loaded renderer. */
 export interface Renderer {
   /** Version of the Rust renderer build that was loaded. */
   version(): string;
+  /**
+   * The seat labels' glyph atlas, fetched alongside the WASM: pass it to
+   * `attach`. The map works without it, with no seat labels.
+   */
+  glyphAtlas: Promise<Uint8Array>;
 }
 
 /**
@@ -26,18 +33,25 @@ export type WasmSource = InitInput;
 let loading: Promise<Renderer> | undefined;
 
 /**
- * Loads and instantiates the renderer's WASM once; later calls share the result.
- * After a failed load the next call tries again.
+ * Loads and instantiates the renderer's WASM once, and starts fetching the
+ * glyph atlas at the same time (docs/04-renderer.md §4); later calls share the
+ * result. After a failed load the next call tries again. A failed atlas does
+ * not fail the load: `glyphAtlas` rejects instead.
  */
-export function loadRenderer(source?: WasmSource): Promise<Renderer> {
-  loading ??= init({
-    module_or_path: source ?? new URL("../wasm/cavea_web_bg.wasm", import.meta.url),
-  }).then(
-    () => ({ version }),
-    (error: unknown) => {
-      loading = undefined;
-      throw error;
-    },
-  );
+export function loadRenderer(source?: WasmSource, atlas?: GlyphAtlasSource): Promise<Renderer> {
+  if (loading === undefined) {
+    const glyphAtlas = loadGlyphAtlas(atlas);
+    // Reported through `attach`; not an unhandled rejection meanwhile.
+    glyphAtlas.catch(() => undefined);
+    loading = init({
+      module_or_path: source ?? new URL("../wasm/cavea_web_bg.wasm", import.meta.url),
+    }).then(
+      () => ({ version, glyphAtlas }),
+      (error: unknown) => {
+        loading = undefined;
+        throw error;
+      },
+    );
+  }
   return loading;
 }

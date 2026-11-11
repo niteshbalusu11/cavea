@@ -43,6 +43,11 @@ export type RendererEvent =
   | { type: "holdLost"; labels: string[] }
   /** A delta did not follow the state at `seq`: fetch a new snapshot. */
   | { type: "resync"; seq: number | null }
+  /**
+   * A host-side failure the map carries on without: `glyphAtlas` when the
+   * atlas could not be fetched, decoded or used, so seats have no labels.
+   */
+  | { type: "error"; code: "glyphAtlas"; message: string }
   | {
       type: "cameraChanged";
       centre: [number, number];

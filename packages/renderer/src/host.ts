@@ -14,6 +14,12 @@ export interface AttachOptions {
   maxDpr?: number;
   /** Default: follow `prefers-reduced-motion`. */
   reducedMotion?: boolean;
+  /**
+   * The glyph atlas (`Renderer.glyphAtlas`), given to the view when it
+   * arrives; seat labels appear then. A rejection is reported as an `error`
+   * event and the map carries on without labels.
+   */
+  glyphAtlas?: Promise<Uint8Array>;
   /** Called after every frame the host runs, with its time. */
   onFrame?: (time: number) => void;
   /**
@@ -211,6 +217,20 @@ export function attach(
   } else {
     view.setReducedMotion(options.reducedMotion);
   }
+
+  const atlasFailed = (error: unknown): void =>
+    options.onEvents?.([{ type: "error", code: "glyphAtlas", message: String(error) }]);
+  options.glyphAtlas?.then((pixels) => {
+    if (detached) {
+      return;
+    }
+    try {
+      view.setGlyphAtlas(pixels);
+    } catch (error) {
+      atlasFailed(error);
+    }
+    update();
+  }, atlasFailed);
 
   const setGestureHandling = (mode: GestureHandling): void => view.setGestureHandling(MODES[mode]);
   setGestureHandling(options.gestureHandling ?? "greedy");

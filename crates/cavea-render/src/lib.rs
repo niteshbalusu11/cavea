@@ -7,7 +7,7 @@
 //! `glow` backend (feature `glow`), the `shape` program, the seat buffers, the
 //! host service traits, the camera, the gesture recogniser and on-demand frames,
 //! scenes loaded from compiled charts, visual states, themes and the palette,
-//! and chunk culling.
+//! chunk culling, and seat labels from the baked glyph atlas (`text`).
 
 pub mod backend;
 pub mod camera;
@@ -20,6 +20,7 @@ pub mod overview;
 pub mod protocol;
 pub mod scene;
 pub mod seat;
+pub mod text;
 pub mod theme;
 pub mod tuning;
 

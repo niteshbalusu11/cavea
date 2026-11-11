@@ -124,6 +124,7 @@ pub struct Uniforms {
     /// Stroke width in device pixels.
     pub stroke_px: f32,
     /// Shapes smaller than this on screen, in device pixels, get no stroke.
+    /// `Glyph`: labels whose em is smaller than this on screen are not drawn.
     pub stroke_min_px: f32,
     /// Alpha factor for dimmed objects.
     pub dim: f32,
@@ -173,15 +174,21 @@ pub struct DrawCall<'a> {
     /// Buffers in the order the pipeline defines. `Shape`: the 12-byte static
     /// and the 4-byte dynamic instance buffers (04 §6). `Mesh`: the vertex
     /// buffer (12 bytes per vertex: x, y as `f32`, RGBA8 colour, as `MESH`
-    /// stores them) and the `u32` index buffer.
+    /// stores them) and the `u32` index buffer. `Glyph`: the label buffer
+    /// (`text::LABEL_STRIDE` bytes per seat) and the seats' dynamic buffer.
     pub buffers: [Option<BufferId>; 2],
-    /// `Shape`: the palette texture. `Mesh`: none.
-    pub texture: Option<TextureId>,
+    /// `Shape`: the palette texture. `Glyph`: the glyph atlas, then the
+    /// palette. `Mesh`: none.
+    pub textures: [Option<TextureId>; 2],
     pub uniforms: Uniforms,
     /// `Shape`: instance ranges, in order. WebGL2 has no base instance, so
     /// the GL backend rebinds attribute offsets per range (04 §11). `Mesh`:
-    /// ranges of the index buffer, each drawn as triangles.
+    /// ranges of the index buffer, each drawn as triangles. `Glyph`: ranges
+    /// of seats (`idx`), which index the dynamic buffer.
     pub ranges: &'a [Range<u32>],
+    /// `Glyph`: for each range, the instance of the label buffer that holds
+    /// its first seat. Empty for the other pipelines.
+    pub bases: &'a [u32],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
