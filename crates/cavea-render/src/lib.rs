@@ -14,6 +14,7 @@ pub mod camera;
 pub mod cull;
 pub mod engine;
 pub mod gesture;
+pub mod hit;
 pub mod host;
 pub mod protocol;
 pub mod scene;

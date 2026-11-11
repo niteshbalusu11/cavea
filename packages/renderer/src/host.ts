@@ -3,6 +3,7 @@
 // no clock: every command carries `event.timeStamp` or the
 // `requestAnimationFrame` time, both on the `performance.now()` clock.
 import { defaultMaxDpr, type View } from "../wasm/cavea_web.js";
+import { takeEvents, type RendererEvent } from "./events.ts";
 
 export type GestureHandling = "greedy" | "cooperative" | "none";
 
@@ -15,11 +16,19 @@ export interface AttachOptions {
   reducedMotion?: boolean;
   /** Called after every frame the host runs, with its time. */
   onFrame?: (time: number) => void;
+  /**
+   * Called with the engine's events after each frame, and after input or an
+   * `update()` that produced any, outside the frame.
+   */
+  onEvents?: (events: RendererEvent[]) => void;
 }
 
 export interface Attached {
   setGestureHandling(mode: GestureHandling): void;
-  /** Schedules a frame if the view wants one; call after using the view directly. */
+  /**
+   * Delivers pending events and schedules a frame if the view wants one; call
+   * after using the view directly.
+   */
   update(): void;
   /** Removes every listener and stops the frame loop. */
   detach(): void;
@@ -55,6 +64,11 @@ export function attach(
   let detached = false;
 
   function update(): void {
+    // Taken even without a listener, so they do not pile up in the view.
+    const events = takeEvents(view);
+    if (events.length > 0) {
+      options.onEvents?.(events);
+    }
     if (view.needFrame && handle === 0 && !document.hidden && !detached) {
       handle = requestAnimationFrame(frame);
     }

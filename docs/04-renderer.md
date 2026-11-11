@@ -66,7 +66,7 @@ The engine is driven only by commands and emits only events. Both are plain data
 | `SetFilter` | Categories, price range, accessible only |
 | `SetTheme` | A built-in theme (`light`, `dark`, `high-contrast`) and token values to apply over it (§19) |
 | `SetMode` | `picker`, `static`, `spotlight`, `manager` |
-| `SetRules` | Maximum, minimum, validators, group size |
+| `SetRules` | Maximum (1 to 100, default 100), minimum, validators, group size |
 | `SetFloor` | Floor id |
 | `Tick` | Frame time |
 | `ContextLost` / `ContextRestored` | — |
@@ -79,10 +79,10 @@ The engine is driven only by commands and emits only events. Both are plain data
 | `NeedFrame` | — |
 | `HoldRequest` / `ReleaseRequest` | Request id, labels |
 | `SelectionChanged` | Selected objects with label, category, section, row, seat, flags |
-| `SelectionInvalid` / `SelectionValid` | Rule and offending objects |
-| `ObjectHover` / `ObjectFocus` | Object details, anchor position in screen space |
+| `SelectionInvalid` / `SelectionValid` | Rule and offending objects (§16) |
+| `ObjectHover` / `ObjectFocus` | Object details, anchor position in screen space (the object's centre in CSS pixels); none when it leaves every object |
 | `SectionEnter` | Section |
-| `ObjectUnavailable` | A selected object was taken by someone else |
+| `ObjectUnavailable` | A selected object was taken by someone else; it is no longer selected |
 | `CameraChanged` | Centre, zoom, level of detail |
 | `Announce` | Text for assistive technology |
 | `Metrics` | Timing marks and frame statistics |
@@ -147,7 +147,8 @@ Derived at load:
 | Seat dynamic buffer | 4 bytes × seats | Sub-ranges on state change |
 | Decoration mesh (vertices, indices) | From `MESH` | Once |
 | Table and booth instance buffer | 24 bytes × objects | Once; dynamic part on state change |
-| Palette texture | 24 × (categories + 1), RGBA8 | On theme or pricing change |
+| Palette texture | 33 × (categories + 1), RGBA8 | On theme or pricing change |
+| Overlay instance buffers | 4 instances, static and dynamic layout | When a ring moves |
 | MSDF glyph atlas | 256 × 256, RGB8 | Once |
 | Dynamic text atlas | Up to 2048 × 2048, R8 | When new strings or zoom buckets are needed |
 | Label glyph buffers | Per chunk, built lazily, LRU of 64 chunks | On first need |
@@ -185,6 +186,8 @@ Five shader programs. Draw order, back to front:
 | 10 | Row labels, section labels, text objects, area labels | `glyph` or `text` | Instanced quad | By size |
 | 11 | Decoration, upper layer and icons | `mesh`, `glyph` | — | Always |
 | 12 | Overlays: hover ring, focus ring, selection box | `shape` | Instanced quad | When present |
+
+The hover and focus rings are drawn in screen space (CSS pixels), so they are the same width at any zoom: for each, a halo in the background colour from the seat's edge out 2 px, then the ring 2 px wide outside it (`RING_WIDTH_PX`), together the two-tone ring of `11-accessibility.md` §3. Each is a `shape` instance of the seat's shape and angle (a chair's ring is a rounded square) whose fill is transparent and whose stroke is the ring; at most four instances, uploaded only when they change. The focus ring is drawn over the hover ring.
 
 Programs:
 
@@ -228,6 +231,7 @@ The engine maps status, selection and mode to one visual state per object:
 | 5 | Booked | — | Booked |
 | 6 | Held by another | — | Held |
 | 7 | Custom | — | Custom status (colour from the status table) |
+| 8–10 | Overlays | Ring halo (`bg`), hover ring, focus ring: stroke only | The same |
 
 Picker mode: the buyer's own selection wins over the status (pending 2, held 3); otherwise status 0 is available and any other status unavailable. Filters do not change the state; they set the dim bit of `fx`. Manager mode keeps codes 4–7; their colours are placeholders until that mode is built.
 
@@ -328,15 +332,16 @@ Let `s` be the seat size in CSS pixels at the current zoom.
 ## 15. Hit testing
 
 1. Convert the screen point to world space.
-2. Find sections whose bounding box, grown by the tolerance, contains the point (a short linear scan; sections are few).
-3. Within those, find rows whose bounding box contains the point.
+2. Find the active floor's sections whose bounding box, grown by the largest tolerance of any seat, contains the point (a short linear scan; sections are few).
+3. Within those, find rows whose bounding box (of seat centres), grown by the row's tolerance, contains the point. The active floor's rows outside any section are tested here too.
 4. Within those rows, find the seat with the nearest centre.
-5. Accept it if the distance is within the tolerance.
+5. Accept it if the distance is within the tolerance. Equal distances go to the lower `idx`. The result is the brute-force answer: the nearest seat centre among the seats within their tolerance (`cavea_render::hit`).
 
-- Tolerance: the larger of the seat's half size and 12 CSS px (touch) or 4 CSS px (mouse).
+- Tolerance: the larger of the seat's half size and 12 CSS px (touch and pen) or 4 CSS px (mouse, and hover).
 - Tables, booths and areas are tested against their shapes after seats.
-- **Zoom-to-select:** on touch, if `s < 18` the tap does not select. It flies the camera to make seats 32 px, centred on the tap. With a mouse, selection works from `s ≥ 5`.
-- Target: under 20 µs per hit test at 100,000 seats.
+- **Zoom-to-select:** on touch or pen, if the hit seat's size on screen `s < 18` the tap does not select. It flies the camera to make seats 32 px, centred on the tap. With a mouse, selection works from `s ≥ 5`; a click on a smaller seat zooms the same way. A tap that hits no seat does nothing. The thresholds are in `cavea_render::tuning`.
+- Hover hit-tests each mouse or pen position and again when the camera moves; `ObjectHover` fires and the ring is redrawn only when the hovered object changes. A long press reports its object with `ObjectHover` (for the tooltip); the next touch tap clears it.
+- Target: under 20 µs per hit test at 100,000 seats. Measured locally (release build, AMD Ryzen 9 7900X, the synthetic 100,000-seat stadium, taps near seats at 18 to 64 px seats): 0.55 µs.
 
 ## 16. Selection engine
 
@@ -351,12 +356,17 @@ tap → hit test → rules check ──fail──▶ SelectionInvalid (no state 
    visual = selected-held    revert, ObjectUnavailable or SelectionInvalid
 ```
 
-- Rules run locally first (`02-domain-model.md` §12) using the same code the server uses.
-- Hold requests for one token are sent in order, one in flight at a time; taps made meanwhile are coalesced into the next request.
+- Rules run locally first (`02-domain-model.md` §12) using the same code the server uses (`cavea_core::rules`). A seat that is not available (public status other than 0) is refused with `SelectionInvalid` rule `not_free`; one over the maximum with rule `max`. Neither changes anything.
+- The visual state changes in the frame of the `Tick` that takes the tap: one dynamic-buffer sub-range upload.
+- At most `MAX_SELECTED` (100) seats are selected, kept in the order selected.
+- Hold requests for one token are sent in order, one in flight at a time; taps made meanwhile are coalesced into the next request. (Hold requests, results and revert are REN-034. Until then the engine selects as in a manual session: a tap selects at once, visual state selected-held, and deselecting sends nothing.)
+- **Readiness:** `SelectionValid` and `SelectionInvalid` with rule `min` (objects: the selection) report, when it changes, whether the selection meets the minimum for checkout. Every other `SelectionInvalid` reports objects that were refused; the selection is as it was. `SetRules` refuses a maximum below the current selection.
+- `Select`, `Deselect` and `ClearSelection` behave as taps and take labels or `idx`; `Select` is all or nothing (any unavailable seat, or too many, refuses the whole command). An unknown label or `idx` is an `InvalidInput` error for the whole command. Labels resolve through an index of every seat's full label, built on the first lookup by label (8 bytes per seat; 9 ms for 100,000 seats, measured locally).
 - **Group selection:** with a group size *n*, one tap selects the *n* seats in the tapped seat's segment that contain it and create the fewest orphans, preferring the window centred on the tap.
 - `session: "manual"` skips hold requests; the host holds at checkout.
-- If a delta makes a selected object unavailable, it is removed from the selection and `ObjectUnavailable` fires.
+- If a status change (a delta) makes a selected object unavailable, it is removed from the selection and `ObjectUnavailable` fires. (With hold requests, the buyer's own hold also makes the public status unavailable; telling it from someone else's is REN-034, through `SetPrivateHolds` or the engine's own requests.)
 - Deselecting sends a release.
+- `LoadChart` forgets the selection, hover and focus, and emits `SelectionChanged` if anything was selected.
 
 ## 17. Applying state
 

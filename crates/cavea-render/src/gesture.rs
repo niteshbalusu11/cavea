@@ -219,6 +219,11 @@ impl Recogniser {
         self.pointers.iter().flatten().count()
     }
 
+    /// Whether any pointer is down.
+    pub fn pressed(&self) -> bool {
+        self.count() > 0
+    }
+
     fn index(&self, id: u32) -> Option<usize> {
         self.pointers
             .iter()

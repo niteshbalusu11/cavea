@@ -1,6 +1,7 @@
 //! A WebGL2 seat view on a canvas: creates the context with the attributes of
 //! `docs/04-renderer.md` §20.2, owns the engine and its `glow` backend, and turns
-//! engine events into return values. Nothing here crosses the JavaScript
+//! engine events into return values: `NeedFrame` and errors directly, the
+//! others batched for `takeEvents`. Nothing here crosses the JavaScript
 //! boundary per seat. Not the public SDK surface (that is `05-web-sdk.md`).
 
 use cavea_render::{
@@ -8,7 +9,8 @@ use cavea_render::{
     backend::glow::GlowBackend,
     backing_size,
     protocol::{
-        BuiltinTheme, Command, Event, GestureHandling, Modifiers, PointerKind, PointerType,
+        BuiltinTheme, Command, Event, GestureHandling, Modifiers, ObjectRef, PointerKind,
+        PointerType,
     },
     tuning::{MAX_DPR_OTHER, MAX_DPR_TOUCH},
 };
@@ -22,6 +24,8 @@ pub struct View {
     engine: Engine<GlowBackend>,
     canvas: HtmlCanvasElement,
     need_frame: bool,
+    /// Events for the host since the last `takeEvents`.
+    events: Vec<Event>,
     gestures: GestureHandling,
     /// The latest `resize`, applied to the canvas at the next frame together
     /// with the engine's viewport, so the canvas is never cleared between frames.
@@ -61,6 +65,7 @@ impl View {
             engine: Engine::new(backend),
             canvas,
             need_frame: false,
+            events: Vec::new(),
             gestures: GestureHandling::Greedy,
             resize: None,
         };
@@ -204,6 +209,49 @@ impl View {
         })
     }
 
+    /// Events since the last call as a JSON array (`RendererEvent[]` in
+    /// `packages/renderer`), or `undefined` if there are none. Call once per
+    /// frame and after commands; never per seat.
+    #[wasm_bindgen(js_name = takeEvents)]
+    pub fn take_events(&mut self) -> Option<String> {
+        if self.events.is_empty() {
+            return None;
+        }
+        let mut json = String::new();
+        crate::events::to_json(&self.events, &mut json);
+        self.events.clear();
+        Some(json)
+    }
+
+    /// Selects seats by full label, as taps do, all or nothing (04 §16).
+    /// Throws for unknown labels.
+    pub fn select(&mut self, labels: Vec<String>) -> Result<(), JsError> {
+        let objects = labels.into_iter().map(ObjectRef::Label).collect();
+        self.send(Command::Select { objects })
+    }
+
+    /// Deselects seats by full label; throws for unknown labels.
+    pub fn deselect(&mut self, labels: Vec<String>) -> Result<(), JsError> {
+        let objects = labels.into_iter().map(ObjectRef::Label).collect();
+        self.send(Command::Deselect { objects })
+    }
+
+    #[wasm_bindgen(js_name = clearSelection)]
+    pub fn clear_selection(&mut self) -> Result<(), JsError> {
+        self.send(Command::ClearSelection)
+    }
+
+    /// `max` (1 to 100, default 100) and `min` (default 0) selection (02 §12).
+    #[wasm_bindgen(js_name = setRules)]
+    pub fn set_rules(&mut self, max: Option<u32>, min: Option<u32>) -> Result<(), JsError> {
+        self.send(Command::SetRules {
+            max,
+            min,
+            validators: Vec::new(),
+            group_size: None,
+        })
+    }
+
     /// Whether a frame is wanted, after a call other than `frame`.
     #[wasm_bindgen(getter, js_name = needFrame)]
     pub fn need_frame(&self) -> bool {
@@ -260,16 +308,19 @@ impl View {
         self.drain()
     }
 
-    /// Records `NeedFrame` and returns the first error event, if any.
+    /// Records `NeedFrame`, keeps the events for `takeEvents` and returns
+    /// the first error event, if any.
     fn drain(&mut self) -> Result<(), JsError> {
         let mut error = None;
         for event in self.engine.drain_events() {
             match event {
                 Event::NeedFrame => self.need_frame = true,
-                Event::Error { code, message } if error.is_none() => {
-                    error = Some(JsError::new(&format!("{code:?}: {message}")));
+                Event::Error { code, message } => {
+                    if error.is_none() {
+                        error = Some(JsError::new(&format!("{code:?}: {message}")));
+                    }
                 }
-                _ => {}
+                event => self.events.push(event),
             }
         }
         error.map_or(Ok(()), Err)

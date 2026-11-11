@@ -217,6 +217,8 @@ pub enum Command {
         tokens: Vec<ThemeToken>,
     },
     SetMode(Mode),
+    /// `max`: at most this many objects, 1 to `tuning::MAX_SELECTED` (the
+    /// default). `min`: at least this many before checkout.
     SetRules {
         max: Option<u32>,
         min: Option<u32>,
@@ -274,7 +276,7 @@ pub struct ChartInfo {
 }
 
 /// One object as the host sees it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ObjectInfo {
     pub label: String,
     pub category: String,
@@ -346,12 +348,14 @@ pub enum Event {
         objects: Vec<String>,
     },
     SelectionValid,
-    /// `None` when the pointer leaves every object. Anchor in CSS pixels.
+    /// `None` when the pointer leaves every object. The anchor is the
+    /// object's centre in CSS pixels on the canvas.
     ObjectHover(Option<(ObjectInfo, [f32; 2])>),
     ObjectFocus(Option<(ObjectInfo, [f32; 2])>),
     SectionEnter {
         section: String,
     },
+    /// A selected object was taken by someone else; it is no longer selected.
     ObjectUnavailable {
         label: String,
     },

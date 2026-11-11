@@ -172,7 +172,7 @@ The engine enforces the "Who may issue it" column itself: each command carries t
 
 ## 12. Selection rules
 
-These run in the renderer for instant feedback and again on the server as the authority. Both use the same code in `cavea-core`.
+These run in the renderer for instant feedback and again on the server as the authority. Both use the same code in `cavea-core` (`cavea_core::rules`: plain functions over counts; the orphan and consecutive rules will take the row segments and seat state). Hosts see a broken rule by its code: `max`, `min`.
 
 | Rule | Definition |
 |---|---|

@@ -4,7 +4,7 @@
 
 use std::ops::Range;
 
-use cavea_format::{Artefact, Chart, SeatShape};
+use cavea_format::{Artefact, Chart, NONE, SeatShape, Segment};
 
 use crate::{
     protocol::{Bounds, CategoryInfo, ChartInfo, FloorInfo, SectionInfo},
@@ -32,6 +32,10 @@ pub struct Scene {
     /// The seats drawn: the active floor's `idx` range. The first floor until
     /// `SetFloor` exists; seats of other floors stay loaded but are not drawn.
     pub active: Range<u32>,
+    /// The active floor, an index into `chart.floors`.
+    pub floor: u32,
+    /// The active floor's rows outside any section, for hit testing (04 §15).
+    pub loose_rows: Vec<u32>,
     /// What the camera fits and clamps to: the active floor's seat centres
     /// grown by `max_half`.
     pub bounds: Bounds,
@@ -66,6 +70,11 @@ impl Scene {
         let (active, floor_box) = chart.floors.first().map_or((0..0, [0; 4]), |f| {
             (f.seat_first..f.seat_first + f.seat_count, f.bounds)
         });
+        let loose_rows = (0u32..)
+            .zip(&chart.rows)
+            .filter(|(_, r)| r.section == NONE && active.contains(&r.seat_first))
+            .map(|(i, _)| i)
+            .collect();
         let [x0, y0, x1, y1] = floor_box.map(|v| v as f32 * 0.25);
         let bounds = Bounds {
             x: x0 - max_half,
@@ -81,6 +90,8 @@ impl Scene {
             visual: vec![0; seats],
             fx: vec![0; seats],
             active,
+            floor: 0,
+            loose_rows,
             bounds,
             max_half,
             seat_size,
@@ -92,43 +103,52 @@ impl Scene {
     /// the angle of the row at the seat, from its neighbours in its segment.
     /// A seat alone in its segment takes the direction of its whole row.
     pub fn encode_static(&self) -> Vec<u8> {
-        let at = |i: u32| self.pos.get(i as usize).copied().unwrap_or_default();
         let mut out = Vec::with_capacity(self.pos.len() * seat::STATIC_STRIDE);
         for segment in &self.chart.segments {
-            let Some(row) = self.chart.rows.get(segment.row as usize) else {
-                continue;
-            };
-            let shape = match row.shape {
-                SeatShape::Circle => seat::shape::CIRCLE,
-                SeatShape::Rounded => seat::shape::ROUNDED_SQUARE,
-                SeatShape::Chair => seat::shape::CHAIR,
-            };
-            let oriented = row.shape != SeatShape::Circle;
-            let half = row.seat_size.div_ceil(2);
             let first = segment.seat_first;
-            let last = first + u32::from(segment.seat_count).saturating_sub(1);
-            let row_last = row.seat_first + u32::from(row.seat_count).saturating_sub(1);
-            for i in first..=last {
-                let (a, b) = if first == last {
-                    (at(row.seat_first), at(row_last))
-                } else {
-                    (at(i.saturating_sub(1).max(first)), at((i + 1).min(last)))
-                };
-                let angle = if oriented {
-                    binary_angle(b[0] - a[0], b[1] - a[1])
-                } else {
-                    0
-                };
-                let seat = SeatStatic {
-                    pos: at(i),
-                    half,
-                    angle,
-                    shape,
-                };
-                out.extend_from_slice(&seat.encode());
+            for i in first..first + u32::from(segment.seat_count) {
+                if let Some(seat) = self.in_segment(segment, i) {
+                    out.extend_from_slice(&seat.encode());
+                }
             }
         }
         out
+    }
+
+    /// Seat `idx`'s static instance values, as the static buffer holds them.
+    pub fn seat_static(&self, idx: u32) -> Option<SeatStatic> {
+        let segments = &self.chart.segments;
+        let i = segments.partition_point(|s| s.seat_first <= idx);
+        self.in_segment(segments.get(i.checked_sub(1)?)?, idx)
+    }
+
+    fn in_segment(&self, segment: &Segment, i: u32) -> Option<SeatStatic> {
+        let at = |i: u32| self.pos.get(i as usize).copied().unwrap_or_default();
+        let row = self.chart.rows.get(segment.row as usize)?;
+        let shape = match row.shape {
+            SeatShape::Circle => seat::shape::CIRCLE,
+            SeatShape::Rounded => seat::shape::ROUNDED_SQUARE,
+            SeatShape::Chair => seat::shape::CHAIR,
+        };
+        let first = segment.seat_first;
+        let last = first + u32::from(segment.seat_count).saturating_sub(1);
+        let row_last = row.seat_first + u32::from(row.seat_count).saturating_sub(1);
+        let (a, b) = if first == last {
+            (at(row.seat_first), at(row_last))
+        } else {
+            (at(i.saturating_sub(1).max(first)), at((i + 1).min(last)))
+        };
+        let angle = if row.shape == SeatShape::Circle {
+            0
+        } else {
+            binary_angle(b[0] - a[0], b[1] - a[1])
+        };
+        Some(SeatStatic {
+            pos: at(i),
+            half: row.seat_size.div_ceil(2),
+            angle,
+            shape,
+        })
     }
 
     /// Metadata for `Ready`. Allocates per category, floor and section, not

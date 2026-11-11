@@ -10,6 +10,7 @@
 mod ccf;
 mod chart;
 mod codec;
+pub mod full_label;
 #[cfg(test)]
 mod tests;
 pub mod wire;

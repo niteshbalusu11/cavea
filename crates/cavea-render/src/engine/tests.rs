@@ -10,6 +10,7 @@ use crate::{
 };
 
 mod chart;
+mod select;
 use PointerKind::{Cancel, Down, Move, Up};
 
 const MOUSE: PointerType = PointerType::Mouse;

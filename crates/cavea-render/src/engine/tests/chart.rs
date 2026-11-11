@@ -216,17 +216,20 @@ fn a_bad_chart_is_an_error_and_leaves_the_engine_as_it_was() {
 fn loading_a_second_chart_releases_the_first() {
     let mut e = loaded(compile(ARC));
     let (s, d, p) = ids(&e);
+    let [o1, o2] = e.scene.as_ref().unwrap().overlay;
     load(&mut e, two_seats([0.0, 0.0], [10.0, 10.0]));
     assert_eq!(
         e.backend.destroyed,
         [
             ResourceId::Buffer(BufferId(s)),
             ResourceId::Buffer(BufferId(d)),
-            ResourceId::Texture(TextureId(p))
+            ResourceId::Texture(TextureId(p)),
+            ResourceId::Buffer(o1),
+            ResourceId::Buffer(o2),
         ]
     );
-    // Only the new chart's three resources are alive, and it is what is drawn.
-    assert_eq!(e.backend.buffers.len() + e.backend.textures.len(), 3);
+    // Only the new chart's five resources are alive, and it is what is drawn.
+    assert_eq!(e.backend.buffers.len() + e.backend.textures.len(), 5);
     tick(&mut e, 16.0);
     assert_eq!(e.backend.draws.last(), Some(&one(0..2)));
     let c = cam(&e);

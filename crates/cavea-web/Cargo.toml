@@ -18,6 +18,8 @@ demo = ["dep:cavea-testkit", "dep:cavea-compiler", "cavea-render/demo"]
 
 [dependencies]
 wasm-bindgen.workspace = true
+# Natively too, for the event encoder's test; the `glow` backend is wasm32 only.
+cavea-render.workspace = true
 cavea-compiler = { workspace = true, optional = true }
 cavea-testkit = { workspace = true, optional = true }
 
