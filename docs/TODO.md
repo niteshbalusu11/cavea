@@ -237,7 +237,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 ### Testing
 
 - [x] **TST-020** Reference model and model-based property tests for the engine (13 §3.1)
-- [ ] **TST-021** Deterministic simulation harness with the fault table (13 §3.2)
+- [x] **TST-021** Deterministic simulation harness with the fault table (13 §3.2)
 - [ ] **TST-022** Reconciler: `cavea verify` (13 §3.3)
 - [ ] **TST-023** Load generator `cavea-loadgen` (13 §7.1)
 - [ ] **TST-024** Scenarios L1 and L2 on reference hardware; record results (13 §7.2)
