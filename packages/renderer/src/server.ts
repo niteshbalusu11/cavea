@@ -80,6 +80,8 @@ const HOLD_MS = 18_000;
 const RETRY_MS = 2_000;
 /** Without PRIVATE frames, the buyer's holds are read again this often while any is live. */
 const MINE_MS = 60_000;
+/** A failed read of the buyer's holds is tried again after this. */
+const MINE_RETRY_MS = 5_000;
 
 /** Hold tokens when `sessionStorage` cannot be used. */
 const memory = new Map<string, string>();
@@ -443,7 +445,8 @@ export function serverAdapter(input: CaveaServerOptions, platform: () => Platfor
     } else if (res?.ok) {
       ownHolds(body);
     } else {
-      watchMine();
+      // Failed: read again soon, whether or not any hold is known yet.
+      later("mine", MINE_RETRY_MS, () => run(refreshMine()));
     }
   }
 

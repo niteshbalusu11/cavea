@@ -579,6 +579,19 @@ describe("holds", () => {
     expect(w.paths().filter((p) => p.endsWith("/hold"))).toHaveLength(2);
   });
 
+  test("a failed read of the holds is tried again, even before any hold is known", async () => {
+    const w = world({ transport: "poll" });
+    w.store.set(`cavea:hold:${BASE}|${KEY}|hamlet`, TOKEN);
+    w.state.held = ["A-1"];
+    const current = w.routes["GET /hold-tokens/current"];
+    let failures = 2;
+    w.routes["GET /hold-tokens/current"] = (req) =>
+      failures-- > 0 ? refused(503, "unavailable") : (current?.(req) ?? refused(404, "not_found"));
+    await w.adapter.connect(w.ctx);
+    await w.advance(10_000);
+    expect(w.log).toContain(`mine [A-1] ${iso(T0 + 900_000)}`);
+  });
+
   test("nothing runs after disconnect, whatever answers late", async () => {
     const w = world({ transport: "sse" });
     await w.adapter.connect(w.ctx);
