@@ -70,6 +70,9 @@ A sensible first wave once the scaffold is on `main`:
 | A | Chart document types, label schemes, row-block expansion: `FMT-002` to `FMT-009` | `cavea-compiler`, document types in `cavea-core` |
 | B | Engine protocol, backend trait, WebGL2 backend, shader build pipeline, seat program on synthetic data: `REN-002`, `REN-003`, `REN-010`, `REN-013` to `REN-017`, with `FMT-001` in the testkit | `cavea-render`, `cavea-web`, `cavea-testkit` |
 | C | Seat engine domain types, store trait, in-memory store, actor loop: `ENG-001` to `ENG-005` | `cavea-engine` |
+| D (small, start first) | Nix development environment: `FND-010` | `flake.nix`, `flake.lock`, `.envrc`, the tooling notes in `AGENTS.md` and `README.md` |
+
+Slice D in detail: a `flake.nix` dev shell that provides every tool the repository needs beyond a bare OS (the Rust toolchain exactly as pinned in `rust-toolchain.toml` including the `wasm32-unknown-unknown` target, `wasm-bindgen-cli` at the version matching `Cargo.lock`, `binaryen` for `wasm-opt`, `brotli`, `bun`, a PostgreSQL client, and anything else the scaffold installed by hand), plus an `.envrc` containing `use flake`, so that `cd` into the repository followed by `direnv allow` loads everything. Commit `flake.lock`; ignore `.direnv/`. Proof: in a fresh shell, `nix develop -c` runs every command in the `AGENTS.md` "Commands" section successfully. CI does not use Nix; it keeps its plain cached toolchain setup, and the flake must stay in agreement with it.
 
 ## 6. Concurrency and the machine
 
@@ -110,5 +113,6 @@ Ask only when a decision is genuinely the owner's and work cannot route around i
 - Quality gates, test policy and CI policy are in `AGENTS.md` and are binding on every builder.
 - CI stays small: format, lint, type-check and build checks only. Do not let a builder add audit, coverage or benchmark jobs.
 - Test suites are not in CI. Every builder runs the relevant tests locally before filing and again after rebasing; say so in each brief.
+- System-level tools come from `flake.nix`. A builder that needs a new one adds it to the flake in the same pull request instead of installing it by hand, and builders may run their commands through `nix develop -c` to get the pinned versions.
 - No secrets in briefs, commits or pull requests.
 - Commit and pull-request attribution follows the harness's instructions.
