@@ -331,6 +331,8 @@ async fn run<S: SeatStore, C: Clock>(
     // the metrics: one reading serves everything that happens on that turn.
     let mut read: Option<Instant> = None;
     let mut holds = HoldsCounted(0);
+    // A restored event's holds count from the start.
+    holds.set(state.hold_count());
     // The write in flight is a heartbeat.
     let mut renewing = false;
     let mut open = true;
