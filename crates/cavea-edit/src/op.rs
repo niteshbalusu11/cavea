@@ -62,6 +62,17 @@ pub(crate) enum Op {
         oid: u32,
         value: Option<SeatOverride>,
     },
+    /// Replaces a free-form row's removed positions.
+    Removed {
+        id: u32,
+        removed: Vec<u32>,
+    },
+    /// Replaces a node's own data with a value of the same type and id; a
+    /// section's children stay.
+    Replace {
+        id: u32,
+        node: Box<Node>,
+    },
 }
 
 /// What an op restores, for coalescing a gesture: of two inverses with the
@@ -77,6 +88,7 @@ pub(crate) enum Key {
     NextOid,
     Row(u32, u32),
     Override(u32, u32),
+    Removed(u32),
 }
 
 impl Op {
@@ -86,6 +98,9 @@ impl Op {
             // Kept always: a row's own inverse (`SetRow`) may be recorded
             // after it, so undo must replay every row list in turn.
             Op::Rows { .. } => return None,
+            // Kept always: it covers what every other key of the node does.
+            Op::Replace { .. } => return None,
+            Op::Removed { id, .. } => Key::Removed(*id),
             Op::Transform { id, .. } => Key::Transform(*id),
             Op::Set { id, property } => Key::Set(*id, discriminant(property)),
             Op::Chart(p) => Key::Chart(discriminant(p)),
@@ -274,6 +289,32 @@ impl Document {
                     oid,
                     value: old,
                 })
+            }
+            Op::Removed { id, removed } => match self.slots.get_mut(&id).map(|s| &mut s.node) {
+                Some(Node::Row(r)) => {
+                    let old = replace(&mut r.removed, removed);
+                    self.touch_content(id);
+                    Ok(Op::Removed { id, removed: old })
+                }
+                _ => fail(Op::Removed { id, removed }, CommandError::NotARowBlock(id)),
+            },
+            Op::Replace { id, node } => {
+                let fits = |old: &Node| {
+                    discriminant(old) == discriminant(&*node)
+                        && node_id(&node) == id
+                        && !matches!(&*node, Node::Section(s) if !s.children.is_empty())
+                };
+                match self.slots.get_mut(&id).filter(|s| fits(&s.node)) {
+                    Some(slot) => {
+                        let old = replace(&mut slot.node, *node);
+                        self.touch_content(id);
+                        Ok(Op::Replace {
+                            id,
+                            node: Box::new(old),
+                        })
+                    }
+                    None => fail(Op::Replace { id, node }, CommandError::Internal),
+                }
             }
         }
     }

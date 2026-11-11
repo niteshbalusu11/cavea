@@ -5,18 +5,21 @@
 
 use cavea_compiler::ChartDocument;
 
-use crate::command::Property;
-use crate::command::{Command, CommandError};
+use crate::arrange::{self, AlignTo, ArrayStep, Order};
+use crate::clipboard;
+use crate::command::{Axis, Command, CommandError, End, Property, SeatEdit};
 use crate::document::{Document, LoadError};
 use crate::draft::Draft;
 use crate::editor::{Applied, Editor};
 use crate::index::{Rect, SpatialIndex};
+use crate::rows;
 use crate::section;
-use crate::selection::{self, Level, Selection};
+use crate::selection::{self, Level, Selection, View};
+use crate::tool::handles::targets;
 use crate::tool::snap::{Snap, SnapSettings};
 use crate::tool::{
-    self, ArcTool, BlockTool, Context, Cursor, Input, Overlay, RowTool, SelectTool, ShapeKindTool,
-    ShapeTool, TextTool, Tool, ToolId,
+    self, ArcTool, BlockTool, BrushTool, Context, Cursor, FocalTool, Input, Overlay, RowTool,
+    SelectTool, ShapeKindTool, ShapeTool, TextTool, Tool, ToolId,
 };
 use cavea_compiler::document::{Node, Outline, Points};
 
@@ -96,6 +99,8 @@ impl Session {
             ToolId::Line => Box::new(ShapeTool::new(ShapeKindTool::Line)),
             ToolId::Text => Box::new(TextTool::default()),
             ToolId::Section => Box::new(ShapeTool::new(ShapeKindTool::Section)),
+            ToolId::Brush => Box::new(BrushTool::default()),
+            ToolId::Focal => Box::new(FocalTool::default()),
         };
         self.tool_id = id;
     }
@@ -179,6 +184,150 @@ impl Session {
             id,
             property: Property::Outline(Outline::Points(Points { points })),
         })
+    }
+
+    /// Runs an edit built from the selection, as one undo entry; one that
+    /// does not fit the selection does nothing. `then` names the selection
+    /// to set after it applied.
+    fn edit<T>(
+        &mut self,
+        f: impl FnOnce(&View<'_>, &Selection) -> Result<Option<(Command, T)>, CommandError>,
+        then: impl FnOnce(&mut Selection, &Document, T, &Applied),
+    ) -> Result<Applied, CommandError> {
+        self.reset_tool();
+        let Some((command, next)) = f(&self.view(), &self.selection)? else {
+            return Ok(Applied::default());
+        };
+        let result = self.editor.apply(command);
+        self.settle();
+        if let Ok(applied) = &result {
+            then(&mut self.selection, self.editor.document(), next, applied);
+        }
+        result
+    }
+
+    fn edit_with(
+        &mut self,
+        f: impl FnOnce(&View<'_>, &Selection) -> Option<Command>,
+    ) -> Result<Applied, CommandError> {
+        self.edit(|v, s| Ok(f(v, s).map(|c| (c, ()))), |_, _, (), _| {})
+    }
+
+    fn view(&self) -> View<'_> {
+        View {
+            doc: self.editor.document(),
+            index: &self.index,
+            floor: self.floor,
+            tol: 0.0,
+        }
+    }
+
+    /// Adds (`count` above 0) or removes positions at one end of each
+    /// selected row (07 §5.3).
+    pub fn row_seats(&mut self, end: End, count: i32) -> Result<Applied, CommandError> {
+        self.edit_with(|v, s| rows::row_seats(v, s, end, count))
+    }
+
+    /// Shifts the selected rows sideways by `delta` chart units.
+    pub fn shift_rows(&mut self, delta: f64) -> Result<Applied, CommandError> {
+        self.edit_with(|v, s| rows::shift(v, s, delta))
+    }
+
+    /// Sets or clears the selected rows' label override.
+    pub fn set_row_label(&mut self, label: Option<String>) -> Result<Applied, CommandError> {
+        self.edit_with(|v, s| rows::label(v, s, label))
+    }
+
+    /// Marks the position at the world point `at` removed in each selected
+    /// row (07 §5.3: an aisle that renumbers nothing).
+    pub fn cut_aisle(&mut self, at: [f64; 2]) -> Result<Applied, CommandError> {
+        self.edit_with(|v, s| rows::cut_aisle(v, s, at))
+    }
+
+    /// Inserts `count` removed positions at the world point `at` in each
+    /// selected row (an aisle that removes no seat).
+    pub fn open_aisle(&mut self, at: [f64; 2], count: u32) -> Result<Applied, CommandError> {
+        self.edit_with(|v, s| rows::open_aisle(v, s, at, count))
+    }
+
+    /// One edit to every selected seat (07 §5.3, seat-edit mode).
+    pub fn edit_seats(&mut self, edit: SeatEdit) -> Result<Applied, CommandError> {
+        self.edit_with(|v, s| rows::edit(v, s, edit))
+    }
+
+    /// Deletes what is selected, as Delete does at each level (07 §8).
+    pub fn delete(&mut self) -> Result<Applied, CommandError> {
+        self.edit(
+            |v, s| Ok(rows::delete(v, s).map(|(c, l, i)| (c, (l, i)))),
+            |sel, doc, (level, items), _| sel.set(doc, level, items),
+        )
+    }
+
+    /// Sets (or clears) the focal point of the floor shown (07 §4, §5.6).
+    pub fn set_focal_point(&mut self, point: Option<[f64; 2]>) -> Result<Applied, CommandError> {
+        let floor = self.floor;
+        self.edit_with(|v, _| tool::focal::command(v.doc, floor, point))
+    }
+
+    pub fn align(&mut self, to: AlignTo) -> Result<Applied, CommandError> {
+        self.edit_with(|v, s| arrange::align(v, s, to))
+    }
+
+    pub fn distribute(&mut self, axis: Axis) -> Result<Applied, CommandError> {
+        self.edit_with(|v, s| arrange::distribute(v, s, axis))
+    }
+
+    pub fn flip(&mut self, axis: Axis) -> Result<Applied, CommandError> {
+        self.edit_with(|v, s| arrange::flip(v, s, axis))
+    }
+
+    /// One copy of the selected nodes moved by the world vector `offset`
+    /// (Ctrl+D uses [`crate::DUPLICATE_OFFSET`] each way); the copies are
+    /// selected.
+    pub fn duplicate(&mut self, offset: [f64; 2]) -> Result<Applied, CommandError> {
+        self.edit(|v, s| arrange::duplicate(v, s, offset), select_created)
+    }
+
+    /// `copies` copies of the selected nodes, each one `step` from the one
+    /// before; the copies are selected.
+    pub fn array(&mut self, copies: u32, step: ArrayStep) -> Result<Applied, CommandError> {
+        self.edit(|v, s| arrange::array(v, s, copies, step), select_created)
+    }
+
+    pub fn order(&mut self, order: Order) -> Result<Applied, CommandError> {
+        self.edit_with(|v, s| arrange::order(v, s, order))
+    }
+
+    pub fn set_locked(&mut self, locked: bool) -> Result<Applied, CommandError> {
+        self.edit_with(|_, s| arrange::set_flag(s, Property::Locked(locked)))
+    }
+
+    pub fn set_hidden(&mut self, hidden: bool) -> Result<Applied, CommandError> {
+        self.edit_with(|_, s| arrange::set_flag(s, Property::Hidden(hidden)))
+    }
+
+    /// The selected nodes as clipboard text (§2.3), or `None`.
+    pub fn copy(&mut self) -> Option<String> {
+        self.reset_tool();
+        clipboard::copy(&self.view(), &self.selection)
+    }
+
+    /// Copy, then delete what was copied, as one undo entry.
+    pub fn cut(&mut self) -> Result<Option<String>, CommandError> {
+        let Some(text) = self.copy() else {
+            return Ok(None);
+        };
+        self.edit_with(|v, s| targets(v, s).map(|(ids, _)| Command::DeleteNodes { ids }))?;
+        Ok(Some(text))
+    }
+
+    /// Pastes clipboard text with fresh ids, centred on the world point
+    /// `at`, or offset from where it was copied; the nodes are selected.
+    pub fn paste(&mut self, text: &str, at: Option<[f64; 2]>) -> Result<Applied, CommandError> {
+        self.edit(
+            |v, s| clipboard::paste(v, s, text, at).map(Some),
+            select_created,
+        )
     }
 
     /// Passes input to the active tool. A pointer event that is not finite,
@@ -290,7 +439,12 @@ impl Session {
             [one] => Some(one),
             _ => Rect::around(outlines.iter().flatten().copied()).map(|r| r.corners()),
         };
+        let focal = self.floor.and_then(|f| {
+            let floors = self.document().floors().iter();
+            floors.filter(|l| l.id == f).find_map(|l| l.focal_point)
+        });
         let mut out = Overlay {
+            focal,
             outlines,
             frame,
             sections: self.section_outlines(),
@@ -361,4 +515,9 @@ impl Session {
             }
         }
     }
+}
+
+/// Selects what a command created, at `level`.
+fn select_created(sel: &mut Selection, doc: &Document, level: Level, applied: &Applied) {
+    sel.set(doc, level, applied.created.iter().copied());
 }

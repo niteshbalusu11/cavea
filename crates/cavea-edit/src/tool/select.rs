@@ -14,9 +14,11 @@ use super::{
 };
 use cavea_compiler::document::Node;
 
-use crate::command::{Command, NodeTransform};
+use crate::arrange::{self, DUPLICATE_OFFSET};
+use crate::command::{Command, NodeTransform, Property};
 use crate::document::each_node;
 use crate::index::{P, Place, Rect, Select};
+use crate::rows;
 use crate::selection::{self, Level, Selection, View, pickable};
 
 #[derive(Debug, Default)]
@@ -92,7 +94,11 @@ enum State {
         room: u64,
         readout: Option<Readout>,
         live: Live,
+        /// At the rows level: the rows whose ends a side handle moves.
+        rows: Option<BTreeSet<u32>>,
     },
+    /// Nudging the selected seats by dragging one, from `start` (world).
+    Nudging { start: P, live: Live },
     /// Editing a text node's string.
     Text(TextEdit),
     /// A press already acted on (a double click) or abandoned (a second
@@ -118,7 +124,7 @@ impl Tool for SelectTool {
             State::Moving { .. } | State::Rotating { .. } => {
                 let _ = cx.editor.cancel_gesture();
             }
-            State::Resizing { mut live, .. } => live.cancel(cx),
+            State::Resizing { mut live, .. } | State::Nudging { mut live, .. } => live.cancel(cx),
             State::Text(mut edit) => edit.cancel(cx),
             State::Pivot { before } => self.pivot = before,
             State::Pressed { before, .. } | State::Marquee { before, .. } => {
@@ -131,7 +137,7 @@ impl Tool for SelectTool {
 
     fn cursor(&self) -> Cursor {
         match self.state {
-            State::Moving { .. } => Cursor::Move,
+            State::Moving { .. } | State::Nudging { .. } => Cursor::Move,
             State::Marquee { .. } => Cursor::Crosshair,
             State::Idle if self.over_selected => Cursor::Move,
             _ => Cursor::Default,
@@ -178,6 +184,22 @@ impl SelectTool {
     fn start_handle(&mut self, cx: &mut Context<'_>, p: Pointer, kind: HandleKind) -> State {
         let room = budget(cx);
         let (view, sel) = cx.split(p.tolerance());
+        if let (Level::Rows(id), HandleKind::Side(_)) = (sel.level(), kind) {
+            let (Some(base), Some(place)) = (view.doc.node(id), view.index.place(id)) else {
+                return State::Swallow;
+            };
+            return State::Resizing {
+                id,
+                kind,
+                base: Box::new(base.clone()),
+                place,
+                start: place.invert(p.world),
+                room,
+                readout: None,
+                live: Live::default(),
+                rows: Some(sel.items().clone()),
+            };
+        }
         let pivot = self.pivot_for(sel);
         let Some((ids, parent)) = handles::targets(&view, sel) else {
             return State::Swallow;
@@ -228,6 +250,7 @@ impl SelectTool {
                     room,
                     readout: None,
                     live: Live::default(),
+                    rows: None,
                 }
             }
         }
@@ -321,11 +344,17 @@ impl SelectTool {
                 let parent = match cx.selection.level() {
                     Level::Top => Some(None),
                     Level::Section(s) => Some(Some(s)),
-                    // Rows and seats are not moved yet: a drag selects them.
+                    // Rows are not moved by dragging: a drag selects them.
                     Level::Rows(_) | Level::Seats(_) => None,
                 };
+                let seats = matches!(cx.selection.level(), Level::Seats(_));
                 self.state = match (target, parent) {
                     (Some(_), Some(parent)) => start_move(cx, down.world, parent),
+                    // A drag from a selected seat nudges the selection.
+                    (Some(_), None) if seats => State::Nudging {
+                        start: down.world,
+                        live: Live::default(),
+                    },
                     _ => {
                         let same = before.level() == cx.selection.level();
                         let base = match down.mods.shift && same {
@@ -424,10 +453,11 @@ impl SelectTool {
                 room,
                 readout,
                 live,
+                rows,
             } => {
                 let q = place.invert(snap::point(cx, &p, Some(*id), None));
                 let d = [q[0] - start[0], q[1] - start[1]];
-                match handles::resize(base, *id, *kind, d, q, p.mods, *room) {
+                match handles::resize(base, *id, *kind, d, q, p.mods, (*room, rows.as_ref())) {
                     Step::Base => {
                         live.clear(cx);
                         *readout = None;
@@ -438,6 +468,13 @@ impl SelectTool {
                         }
                     }
                     Step::Keep => {}
+                }
+            }
+            State::Nudging { start, live } => {
+                let v = [p.world[0] - start[0], p.world[1] - start[1]];
+                let (view, sel) = cx.split(0.0);
+                if let Some(command) = rows::nudge(&view, sel, v) {
+                    live.show(cx, command);
                 }
             }
             State::Text(_) | State::Swallow => {}
@@ -471,7 +508,9 @@ impl SelectTool {
             State::Rotating { .. } => {
                 let _ = cx.editor.end_gesture();
             }
-            State::Resizing { mut live, .. } => drop(live.commit(cx)),
+            State::Resizing { mut live, .. } | State::Nudging { mut live, .. } => {
+                let _ = live.commit(cx);
+            }
             State::Text(edit) => self.state = State::Text(edit),
             // Not dragged: an ordinary click.
             State::Handle { down, .. } => {
@@ -498,12 +537,64 @@ impl SelectTool {
             _ if !idle => {}
             Key::Enter => drop(step_in(cx)),
             Key::Char('a') if mods.ctrl => select_all(cx),
-            Key::ArrowLeft => nudge(cx, [-step, 0.0]),
-            Key::ArrowRight => nudge(cx, [step, 0.0]),
-            Key::ArrowUp => nudge(cx, [0.0, -step]),
-            Key::ArrowDown => nudge(cx, [0.0, step]),
-            Key::Char(_) | Key::Backspace => {}
+            Key::Char('d') if mods.ctrl => {
+                let at = [DUPLICATE_OFFSET; 2];
+                let (view, sel) = cx.split(0.0);
+                if let Ok(Some((command, level))) = arrange::duplicate(&view, sel, at) {
+                    let created = cx.editor.apply(command).map(|a| a.created);
+                    let doc = cx.editor.document();
+                    cx.selection.set(doc, level, created.unwrap_or_default());
+                }
+            }
+            Key::Char('l') if mods.ctrl => toggle(cx, Property::Locked, |n| n.0),
+            Key::Char('h') if mods.ctrl => toggle(cx, Property::Hidden, |n| n.1),
+            Key::Delete | Key::Backspace => {
+                let (view, sel) = cx.split(0.0);
+                if let Some((command, level, items)) = rows::delete(&view, sel)
+                    && cx.editor.apply(command).is_ok()
+                {
+                    cx.selection.set(cx.editor.document(), level, items);
+                }
+            }
+            Key::ArrowLeft => arrow(cx, [-step, 0.0], mods.shift),
+            Key::ArrowRight => arrow(cx, [step, 0.0], mods.shift),
+            Key::ArrowUp => arrow(cx, [0.0, -step], mods.shift),
+            Key::ArrowDown => arrow(cx, [0.0, step], mods.shift),
+            Key::Char(_) => {}
         }
+    }
+}
+
+/// An arrow key: nodes move by `v` (07 §5.1); rows shift along themselves
+/// by half a seat pitch towards their first (Left) or last (Right)
+/// position, a whole pitch with Shift; seats are nudged by `v`. One undo
+/// entry each.
+fn arrow(cx: &mut Context<'_>, v: P, shift: bool) {
+    let (view, sel) = cx.split(0.0);
+    let command = match sel.level() {
+        Level::Top | Level::Section(_) => return nudge(cx, v),
+        Level::Rows(_) if v[0] != 0.0 => rows::half_pitch(&view, sel).and_then(|h| {
+            let delta = h * v[0].signum() * if shift { 2.0 } else { 1.0 };
+            rows::shift(&view, sel, delta)
+        }),
+        Level::Rows(_) => None,
+        Level::Seats(_) => rows::nudge(&view, sel, v),
+    };
+    if let Some(c) = command {
+        let _ = cx.editor.apply(c);
+    }
+}
+
+/// Ctrl+L and Ctrl+H: locks (hides) every selected node, or unlocks (shows)
+/// them all if all are already.
+fn toggle(cx: &mut Context<'_>, property: fn(bool) -> Property, get: fn((bool, bool)) -> bool) {
+    let doc = cx.editor.document();
+    let all = cx.selection.items().iter().all(|&id| {
+        doc.node(id)
+            .is_some_and(|n| get(each_node!(n, x => (x.locked, x.hidden))))
+    });
+    if let Some(c) = arrange::set_flag(cx.selection, property(!all)) {
+        let _ = cx.editor.apply(c);
     }
 }
 

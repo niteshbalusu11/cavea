@@ -22,11 +22,12 @@ const SHIFT: Modifiers = Modifiers {
 };
 const CTRL: Modifiers = Modifiers { ctrl: true, ..NONE };
 
-/// An empty chart with one category, ids from 1000. Zoom 1.
+/// An empty chart with two categories, ids from 1000. Zoom 1.
 fn empty() -> ChartDocument {
     serde_json::from_value(serde_json::json!({
         "schema": 1, "name": "t", "nextOid": 1000,
-        "categories": [{ "key": "std", "label": "Standard", "color": "#2563EB" }],
+        "categories": [{ "key": "std", "label": "Standard", "color": "#2563EB" },
+                       { "key": "vip", "label": "VIP", "color": "#B45309" }],
         "floors": [{ "id": 1, "name": "Stalls", "focalPoint": [0, -1000] }],
         "nodes": []
     }))
@@ -1029,7 +1030,7 @@ fn draw_a_theatre() {
     assert!(compiled.stats.seats > 200, "{}", compiled.stats.seats);
 }
 
-fn tools() -> [ToolId; 10] {
+fn tools() -> [ToolId; 12] {
     [
         ToolId::Select,
         ToolId::RowBlock,
@@ -1041,6 +1042,8 @@ fn tools() -> [ToolId; 10] {
         ToolId::Line,
         ToolId::Text,
         ToolId::Section,
+        ToolId::Brush,
+        ToolId::Focal,
     ]
 }
 
@@ -1085,7 +1088,7 @@ fn event(t: &mut T, r: &mut Rng) {
         alt: r.below(8) == 0,
         ctrl: r.below(5) == 0,
     };
-    match r.below(20) {
+    match r.below(21) {
         0..=4 => {
             t.down(a, mods);
             for k in 1..=r.below(4) + 1 {
@@ -1128,6 +1131,7 @@ fn event(t: &mut T, r: &mut Rng) {
         }
         17 => t.down(a, mods),
         18 => t.up(a, mods),
+        19 => t.s.set_category(Some(["std", "vip"][r.below(2)].into())),
         _ => t.key(Key::Enter),
     }
 }
@@ -1158,7 +1162,7 @@ fn generated_traces() {
         for node in shapes.into_iter().take(seed as usize / 3 % 4) {
             add(&mut t.s, node);
         }
-        t.s.set_tool(tools()[(seed as usize) % 10]);
+        t.s.set_tool(tools()[(seed as usize) % tools().len()]);
         if seed % 2 == 1 {
             t.s.set_snap(SnapSettings::default());
         }

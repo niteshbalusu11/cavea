@@ -10,18 +10,26 @@
 //! - [`Session`]: the editor with the index, the [`Selection`] and the active
 //!   tool, driven by [`Input`] and drawing an [`Overlay`].
 
+mod arrange;
+mod clipboard;
 mod command;
 mod document;
 mod draft;
 mod editor;
+mod flip;
 mod index;
 mod op;
+mod rows;
 mod section;
 mod selection;
 mod session;
 mod tool;
 
-pub use command::{ChartProperty, Command, CommandError, End, NodeTransform, Property};
+pub use arrange::{AlignTo, ArrayStep, DUPLICATE_OFFSET, MAX_COPIES, MAX_NEW_NODES, Order};
+pub use clipboard::MAX_CLIPBOARD;
+pub use command::{
+    Axis, ChartProperty, Command, CommandError, End, NodeTransform, Property, SeatEdit,
+};
 pub use document::{Changes, Document, LoadError};
 pub use draft::Draft;
 pub use editor::{Applied, Editor, MAX_UNDO};
@@ -33,5 +41,7 @@ pub use tool::{
     PointerKind, Readout, Side, SnapSettings, TextField, ToolId, tuning,
 };
 
+#[cfg(test)]
+mod edit_tests;
 #[cfg(test)]
 mod tests;

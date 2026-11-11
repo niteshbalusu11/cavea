@@ -11,8 +11,10 @@ use crate::index::{P, Quad, Rect, SpatialIndex};
 use crate::selection::{Selection, View};
 
 mod block;
+mod brush;
 mod draw;
-mod handles;
+pub(crate) mod focal;
+pub(crate) mod handles;
 mod row;
 mod select;
 mod shape;
@@ -20,7 +22,9 @@ pub(crate) mod snap;
 mod text;
 
 pub(crate) use block::{ArcTool, BlockTool};
+pub(crate) use brush::BrushTool;
 pub(crate) use draw::Spot;
+pub(crate) use focal::FocalTool;
 pub use handles::{Corner, Handle, HandleKind, Side};
 pub(crate) use row::RowTool;
 pub(crate) use select::{SelectTool, select_all, step_in};
@@ -29,7 +33,7 @@ pub use snap::{Guide, SnapSettings};
 pub(crate) use text::TextTool;
 
 #[cfg(test)]
-mod draw_tests;
+pub(crate) mod draw_tests;
 #[cfg(test)]
 mod tests;
 
@@ -141,8 +145,9 @@ pub enum Key {
     ArrowRight,
     ArrowUp,
     ArrowDown,
-    /// Deletes the last character of a numeric entry.
+    /// Deletes the last character of a numeric entry; as Delete otherwise.
     Backspace,
+    Delete,
     /// A printable key, lower case: `a` for select all with Ctrl.
     Char(char),
 }
@@ -184,6 +189,10 @@ pub enum ToolId {
     Line,
     Text,
     Section,
+    /// Category brush (07 §4).
+    Brush,
+    /// Focal point (07 §4).
+    Focal,
 }
 
 /// What the canvas draws over the chart, in chart coordinates; sizes in
@@ -212,6 +221,8 @@ pub struct Overlay {
     /// The outlines of the selected sections, and of the section whose
     /// children are selected, automatic or explicit.
     pub sections: Vec<Vec<P>>,
+    /// The focal point of the floor shown.
+    pub focal: Option<P>,
 }
 
 /// The numbers a gesture shows while it runs (07 §4). Lengths in chart
