@@ -72,8 +72,10 @@ const FALLBACK_AFTER = 2;
 const SILENCE_MS = 60_000;
 /** A hidden page keeps its connection this long. */
 const PAUSE_MS = 10_000;
-/** One request's limit; a hold with its retry stays under the map's 20 s. */
+/** One request's limit, its body included. */
 const REQUEST_MS = 8_000;
+/** A hold or release, with token creation and retries, gives up after this: under the map's 20 s. */
+const HOLD_MS = 18_000;
 /** A hold, release or token creation that failed for want of capacity is retried once, after at most this. */
 const RETRY_MS = 2_000;
 /** Without PRIVATE frames, the buyer's holds are read again this often while any is live. */
@@ -199,6 +201,8 @@ export function serverAdapter(input: CaveaServerOptions, platform: () => Platfor
   /** A hold or release is running; `epoch` counts them, so an older read of the holds is dropped. */
   let busy = false;
   let epoch = 0;
+  /** When the running hold or release gives up (`P.now()` ms). */
+  let deadline = Infinity;
   let stopped = false;
   let halted = false;
   let paused = false;
@@ -273,18 +277,31 @@ export function serverAdapter(input: CaveaServerOptions, platform: () => Platfor
 
   // ---- HTTP ----
 
-  /** A request with the key in `Authorization` (`auth`), cancelled on destroy or after `REQUEST_MS`. */
+  /**
+   * A request with the key in `Authorization` (`auth`) and its body read in
+   * full, cancelled on destroy, after `REQUEST_MS` or at the hold's deadline.
+   */
   async function request(url: string, init: RequestInit = {}, auth = true): Promise<Response> {
+    const ms = Math.min(REQUEST_MS, deadline - P.now());
+    if (stopped || signal?.aborted || ms <= 0) {
+      throw new Error(stopped || signal?.aborted ? "the map was destroyed" : "out of time");
+    }
     const abort = new AbortController();
     const stop = (): void => abort.abort();
     signal?.addEventListener("abort", stop);
-    const timer = P.setTimeout(stop, REQUEST_MS);
+    const timer = P.setTimeout(stop, ms);
     try {
       const headers = new Headers(init.headers);
       if (auth) {
         headers.set("Authorization", `Bearer ${key}`);
       }
-      return await P.fetch(url, { ...init, headers, signal: abort.signal });
+      const res = await P.fetch(url, { ...init, headers, signal: abort.signal });
+      const body = await res.arrayBuffer();
+      return new Response(res.status === 204 || res.status === 304 ? null : body, {
+        status: res.status,
+        statusText: res.statusText,
+        headers: res.headers,
+      });
     } finally {
       P.clearTimeout(timer);
       signal?.removeEventListener("abort", stop);
@@ -293,7 +310,19 @@ export function serverAdapter(input: CaveaServerOptions, platform: () => Platfor
 
   async function sessionToken(): Promise<string | null> {
     if (session === null && typeof options.sessionToken === "function") {
-      session = String(await options.sessionToken());
+      // The host's function shares the hold's deadline.
+      const left = deadline - P.now();
+      let timer: unknown;
+      const late = new Promise<never>((_, reject) => {
+        if (Number.isFinite(left)) {
+          timer = P.setTimeout(() => reject(new Error("sessionToken() did not answer")), left);
+        }
+      });
+      try {
+        session = String(await Promise.race([options.sessionToken(), late]));
+      } finally {
+        P.clearTimeout(timer);
+      }
     }
     return session;
   }
@@ -326,11 +355,11 @@ export function serverAdapter(input: CaveaServerOptions, platform: () => Platfor
           return res;
         }
         wait = Number(res.headers.get("Retry-After") ?? 1) * 1000 || 1000;
-        if (retried || wait > RETRY_MS) {
+        if (retried || wait > RETRY_MS || P.now() + wait >= deadline) {
           return res;
         }
       } catch (error) {
-        if (retried || signal?.aborted) {
+        if (retried || stopped || P.now() + wait >= deadline) {
           throw error;
         }
       }
@@ -398,20 +427,21 @@ export function serverAdapter(input: CaveaServerOptions, platform: () => Platfor
   async function refreshMine(): Promise<void> {
     const t = token;
     const at = epoch;
-    if (t === null || privateLive || busy) {
+    if (t === null || privateLive || busy || stopped) {
       return;
     }
     const res = await request(currentUrl, { headers: { "Cavea-Hold-Token": t } }).catch(
       () => undefined,
     );
+    const body: unknown = res?.ok ? await res.json().catch(() => undefined) : undefined;
     // A hold or release since the read began makes the answer stale; its own read follows.
-    if (t !== token || at !== epoch || busy || privateLive) {
+    if (stopped || t !== token || at !== epoch || busy || privateLive) {
       return;
     }
     if (res?.status === 404) {
       ended();
     } else if (res?.ok) {
-      ownHolds(await res.json());
+      ownHolds(body);
     } else {
       watchMine();
     }
@@ -420,7 +450,7 @@ export function serverAdapter(input: CaveaServerOptions, platform: () => Platfor
   /** Reads the holds again at their expiry, and every `MINE_MS` while any is live. */
   function watchMine(): void {
     cancel("mine");
-    if (token !== null && !privateLive && held > 0) {
+    if (!stopped && token !== null && !privateLive && held > 0) {
       const toExpiry = expires - (P.now() + (offset ?? 0)) + 1000;
       later("mine", Math.max(1000, Math.min(MINE_MS, toExpiry)), () => run(refreshMine()));
     }
@@ -498,6 +528,7 @@ export function serverAdapter(input: CaveaServerOptions, platform: () => Platfor
   async function hold(labels: string[]): Promise<HoldResult> {
     busy = true;
     epoch += 1;
+    deadline = P.now() + HOLD_MS;
     try {
       for (let fresh = mode === "start"; ; fresh = false) {
         const t = await ensureToken();
@@ -518,6 +549,7 @@ export function serverAdapter(input: CaveaServerOptions, platform: () => Platfor
       }
     } finally {
       busy = false;
+      deadline = Infinity;
       run(refreshMine());
     }
   }
@@ -525,6 +557,7 @@ export function serverAdapter(input: CaveaServerOptions, platform: () => Platfor
   async function release(labels: string[]): Promise<void> {
     busy = true;
     epoch += 1;
+    deadline = P.now() + HOLD_MS;
     try {
       if (token === null) {
         return;
@@ -540,6 +573,7 @@ export function serverAdapter(input: CaveaServerOptions, platform: () => Platfor
       throw new Error(`release refused: ${said(res, p)}`);
     } finally {
       busy = false;
+      deadline = Infinity;
       run(refreshMine());
     }
   }

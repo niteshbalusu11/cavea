@@ -163,12 +163,13 @@ function world(options: Partial<CaveaServerOptions> = {}, store = new Map<string
       const path = u.pathname.replace("/cavea/v1/public", "");
       const req: Req = { method: init.method ?? "GET", path, url, headers, body };
       requests.push(req);
-      const res = await (routes[`${req.method} ${path}`]?.(req) ??
-        new Response(null, { status: 404 }));
-      if (init.signal?.aborted) {
-        throw new DOMException("aborted", "AbortError");
-      }
-      return res;
+      const aborted = new Promise<never>((_, reject) =>
+        init.signal?.addEventListener("abort", () =>
+          reject(new DOMException("aborted", "AbortError")),
+        ),
+      );
+      const answer = routes[`${req.method} ${path}`]?.(req) ?? new Response(null, { status: 404 });
+      return Promise.race([answer, aborted]);
     },
     WebSocket: Socket as unknown as typeof WebSocket,
     EventSource: Source as unknown as typeof EventSource,
@@ -229,6 +230,7 @@ function world(options: Partial<CaveaServerOptions> = {}, store = new Map<string
   const paths = (): string[] => requests.map((r) => `${r.method} ${r.path}`);
   return {
     adapter,
+    platform,
     ctx,
     abort,
     routes,
@@ -558,6 +560,39 @@ describe("holds", () => {
     await w.advance(500);
     expect(await lost).toBe("TypeError: Failed to fetch");
     expect(w.paths().filter((p) => p.endsWith("/hold"))).toHaveLength(5);
+  });
+
+  test("a hold gives up 18 s after it started, token creation and retries included", async () => {
+    const w = world();
+    await w.live();
+    w.routes["POST /hold-tokens"] = () =>
+      new Promise((r) => w.platform.setTimeout(() => r(json(201, { hold_token: TOKEN })), 7_000));
+    w.routes["POST /events/hamlet/hold"] = () => new Promise(() => {});
+    let settled = false;
+    const result = hold(w, "A-1").catch((e: unknown) => String(e));
+    void result.then(() => (settled = true));
+    await w.advance(17_999);
+    expect(settled).toBe(false);
+    await w.advance(1);
+    expect(await result).toContain("AbortError");
+    // Aborted at 15 s (8 s after the token), retried at 15.5 s and aborted at 18 s.
+    expect(w.paths().filter((p) => p.endsWith("/hold"))).toHaveLength(2);
+  });
+
+  test("nothing runs after disconnect, whatever answers late", async () => {
+    const w = world({ transport: "sse" });
+    await w.adapter.connect(w.ctx);
+    w.source().recv(frame("hello"));
+    let answer!: (r: Response) => void;
+    w.routes["POST /events/hamlet/hold"] = () => new Promise((r) => (answer = r));
+    const pending = hold(w, "A-1").catch((e: unknown) => String(e));
+    await w.settle();
+    const sent = w.requests.length;
+    w.adapter.disconnect();
+    answer(json(200, {}));
+    await pending;
+    await w.advance(120_000);
+    expect([w.due.size, w.requests.length, w.sources.length]).toEqual([0, sent, 1]);
   });
 
   test("on SSE and polling the buyer's holds come from hold-tokens/current, kept in order with replies", async () => {

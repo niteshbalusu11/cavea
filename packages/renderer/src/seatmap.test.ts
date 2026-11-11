@@ -720,7 +720,7 @@ describe("methods", () => {
       ["flyTo", undefined, "A", true, true],
       ["flyTo", undefined, "A-1-2", false, false],
       ["flyTo", [1, 2, 3, 4], undefined, false, false],
-      ["flyTo", [0, -25, 200, 150], undefined, false, false],
+      ["flyTo", [6, -19, 188, 138], undefined, false, false],
       ["setTheme", "dark", []],
       ["setTheme", "dark", ["bg", "#000", "dim", "0.5"]],
     ]);

@@ -767,7 +767,9 @@ export async function createMap(
       return;
     }
     const scale = camera.zoom * factor;
-    const [width, height] = [size[0] / scale, size[1] / scale];
+    // The engine fits bounds inside a margin of `FIT_PADDING_PX` (24) on each side.
+    const room = (px: number): number => Math.max(px - 48, 1) / scale;
+    const [width, height] = [room(size[0]), room(size[1])];
     const [x, y] = camera.centre;
     fly({ x: x - width / 2, y: y - height / 2, width, height }, undefined, false, true);
   }
