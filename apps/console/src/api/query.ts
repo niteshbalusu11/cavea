@@ -14,6 +14,9 @@ export interface Query<T> {
   state: Accessor<Loaded<T>>;
   /** Loads again, keeping what is shown meanwhile. */
   refetch(): void;
+  /** Changes the data shown, when there is some (a page appended, a row
+   * replaced by the server's answer to an action). */
+  update(change: (data: T) => T): void;
 }
 
 export function createQuery<K, T>(
@@ -60,6 +63,10 @@ export function createQuery<K, T>(
     state,
     refetch: () => {
       if (current !== null) run(current, true);
+    },
+    update: (change) => {
+      const shown = state();
+      if (shown.status === "ready") setState({ ...shown, data: change(shown.data) });
     },
   };
 }
