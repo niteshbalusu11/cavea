@@ -121,6 +121,7 @@ Every command is **all-or-nothing**: if one object fails its condition, nothing 
 - When a token expires, all its objects return to `free` in one command, and a `hold.expired` webhook fires.
 - A token can hold objects in more than one event only if the events belong to the same season (P2).
 - The token is a bearer secret. The server stores only its SHA-256 hash.
+- A token is expired from its expiry instant onwards (`now >= expires_at`, checked when the command is processed). An expired token can no longer hold, release or extend; its objects return to `free` only through expiry.
 
 ## 6. Bookings
 

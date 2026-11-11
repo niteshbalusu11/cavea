@@ -166,11 +166,11 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 ### Seat engine
 
-- [ ] **ENG-001** Domain types: statuses, holds, commands, replies, failure reasons (02 §4, §5)
-- [ ] **ENG-002** `SeatStore` trait and an in-memory implementation with fault injection (08 §5)
-- [ ] **ENG-003** Event actor state and mailbox (08 §4.1)
-- [ ] **ENG-004** Actor loop with natural batching and acknowledge-after-commit (08 §4.3)
-- [ ] **ENG-005** Commands: create hold, hold, release, extend (08 §4.2, §7.1)
+- [x] **ENG-001** Domain types: statuses, holds, commands, replies, failure reasons (02 §4, §5)
+- [x] **ENG-002** `SeatStore` trait and an in-memory implementation with fault injection (08 §5)
+- [x] **ENG-003** Event actor state and mailbox (08 §4.1)
+- [x] **ENG-004** Actor loop with natural batching and acknowledge-after-commit (08 §4.3)
+- [x] **ENG-005** Commands: create hold, hold, release, extend (08 §4.2, §7.1)
 - [ ] **ENG-006** Commands: book with token, book direct, change status (08 §7.2)
 - [ ] **ENG-007** All-or-nothing validation with per-object failure reasons (02 §4.3)
 - [ ] **ENG-008** Hold expiry heap and internal expire command (08 §7.3)
