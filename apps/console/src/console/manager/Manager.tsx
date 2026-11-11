@@ -8,6 +8,7 @@
 import {
   createSeatMap,
   type CaveaError,
+  type Metrics,
   type SeatMap,
   type SeatObject,
   type Selection,
@@ -18,7 +19,7 @@ import type { Event } from "../../api/generated.ts";
 import { allows } from "../../api/permissions.ts";
 import { asApiError, componentSignal } from "../../api/query.ts";
 import { msg, msgOf } from "../../i18n/messages.ts";
-import { workspace } from "../../session.ts";
+import { loadSession, workspace } from "../../session.ts";
 import { resolvedTheme } from "../../theme.ts";
 import { Button, IconButton } from "../../ui/controls.tsx";
 import { Field, length } from "../../ui/form.tsx";
@@ -128,6 +129,7 @@ export function Manager(props: { event: Event; onEvent: (event: Event) => void }
           available: msg("manager.legendFree"),
           unavailable: msg("manager.legendTaken"),
           selected: msg("manager.legendSelected"),
+          soldOut: msg("manager.noneFree"),
         },
         onSelectionChange: onSelection,
         onObjectSelect: (o) => inspect(o, true),
@@ -140,10 +142,23 @@ export function Manager(props: { event: Event; onEvent: (event: Event) => void }
           else if (rule === "max") notify(msg("manager.max", { n: MAX }), "error");
         },
         onError: (e) => notify(msg("manager.mapError", { code: e.code }), "error"),
+        // Frame statistics, for measuring in a dev build's console.
+        ...(import.meta.env.DEV
+          ? {
+              onMetrics: (m: Metrics) => {
+                const w = window as unknown as { caveaManager?: { metrics?: Metrics[] } };
+                w.caveaManager?.metrics?.push(m);
+              },
+            }
+          : {}),
       });
       setMap(created);
       if (import.meta.env.DEV) {
-        (window as unknown as { caveaManager?: unknown }).caveaManager = { map: created, live };
+        (window as unknown as { caveaManager?: unknown }).caveaManager = {
+          map: created,
+          live,
+          metrics: [],
+        };
       }
     } catch (e) {
       if (signal.aborted) return;
@@ -181,7 +196,8 @@ export function Manager(props: { event: Event; onEvent: (event: Event) => void }
         map()?.clearSelection();
       } else {
         setRefusal({ action, error: outcome.error, refused: outcome.refused });
-        if (outcome.error.code === "forbidden") report(outcome.error);
+        // The panel says it; a role lowered since is read again.
+        if (outcome.error.code === "forbidden") void loadSession();
       }
       return outcome;
     } catch (e) {
@@ -344,17 +360,21 @@ function Health(props: { live: ReturnType<typeof createLive> }) {
       <Show
         when={h().error}
         fallback={
-          <Show when={h().readAt} fallback={msg("manager.liveStarting")}>
-            {(at) => msg("manager.liveEvery", { time: time.format(at()) })}
+          <Show when={h().checkedAt} fallback={msg("manager.liveStarting")}>
+            {(at) => <>{msg("manager.liveEvery", { time: time.format(at()) })}</>}
           </Show>
         }
       >
-        {(e) => {
-          const at = h().readAt;
-          return at === null
-            ? msg("manager.staleNever", { problem: describe(e()) })
-            : msg("manager.stale", { problem: describe(e()), time: time.format(at) });
-        }}
+        {(e) => (
+          <>
+            {h().checkedAt === null
+              ? msg("manager.staleNever", { problem: describe(e()) })
+              : msg("manager.stale", {
+                  problem: describe(e()),
+                  time: time.format(h().checkedAt ?? 0),
+                })}
+          </>
+        )}
       </Show>
     </p>
   );
@@ -395,12 +415,14 @@ function RefusalNote(props: { refusal: Refused; live: ReturnType<typeof createLi
   );
 }
 
-const row = (term: string, value: string) => (
-  <div class="flex gap-2">
-    <dt class="w-28 shrink-0 text-muted">{term}</dt>
-    <dd class="min-w-0 break-words text-fg">{value}</dd>
-  </div>
-);
+function Row(props: { term: string; value: string }) {
+  return (
+    <div class="flex gap-2">
+      <dt class="w-28 shrink-0 text-muted">{props.term}</dt>
+      <dd class="min-w-0 break-words text-fg">{props.value}</dd>
+    </div>
+  );
+}
 
 function Details(props: { seat: SeatObject | null; live: ReturnType<typeof createLive> }) {
   const object = () => {
@@ -433,12 +455,18 @@ function Details(props: { seat: SeatObject | null; live: ReturnType<typeof creat
               </p>
             </Show>
             <dl class="mt-2 space-y-1 text-sm">
-              {row(msg("manager.status"), statusName(status()))}
-              {row(msg("manager.category"), seat().category.label)}
-              <Show when={object()?.order_ref}>{(ref) => row(msg("manager.order"), ref())}</Show>
-              <Show when={object()?.ticket_type}>{(t) => row(msg("manager.ticketType"), t())}</Show>
+              <Row term={msg("manager.status")} value={statusName(status())} />
+              <Row term={msg("manager.category")} value={seat().category.label} />
+              <Show when={object()?.order_ref}>
+                {(ref) => <Row term={msg("manager.order")} value={ref()} />}
+              </Show>
+              <Show when={object()?.ticket_type}>
+                {(t) => <Row term={msg("manager.ticketType")} value={t()} />}
+              </Show>
               <Show when={object()?.expires_at}>
-                {(at) => row(msg("manager.expires"), dateTime.format(new Date(at())))}
+                {(at) => (
+                  <Row term={msg("manager.expires")} value={dateTime.format(new Date(at()))} />
+                )}
               </Show>
             </dl>
           </div>

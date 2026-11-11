@@ -341,7 +341,12 @@ function ChartEvents(props: { chart: Chart }) {
                   {(e) => (
                     <li class="flex flex-wrap items-center gap-3 px-3 py-2">
                       <span class="min-w-0 flex-1">
-                        <span class="block font-medium text-fg">{e.name ?? e.key}</span>
+                        <A
+                          href={`/events/${encodeURIComponent(e.key)}`}
+                          class="block font-medium text-accent underline"
+                        >
+                          {e.name ?? e.key}
+                        </A>
                         <span class="block font-mono text-sm text-muted">{e.key}</span>
                       </span>
                       <span class="text-sm text-muted">

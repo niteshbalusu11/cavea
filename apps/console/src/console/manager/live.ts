@@ -42,6 +42,11 @@ export interface WholeRead {
   endedAt: number;
 }
 
+export interface Health {
+  checkedAt: number | null;
+  error: ApiError | null;
+}
+
 export type Outcome =
   | { ok: true; labels: string[] }
   | { ok: false; error: ApiError; refused: Refusal[] };
@@ -55,9 +60,9 @@ export interface Live {
   object(label: string): EventObject | undefined;
   /** Changes whenever a status known to the page changes. */
   version(): number;
-  /** When the seats were last read in full, and the last failure, if the
-   * latest read failed (what is shown may then be stale). */
-  health(): { readAt: number | null; error: ApiError | null };
+  /** When the counts and the watched seats were last read, and the last
+   * failure if the latest read failed (what is shown may then be stale). */
+  health(): Health;
   /** The map's selection: these seats are drawn available whatever their
    * status, so that the picker keeps them; the others go back. */
   setSelected(labels: readonly string[]): void;
@@ -99,11 +104,11 @@ export function createLive(options: {
   let countsAtRead: Counts | null = null;
   const history: WholeRead[] = [];
   const [version, setVersion] = createSignal(0);
-  const [health, setHealth] = createSignal<{ readAt: number | null; error: ApiError | null }>({
-    readAt: null,
-    error: null,
-  });
+  const [health, setHealth] = createSignal<Health>({ checkedAt: null, error: null });
   const bump = () => setVersion((v) => v + 1);
+  /** The last whole read's failure, until one succeeds: the map may be
+   * stale while the counts and the selection are read fine. */
+  let wholeFailed: ApiError | null = null;
 
   const hidden = (label: string) => nonFree.has(label) && !selected.has(label);
   /** Tells the map about `labels` (or everything it may draw wrongly). */
@@ -176,8 +181,8 @@ export function createLive(options: {
       const endedAt = Date.now();
       last = { requests, objects: found.size, tookMs: endedAt - started, endedAt };
       history.push(last);
+      wholeFailed = null;
       if (history.length > 20) history.shift();
-      setHealth({ readAt: endedAt, error: null });
       bump();
     } finally {
       reading = false;
@@ -207,10 +212,12 @@ export function createLive(options: {
         !reading &&
         wholeReadDue(Date.now(), last, countsAtRead === null || !sameCounts(counts, countsAtRead))
       ) {
-        void whole(counts).catch(failed);
-      } else if (health().error !== null) {
-        setHealth((h) => ({ ...h, error: null }));
+        void whole(counts).catch((e: unknown) => {
+          failed(e);
+          if (!isAbort(e) && !signal.aborted) wholeFailed = asApiError(e);
+        });
       }
+      setHealth({ checkedAt: Date.now(), error: wholeFailed });
     } catch (e) {
       delay = Math.max(delay, failed(e) ?? 0);
     }
@@ -238,6 +245,7 @@ export function createLive(options: {
       // below is what it starts from.
       if (answer.counts !== undefined) await whole(answer.counts);
       ctx = context;
+      setHealth({ checkedAt: Date.now(), error: null });
       schedule(TICK_MS);
       return { kind: "map", unavailable: [...drawn] };
     },
