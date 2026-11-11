@@ -23,7 +23,7 @@ Layout and dependency rules are in `docs/01-architecture.md` §3. `cavea-core` a
 
 Run everything from the repository root. Prefix every cargo command with `CARGO_BUILD_JOBS=8` (shown once here, implied below).
 
-Toolchains: Rust is pinned in `rust-toolchain.toml` (with the `wasm32-unknown-unknown` target); bun is pinned in `package.json` (`packageManager`). `wasm-opt` (binaryen) is optional; without it `build-web` warns and reports unoptimised sizes.
+Toolchains: Rust is pinned in `rust-toolchain.toml` (with the `wasm32-unknown-unknown` target); bun is pinned in `package.json` (`packageManager`). `flake.nix` provides every system tool at those versions (Rust with `rust-lld`, bun, `wasm-opt` from binaryen, `psql`, `brotli`): enter it with `nix develop` or `direnv allow`, or run one command as `nix develop -c <command>`. A new system tool goes into the flake, not onto the machine by hand. Docker is the only host requirement. Outside the flake, `wasm-opt` is optional; without it `build-web` warns and reports unoptimised sizes.
 
 **Rust**
 

@@ -55,7 +55,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [ ] **FND-007** Generate TypeScript types from Rust for options, events and payloads (05 §3, §5)
 - [x] **FND-008** Workspace lint configuration: moderate clippy set, strict `tsc`, oxc rules (01 §4)
 - [ ] **FND-009** Changelog tooling and commit conventions (01 §6)
-- [ ] **FND-010** Nix development environment: `flake.nix` with every non-trivial tool, `.envrc` using the flake, so `direnv allow` loads everything (ORCHESTRATION §5, §10)
+- [x] **FND-010** Nix development environment: `flake.nix` with every non-trivial tool, `.envrc` using the flake, so `direnv allow` loads everything (ORCHESTRATION §5, §10)
 
 ### Chart format and compiler
 
