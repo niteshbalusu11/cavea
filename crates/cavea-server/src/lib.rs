@@ -6,6 +6,7 @@ pub mod charts;
 pub mod config;
 pub mod http;
 pub mod limiter;
+pub mod metrics;
 pub mod net;
 pub mod realtime;
 pub mod seats;
@@ -39,6 +40,7 @@ pub async fn serve(
 ) -> std::io::Result<()> {
     let seats = state.seats.clone();
     let realtime = state.realtime.clone();
+    let probe = tokio::spawn(state.health.clone().watch(state.db.clone()));
     // In the background, so that the server answers at once; a request for an
     // event not loaded yet loads it itself.
     let preload = tokio::spawn({
@@ -66,6 +68,7 @@ pub async fn serve(
                 tracing::warn!("requests still in flight after the drain period; closing them");
             }
             preload.abort();
+            probe.abort();
             if tokio::time::timeout_at(deadline, seats.shutdown()).await.is_err() {
                 tracing::error!("actors did not stop within the shutdown deadline");
             }

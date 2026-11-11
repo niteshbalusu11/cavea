@@ -23,7 +23,7 @@ use crate::state::{EventState, LoadError};
 use crate::store::{Acquired, ChartProvider, SeatStore, StoreError};
 use crate::types::{Clock, EventId, Failure, Reply, Request, Timestamp, TokenHash};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct RegistryConfig {
     pub actor: ActorConfig,
     /// After a load fails, requests for that event fail at once for this long
@@ -101,6 +101,8 @@ struct Inner<S, P, C> {
     clock: C,
     config: RegistryConfig,
     slots: Mutex<Slots>,
+    /// Where loads and actors run: the runtime the registry was created on.
+    runtime: Option<tokio::runtime::Handle>,
 }
 
 impl<S, P, C> Inner<S, P, C> {
@@ -110,7 +112,10 @@ impl<S, P, C> Inner<S, P, C> {
 }
 
 /// Every live event actor of this node. Cheap to clone. Must be used inside a
-/// Tokio runtime: loads and actors run as tasks of their own.
+/// Tokio runtime: loads and actors run as tasks of their own, on the runtime
+/// the registry was created on (created outside one, on the caller's), so a
+/// caller on another runtime, such as a realtime connection's, never moves
+/// an actor there.
 pub struct Registry<S, P, C> {
     inner: Arc<Inner<S, P, C>>,
 }
@@ -142,6 +147,7 @@ impl<S: SeatStore, P: ChartProvider, C: Clock + Clone> Registry<S, P, C> {
                 clock,
                 config,
                 slots: Mutex::default(),
+                runtime: tokio::runtime::Handle::try_current().ok(),
             }),
         }
     }
@@ -253,6 +259,20 @@ impl<S: SeatStore, P: ChartProvider, C: Clock + Clone> Registry<S, P, C> {
 
     /// How many actors are live, stopping included.
     #[must_use]
+    /// Loaded actors, and the commands waiting in their mailboxes, for the
+    /// metrics; reads each actor's channel, sends no message.
+    pub fn load(&self) -> (usize, usize) {
+        let slots = self.inner.slots();
+        slots
+            .map
+            .values()
+            .filter_map(|s| match s {
+                Slot::Live(live) => Some(live.handle.queued()),
+                _ => None,
+            })
+            .fold((0, 0), |(n, q), queued| (n + 1, q + queued))
+    }
+
     pub fn loaded(&self) -> usize {
         let slots = self.inner.slots();
         slots
@@ -348,7 +368,11 @@ impl<S: SeatStore, P: ChartProvider, C: Clock + Clone> Registry<S, P, C> {
         let inner = self.inner.clone();
         // Not the caller's span: the actor outlives the request that loaded it.
         let span = info_span!(parent: None, "actor", event_id = %hex(event));
-        tokio::spawn(run_event(inner, event, tx).instrument(span));
+        let task = run_event(inner, event, tx).instrument(span);
+        match &self.inner.runtime {
+            Some(runtime) => drop(runtime.spawn(task)),
+            None => drop(tokio::spawn(task)),
+        }
         Ok(Found::Wait(rx))
     }
 
@@ -415,7 +439,7 @@ async fn run_event<S: SeatStore, P: ChartProvider, C: Clock + Clone>(
         state,
         inner.store.clone(),
         inner.clock.clone(),
-        inner.config.actor,
+        inner.config.actor.clone(),
     );
     let (done_tx, done) = watch::channel(false);
     let live = Live { handle, done };

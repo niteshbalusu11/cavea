@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasher as _, RandomState};
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 /// Buckets are spread over this many independently locked maps.
@@ -62,6 +63,8 @@ pub struct Limiter {
     reads: Option<u64>,
     hasher: RandomState,
     shards: Box<[Mutex<Shard>]>,
+    /// Refusals per [`Budget`], for `cavea_rate_limited_total`.
+    refused: [AtomicU64; 2],
 }
 
 impl std::fmt::Debug for Limiter {
@@ -96,7 +99,14 @@ impl Limiter {
             reads: interval(reads_per_minute),
             hasher,
             shards,
+            refused: [AtomicU64::new(0), AtomicU64::new(0)],
         }
+    }
+
+    /// Requests refused for `budget` since start-up.
+    #[must_use]
+    pub fn refused(&self, budget: Budget) -> u64 {
+        self.refused[budget as usize].load(Ordering::Relaxed)
     }
 
     /// Take one from the bucket of `api_key` (a key id's 128 bits) and `addr`
@@ -146,6 +156,7 @@ impl Limiter {
         let start = (*tat).max(now);
         let ahead = start - now;
         if ahead > burst {
+            self.refused[budget as usize].fetch_add(1, Ordering::Relaxed);
             return Err(Limited((ahead - burst).div_ceil(1_000_000).max(1)));
         }
         *tat = start + interval;

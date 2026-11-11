@@ -13,7 +13,10 @@
 //! recent deltas and the committed holds sit behind one `RwLock` that is held
 //! only to clone or swap `Arc`s, never across an await. Live frames go out on a
 //! `tokio::sync::broadcast` channel, encoded once and shared by every
-//! subscriber.
+//! subscriber; sent by the actor, or by a relay task on the subscribers' own
+//! runtime ([`ActorConfig::broadcast_on`]).
+//!
+//! [`ActorConfig::broadcast_on`]: crate::ActorConfig
 //!
 //! [`EventState::take_batch_into`]: crate::state::EventState
 
@@ -22,12 +25,15 @@ use std::fmt;
 use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::time::Instant;
 
 use cavea_format::wire::{self, Change, Hello, ServerFrame, View, WireError};
-use tokio::sync::broadcast;
+use tokio::runtime::Handle;
+use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error};
 
 use crate::actor::KeepAlive;
+use crate::metrics::METRICS;
 use crate::state::{EventState, InvariantViolation};
 use crate::types::{EventId, Idx, Timestamp, TokenHash};
 
@@ -44,6 +50,12 @@ pub const RING_MS: u64 = 60_000;
 pub const RING_BYTES: usize = 4 << 20;
 /// Publications a subscriber may fall behind before it lags (08 §8.3).
 pub const QUEUE_FRAMES: usize = 64;
+/// A publication also waits while the last one has not reached the
+/// subscribers: while more than this many of them, and more than a tenth, have
+/// not taken it yet (08 §8.3)...
+pub const BEHIND_SUBSCRIBERS: usize = 1_000;
+/// ...but never longer than this after the last.
+pub const MAX_WAIT_MS: u64 = 1_000;
 
 /// The publication interval for an event with `subscribers` subscribers:
 /// 100 ms up to 20,000, then growing in proportion, so that the frames sent per
@@ -126,6 +138,13 @@ type Touched = HashMap<TokenHash, Option<Arc<Holding>>>;
 struct Publication {
     delta: Frame,
     holds: Option<Arc<Touched>>,
+    /// Subscribers that have taken it, which they do only once they have
+    /// written the publication before.
+    taken: Arc<AtomicUsize>,
+    /// When it was made, and how many takers make nine in ten of the
+    /// subscribers it went to, for `cavea_rt_fanout_seconds`.
+    made: Instant,
+    most: usize,
 }
 
 struct Shared {
@@ -361,6 +380,9 @@ impl Subscription {
                 // first message: already covered by what it was given.
                 Ok(p) if p.delta.seq <= self.seq => {}
                 Ok(p) => {
+                    if p.taken.fetch_add(1, Ordering::Relaxed) + 1 == p.most {
+                        METRICS.fanout.observe_duration(p.made.elapsed());
+                    }
                     self.seq = p.delta.seq;
                     let mine = self.token.and_then(|t| p.holds.as_ref()?.get(&t).cloned());
                     if let Some(holding) = mine {
@@ -455,6 +477,8 @@ impl Sealed {
 pub(crate) struct Publisher {
     feed: Arc<Feed>,
     tx: broadcast::Sender<Publication>,
+    /// The relay task's queue, if publications are broadcast by one.
+    relay: Option<mpsc::UnboundedSender<Publication>>,
     /// Committed domain statuses.
     status: Vec<u8>,
     /// Public codes as last published, one bit per object.
@@ -464,6 +488,8 @@ pub(crate) struct Publisher {
     /// `seq` of the current snapshot and the last delta's `to_seq`.
     published: u64,
     last_publish: Option<Timestamp>,
+    /// The last publication's count of takers, and the subscribers it went to.
+    last_taken: Option<(Arc<AtomicUsize>, usize)>,
     /// Committed changes since `published`, in commit order.
     changes: Vec<Change>,
     /// Committed holds of tokens touched since `published`.
@@ -478,8 +504,12 @@ fn wire_corrupt(_: WireError) -> InvariantViolation {
 impl Publisher {
     /// The feed of a freshly loaded `state`, all of which is committed, with
     /// its first snapshot published. `Err` (with a feed that has ended) if
-    /// that snapshot cannot be encoded.
-    pub(crate) fn new(state: &EventState) -> (Arc<Feed>, Result<Self, InvariantViolation>) {
+    /// that snapshot cannot be encoded. With `broadcast_on`, publications are
+    /// broadcast by a relay task spawned there.
+    pub(crate) fn new(
+        state: &EventState,
+        broadcast_on: Option<&Handle>,
+    ) -> (Arc<Feed>, Result<Self, InvariantViolation>) {
         let chart = state.chart();
         let status = state.statuses().to_vec();
         let objects = u32::try_from(status.len()).unwrap_or(u32::MAX);
@@ -521,14 +551,29 @@ impl Publisher {
                 *word |= u64::from(s != 0) << bit;
             }
         }
+        // One task, one queue: publications are broadcast in the order the
+        // actor made them. It ends once the actor has dropped the queue and
+        // everything in it is sent; the channel closes after that.
+        let relay = broadcast_on.map(|runtime| {
+            let (relay, mut queue) = mpsc::unbounded_channel::<Publication>();
+            let tx = tx.clone();
+            drop(runtime.spawn(async move {
+                while let Some(publication) = queue.recv().await {
+                    let _ = tx.send(publication);
+                }
+            }));
+            relay
+        });
         let publisher = Self {
             feed: feed.clone(),
             tx,
+            relay,
             status,
             shown,
             seq: state.seq(),
             published: state.seq(),
             last_publish: None,
+            last_taken: None,
             changes: Vec::new(),
             holds: HashMap::new(),
             held: Vec::new(),
@@ -559,21 +604,41 @@ impl Publisher {
     }
 
     /// When the next publication is due, or `None` if everything committed is
-    /// published. The first commit after a quiet interval is due at once.
+    /// published. The first commit after a quiet interval is due at once. A
+    /// publication that has not reached most subscribers yet holds the next one
+    /// back, up to [`MAX_WAIT_MS`]: when fanning out cannot keep up, changes
+    /// coalesce over a longer interval instead of queueing up behind it.
     pub(crate) fn due(&self) -> Option<Timestamp> {
         if self.seq == self.published {
             return None;
         }
-        let interval = interval_ms(self.feed.subscribers());
+        let wait = if self.behind() {
+            MAX_WAIT_MS
+        } else {
+            interval_ms(self.feed.subscribers())
+        };
         Some(
             self.last_publish
-                .map_or(Timestamp(0), |t| Timestamp(t.0.saturating_add(interval))),
+                .map_or(Timestamp(0), |t| Timestamp(t.0.saturating_add(wait))),
         )
+    }
+
+    /// Whether the last publication is still on its way to the subscribers:
+    /// more than [`BEHIND_SUBSCRIBERS`] of them, and more than a tenth, have
+    /// not taken it. A few stalled clients never count, nor do subscribers
+    /// that have left since.
+    fn behind(&self) -> bool {
+        self.last_taken.as_ref().is_some_and(|(taken, sent_to)| {
+            let still = (*sent_to).min(self.feed.subscribers());
+            let left = still.saturating_sub(taken.load(Ordering::Relaxed));
+            left > BEHIND_SUBSCRIBERS && left > sent_to / 10
+        })
     }
 
     /// When the actor should next look at [`Self::due`]: the due time, or
     /// sooner, at the next 100 ms step after `now`, while a stretched
-    /// interval is pending, since subscribers leaving shortens it.
+    /// interval is pending, since subscribers leaving or catching up shortens
+    /// it.
     pub(crate) fn wake_at(&self, now: Timestamp) -> Option<Timestamp> {
         let due = self.due()?;
         let Some(last) = self.last_publish.filter(|_| due > now) else {
@@ -589,8 +654,12 @@ impl Publisher {
     pub(crate) fn publish(&mut self, now: Timestamp) -> Result<(), InvariantViolation> {
         if let Some(publication) = self.stage(now)? {
             // Outside the lock: a subscriber attached since the swap already
-            // has this publication and skips it by its `seq`.
-            let _ = self.tx.send(publication);
+            // has this publication and skips it by its `seq`. So does one
+            // that attaches before the relay sends it.
+            match &self.relay {
+                Some(relay) => drop(relay.send(publication)),
+                None => drop(self.tx.send(publication)),
+            }
         }
         Ok(())
     }
@@ -645,6 +714,9 @@ impl Publisher {
             .collect();
         let delta = Frame::new(self.seq, delta);
         let holds = (!holds.is_empty()).then(|| Arc::new(holds));
+        let taken = Arc::new(AtomicUsize::new(0));
+        let sent_to = self.feed.subscribers();
+        self.last_taken = Some((taken.clone(), sent_to));
         {
             let mut shared = self.feed.write();
             shared.snapshot = Some(Frame::new(self.seq, snapshot));
@@ -662,7 +734,14 @@ impl Publisher {
         self.last_publish = Some(now);
         self.changes.clear();
         self.held.clear();
-        Ok(Some(Publication { delta, holds }))
+        METRICS.publications.fetch_add(1, Ordering::Relaxed);
+        Ok(Some(Publication {
+            delta,
+            holds,
+            taken,
+            made: Instant::now(),
+            most: sent_to - sent_to / 10,
+        }))
     }
 
     /// Drop expired frames from the ring buffer while no delta is published.
@@ -753,13 +832,37 @@ mod tests {
         }
     }
 
+    /// 2,000 subscribers, none of which has taken the last publication yet:
+    /// the next one waits, up to `MAX_WAIT_MS`. Once all but 1,000 have taken
+    /// it, the next is due at the usual interval again.
+    #[test]
+    fn a_publication_waits_for_the_last_to_reach_most_subscribers() {
+        let mut state = state();
+        let (feed, publisher) = Publisher::new(&state, None);
+        let mut publisher = publisher.unwrap();
+        let keep = keep();
+        let mut subs: Vec<_> = (0..2_000)
+            .map(|_| feed.attach(0, None, keep.clone(), Timestamp(0)).unwrap())
+            .collect();
+        commit_block(&mut state, &mut publisher, 1);
+        publisher.publish(Timestamp(0)).unwrap();
+        commit_block(&mut state, &mut publisher, 2);
+        assert_eq!(publisher.due(), Some(Timestamp(MAX_WAIT_MS)));
+        for sub in &mut subs[..999] {
+            assert_eq!(seq_of(poll_next(sub)), Some(1));
+        }
+        assert_eq!(publisher.due(), Some(Timestamp(MAX_WAIT_MS)));
+        assert_eq!(seq_of(poll_next(&mut subs[999])), Some(1));
+        assert_eq!(publisher.due(), Some(Timestamp(INTERVAL_MS)));
+    }
+
     /// The actor swaps a publication in, then broadcasts it outside the lock.
     /// A subscriber attaching in between gets it from the swap and must not
     /// get it again from the broadcast; one attaching before gets it once.
     #[test]
     fn a_subscriber_attached_between_swap_and_broadcast_gets_each_frame_once() {
         let mut state = state();
-        let (feed, publisher) = Publisher::new(&state);
+        let (feed, publisher) = Publisher::new(&state, None);
         let mut publisher = publisher.unwrap();
         let mut before = feed.attach(0, None, keep(), Timestamp(0)).unwrap();
         assert_eq!(before.seq(), 0);

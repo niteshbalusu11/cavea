@@ -268,6 +268,12 @@ impl EventState {
         self.slot(*self.by_token.get(token)?).map(view)
     }
 
+    /// Live holds, committed or not.
+    #[must_use]
+    pub fn hold_count(&self) -> usize {
+        self.by_token.len()
+    }
+
     pub fn holds(&self) -> impl Iterator<Item = HoldView<'_>> {
         self.holds.iter().flatten().map(view)
     }

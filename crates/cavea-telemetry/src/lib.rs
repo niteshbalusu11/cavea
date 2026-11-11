@@ -19,17 +19,22 @@
 //! same literal names, and a test in `cavea-server` checks that they agree.
 
 mod http;
+mod output;
 
 use std::fmt;
 use std::str::FromStr;
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use tracing::Subscriber;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::MakeWriter;
 
+pub use output::{Output, QUEUE_RECORDS};
+
 pub use http::{
-    REQUEST_ID_HEADER, RequestId, RequestLayer, RequestService, UNMATCHED_ROUTE, record_event,
-    record_workspace, request_id,
+    Completed, REQUEST_ID_HEADER, RequestId, RequestLayer, RequestService, UNMATCHED_ROUTE,
+    record_event, record_workspace, request_id,
 };
 
 /// Span names. Fields are listed with each.
@@ -91,6 +96,8 @@ pub enum InitError {
     Format,
     /// A global subscriber is already installed.
     AlreadyInitialised,
+    /// The log output's thread could not be started.
+    Output(std::io::Error),
 }
 
 impl fmt::Display for InitError {
@@ -99,6 +106,7 @@ impl fmt::Display for InitError {
             Self::Filter(e) => write!(f, "invalid log filter: {e}"),
             Self::Format => f.write_str("log format must be `json` or `text`"),
             Self::AlreadyInitialised => f.write_str("logging is already initialised"),
+            Self::Output(e) => write!(f, "cannot start the log output: {e}"),
         }
     }
 }
@@ -107,7 +115,9 @@ impl std::error::Error for InitError {}
 
 /// Build the subscriber for `filter` (`tracing` directive syntax, such as
 /// `info,cavea_server=debug`) and `format`, writing to `writer`. [`init`] uses
-/// this with stdout; tests use it to capture output.
+/// this with an [`Output`] to stdout; tests use it to capture output. A record
+/// the writer fails to take is lost silently: never reported on standard
+/// error, whose failure would panic the task that logged.
 pub fn subscriber<W>(
     filter: &str,
     format: LogFormat,
@@ -119,7 +129,8 @@ where
     let filter = EnvFilter::try_new(filter).map_err(InitError::Filter)?;
     let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_writer(writer);
+        .with_writer(writer)
+        .log_internal_errors(false);
     Ok(match format {
         // Every enclosing span with its fields, outermost first, so an event
         // inside `apply` still carries the request id.
@@ -135,9 +146,38 @@ where
     })
 }
 
-/// Install the process-wide subscriber, writing to stdout. Call once, first
-/// thing in `main`.
-pub fn init(filter: &str, format: LogFormat) -> Result<(), InitError> {
-    tracing::subscriber::set_global_default(subscriber(filter, format, std::io::stdout)?)
-        .map_err(|_| InitError::AlreadyInitialised)
+/// The process's log output, once [`init`] has run.
+static OUTPUT: OnceLock<Output> = OnceLock::new();
+
+/// How long the output is given, at exit, to write what is queued.
+pub const FLUSH_AT_EXIT: Duration = Duration::from_millis(250);
+
+/// Log records dropped since start-up because the output was full or failing
+/// (`cavea_log_records_dropped_total`); 0 before [`init`].
+#[must_use]
+pub fn dropped_records() -> u64 {
+    OUTPUT.get().map_or(0, Output::dropped)
+}
+
+/// Install the process-wide subscriber, writing to stdout through an
+/// [`Output`]: logging never waits for stdout and never fails. Call once,
+/// first thing in `main`, and keep the guard until exit: dropping it gives the
+/// output [`FLUSH_AT_EXIT`] to write what is queued.
+pub fn init(filter: &str, format: LogFormat) -> Result<Logging, InitError> {
+    let output = Output::spawn(std::io::stdout(), QUEUE_RECORDS).map_err(InitError::Output)?;
+    tracing::subscriber::set_global_default(subscriber(filter, format, output.clone())?)
+        .map_err(|_| InitError::AlreadyInitialised)?;
+    let _ = OUTPUT.set(output.clone());
+    Ok(Logging(output))
+}
+
+/// Flushes the log output when dropped.
+#[derive(Debug)]
+#[must_use = "dropping it at once flushes nothing written after"]
+pub struct Logging(Output);
+
+impl Drop for Logging {
+    fn drop(&mut self) {
+        let _ = self.0.flush(FLUSH_AT_EXIT);
+    }
 }

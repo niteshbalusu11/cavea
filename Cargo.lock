@@ -326,6 +326,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hmac",
  "http-body",
+ "libc",
  "serde",
  "serde_json",
  "sha2 0.11.1",

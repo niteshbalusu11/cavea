@@ -63,7 +63,7 @@ fn state() -> AppState {
     // Never connects: no route under test reaches the database.
     let db = sqlx::postgres::PgPoolOptions::new().connect_lazy_with(Default::default());
     AppState {
-        seats: Seats::new(db.clone(), &config, ServerClock::System),
+        seats: Seats::new(db.clone(), &config, ServerClock::System, None),
         realtime: Realtime::new(100, 10, Timing::default()),
         limiter: Arc::new(Limiter::new(
             config.rate_limit_holds,
@@ -71,6 +71,7 @@ fn state() -> AppState {
         )),
         config: Arc::new(config),
         db,
+        health: super::Health::default(),
     }
 }
 
@@ -182,6 +183,142 @@ async fn healthz_responds_ok() {
         .await
         .unwrap();
     assert_eq!(&body[..], b"ok");
+}
+
+/// `GET /metrics` answers the admin key alone, with Prometheus text: each
+/// family declared before its samples; each sample a name, labels from the
+/// bounded set and a number; each histogram's buckets cumulative up to `+Inf`,
+/// which is its count. A path no route matched is `<unmatched>`, never itself.
+#[tokio::test]
+async fn metrics_are_prometheus_text_with_bounded_labels() {
+    let _serial = serial();
+    const ADMIN: &str = "test-admin-key-not-a-real-secret-000";
+    let mut state = state();
+    Arc::make_mut(&mut state.config).admin_key = Some(ADMIN.parse().unwrap());
+    let app = router(state);
+    for path in ["/healthz", "/readyz", "/v1/no-such-route-ev_9f3a"] {
+        app.clone().oneshot(get_req(path)).await.unwrap();
+    }
+    let refused = app.clone().oneshot(get_req("/metrics")).await.unwrap();
+    assert_eq!(refused.status(), 401);
+    let request = Request::get("/metrics")
+        .header(header::AUTHORIZATION, format!("Bearer {ADMIN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "text/plain; version=0.0.4; charset=utf-8"
+    );
+    let body = axum::body::to_bytes(response.into_body(), 1 << 22)
+        .await
+        .unwrap();
+    let text = std::str::from_utf8(&body).unwrap();
+
+    const LABELS: [&str; 7] = [
+        "op",
+        "result",
+        "route",
+        "status",
+        "transport",
+        "budget",
+        "le",
+    ];
+    let mut kinds = std::collections::HashMap::new();
+    // Per histogram series: the last cumulative bucket count, and `+Inf`'s.
+    let mut buckets: std::collections::HashMap<String, (f64, Option<f64>)> = Default::default();
+    let mut counts = Vec::new();
+    let mut routes = std::collections::HashSet::new();
+    for line in text.lines() {
+        if line.starts_with("# HELP ") {
+            continue;
+        }
+        if let Some(declared) = line.strip_prefix("# TYPE ") {
+            let (name, kind) = declared.split_once(' ').unwrap();
+            assert!(["counter", "gauge", "histogram"].contains(&kind), "{line}");
+            assert!(
+                kinds.insert(name.to_owned(), kind).is_none(),
+                "declared twice: {line}"
+            );
+            continue;
+        }
+        let (series, value) = line.rsplit_once(' ').unwrap();
+        let value: f64 = value.parse().unwrap_or_else(|_| panic!("{line}"));
+        assert!(value.is_finite() && value >= 0.0, "{line}");
+        let (name, labels) = match series.split_once('{') {
+            Some((name, labels)) => (name, labels.strip_suffix('}').unwrap()),
+            None => (series, ""),
+        };
+        assert!(
+            name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && name.starts_with("cavea_"),
+            "{line}"
+        );
+        let mut le = None;
+        let mut rest = labels;
+        let mut others = String::new();
+        while !rest.is_empty() {
+            let (key, after) = rest.split_once("=\"").unwrap();
+            assert!(LABELS.contains(&key), "unbounded label {key}: {line}");
+            let end = after.find('"').unwrap();
+            let value = &after[..end];
+            match key {
+                "le" => le = Some(value),
+                "route" => {
+                    routes.insert(value.to_owned());
+                }
+                _ => {}
+            }
+            if key != "le" {
+                others.push_str(&rest[..key.len() + 2 + end + 1]);
+            }
+            rest = after[end + 1..].trim_start_matches(',');
+        }
+        let family = [
+            name.strip_suffix("_bucket"),
+            name.strip_suffix("_sum"),
+            name.strip_suffix("_count"),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|f| kinds.get(*f) == Some(&"histogram"))
+        .unwrap_or(name);
+        assert!(
+            kinds.contains_key(family),
+            "sample before its # TYPE: {line}"
+        );
+        let key = format!("{family}{{{others}}}");
+        if name.ends_with("_bucket") && family != name {
+            let entry = buckets.entry(key).or_insert((0.0, None));
+            assert!(value >= entry.0, "buckets not cumulative: {line}");
+            entry.0 = value;
+            if le.unwrap() == "+Inf" {
+                entry.1 = Some(value);
+            }
+        } else if name.ends_with("_count") && family != name {
+            counts.push((key, value));
+        }
+    }
+    assert!(!counts.is_empty());
+    for (key, count) in counts {
+        assert_eq!(buckets[&key].1, Some(count), "{key}: +Inf is not the count");
+    }
+    for name in [
+        "cavea_commands_total",
+        "cavea_http_requests_total",
+        "cavea_rt_subscribers",
+        "cavea_db_pool_in_use",
+        "cavea_log_records_dropped_total",
+        "cavea_rt_fanout_seconds",
+    ] {
+        assert!(kinds.contains_key(name), "{name} missing");
+    }
+    assert!(
+        routes.contains("<unmatched>") && routes.contains("/healthz"),
+        "{routes:?}"
+    );
+    assert!(routes.iter().all(|r| !r.contains("ev_9f3a")), "{routes:?}");
 }
 
 #[tokio::test]

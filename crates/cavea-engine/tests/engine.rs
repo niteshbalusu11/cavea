@@ -992,6 +992,43 @@ fn gate(store: &MemoryStore) -> oneshot::Sender<()> {
     open
 }
 
+/// `cavea_commit_duration_seconds_count` and the commands' count, from the
+/// process's metrics.
+fn timed() -> (u64, u64) {
+    let mut out = cavea_engine::metrics::Exposition::new();
+    cavea_engine::metrics::METRICS.render(&mut out, (0, 0));
+    let text = out.into_string();
+    let count = |prefix: &str| -> u64 {
+        text.lines()
+            .filter(|l| l.starts_with(prefix))
+            .map(|l| l.rsplit_once(' ').unwrap().1.parse::<u64>().unwrap())
+            .sum()
+    };
+    (
+        count("cavea_commit_duration_seconds_count "),
+        count("cavea_command_duration_seconds_count{op=\"create_hold\"}"),
+    )
+}
+
+/// Every commit is timed, also one during which the next command arrives, and
+/// every command; other tests may add to the counts, never take from them.
+#[tokio::test]
+async fn every_commit_and_command_is_counted() {
+    let r = rig(ActorConfig::default());
+    let (commits, commands) = timed();
+    let open = gate(&r.store);
+    let first = tokio::spawn(r.handle.submit(req(create(1, None))).unwrap());
+    settle().await;
+    let second = tokio::spawn(r.handle.submit(req(create(2, None))).unwrap());
+    settle().await;
+    open.send(()).unwrap();
+    first.await.unwrap().unwrap();
+    second.await.unwrap().unwrap();
+    let (commits_now, commands_now) = timed();
+    assert!(commits_now >= commits + 2, "{commits} -> {commits_now}");
+    assert!(commands_now >= commands + 2, "{commands} -> {commands_now}");
+}
+
 #[tokio::test]
 async fn replies_wait_for_the_commit() {
     let r = rig(ActorConfig::default());

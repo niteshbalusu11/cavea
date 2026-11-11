@@ -640,6 +640,11 @@ async fn the_interval_stretches_with_more_than_twenty_thousand_subscribers() {
     reg.send(EV, status(&[1], Status::BLOCKED)).await.unwrap();
     reg.send(EV, status(&[2], Status::BLOCKED)).await.unwrap();
     settle().await;
+    // Every subscriber takes the first publication, as live ones do (the
+    // runtime's budget would stop one task after 128).
+    for sub in &mut subs {
+        while poll_now(tokio::task::unconstrained(sub.next())).is_some() {}
+    }
     store.clock().advance_ms(199);
     settle().await;
     assert_eq!(reg.snapshot(EV).await.unwrap().seq(), 1);

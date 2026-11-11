@@ -13,11 +13,13 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{Instrument, Span, debug, error, info, info_span};
 
 use crate::feed::{End, Feed, Publisher, Sealed};
+use crate::metrics::METRICS;
 use crate::state::{EventState, InvariantViolation};
 use crate::store::{SeatStore, StoreError};
 use crate::types::{Clock, Failure, Op, Reply, Request, Timestamp};
+use std::time::Instant;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ActorConfig {
     /// Commands that may wait in the mailbox; beyond this callers get
     /// `overloaded`.
@@ -31,6 +33,12 @@ pub struct ActorConfig {
     /// stops. It is checked once per period, so after the last command, hold
     /// expiry or `KeepAlive` it can take up to twice this.
     pub idle_ms: u64,
+    /// Where publications are broadcast: with a runtime, a task of its own
+    /// there wakes the subscribers, in publication order; without, the actor
+    /// does. Subscribers that run on another runtime than the actor are woken
+    /// cheaply only from their own, and never at the actor's expense
+    /// (08 §8.3).
+    pub broadcast_on: Option<tokio::runtime::Handle>,
 }
 
 impl Default for ActorConfig {
@@ -40,6 +48,7 @@ impl Default for ActorConfig {
             max_batch: 2_000,
             heartbeat_ms: 5_000,
             idle_ms: 600_000,
+            broadcast_on: None,
         }
     }
 }
@@ -69,10 +78,48 @@ struct Envelope {
     parent: Span,
     /// Open while the command waits in the mailbox.
     wait: Span,
+    submitted: Instant,
 }
 
-/// A reply waiting to be released, with its `apply` span and the caller's span.
-type Queued = (oneshot::Sender<Reply>, Reply, Span, Span);
+/// A reply waiting to be released.
+struct Queued {
+    reply: oneshot::Sender<Reply>,
+    result: Reply,
+    apply: Span,
+    caller: Span,
+    op: Op,
+    submitted: Instant,
+}
+
+impl Queued {
+    /// Answer the caller, counting the command as answered at `now`.
+    fn answer(self, result: Reply, now: Instant) {
+        let took = now.saturating_duration_since(self.submitted);
+        METRICS.command(self.op, result.as_ref().map(|_| ()), Some(took));
+        // The caller may have gone away; nothing to do then.
+        let _ = self.reply.send(result);
+    }
+}
+
+/// This actor's live holds, as added to `cavea_holds_active`; taken back out
+/// when the actor ends, however it ends.
+struct HoldsCounted(i64);
+
+impl HoldsCounted {
+    fn set(&mut self, holds: usize) {
+        let holds = i64::try_from(holds).unwrap_or(i64::MAX);
+        if holds != self.0 {
+            METRICS.holds.fetch_add(holds - self.0, Ordering::Relaxed);
+            self.0 = holds;
+        }
+    }
+}
+
+impl Drop for HoldsCounted {
+    fn drop(&mut self) {
+        self.set(0);
+    }
+}
 
 /// Sends commands to one actor. Cheap to clone.
 #[derive(Debug, Clone)]
@@ -154,16 +201,21 @@ impl ActorHandle {
     pub(crate) fn try_submit(&self, request: Request) -> Result<PendingReply, Rejected> {
         let (reply, rx) = oneshot::channel();
         let parent = Span::current();
-        let wait = info_span!("mailbox_wait", op = request.command.op().name());
+        let op = request.command.op();
+        let wait = info_span!("mailbox_wait", op = op.name());
         let envelope = Envelope {
             request,
             reply,
             parent,
             wait,
+            submitted: Instant::now(),
         };
         match self.tx.try_send(envelope) {
             Ok(()) => Ok(PendingReply(rx)),
-            Err(mpsc::error::TrySendError::Full(_)) => Err(Rejected::Overloaded),
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                METRICS.command(op, Err(&Failure::Overloaded), None);
+                Err(Rejected::Overloaded)
+            }
             Err(mpsc::error::TrySendError::Closed(e)) => Err(Rejected::Closed(Box::new(e.request))),
         }
     }
@@ -183,6 +235,11 @@ impl ActorHandle {
     pub fn keep_alive(&self) -> KeepAlive {
         self.control.keep.fetch_add(1, Ordering::SeqCst);
         KeepAlive(self.control.clone())
+    }
+
+    /// Commands waiting in the mailbox, for `cavea_actor_mailbox_depth`.
+    pub(crate) fn queued(&self) -> usize {
+        self.tx.max_capacity() - self.tx.capacity()
     }
 
     /// What the actor publishes for realtime readers.
@@ -218,7 +275,7 @@ pub fn actor<S: SeatStore, C: Clock>(
         keep: AtomicUsize::new(0),
         released: AtomicU64::new(0),
     });
-    let (feed, publisher) = Publisher::new(&state);
+    let (feed, publisher) = Publisher::new(&state, config.broadcast_on.as_ref());
     let run = run(state, publisher, store, clock, rx, control.clone(), config);
     (ActorHandle { tx, control, feed }, run)
 }
@@ -268,6 +325,14 @@ async fn run<S: SeatStore, C: Clock>(
     // Replies of the batch being committed.
     let mut committing: Vec<Queued> = Vec::new();
     let mut in_flight: Option<Write<'_>> = None;
+    // When the batch in flight started committing; `None` for a heartbeat.
+    let mut commit_started = None;
+    // The clock as read for the last command taken or commit finished, for
+    // the metrics: one reading serves everything that happens on that turn.
+    let mut read: Option<Instant> = None;
+    let mut holds = HoldsCounted(0);
+    // A restored event's holds count from the start.
+    holds.set(state.hold_count());
     // The write in flight is a heartbeat.
     let mut renewing = false;
     let mut open = true;
@@ -296,7 +361,7 @@ async fn run<S: SeatStore, C: Clock>(
                 Err(v) => return Err(stop(ActorError::Invariant(v), pending, committing, rx)),
                 // Only refusals and no-ops: nothing to write, and everything
                 // they observed is already committed.
-                Ok(None) => release(&mut pending),
+                Ok(None) => release(&mut pending, read.unwrap_or_else(Instant::now)),
                 Ok(Some(batch)) => {
                     // `seq` is per event, so the event id names the commit too.
                     let event_id = format!("{:032x}", batch.event.0);
@@ -306,12 +371,16 @@ async fn run<S: SeatStore, C: Clock>(
                         seq = batch.seq,
                         commands = pending.len()
                     );
-                    for (_, _, apply, caller) in &pending {
-                        span.follows_from(apply);
+                    for queued in &pending {
+                        span.follows_from(&queued.apply);
                         // Lets the caller's own log records name this commit.
-                        caller.record("event_id", &event_id);
-                        caller.record("commit_seq", batch.seq);
+                        queued.caller.record("event_id", &event_id);
+                        queued.caller.record("commit_seq", batch.seq);
                     }
+                    METRICS
+                        .commit_batch
+                        .observe(u64::try_from(batch.log.len()).unwrap_or(u64::MAX));
+                    commit_started = Some(read.unwrap_or_else(Instant::now));
                     in_flight = Some(Box::pin(store.commit_batch(batch).instrument(span)));
                     committing = std::mem::take(&mut pending);
                 }
@@ -387,6 +456,14 @@ async fn run<S: SeatStore, C: Clock>(
         })
         .await;
 
+        read = matches!(next, Next::Committed(_) | Next::Received(_)).then(Instant::now);
+        if let (Next::Committed(_), Some(now)) = (&next, read)
+            && let Some(started) = commit_started.take()
+        {
+            METRICS
+                .commit_seconds
+                .observe_duration(now.saturating_duration_since(started));
+        }
         match next {
             Next::Committed(Ok(())) => {
                 in_flight = None;
@@ -396,8 +473,9 @@ async fn run<S: SeatStore, C: Clock>(
                 } else {
                     debug!(commands = committing.len(), "batch committed");
                     publisher.commit(&sealed);
+                    holds.set(state.hold_count());
                 }
-                release(&mut committing);
+                release(&mut committing, read.unwrap_or_else(Instant::now));
             }
             Next::Committed(Err(e)) => {
                 return Err(stop(ActorError::Store(e), pending, committing, rx));
@@ -447,7 +525,12 @@ async fn run<S: SeatStore, C: Clock>(
                 idle_at = after(clock.now(), config.idle_ms);
                 let span = info_span!("apply", op = Op::Expire.name());
                 match span.in_scope(|| state.expire_due(clock.now())) {
-                    Ok(expired) => span.in_scope(|| debug!(expired, "holds expired")),
+                    Ok(expired) => {
+                        for _ in 0..expired {
+                            METRICS.command(Op::Expire, Ok(()), None);
+                        }
+                        span.in_scope(|| debug!(expired, "holds expired"));
+                    }
                     Err(v) => return Err(stop(ActorError::Invariant(v), pending, committing, rx)),
                 }
             }
@@ -457,15 +540,28 @@ async fn run<S: SeatStore, C: Clock>(
                     reply,
                     parent,
                     wait,
+                    submitted,
                 } = envelope;
                 drop(wait);
+                let now = read.unwrap_or_else(Instant::now);
+                METRICS.mailbox_wait(now.saturating_duration_since(submitted));
+                let op = request.command.op();
                 idle_at = after(clock.now(), config.idle_ms);
-                let span = info_span!(parent: &parent, "apply", op = request.command.op().name());
+                let span = info_span!(parent: &parent, "apply", op = op.name());
                 let applied = span.in_scope(|| state.apply(&request, clock.now()));
+                let queued = |result| Queued {
+                    reply,
+                    result,
+                    apply: span,
+                    caller: parent,
+                    op,
+                    submitted,
+                };
                 match applied {
-                    Ok(result) => pending.push((reply, result, span, parent)),
+                    Ok(result) => pending.push(queued(result)),
                     Err(v) => {
-                        let _ = reply.send(Err(Failure::Unavailable));
+                        let failed = Err(Failure::Unavailable);
+                        queued(Err(Failure::Unavailable)).answer(failed, Instant::now());
                         return Err(stop(ActorError::Invariant(v), pending, committing, rx));
                     }
                 }
@@ -478,13 +574,15 @@ fn after(t: Timestamp, ms: u64) -> Timestamp {
     Timestamp(t.0.saturating_add(ms))
 }
 
-fn release(queued: &mut Vec<Queued>) {
-    for (reply, result, span, _) in queued.drain(..) {
-        if let Err(failure) = &result {
-            span.in_scope(|| debug!(code = failure.code(), "command refused"));
+/// Answer every queued caller; `now` times the replies for the metrics.
+fn release(queued: &mut Vec<Queued>, now: Instant) {
+    for mut queued in queued.drain(..) {
+        if let Err(failure) = &queued.result {
+            let code = failure.code();
+            queued.apply.in_scope(|| debug!(code, "command refused"));
         }
-        // The caller may have gone away; nothing to do then.
-        let _ = reply.send(result);
+        let result = std::mem::replace(&mut queued.result, Err(Failure::Unavailable));
+        queued.answer(result, now);
     }
 }
 
@@ -502,11 +600,14 @@ fn stop(
         }
         _ => error!(error = %err, "actor stopped; event must be reloaded"),
     }
-    for (reply, _, _, _) in committing.into_iter().chain(pending) {
-        let _ = reply.send(Err(Failure::Unavailable));
+    for queued in committing.into_iter().chain(pending) {
+        queued.answer(Err(Failure::Unavailable), Instant::now());
     }
     rx.close();
     while let Ok(envelope) = rx.try_recv() {
+        let op = envelope.request.command.op();
+        let took = envelope.submitted.elapsed();
+        METRICS.command(op, Err(&Failure::Unavailable), Some(took));
         let _ = envelope.reply.send(Err(Failure::Unavailable));
     }
     err
