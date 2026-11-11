@@ -4,9 +4,10 @@
 //! [`compile`] runs, in order: the schema and structure checks the pipeline
 //! needs (steps 1–2), expansion (3), the transform to world coordinates (4),
 //! row segmentation (5), labelling and the uniqueness check (6–7), ranking (8),
-//! `idx` order and render chunks (9–10), quantisation (13), and encoding with
-//! the content hash (14–15). Outlines, section label anchors and tessellation
-//! (11–12) are the next slice: [`section_outline`] is where they plug in.
+//! `idx` order and render chunks (9–10), section outlines, label anchors and
+//! outline tessellation (11–12, in [`crate::geometry`] and
+//! [`crate::tessellate`]), quantisation (13), and encoding with the content
+//! hash (14–15). Decoration nodes are not compiled yet.
 //!
 //! Everything here is deterministic: no platform maths beyond `+ − × ÷ √`,
 //! no hash-map iteration, and every sort has a total order.
@@ -23,6 +24,8 @@ use crate::detmath;
 use crate::document::{self as doc, ChartDocument, Node};
 use crate::expand::{ExpandedRow, Expansion, Seat};
 use crate::finding::{Code, Detail, Finding, Findings, expand_code};
+use crate::geometry::{self, OutlineError, P};
+use crate::tessellate::{self, Subpath, TessError};
 
 /// The document schema this compiler reads.
 pub const SCHEMA: u32 = 1;
@@ -247,12 +250,38 @@ fn point_box([x, y]: Point) -> Bounds {
     [x, y, x, y]
 }
 
-/// The outline mesh range, label anchor and largest label size of a section.
-/// Neutral values until the outline slice (FMT-010, FMT-017, FMT-018) computes
-/// the hull, its triangles and the pole of inaccessibility here.
-fn section_outline(_bounds: Bounds) -> ((u32, u32), Point, u16) {
-    ((0, 0), [0, 0], 0)
+/// A world point in chart units as a `MESH` vertex, if it is within the
+/// quantised range (03 §3.1.1).
+fn mesh_point(p: [f64; 2]) -> Option<[f32; 2]> {
+    quantise_point(p).map(|_| [p[0] as f32, p[1] as f32])
 }
+
+/// A quantised box that contains every point of `pts`: minima rounded down
+/// and maxima up to quarter units. `None` out of range.
+fn outer_box(pts: &[[f64; 2]]) -> Option<Bounds> {
+    let q = |v: f64, up: bool| {
+        let v = if up {
+            (v * 4.0).ceil()
+        } else {
+            (v * 4.0).floor()
+        };
+        quantise(v / 4.0)
+    };
+    let mut b: Option<Bounds> = None;
+    for &[x, y] in pts {
+        grow(
+            &mut b,
+            [q(x, false)?, q(y, false)?, q(x, true)?, q(y, true)?],
+        );
+    }
+    b
+}
+
+/// Section outline vertices are white: the renderer tints them (03 §4.2.3).
+const OUTLINE_COLOR: ccf::Rgba = [255, 255, 255, 255];
+/// Half the default row pitch: the outline padding of a section without row
+/// blocks.
+const DEFAULT_PADDING: f64 = 47.5;
 
 /// A bookable node to expand, and where it sits in the world.
 struct Member<'d> {
@@ -285,6 +314,8 @@ struct Unit<'d> {
     /// Position among the document's top-level nodes.
     order: usize,
     members: Vec<Member<'d>>,
+    /// The section's placement in the world; identity outside sections.
+    place: Place,
 }
 
 struct FloorInfo<'d> {
@@ -463,6 +494,7 @@ impl<'d> Compiler<'d> {
                             section: None,
                             order,
                             members: vec![member],
+                            place: Place::IDENTITY,
                         });
                     }
                 }
@@ -529,6 +561,7 @@ impl<'d> Compiler<'d> {
             section: Some(s),
             order,
             members,
+            place: place?,
         })
     }
 
@@ -708,7 +741,11 @@ impl<'d> Compiler<'d> {
             seat_flags: b.seat_flags,
             objects: Vec::new(),
             tables: Vec::new(),
-            mesh: ccf::Mesh::default(),
+            mesh: ccf::Mesh {
+                vertices: b.vertices,
+                indices: b.outline_indices,
+                draws: Vec::new(),
+            },
             texts: Vec::new(),
             icons: Vec::new(),
             images: Vec::new(),
@@ -759,6 +796,13 @@ struct Builder<'d> {
     chunk: Option<((usize, u32), ccf::RenderChunk)>,
     floor_seats: Vec<(u32, Option<Bounds>)>,
     bounds: Option<Bounds>,
+    /// The current section's seats in its own space, for its outline.
+    local: Vec<[f64; 2]>,
+    /// `MESH` vertices, and the indices of section outlines in `SECT` order.
+    vertices: Vec<ccf::Vertex>,
+    outline_indices: Vec<u32>,
+    /// Points of explicit outlines so far.
+    outline_points: usize,
 }
 
 impl<'d> Builder<'d> {
@@ -779,7 +823,9 @@ impl<'d> Builder<'d> {
                 row_count: 0,
                 category,
                 entrance: c.strings.opt(s.entrance.as_deref()),
-                mesh_first: 0,
+                // An empty range where the outline would start, so that
+                // outline ranges tile the start of the index buffer.
+                mesh_first: self.outline_indices.len() as u32,
                 mesh_count: 0,
                 bounds: [0; 4],
                 label_anchor: [0, 0],
@@ -789,6 +835,7 @@ impl<'d> Builder<'d> {
             (index, s)
         });
         let (seats_before, rows_before) = (self.seat_pos.len(), self.rows.len());
+        self.local.clear();
         let mut bounds = None;
         for m in &unit.members {
             let mut problems = Problems::default();
@@ -821,9 +868,111 @@ impl<'d> Builder<'d> {
             s.seat_count = (self.seat_pos.len() - seats_before) as u32;
             s.row_count = (self.rows.len() - rows_before) as u32;
             s.bounds = bounds.unwrap_or_default();
-            let ((first, count), anchor, size) = section_outline(s.bounds);
-            (s.mesh_first, s.mesh_count, s.label_anchor, s.label_size) =
-                (first, count, anchor, size);
+        }
+        if let Some((index, s)) = section {
+            self.outline(unit, index, s, f);
+        }
+    }
+
+    /// Step 11–12 for one section: its outline (explicit, or computed from its
+    /// seats), the outline's triangles, the label anchor and size, and the
+    /// bounds grown to cover the outline.
+    fn outline(&mut self, unit: &Unit<'d>, index: u32, s: &'d doc::Section, f: &mut Findings) {
+        let node = Some(s.id);
+        let poly = match &s.outline {
+            doc::Outline::Auto => {
+                let pitch = unit
+                    .members
+                    .iter()
+                    .filter_map(|m| match m.node {
+                        Bookable::Block(b) => Some(b.row_pitch),
+                        Bookable::Row(_) => None,
+                    })
+                    .fold(None, |a: Option<f64>, p| Some(a.map_or(p, |a| a.max(p))));
+                let padding = pitch.map_or(DEFAULT_PADDING, |p| p / 2.0);
+                geometry::auto_outline(&self.local, padding)
+            }
+            doc::Outline::Points(pts) => {
+                self.outline_points = self.outline_points.saturating_add(pts.points.len());
+                if self.outline_points > geometry::MAX_OUTLINE_POINTS {
+                    let detail = Detail::TooMany {
+                        what: "outline points in the chart",
+                        limit: geometry::MAX_OUTLINE_POINTS as u32,
+                    };
+                    f.push(Code::E006, node, detail);
+                    return;
+                }
+                match geometry::explicit_outline(&pts.points) {
+                    Ok(poly) => poly,
+                    Err(e) => {
+                        let (code, detail) = match e {
+                            OutlineError::NotFinite => {
+                                (Code::E005, Detail::InvalidValue { field: "outline" })
+                            }
+                            OutlineError::TooManyPoints => (
+                                Code::E006,
+                                Detail::TooMany {
+                                    what: "outline points",
+                                    limit: geometry::MAX_POINTS as u32,
+                                },
+                            ),
+                            OutlineError::ZeroSize => (
+                                Code::E005,
+                                Detail::Geometry {
+                                    problem: "zero size",
+                                },
+                            ),
+                            OutlineError::SelfIntersecting => (
+                                Code::E005,
+                                Detail::Geometry {
+                                    problem: "self-intersecting outline",
+                                },
+                            ),
+                        };
+                        f.push(code, node, detail);
+                        return;
+                    }
+                }
+            }
+        };
+        if poly.is_empty() {
+            return;
+        }
+        let place = unit.place;
+        let world: Vec<P> = poly.iter().map(|&p| place.apply(p)).collect();
+        let Some(outer) = outer_box(&world) else {
+            f.push(Code::E005, node, Detail::OutOfRange);
+            return;
+        };
+        let first = self.outline_indices.len();
+        let paths: [Subpath; 1] = [(poly, true)];
+        let tess = tessellate::fill(
+            &paths,
+            OUTLINE_COLOR,
+            |p| mesh_point(place.apply(p)),
+            &mut self.vertices,
+            &mut self.outline_indices,
+        );
+        if let Err(e) = tess {
+            f.push(tess_code(e), node, tess_detail(e));
+            return;
+        }
+        let anchor = quantise_point(geometry::pole(&world)).unwrap_or_default();
+        let chars = s.label.as_deref().map_or(0, |l| l.chars().count());
+        let at = [f64::from(anchor[0]) / 4.0, f64::from(anchor[1]) / 4.0];
+        let size = geometry::label_size(&world, at, chars);
+        if let Some(rec) = self.sections.get_mut(index as usize) {
+            rec.mesh_first = first as u32; // ≤ 3 × MAX_VERTICES
+            rec.mesh_count = (self.outline_indices.len() - first) as u32;
+            rec.label_anchor = anchor;
+            rec.label_size = size;
+            rec.bounds = if rec.seat_count > 0 {
+                let mut b = rec.bounds;
+                grow_box(&mut b, outer);
+                b
+            } else {
+                outer
+            };
         }
     }
 
@@ -888,7 +1037,11 @@ impl<'d> Builder<'d> {
                 }),
             }
 
-            let world = ctx.place[1].apply(ctx.place[0].apply(seat.pos));
+            let local = ctx.place[0].apply(seat.pos);
+            if ctx.section.is_some() {
+                self.local.push(local);
+            }
+            let world = ctx.place[1].apply(local);
             let pos = quantise_point(world).unwrap_or_else(|| {
                 problems.out_of_range = true;
                 [0, 0]
@@ -1117,6 +1270,26 @@ impl<'d> Builder<'d> {
                 }
             }
         }
+    }
+}
+
+fn tess_code(e: TessError) -> Code {
+    match e {
+        TessError::TooManyVertices => Code::E006,
+        TessError::OutOfRange | TessError::Failed => Code::E005,
+    }
+}
+
+fn tess_detail(e: TessError) -> Detail {
+    match e {
+        TessError::TooManyVertices => Detail::TooMany {
+            what: "mesh vertices",
+            limit: tessellate::MAX_VERTICES as u32,
+        },
+        TessError::OutOfRange => Detail::OutOfRange,
+        TessError::Failed => Detail::Geometry {
+            problem: "cannot be tessellated",
+        },
     }
 }
 
