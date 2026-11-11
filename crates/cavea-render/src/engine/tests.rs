@@ -383,6 +383,27 @@ fn pinch_zooms_about_a_fixed_midpoint() {
     }
     assert!(close(cam(&e).to_world(mid, SIZE), anchor, 1e-9));
     assert!((cam(&e).zoom / zoom - 2.0).abs() < 1e-9);
+
+    // Movement under the drag threshold is not lost when the pinch begins.
+    let mut e = engine();
+    ptr(&mut e, Down, 1, TOUCH, [350.0, 300.0], 0.0);
+    ptr(&mut e, Down, 2, TOUCH, [450.0, 300.0], 5.0);
+    for (i, d) in [57.0, 57.0, 59.0, 59.0].into_iter().enumerate() {
+        ptr(
+            &mut e,
+            Move,
+            1 + i as u32 % 2,
+            TOUCH,
+            [400.0 + d * if i % 2 == 0 { -1.0 } else { 1.0 }, 300.0],
+            10.0 + i as f64,
+        );
+    }
+    tick(&mut e, 20.0);
+    assert!(
+        (cam(&e).zoom / zoom - 1.18).abs() < 1e-9,
+        "zoom ×{}",
+        cam(&e).zoom / zoom
+    );
 }
 
 #[test]
@@ -415,6 +436,13 @@ fn inertia_decays_stops_and_then_asks_for_nothing() {
     for later in 0..10 {
         assert!(tick(&mut e, t + f64::from(later) * 16.0).is_empty());
     }
+
+    // A flick that crosses the threshold in one move still flings.
+    let mut e = big();
+    ptr(&mut e, Down, 1, TOUCH, [600.0, 300.0], 0.0);
+    ptr(&mut e, Move, 1, TOUCH, [500.0, 300.0], 50.0);
+    ptr(&mut e, Up, 1, TOUCH, [500.0, 300.0], 51.0);
+    assert!(wants_frame(&tick(&mut e, 51.0)));
 
     // No inertia under reduced motion.
     let mut e = engine();

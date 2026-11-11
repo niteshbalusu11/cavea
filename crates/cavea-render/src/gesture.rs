@@ -248,7 +248,11 @@ impl Recogniser {
                 out.push(Action::Interrupt);
             }
         }
-        let first = self.pointers.iter().flatten().next().map(|p| p.pos);
+        // A pinch measures from where both fingers were when the second joined.
+        let first = self.pointers.iter_mut().flatten().next().map(|p| {
+            p.start = p.pos;
+            p.pos
+        });
         let Some(slot) = self.pointers.iter_mut().find(|p| p.is_none()) else {
             return;
         };
@@ -307,6 +311,10 @@ impl Recogniser {
                 if !self.dragging {
                     self.dragging = true;
                     self.sampled = 0;
+                    if was_still {
+                        // A flick may cross the threshold in one move.
+                        self.sample(self.start_ms, start);
+                    }
                 }
                 self.sample(time_ms, at);
                 // The drag grabs the chart where the press began.
@@ -321,12 +329,19 @@ impl Recogniser {
                     return true;
                 };
                 let other = match (a.id == id, b.id == id) {
-                    (true, _) => b.pos,
-                    (_, true) => a.pos,
+                    (true, _) => *b,
+                    (_, true) => *a,
                     _ => return true,
                 };
-                let (m0, d0) = (mid(prev, other), dist(prev, other));
-                let (m1, d1) = (mid(at, other), dist(at, other));
+                // The first pinching move also applies the movement made
+                // under the threshold.
+                let (from, other_from) = if was_still {
+                    (start, other.start)
+                } else {
+                    (prev, other.pos)
+                };
+                let (m0, d0) = (mid(from, other_from), dist(from, other_from));
+                let (m1, d1) = (mid(at, other.pos), dist(at, other.pos));
                 if d0 > 0.0 {
                     out.push(Action::Zoom {
                         factor: d1 / d0,
