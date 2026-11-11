@@ -10,16 +10,26 @@ export interface Renderer {
 
 /**
  * Where to load the WASM from. Omit it to fetch the module that ships next to
- * this package; pass bytes, a `Response` or a URL to load it from elsewhere.
+ * this package; pass a URL, a `Response`, bytes or a compiled module to load it
+ * from elsewhere.
  */
-export type WasmSource = InitInput | Promise<InitInput>;
+export type WasmSource = InitInput;
 
 let loading: Promise<Renderer> | undefined;
 
-/** Loads and instantiates the renderer's WASM once; later calls share the result. */
+/**
+ * Loads and instantiates the renderer's WASM once; later calls share the result.
+ * After a failed load the next call tries again.
+ */
 export function loadRenderer(source?: WasmSource): Promise<Renderer> {
   loading ??= init({
     module_or_path: source ?? new URL("../wasm/cavea_web_bg.wasm", import.meta.url),
-  }).then(() => ({ version }));
+  }).then(
+    () => ({ version }),
+    (error: unknown) => {
+      loading = undefined;
+      throw error;
+    },
+  );
   return loading;
 }
