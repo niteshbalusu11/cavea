@@ -1,0 +1,13 @@
+{
+  "about": "a mouse moving over a seat reports it once, between rows reports none, over another seat reports that one, and leaving the map clears the hover",
+  "chart": "theatre",
+  "viewport": [800, 600],
+  "camera": [-290, 380, 580, 440],
+  "steps": [
+    [100, "move", 1, "mouse", 400, 175],
+    [120, "move", 1, "mouse", 401, 176],
+    [200, "move", 1, "mouse", 400, 235],
+    [300, "move", 1, "mouse", 366, 294],
+    [400, "cancel", 1, "mouse", 366, 294]
+  ]
+}

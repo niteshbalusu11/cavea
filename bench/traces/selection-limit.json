@@ -1,0 +1,15 @@
+{
+  "about": "with a maximum of 2, a third seat is refused with rule max and the selection stays at two",
+  "chart": "theatre",
+  "viewport": [800, 600],
+  "camera": [-290, 380, 580, 440],
+  "max": 2,
+  "steps": [
+    [100, "down", 1, "mouse", 331, 176],
+    [160, "up", 1, "mouse", 331, 176],
+    [400, "down", 1, "mouse", 400, 175],
+    [460, "up", 1, "mouse", 400, 175],
+    [700, "down", 1, "mouse", 366, 294],
+    [760, "up", 1, "mouse", 366, 294]
+  ]
+}

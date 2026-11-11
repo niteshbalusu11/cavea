@@ -1,0 +1,8 @@
+      0.0 {"type":"cameraChanged","centre":[0.0000,600.0000],"zoom":1.2545,"range":[0.1077,1.4545],"lod":"detail"}
+    200.0 {"type":"objectFocus","object":{"label":"Stalls Centre-B-108","category":"premium","section":"Stalls Centre","row":"B","seat":"108","flags":0},"at":[365.5000,293.4136]}
+    300.0 {"type":"objectFocus","object":{"label":"Stalls Centre-B-109","category":"premium","section":"Stalls Centre","row":"B","seat":"109","flags":0},"at":[434.5000,293.4136]}
+    400.0 {"type":"objectFocus","object":{"label":"Stalls Centre-C-109","category":"premium","section":"Stalls Centre","row":"C","seat":"109","flags":0},"at":[434.5000,412.5954]}
+    516.7 {"type":"selectionChanged","expiresAt":null,"selected":[{"label":"Stalls Centre-C-109","category":"premium","section":"Stalls Centre","row":"C","seat":"109","flags":0}]}
+    516.7 {"type":"holdRequest","request":1,"labels":["Stalls Centre-C-109"]}
+    516.7 {"type":"objectFocus","object":{"label":"Stalls Centre-C-109","category":"premium","section":"Stalls Centre","row":"C","seat":"109","flags":0},"at":[434.5000,412.5954]}
+    600.0 {"type":"objectFocus","object":null,"at":null}

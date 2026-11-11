@@ -412,6 +412,7 @@ dependencies = [
  "cavea-testkit",
  "glow",
  "js-sys",
+ "serde_json",
  "wasm-bindgen",
  "web-sys",
 ]

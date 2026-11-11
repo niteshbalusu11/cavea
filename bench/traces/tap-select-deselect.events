@@ -1,0 +1,6 @@
+      0.0 {"type":"cameraChanged","centre":[0.0000,600.0000],"zoom":1.2545,"range":[0.1077,1.4545],"lod":"detail"}
+    166.7 {"type":"objectHover","object":{"label":"Stalls Centre-A-108","category":"premium","section":"Stalls Centre","row":"A","seat":"108","flags":0},"at":[400.0000,174.5454]}
+    166.7 {"type":"selectionChanged","expiresAt":null,"selected":[{"label":"Stalls Centre-A-108","category":"premium","section":"Stalls Centre","row":"A","seat":"108","flags":0}]}
+    166.7 {"type":"holdRequest","request":1,"labels":["Stalls Centre-A-108"]}
+   1066.7 {"type":"selectionChanged","expiresAt":null,"selected":[]}
+   1066.7 {"type":"releaseRequest","request":2,"labels":["Stalls Centre-A-108"]}

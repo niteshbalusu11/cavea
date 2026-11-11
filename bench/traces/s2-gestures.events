@@ -1,0 +1,8 @@
+73 cameraChanged CrossFade, the last:
+  25083.3 {"type":"cameraChanged","centre":[0.0000,-5000.0000],"zoom":0.0515,"range":[0.0221,1.4545],"lod":"crossFade"}
+768 cameraChanged Detail, the last:
+  21933.3 {"type":"cameraChanged","centre":[0.0000,-5000.0000],"zoom":0.2872,"range":[0.0221,1.4545],"lod":"detail"}
+71 cameraChanged Overview, the last:
+  25650.0 {"type":"cameraChanged","centre":[0.0000,-5000.0000],"zoom":0.0278,"range":[0.0221,1.4545],"lod":"overview"}
+113 cameraChanged Seats, the last:
+  23683.3 {"type":"cameraChanged","centre":[0.0000,-5000.0000],"zoom":0.1027,"range":[0.0221,1.4545],"lod":"seats"}

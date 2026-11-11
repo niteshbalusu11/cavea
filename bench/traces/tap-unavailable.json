@@ -1,0 +1,13 @@
+{
+  "about": "a click on an unavailable seat is refused with not_free and selects nothing; a click on an available one still selects",
+  "chart": "theatre",
+  "viewport": [800, 600],
+  "camera": [-290, 380, 580, 440],
+  "unavailable": [[468, 15]],
+  "steps": [
+    [100, "down", 1, "mouse", 400, 175],
+    [160, "up", 1, "mouse", 400, 175],
+    [500, "down", 1, "mouse", 366, 294],
+    [560, "up", 1, "mouse", 366, 294]
+  ]
+}

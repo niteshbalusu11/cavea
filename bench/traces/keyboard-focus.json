@@ -1,0 +1,23 @@
+{
+  "about": "the keyboard (D-52, 11 §3): shown focus starts at the seat nearest the view's centre, arrows move it along and across rows, Enter selects it as a tap, Escape hides it",
+  "chart": "theatre",
+  "viewport": [
+    800,
+    600
+  ],
+  "camera": [
+    -290,
+    380,
+    580,
+    440
+  ],
+  "steps": [
+    [100, "focus", 1],
+    [200, "key", "ArrowRight"],
+    [300, "key", "ArrowRight"],
+    [400, "key", "ArrowDown"],
+    [500, "key", "Enter"],
+    [600, "key", "Escape"],
+    [700, "focus", 0]
+  ]
+}
