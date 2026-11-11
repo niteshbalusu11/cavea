@@ -154,7 +154,8 @@ pub(super) fn cookie_session(
 /// cookie, no `Authorization`) is `Cache-Control: no-store`: unlike
 /// `Authorization`, a cookie does not keep a shared cache from storing a
 /// response (RFC 9111 §3.5), and one workspace's answer must never be served
-/// for another's request to the same URL. Requests with a key are untouched.
+/// for another's request to the same URL. Requests with a key are untouched,
+/// and so are the console's own files (`web::Shared`), the same for everyone.
 pub async fn no_store_for_cookies(
     axum::extract::State(state): axum::extract::State<AppState>,
     request: axum::extract::Request,
@@ -163,7 +164,7 @@ pub async fn no_store_for_cookies(
     let cookie = !request.headers().contains_key(header::AUTHORIZATION)
         && session_cookie(request.headers(), &state).is_some();
     let mut response = next.run(request).await;
-    if cookie {
+    if cookie && response.extensions().get::<super::web::Shared>().is_none() {
         response
             .headers_mut()
             .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));

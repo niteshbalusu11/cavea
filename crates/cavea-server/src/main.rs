@@ -97,7 +97,11 @@ async fn run(config: Config, streams: tokio::runtime::Handle) -> anyhow::Result<
     tokio::task::spawn_blocking(cavea_server::console::password::warm).await?;
     let limiter = Limiter::new(config.rate_limit_holds, config.rate_limit_reads)
         .with_sign_in(config.rate_limit_sign_in);
+    let console = cavea_server::http::web::Files::embedded();
+    let (files, bytes) = console.size();
+    tracing::info!(files, bytes, "console files");
     let state = AppState {
+        console,
         limiter: Arc::new(limiter),
         asset_memory: cavea_server::assets::Memory::new(config.asset_max_bytes.get()),
         sign_in: Arc::default(),

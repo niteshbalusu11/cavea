@@ -80,6 +80,7 @@ fn state() -> AppState {
         config: Arc::new(config),
         db,
         health: super::Health::default(),
+        console: super::web::Files::new(&[]),
     }
 }
 
@@ -1099,3 +1100,4 @@ pub(crate) fn install_panic_log() {
 }
 
 mod api;
+mod web;

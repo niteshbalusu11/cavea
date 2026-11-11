@@ -11,6 +11,8 @@
 //!   `cavea-web/demo`); it is not the production payload and is never gated.
 //! - `build-designer`: build `cavea-designer` the same way into
 //!   `packages/designer-core/wasm/` and print its sizes; not gated.
+//! - `build-server [--target <triple>]`: the WASM modules, the console, and
+//!   `cavea-server` in release with the console compiled in (`server.rs`).
 //! - `types [--check]`: write the TypeScript types generated from the Rust
 //!   definitions (`types.rs`) and the console's API types generated from the
 //!   server's OpenAPI document (`api.rs`), or fail if the committed ones are
@@ -22,6 +24,7 @@
 
 mod api;
 mod determinism;
+mod server;
 mod types;
 
 use std::{
@@ -71,6 +74,8 @@ fn main() -> Result<()> {
         ["build-web", "--update-baseline"] => build_web(Mode::UpdateBaseline),
         ["build-web", "--demo"] => build_web(Mode::Demo),
         ["build-designer"] => build_designer(),
+        ["build-server"] => server::build_server(None),
+        ["build-server", "--target", target] => server::build_server(Some(target)),
         ["types"] => types::write(false),
         ["types", "--check"] => types::write(true),
         ["check-deps"] => check_deps(),
@@ -78,7 +83,7 @@ fn main() -> Result<()> {
         _ => {
             eprintln!(
                 "usage: cargo xtask <build-web [--demo | --update-baseline] | build-designer | \
-                 types [--check] | check-deps | determinism>"
+                 build-server [--target <triple>] | types [--check] | check-deps | determinism>"
             );
             std::process::exit(2);
         }
