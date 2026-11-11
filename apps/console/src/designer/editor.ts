@@ -30,6 +30,17 @@ export interface Camera {
 }
 /** The zoom range until the canvas knows the chart's (`Canvas.zoomLimits`). */
 export const ZOOM = { min: 0.002, max: 64, step: 1.25 } as const;
+/**
+ * The designer's zoom range for the canvas's (`Canvas.zoomLimits`, the
+ * buyer's): out as far as `ZOOM.min`, since drawing happens beside the
+ * chart and the buyer's minimum (0.8 of the zoom that fits the floor) pins
+ * an empty or tiny chart at one zoom; in as far as the canvas is tuned for
+ * (D-65). `ZOOM` until the canvas knows its range.
+ */
+export function designerZoom(limits: [number, number] | null): [number, number] {
+  return limits === null ? [ZOOM.min, ZOOM.max] : [Math.min(ZOOM.min, limits[0]), limits[1]];
+}
+
 /** CSS px left around a box framed by zoom to fit or to selection. */
 export const FRAME_PADDING = 24;
 
@@ -175,10 +186,19 @@ export function createEditor(session: Session, onPanic: (message: string) => voi
     equals: (a, b) => a[0] === b[0] && a[1] === b[1],
   });
   const [dpr, setDpr] = createSignal(1);
-  const [limits, setLimits] = createSignal<[number, number] | null>(null, {
+  const [limits, setLimitsSignal] = createSignal<[number, number] | null>(null, {
     equals: (a, b) => a === b || (a !== null && b !== null && a[0] === b[0] && a[1] === b[1]),
   });
-  const range = (): [number, number] => limits() ?? [ZOOM.min, ZOOM.max];
+  const range = (): [number, number] => designerZoom(limits());
+  /** A new range (the first draw, an edit, a floor, a resize) also clamps
+   * the camera's zoom into it, about the centre. */
+  const setLimits = (next: [number, number] | null) => {
+    setLimitsSignal(next);
+    const [lo, hi] = designerZoom(next);
+    const c = camera();
+    const zoom = Math.min(Math.max(c.zoom, lo), hi);
+    if (zoom !== c.zoom) setCamera({ ...c, zoom });
+  };
   const view = () => viewOf(camera(), size(), dpr());
   const attached: (() => void)[] = [];
   const [revealed, setRevealed] = createSignal<{ row: number } | null>(null);

@@ -19,7 +19,7 @@ import {
   type PointerKind,
   type Theme,
 } from "@cavea/designer-core";
-import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, onMount, Show, untrack } from "solid-js";
 import { msg } from "../i18n/messages.ts";
 import { notify } from "../ui/overlays.tsx";
 import type { Editor } from "./editor.ts";
@@ -220,6 +220,8 @@ export function CanvasHost(props: { editor: Editor }) {
     if (canvas === null || view.width <= 0 || view.height <= 0) return;
     canvas.setView(view);
     painter?.invalidate();
+    // The chart moved under a still pointer: the hovered seat may differ.
+    if (over !== null) untrack(resample);
   });
   // Zoom to fit on the first measure, and only then.
   let fitted = false;

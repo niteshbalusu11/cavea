@@ -455,3 +455,9 @@ Each entry records what was decided, what was rejected and what would make us re
 - **Rejected:** a `CAVEA_DB_POOL_MIN` (one more setting where lowering `CAVEA_DB_POOL` does the same); opening connections lazily after listening (the burst can come first).
 - **Cost:** A node holds its whole pool on the database, idle or not.
 - **Revisit if:** a deployment runs many nodes against a database whose connection limit is tight (then a pooler in front, or a minimum).
+
+## D-65 · The designer zooms out past the buyer's minimum; in, only as far as the canvas is tuned for (2026-11-11)
+
+- **Decision:** The designer's camera zooms from 0.002 CSS px per chart unit up to the maximum of the canvas's `zoomLimits()` (the buyer renderer's range, 04 §13), and clamps at once when that range changes (07 §3, the canvas).
+- **Why:** The buyer's minimum, 0.8 of the zoom that fits the floor, is right for someone choosing a seat and wrong for someone drawing: new blocks go beside the chart, and on an empty or tiny chart the range collapses to one value (measured in the shell: `[14.25, 14.25]` for an empty chart, `[4.51, 4.51]` with one 2 × 3 block), so the camera could not zoom at all. Zooming out costs the renderer nothing (the overview level); zooming in past its maximum is where its levels of detail are not tuned.
+- **Rejected:** the buyer's range as it is (pins small charts); the shell's fixed 0.002 to 64 (zooms far past what the renderer is tuned for).
