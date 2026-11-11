@@ -229,7 +229,23 @@ test("callbacks reach the latest prop without recreating the map", async () => {
   await view.render({ state, onHoldPending: () => seen.push("second") });
   created[0]!.options.onHoldPending?.();
   expect(seen).toEqual(["second"]);
+  // Added after creation: called too.
+  await view.render({ state, onHoldPending: noop, onSelectionValid: () => seen.push("added") });
+  created[0]!.options.onSelectionValid?.();
+  expect(seen).toEqual(["second", "added"]);
   expect(created).toHaveLength(1);
+  await view.unmount();
+});
+
+test("formatPrice, fixed at creation, keeps formatting when the prop is taken away", async () => {
+  const view = mount();
+  await view.render({ state, formatPrice: () => "first" });
+  await settle();
+  await view.render({ state, formatPrice: () => "second" });
+  const format = created[0]!.options.formatPrice as (minor: number) => string;
+  expect(format(100)).toBe("second");
+  await view.render({ state });
+  expect(format(100)).toBe("first");
   await view.unmount();
 });
 

@@ -352,8 +352,17 @@ class Browser {
           visit.errors = compat.errors ?? [];
           if (compat.firstFrame !== undefined || compat.failed !== undefined) {
             Object.assign(visit, { firstFrame: compat.firstFrame, failed: compat.failed });
-            // Let a realtime stream deliver its first frames (or fall back: 05 §4.1).
+            // Let a realtime stream deliver its first frames (or fall back:
+            // 05 §4.1), then read the errors again: one reported meanwhile fails the check.
             await Bun.sleep(3_000);
+            const { result: after } = await this.send(
+              "Runtime.evaluate",
+              { expression: "JSON.stringify(window.compat?.errors ?? [])", returnByValue: true },
+              session,
+            );
+            visit.errors = JSON.parse(
+              String((after as { value?: string }).value ?? "[]"),
+            ) as string[];
             break;
           }
         }

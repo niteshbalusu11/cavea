@@ -54,6 +54,33 @@ type Setter = keyof typeof SETTERS;
 const PRESENCE = new Set<Key>(["onMetrics", "onError", "formatPrice"]);
 const isCallback = (key: string): boolean => key.startsWith("on") || key === "formatPrice";
 
+/** Every other callback: each gets its trampoline at creation, given or not, so one added later is called. */
+const EVENTS = [
+  "onReady",
+  "onSelectionChange",
+  "onObjectSelect",
+  "onObjectDeselect",
+  "onSelectionInvalid",
+  "onSelectionValid",
+  "onHoldPending",
+  "onHoldSettled",
+  "onHoldFailed",
+  "onHoldLost",
+  "onHoldExpiring",
+  "onHoldExpired",
+  "onObjectUnavailable",
+  "onObjectHover",
+  "onObjectFocus",
+  "onCameraChange",
+] as const satisfies readonly Key[];
+// Fails to compile when the renderer gains a callback this file does not list.
+type Unlisted = Exclude<
+  Extract<Key, `on${string}`>,
+  (typeof EVENTS)[number] | "onMetrics" | "onError"
+>;
+const listed: [Unlisted] extends [never] ? true : Unlisted = true;
+void listed;
+
 /** Props that only matter at creation, so a change is not worth a warning. */
 const INITIAL = new Set<Key>(["initialView"]);
 
@@ -136,15 +163,17 @@ function SeatMapComponent(props: SeatMapProps, ref: ForwardedRef<SeatMapInstance
       }
       const given = latest.current;
       const created: SeatMapOptions = { signal: controller.signal };
-      for (const name of Object.keys(given) as Key[]) {
+      type Fn = (...a: unknown[]) => unknown;
+      for (const name of new Set([...(Object.keys(given) as Key[]), ...EVENTS])) {
         const value = given[name];
-        if (value === undefined) {
+        if (value === undefined && !(EVENTS as readonly Key[]).includes(name)) {
           continue;
         }
         Object.assign(created, {
+          // The latest prop; for the three fixed at creation, the first one
+          // when the prop is taken away (a warning says so).
           [name]: isCallback(name)
-            ? (...args: unknown[]) =>
-                (latest.current[name] as ((...a: unknown[]) => unknown) | undefined)?.(...args)
+            ? (...args: unknown[]) => ((latest.current[name] ?? value) as Fn | undefined)?.(...args)
             : value,
         });
       }
