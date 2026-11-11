@@ -3,7 +3,9 @@
 //! - `build-web`: build `cavea-web` for `wasm32-unknown-unknown` with the
 //!   size-tuned `wasm-release` profile, generate the JavaScript and TypeScript
 //!   bindings into `packages/renderer/wasm/`, run `wasm-opt` when it is on `PATH`,
-//!   and print raw and brotli sizes.
+//!   and print raw and brotli sizes. `--demo` adds the debug-only exports used
+//!   by `apps/demo` (cargo feature `cavea-web/demo`); its sizes are not the
+//!   production payload.
 //! - `check-deps`: enforce the workspace dependency rule from
 //!   `docs/01-architecture.md` §3.
 
@@ -23,10 +25,10 @@ const WASM_PROFILE: &str = "wasm-release";
 fn main() -> Result<()> {
     let task = env::args().nth(1);
     match task.as_deref() {
-        Some("build-web") => build_web(),
+        Some("build-web") => build_web(env::args().nth(2).as_deref() == Some("--demo")),
         Some("check-deps") => check_deps(),
         _ => {
-            eprintln!("usage: cargo xtask <build-web | check-deps>");
+            eprintln!("usage: cargo xtask <build-web [--demo] | check-deps>");
             std::process::exit(2);
         }
     }
@@ -51,9 +53,10 @@ fn run(command: &mut Command) -> Result<()> {
     Ok(())
 }
 
-fn build_web() -> Result<()> {
+fn build_web(demo: bool) -> Result<()> {
     let root = root();
-    run(cargo().current_dir(&root).args([
+    let mut build = cargo();
+    build.current_dir(&root).args([
         "build",
         "--package",
         "cavea-web",
@@ -62,7 +65,11 @@ fn build_web() -> Result<()> {
         WASM_TARGET,
         "--profile",
         WASM_PROFILE,
-    ]))?;
+    ]);
+    if demo {
+        build.args(["--features", "demo"]);
+    }
+    run(&mut build)?;
 
     let target_dir =
         env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);
@@ -86,7 +93,11 @@ fn build_web() -> Result<()> {
 
     let wasm = out_dir.join("cavea_web_bg.wasm");
     wasm_opt(&wasm)?;
-    size_report(&out_dir)
+    size_report(&out_dir)?;
+    if demo {
+        println!("demo build: includes the synthetic generator; not the production payload");
+    }
+    Ok(())
 }
 
 /// Runs `wasm-opt -Oz` in place when binaryen is installed; otherwise warns.

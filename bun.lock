@@ -22,6 +22,17 @@
         "vite-plugin-solid": "2.11.16",
       },
     },
+    "apps/demo": {
+      "name": "@cavea/demo",
+      "version": "0.0.0",
+      "dependencies": {
+        "@cavea/renderer": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "7.0.2",
+        "vite": "8.3.8",
+      },
+    },
     "packages/renderer": {
       "name": "@cavea/renderer",
       "version": "0.0.0",
@@ -69,6 +80,8 @@
     "@babel/types": ["@babel/types@7.29.11", "", { "dependencies": { "@babel/helper-string-parser": "^7.29.11", "@babel/helper-validator-identifier": "^7.29.7" } }, "sha512-WCsemW40Cpc6gouC1SrY6PBaZ+oLRlEVY9XBvZBI7il/HyUrb2nJ505wE1MHEFyDZNnrWDEuy4jL50WVHfTTSQ=="],
 
     "@cavea/console": ["@cavea/console@workspace:apps/console"],
+
+    "@cavea/demo": ["@cavea/demo@workspace:apps/demo"],
 
     "@cavea/renderer": ["@cavea/renderer@workspace:packages/renderer"],
 

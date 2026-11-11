@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cavea demo</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        font:
+          14px system-ui,
+          sans-serif;
+      }
+      /* The canvas fills the window; the status sits on top of it, so text
+         changes never resize the canvas. */
+      canvas {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      output {
+        position: fixed;
+        top: 0;
+        left: 0;
+        padding: 0.5em;
+        white-space: pre;
+        background: rgb(255 255 255 / 0.85);
+        z-index: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <output id="status">Loading…</output>
+    <canvas id="seats"></canvas>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

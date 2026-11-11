@@ -32,7 +32,7 @@ Toolchains: Rust is pinned in `rust-toolchain.toml` (with the `wasm32-unknown-un
 - `cargo build --workspace`
 - `cargo test --workspace`
 - `cargo xtask check-deps`: enforces the dependency rule in `docs/01-architecture.md` §3
-- `cargo xtask build-web`: builds `cavea-web` for wasm32 with the `wasm-release` profile, writes the bindings to `packages/renderer/wasm/` (gitignored), runs `wasm-opt` if present, and prints raw and brotli sizes
+- `cargo xtask build-web`: builds `cavea-web` for wasm32 with the `wasm-release` profile, writes the bindings to `packages/renderer/wasm/` (gitignored), runs `wasm-opt` if present, and prints raw and brotli sizes. `--demo` adds the debug-only exports `apps/demo` needs (synthetic seats); never measure or ship that build
 - `CAVEA_LISTEN=127.0.0.1:<port> cargo run -p cavea-server`: the server; `GET /healthz` answers `ok`. Settings are `CAVEA_` environment variables (`docs/08-server.md` §13)
 
 **TypeScript** (run `cargo xtask build-web` first; `typecheck`, `build` and `test` need the WASM output)
@@ -44,6 +44,7 @@ Toolchains: Rust is pinned in `rust-toolchain.toml` (with the `wasm32-unknown-un
 - `bun run build`: builds every workspace package that has a `build` script
 - `bun run test`: `bun test`
 - `bun run dev --port <port>` in `apps/console`: the console dev server
+- `bun run dev --port <port>` in `apps/demo`, after `cargo xtask build-web --demo`: 100,000 synthetic seats drawn by the renderer (query parameters in `apps/demo/src/main.ts`)
 
 **Database**
 

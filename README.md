@@ -17,6 +17,7 @@ You need Nix (with flakes) and Docker for PostgreSQL. `flake.nix` provides the p
 cargo xtask build-web                               # WASM renderer into packages/renderer/wasm/
 bun install
 (cd apps/console && bun run dev)                   # console at the printed URL
+cargo xtask build-web --demo && (cd apps/demo && bun run dev)  # 100,000 synthetic seats
 docker compose -f deploy/compose.yaml up -d --wait  # PostgreSQL
 cargo run -p cavea-server                           # GET /healthz on CAVEA_LISTEN (default 0.0.0.0:8080)
 ```
