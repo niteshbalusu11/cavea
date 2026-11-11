@@ -800,23 +800,23 @@ async fn migrations_apply_once_and_refuse_an_unknown_schema() {
         a.unwrap();
         b.unwrap();
         let pool = store::connect(options.clone(), 2).await.unwrap();
-        assert_eq!(migration_rows(&pool).await, [1, 2, 3, 4, 5]);
+        assert_eq!(migration_rows(&pool).await, [1, 2, 3, 4, 5, 6]);
         // Again: nothing to do.
         store::migrate(&options).await.unwrap();
-        assert_eq!(migration_rows(&pool).await, [1, 2, 3, 4, 5]);
+        assert_eq!(migration_rows(&pool).await, [1, 2, 3, 4, 5, 6]);
 
         // A migration from a newer server.
         sqlx::query(
             "INSERT INTO cavea_migrations (version, description, success, checksum, execution_time)
-             VALUES (6, 'future', true, '\\x00', 0)",
+             VALUES (7, 'future', true, '\\x00', 0)",
         )
         .execute(&pool)
         .await
         .unwrap();
         let err = store::migrate(&options).await.unwrap_err();
-        assert!(matches!(err, MigrationError::Newer(6)), "{err}");
+        assert!(matches!(err, MigrationError::Newer(7)), "{err}");
         assert!(err.to_string().contains("newer"), "{err}");
-        sqlx::query("DELETE FROM cavea_migrations WHERE version = 6")
+        sqlx::query("DELETE FROM cavea_migrations WHERE version = 7")
             .execute(&pool)
             .await
             .unwrap();

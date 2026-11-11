@@ -180,6 +180,9 @@ pub async fn complete(
         sqlx::query(OWN_ALL).bind(&user).execute(&mut *tx).await?;
         sqlx::query(BURN).execute(&mut *tx).await?;
         super::sessions::insert(&mut tx, session, &user).await?;
+        let actor = format!("usr_{user}");
+        let entry = crate::audit::Entry::console(&actor, &user, "console.setup");
+        crate::audit::record(&mut tx, entry).await?;
         tx.commit().await?;
         Ok(Owner { user })
     };

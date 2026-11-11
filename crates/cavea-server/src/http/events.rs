@@ -13,6 +13,7 @@ use super::extract::{Json, Page, Path, Query, check_text, invalid, invalid_field
 use super::openapi::{Needs, Op, Routes};
 use super::staff::Staff;
 use super::{ApiError, AppState, Code, List};
+use crate::audit::{self, Entry};
 use crate::console::Permission;
 use crate::seats::event_id;
 
@@ -342,22 +343,32 @@ async fn create(
         }
     };
     let settings_text = serde_json::to_string(&settings).map_err(ApiError::internal)?;
-    let row: Result<EventRow, _> = sqlx::query_as(CREATE)
-        .bind(auth.workspace().uuid())
-        .bind(&body.key)
-        .bind(body.name.as_deref())
-        .bind(&version)
-        .bind(&settings_text)
-        .fetch_one(&state.db)
-        .instrument(cavea_telemetry::db_span("create_event"))
-        .await;
-    let row = match row {
-        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-            return Err(ApiError::new(Code::AlreadyExists)
-                .with_message("An event with this key already exists, possibly archived."));
-        }
-        row => row?,
+    let actor = auth.actor();
+    let create = async {
+        let mut tx = state.db.begin().await?;
+        let row: Result<EventRow, _> = sqlx::query_as(CREATE)
+            .bind(auth.workspace().uuid())
+            .bind(&body.key)
+            .bind(body.name.as_deref())
+            .bind(&version)
+            .bind(&settings_text)
+            .fetch_one(&mut *tx)
+            .await;
+        let row = match row {
+            Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+                return Err(ApiError::new(Code::AlreadyExists)
+                    .with_message("An event with this key already exists, possibly archived."));
+            }
+            row => row?,
+        };
+        let entry = Entry::by(&auth, &actor, "event.created").target(&body.key);
+        audit::record(&mut tx, entry).await?;
+        tx.commit().await?;
+        Ok(row)
     };
+    let row = create
+        .instrument(cavea_telemetry::db_span("create_event"))
+        .await?;
     let event = Event::new(row)?;
     cavea_telemetry::record_event(&event.key);
     tracing::info!(chart_version = %format!("cv_{}", event.version_id), "event created");
@@ -509,6 +520,11 @@ SELECT ",
     "e JOIN chart_versions v ON v.id = e.chart_version_id JOIN charts c ON c.id = v.chart_id"
 );
 
+/// Whether the event is unarchived, locking it: only an archive that changes
+/// it is audited.
+const LIVE_EVENT: &str = "SELECT archived_at IS NULL FROM events
+ WHERE workspace_id = $1::uuid AND key = $2 FOR UPDATE";
+
 /// Archive an event (08 §6.2): it becomes read-only. Seat operations, token
 /// creation and changes are refused; outstanding holds are left to expire on
 /// schedule; bookings stay; the loaded actor is left to evict itself once it
@@ -519,10 +535,27 @@ async fn archive(
     State(state): State<AppState>,
 ) -> Result<axum::Json<Event>, ApiError> {
     cavea_telemetry::record_event(&key);
-    let row: Option<EventRow> = sqlx::query_as(ARCHIVE)
-        .bind(auth.workspace().uuid())
-        .bind(&key)
-        .fetch_optional(&state.db)
+    let actor = auth.actor();
+    let archive = async {
+        let mut tx = state.db.begin().await?;
+        let live: Option<bool> = sqlx::query_scalar(LIVE_EVENT)
+            .bind(auth.workspace().uuid())
+            .bind(&key)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let row: Option<EventRow> = sqlx::query_as(ARCHIVE)
+            .bind(auth.workspace().uuid())
+            .bind(&key)
+            .fetch_optional(&mut *tx)
+            .await?;
+        if live == Some(true) {
+            let entry = Entry::by(&auth, &actor, "event.archived").target(&key);
+            audit::record(&mut tx, entry).await?;
+        }
+        tx.commit().await?;
+        Ok::<_, sqlx::Error>(row)
+    };
+    let row = archive
         .instrument(cavea_telemetry::db_span("archive_event"))
         .await?;
     let event = Event::new(row.ok_or_else(not_found)?)?;

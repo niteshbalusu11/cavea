@@ -9,8 +9,10 @@ use tracing::Instrument as _;
 use super::auth::{AdminKeyAuth, KeyKind, NewKey};
 use super::extract::{Json, Page, Path, Query, check_text};
 use super::keys::{KeyRow, KeyView, key_columns};
+use super::members::{InvitationCreated, create_invitation};
 use super::openapi::{Needs, Op, Routes};
 use super::{ApiError, AppState, Code, List};
+use crate::audit::{self, Entry};
 
 pub(super) fn routes() -> Routes {
     Routes::new()
@@ -43,6 +45,24 @@ pub(super) fn routes() -> Routes {
             .body("MintKey")
             .reply(201, "KeyCreated", "The key, shown only here"),
             create_key,
+        )
+        .add(
+            Op::post(
+                "/v1/workspaces/{workspace}/invitations",
+                "inviteWorkspaceOwner",
+                "Invite an owner to a workspace",
+            )
+            .about(
+                "How a workspace the admin key made gets its first member (and the operator's \
+recovery for one whose owners are gone): a one-time link making `email` an owner, shown only \
+here, accepted in the console as any invitation (09 §7). `409` if the email is already a \
+member's.",
+            )
+            .needs(Needs::Admin)
+            .body("InviteOwner")
+            .reply(201, "InvitationCreated", "The invitation and its link")
+            .errors(&[409]),
+            invite_owner,
         )
 }
 
@@ -231,16 +251,84 @@ async fn create_key(
     let uuid = workspace_uuid(&workspace).ok_or_else(not_found)?;
     check_text("name", &body.name)?;
     let new = NewKey::generate(KeyKind::Secret)?;
-    let row: Option<KeyRow> = sqlx::query_as(CREATE_KEY)
-        .bind(uuid)
-        .bind(&new.prefix)
-        .bind(new.hash.as_slice())
-        .bind(&body.name)
-        .fetch_optional(&state.db)
+    let mint = async {
+        let mut tx = state.db.begin().await?;
+        let row: Option<KeyRow> = sqlx::query_as(CREATE_KEY)
+            .bind(uuid)
+            .bind(&new.prefix)
+            .bind(new.hash.as_slice())
+            .bind(&body.name)
+            .fetch_optional(&mut *tx)
+            .await?;
+        if let Some(row) = &row {
+            let target = format!("key_{}", row.0);
+            let entry = Entry {
+                workspace: Some(uuid),
+                actor: "admin",
+                user: None,
+                action: "api_key.created",
+                target: Some(&target),
+                detail: Some(serde_json::json!({ "kind": "secret" })),
+            };
+            audit::record(&mut tx, entry).await?;
+        }
+        tx.commit().await?;
+        Ok::<_, sqlx::Error>(row)
+    };
+    let row = mint
         .instrument(cavea_telemetry::db_span("create_key"))
         .await?;
     let view = KeyView::new(row.ok_or_else(not_found)?, Some(new.key))?;
     cavea_telemetry::record_workspace(&workspace);
     tracing::info!(key_id = %view.id, by = "admin", "api key created");
     Ok((StatusCode::CREATED, axum::Json(view)))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InviteOwner {
+    email: String,
+}
+
+/// An owner invitation to an existing workspace, made by the admin key.
+async fn invite_owner(
+    _: AdminKeyAuth,
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    Json(body): Json<InviteOwner>,
+) -> Result<(StatusCode, axum::Json<InvitationCreated>), ApiError> {
+    let missing = || {
+        ApiError::new(Code::NotFound)
+            .with_message("No such workspace.")
+            .with_detail("missing", "workspace")
+    };
+    let workspace = workspace_uuid(&id).ok_or_else(missing)?;
+    let email = crate::console::normalise_email(&body.email)
+        .ok_or_else(|| super::extract::invalid_field("email", "must be an email address"))?;
+    let work = async {
+        let mut tx = state.db.begin().await?;
+        let found: Option<()> =
+            sqlx::query_as("SELECT FROM workspaces WHERE id = $1::uuid FOR UPDATE")
+                .bind(workspace)
+                .fetch_optional(&mut *tx)
+                .await?;
+        found.ok_or_else(missing)?;
+        let created = create_invitation(
+            &mut tx,
+            &state,
+            workspace,
+            ("admin", None),
+            &email,
+            crate::console::Role::Owner,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok::<_, ApiError>(created)
+    };
+    let created = work
+        .instrument(cavea_telemetry::db_span("create_invitation"))
+        .await?;
+    cavea_telemetry::record_workspace(&id);
+    tracing::info!(invitation = %created.id(), by = "admin", "owner invited");
+    Ok((StatusCode::CREATED, axum::Json(created)))
 }

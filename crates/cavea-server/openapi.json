@@ -120,6 +120,15 @@
           "type": "string"
         }
       },
+      "InvitationPath": {
+        "description": "An invitation's id: `inv_` and 32 hex digits.",
+        "in": "path",
+        "name": "invitation",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
       "Limit": {
         "description": "Items per page.",
         "in": "query",
@@ -312,6 +321,25 @@
       }
     },
     "schemas": {
+      "AcceptInvitation": {
+        "additionalProperties": false,
+        "properties": {
+          "password": {
+            "description": "Not signed in, for an email with no account: the new user's password.",
+            "maxLength": 128,
+            "minLength": 15,
+            "type": "string"
+          },
+          "token": {
+            "description": "The 64 hex digits of the link's fragment.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "type": "object"
+      },
       "Asset": {
         "additionalProperties": false,
         "properties": {
@@ -348,6 +376,96 @@
           "width",
           "height",
           "url"
+        ],
+        "type": "object"
+      },
+      "AuditEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "console.setup",
+              "console.sign_in",
+              "console.sign_in_failed",
+              "console.sign_out",
+              "console.password_changed",
+              "member.invited",
+              "member.joined",
+              "member.role_changed",
+              "member.removed",
+              "invitation.revoked",
+              "workspace.renamed",
+              "api_key.created",
+              "api_key.revoked",
+              "chart.published",
+              "chart.archived",
+              "event.created",
+              "event.archived"
+            ]
+          },
+          "actor": {
+            "description": "`usr_…`, `key_…`, `admin`, or `anonymous` (a failed sign-in).",
+            "type": "string"
+          },
+          "at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "detail": {
+            "description": "Small facts: `role`, `from` and `to`, `kind`, `version`.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "`aud_` and a number.",
+            "type": "string"
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target": {
+            "description": "What was acted on: `usr_…`, `key_…`, `inv_…`, `ws_…`, or a chart's or event's key.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "actor",
+          "action",
+          "target",
+          "detail",
+          "request_id"
+        ],
+        "type": "object"
+      },
+      "AuditList": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AuditEntry"
+            },
+            "type": "array"
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "next"
         ],
         "type": "object"
       },
@@ -688,6 +806,27 @@
         "required": [
           "email",
           "password"
+        ],
+        "type": "object"
+      },
+      "ConsoleWorkspace": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "`ws_` and 32 hex digits.",
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "name"
         ],
         "type": "object"
       },
@@ -1198,6 +1337,116 @@
         ],
         "type": "object"
       },
+      "Invitation": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "`inv_` and 32 hex digits.",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "owner",
+              "admin",
+              "editor",
+              "operator",
+              "viewer"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "role",
+          "created_at",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "InvitationCreated": {
+        "additionalProperties": false,
+        "properties": {
+          "invitation": {
+            "$ref": "#/components/schemas/Invitation"
+          },
+          "link": {
+            "description": "`{CAVEA_PUBLIC_URL}/console/invite#token=<64 hex digits>`, shown only here: give it to the person invited. The console's page posts the token to `/console/api/invitations/accept`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "invitation",
+          "link"
+        ],
+        "type": "object"
+      },
+      "InvitationList": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/Invitation"
+            },
+            "type": "array"
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "next"
+        ],
+        "type": "object"
+      },
+      "InviteMember": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "owner",
+              "admin",
+              "editor",
+              "operator",
+              "viewer"
+            ]
+          }
+        },
+        "required": [
+          "email",
+          "role"
+        ],
+        "type": "object"
+      },
+      "InviteOwner": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "type": "object"
+      },
       "Key": {
         "additionalProperties": false,
         "properties": {
@@ -1621,6 +1870,18 @@
         },
         "type": "object"
       },
+      "RenameWorkspace": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
       "SeatReply": {
         "additionalProperties": false,
         "properties": {
@@ -1956,6 +2217,253 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/console/api/audit": {
+      "get": {
+        "description": "Newest first (the cursor is an entry's id): the workspace's sensitive actions, and the sign-ins, sign-outs and password changes of its current members.",
+        "operationId": "listAudit",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditList"
+                }
+              }
+            },
+            "description": "A page of entries",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "The workspace's audit log",
+        "tags": [
+          "console"
+        ],
+        "x-cavea-permission": "settings",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/console/api/invitations": {
+      "get": {
+        "description": "Unexpired invitations of the workspace, oldest first; never a link.",
+        "operationId": "listInvitations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationList"
+                }
+              }
+            },
+            "description": "A page of invitations",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "List pending invitations",
+        "tags": [
+          "console"
+        ],
+        "x-cavea-permission": "settings",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/console/api/invitations/accept": {
+      "post": {
+        "description": "With the token of an invitation link. Signed in (the cookie, with `Cavea-Csrf-Token`) as the invited email: joins the workspace. Not signed in, for an email with no account: `password` creates the user, who joins and is signed in. A wrong, expired or used token is `401` `invitation`; signed in as another email `403` `invitation_email`; an email that has an account, not signed in, `409` `sign_in`.",
+        "operationId": "acceptInvitation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptInvitation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleMe"
+                }
+              }
+            },
+            "description": "Joined, signed in",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "Set-Cookie": {
+                "$ref": "#/components/headers/SetCookie"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [],
+        "summary": "Accept an invitation",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/console/api/invitations/{invitation}": {
+      "delete": {
+        "description": "Its link stops working.",
+        "operationId": "revokeInvitation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/InvitationPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Revoke an invitation",
+        "tags": [
+          "console"
+        ],
+        "x-cavea-permission": "settings",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
     "/console/api/me": {
       "get": {
         "description": "The user, their workspaces and roles, the session's CSRF token.",
@@ -2053,6 +2561,77 @@
           }
         ],
         "summary": "List the workspace's members",
+        "tags": [
+          "console"
+        ],
+        "x-cavea-permission": "settings",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
+        ]
+      },
+      "post": {
+        "description": "Returns a one-time link for the email and role, shown only here (nothing is sent). It works once, for 7 days, and replaces any earlier invitation of the email to this workspace. Inviting an owner needs `ownership`. An email that is already a member's is `409`.",
+        "operationId": "inviteMember",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteMember"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationCreated"
+                }
+              }
+            },
+            "description": "The invitation and its link",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Invite someone by email",
         "tags": [
           "console"
         ],
@@ -2425,6 +3004,75 @@
         "summary": "Create the owner with the one-time setup token",
         "tags": [
           "console"
+        ]
+      }
+    },
+    "/console/api/workspace": {
+      "patch": {
+        "operationId": "renameWorkspace",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameWorkspace"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleWorkspace"
+                }
+              }
+            },
+            "description": "The workspace",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Rename the workspace",
+        "tags": [
+          "console"
+        ],
+        "x-cavea-permission": "settings",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
         ]
       }
     },
@@ -5400,6 +6048,74 @@
           }
         ],
         "summary": "Create a workspace",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace}/invitations": {
+      "post": {
+        "description": "How a workspace the admin key made gets its first member (and the operator's recovery for one whose owners are gone): a one-time link making `email` an owner, shown only here, accepted in the console as any invitation (09 §7). `409` if the email is already a member's.",
+        "operationId": "inviteWorkspaceOwner",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspacePath"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteOwner"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationCreated"
+                }
+              }
+            },
+            "description": "The invitation and its link",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "adminKey": []
+          }
+        ],
+        "summary": "Invite an owner to a workspace",
         "tags": [
           "workspaces"
         ]
