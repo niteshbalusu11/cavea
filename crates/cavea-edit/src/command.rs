@@ -12,13 +12,14 @@ use std::fmt;
 use std::mem::replace;
 
 use cavea_compiler::document::{
-    Align, Category, Curve, Floor, Node, Outline, RowLabels, SeatLabels, SeatOverride, Settings,
+    Align, BlockRow, Category, Curve, Floor, Node, Outline, RowLabels, SeatLabels, SeatOverride,
+    Settings,
 };
 use cavea_core::limits::{MAX_CATEGORIES, MAX_FLOORS, MAX_OBJECTS, MAX_SEATS_PER_ROW};
 use serde::{Deserialize, Serialize};
 
 use crate::document::{Document, each_node, node_id};
-use crate::op::Op;
+use crate::op::{Op, row_index};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase", deny_unknown_fields)]
@@ -88,10 +89,58 @@ pub enum Command {
         id: u32,
         replacement: Option<u32>,
     },
+    /// Inserts `count` rows of `seats` seats before row `index` of a block.
+    AddRows {
+        id: u32,
+        index: u32,
+        count: u32,
+        seats: u32,
+    },
+    RemoveRows {
+        id: u32,
+        rids: Vec<u32>,
+    },
+    /// Adds seat positions at one end of a row, with fresh oids.
+    AddSeats {
+        id: u32,
+        rid: u32,
+        end: End,
+        count: u32,
+    },
+    /// Removes seat positions at one end of a row, with their overrides.
+    RemoveSeats {
+        id: u32,
+        rid: u32,
+        end: End,
+        count: u32,
+    },
+    /// Leaves a gap at the seat's position; it keeps its oid (03 §2.4).
+    RemoveSeat {
+        id: u32,
+        oid: u32,
+    },
+    RestoreSeat {
+        id: u32,
+        oid: u32,
+    },
+    /// Sets or (with `null`) clears the override of one seat of a row block
+    /// or row.
+    SetSeatOverride {
+        id: u32,
+        oid: u32,
+        value: Option<SeatOverride>,
+    },
     /// Applies the commands in order, as one undo step.
     Composite {
         commands: Vec<Command>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum End {
+    Start,
+    End,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -147,6 +196,7 @@ pub enum ChartProperty {
 pub enum CommandError {
     MissingNode(u32),
     NotASection(u32),
+    NotARowBlock(u32),
     /// The parent is the node itself or inside it.
     Cycle {
         id: u32,
@@ -165,6 +215,24 @@ pub enum CommandError {
     Limit(&'static str),
     IdsExhausted,
     DuplicateId(u32),
+    MissingRow {
+        id: u32,
+        rid: u32,
+    },
+    /// The row's oid runs do not cover its seats, so it cannot be edited.
+    InvalidRow {
+        id: u32,
+        rid: u32,
+    },
+    MissingSeat {
+        id: u32,
+        oid: u32,
+    },
+    /// Removing a removed seat, or restoring one that is not.
+    SeatState {
+        id: u32,
+        oid: u32,
+    },
     DuplicateCategory(String),
     MissingCategory(String),
     MissingFloor(u32),
@@ -180,6 +248,7 @@ impl fmt::Display for CommandError {
         match self {
             Self::MissingNode(id) => write!(f, "no node {id}"),
             Self::NotASection(id) => write!(f, "node {id} is not a section"),
+            Self::NotARowBlock(id) => write!(f, "node {id} has no rows"),
             Self::Cycle { id, parent } => write!(f, "node {parent} is inside node {id}"),
             Self::Placement => f.write_str("only top-level sections hold nodes"),
             Self::IndexOutOfRange => f.write_str("index out of range"),
@@ -188,6 +257,10 @@ impl fmt::Display for CommandError {
             Self::Limit(what) => write!(f, "too many {what}"),
             Self::IdsExhausted => f.write_str("no ids left"),
             Self::DuplicateId(id) => write!(f, "id {id} is taken"),
+            Self::MissingRow { id, rid } => write!(f, "node {id} has no row {rid}"),
+            Self::InvalidRow { id, rid } => write!(f, "node {id} row {rid}: invalid oid runs"),
+            Self::MissingSeat { id, oid } => write!(f, "node {id} has no seat {oid}"),
+            Self::SeatState { id, oid } => write!(f, "node {id} seat {oid}: already so"),
             Self::DuplicateCategory(key) => write!(f, "category {key:?} exists"),
             Self::MissingCategory(key) => write!(f, "no category {key:?}"),
             Self::MissingFloor(id) => write!(f, "no floor {id}"),
@@ -230,7 +303,7 @@ impl Document {
                     return Err(CommandError::Placement);
                 }
                 // The chart's objects so far count against the limit too.
-                let mut objects = self.slots.values().map(|s| own_objects(&s.node)).sum();
+                let mut objects = self.objects();
                 let mut ids = 0;
                 census(&node, &mut ids, &mut objects)?;
                 if !reparses(&node) {
@@ -411,10 +484,189 @@ impl Document {
                 list.remove(i);
                 run(self, Op::Floors(list))
             }
+            Command::AddRows {
+                id,
+                index,
+                count,
+                seats,
+            } => {
+                let rows = self.rows(id)?;
+                if index as usize > rows.len() {
+                    return Err(CommandError::IndexOutOfRange);
+                }
+                if !(1..=MAX_SEATS_PER_ROW).contains(&seats) {
+                    return Err(CommandError::Limit("seats per row"));
+                }
+                let total = u64::from(count) * u64::from(seats);
+                if count == 0 || self.objects() + total > u64::from(MAX_OBJECTS) {
+                    return Err(CommandError::Limit("objects"));
+                }
+                let ids = total + u64::from(count);
+                let mut next = self.allocate(ids).ok_or(CommandError::IdsExhausted)?;
+                for i in 0..count {
+                    let row = BlockRow {
+                        rid: next,
+                        seats,
+                        offset: 0.0,
+                        oids: vec![[next.saturating_add(1), seats]],
+                        label: None,
+                        removed: Vec::new(),
+                    };
+                    next = next.saturating_add(1).saturating_add(seats);
+                    let index = index as usize + i as usize;
+                    run(self, Op::InsertRow { id, index, row })?;
+                }
+                self.raise_next_oid(next, run)
+            }
+            Command::RemoveRows { id, mut rids } => {
+                rids.sort_unstable();
+                rids.dedup();
+                for rid in rids {
+                    let (row, overrides) = self.row(id, rid)?;
+                    let gone: Vec<u32> = row
+                        .oids
+                        .iter()
+                        .flat_map(|r| overrides.range(r[0]..r[0].saturating_add(r[1])))
+                        .map(|(&oid, _)| oid)
+                        .collect();
+                    for oid in gone {
+                        run(
+                            self,
+                            Op::Override {
+                                id,
+                                oid,
+                                value: None,
+                            },
+                        )?;
+                    }
+                    run(self, Op::RemoveRow { id, rid })?;
+                }
+                Ok(())
+            }
+            Command::AddSeats {
+                id,
+                rid,
+                end,
+                count,
+            } => {
+                let (row, _) = self.row(id, rid)?;
+                let mut oids = expand_runs(row, id)?;
+                let mut row = row.clone();
+                if count == 0 || row.seats.saturating_add(count) > MAX_SEATS_PER_ROW {
+                    return Err(CommandError::Limit("seats per row"));
+                }
+                if self.objects() + u64::from(count) > u64::from(MAX_OBJECTS) {
+                    return Err(CommandError::Limit("objects"));
+                }
+                let first = self
+                    .allocate(count.into())
+                    .ok_or(CommandError::IdsExhausted)?;
+                let new = (0..count).map(|i| first.saturating_add(i));
+                match end {
+                    End::Start => {
+                        oids.splice(0..0, new);
+                        row.removed
+                            .iter_mut()
+                            .for_each(|p| *p = p.saturating_add(count));
+                    }
+                    End::End => oids.extend(new),
+                }
+                row.seats += count;
+                row.oids = compress(&oids);
+                run(self, Op::SetRow { id, row })?;
+                self.raise_next_oid(first.saturating_add(count), run)
+            }
+            Command::RemoveSeats {
+                id,
+                rid,
+                end,
+                count,
+            } => {
+                let (row, overrides) = self.row(id, rid)?;
+                let mut oids = expand_runs(row, id)?;
+                let mut row = row.clone();
+                if count == 0 || count >= row.seats {
+                    return Err(CommandError::Limit("seats removed"));
+                }
+                let keep = row.seats - count;
+                let gone: Vec<u32> = match end {
+                    End::Start => {
+                        row.removed.retain(|&p| p >= count);
+                        row.removed.iter_mut().for_each(|p| *p -= count);
+                        oids.drain(..count as usize).collect()
+                    }
+                    End::End => {
+                        row.removed.retain(|&p| p < keep);
+                        oids.drain(keep as usize..).collect()
+                    }
+                };
+                let gone: Vec<u32> = gone
+                    .into_iter()
+                    .filter(|o| overrides.contains_key(o))
+                    .collect();
+                row.seats = keep;
+                row.oids = compress(&oids);
+                for oid in gone {
+                    run(
+                        self,
+                        Op::Override {
+                            id,
+                            oid,
+                            value: None,
+                        },
+                    )?;
+                }
+                run(self, Op::SetRow { id, row })
+            }
+            Command::RemoveSeat { id, oid } | Command::RestoreSeat { id, oid } => {
+                let remove = matches!(command, Command::RemoveSeat { .. });
+                let rows = self.rows(id)?;
+                let found = rows
+                    .iter()
+                    .find_map(|r| position(&r.oids, r.seats, oid).map(|p| (r, p)));
+                let (row, pos) = found.ok_or(CommandError::MissingSeat { id, oid })?;
+                let mut row = row.clone();
+                let at = row.removed.iter().position(|&p| p == pos);
+                match (remove, at) {
+                    (true, None) => {
+                        row.removed.push(pos);
+                        row.removed.sort_unstable();
+                    }
+                    (false, Some(i)) => {
+                        row.removed.remove(i);
+                    }
+                    _ => return Err(CommandError::SeatState { id, oid }),
+                }
+                run(self, Op::SetRow { id, row })
+            }
+            Command::SetSeatOverride { id, oid, value } => {
+                let has = match self.node(id) {
+                    Some(Node::RowBlock(b)) => b
+                        .rows
+                        .iter()
+                        .any(|r| position(&r.oids, r.seats, oid).is_some()),
+                    Some(Node::Row(r)) => position(&r.oids, r.seats, oid).is_some(),
+                    Some(_) => return Err(CommandError::NotARowBlock(id)),
+                    None => return Err(CommandError::MissingNode(id)),
+                };
+                if !has {
+                    return Err(CommandError::MissingSeat { id, oid });
+                }
+                let nudge = value.as_ref().and_then(|v| v.nudge);
+                if nudge.is_some_and(|n| !n.iter().all(|v| v.is_finite())) {
+                    return Err(CommandError::InvalidValue("nudge"));
+                }
+                run(self, Op::Override { id, oid, value })
+            }
             Command::Composite { commands } => commands
                 .into_iter()
                 .try_for_each(|c| self.execute(c, inverse, created)),
         }
+    }
+
+    /// Bookable objects in the chart (02 §14).
+    fn objects(&self) -> u64 {
+        self.slots.values().map(|s| own_objects(&s.node)).sum()
     }
 
     /// Only top-level sections hold children; sections are top-level.
@@ -466,6 +718,23 @@ impl Document {
             }
         }
         ops.into_iter().try_for_each(|op| run(self, op))
+    }
+
+    fn rows(&self, id: u32) -> Result<&[BlockRow]> {
+        match self.node(id) {
+            Some(Node::RowBlock(b)) => Ok(&b.rows),
+            Some(_) => Err(CommandError::NotARowBlock(id)),
+            None => Err(CommandError::MissingNode(id)),
+        }
+    }
+
+    fn row(&self, id: u32, rid: u32) -> Result<(&BlockRow, &BTreeMap<u32, SeatOverride>)> {
+        let Some(Node::RowBlock(b)) = self.node(id) else {
+            return self.rows(id).and(Err(CommandError::Internal));
+        };
+        let i = row_index(&b.rows, id, rid)?;
+        let row = b.rows.get(i).ok_or(CommandError::Internal)?;
+        Ok((row, &b.seat_overrides))
     }
 }
 
@@ -743,4 +1012,45 @@ fn remap(
         }
         pos = pos.saturating_add(count);
     }
+}
+
+/// The row's oids, one per position; the runs must cover its seats exactly.
+fn expand_runs(row: &BlockRow, id: u32) -> Result<Vec<u32>> {
+    let total: u64 = row.oids.iter().map(|r| u64::from(r[1])).sum();
+    if row.seats > MAX_SEATS_PER_ROW || total != u64::from(row.seats) {
+        return Err(CommandError::InvalidRow { id, rid: row.rid });
+    }
+    let mut out = Vec::with_capacity(row.seats as usize);
+    for &[first, count] in &row.oids {
+        if first.checked_add(count).is_none() {
+            return Err(CommandError::InvalidRow { id, rid: row.rid });
+        }
+        out.extend(first..first + count);
+    }
+    Ok(out)
+}
+
+/// Oids back into `[first, count]` runs.
+fn compress(oids: &[u32]) -> Vec<[u32; 2]> {
+    let mut runs: Vec<[u32; 2]> = Vec::new();
+    for &oid in oids {
+        match runs.last_mut() {
+            Some([first, count]) if first.checked_add(*count) == Some(oid) => *count += 1,
+            _ => runs.push([oid, 1]),
+        }
+    }
+    runs
+}
+
+/// The seat position holding `oid` in a row's runs.
+fn position(runs: &[[u32; 2]], seats: u32, oid: u32) -> Option<u32> {
+    let mut pos = 0u32;
+    for &[first, count] in runs {
+        if oid >= first && oid - first < count {
+            let p = pos.checked_add(oid - first)?;
+            return (p < seats).then_some(p);
+        }
+        pos = pos.checked_add(count)?;
+    }
+    None
 }
