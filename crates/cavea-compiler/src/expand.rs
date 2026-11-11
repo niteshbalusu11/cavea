@@ -173,6 +173,25 @@ impl std::error::Error for ExpandError {}
 
 type Kind = ExpandErrorKind;
 
+/// A seat override with its flags folded into `SFLG` bits, sorted by `oid`.
+/// Folding once per node keeps a long `flags` list from costing once per seat.
+struct Override<'d> {
+    oid: u32,
+    flags: u8,
+    over: &'d doc::SeatOverride,
+}
+
+fn resolve(overrides: &BTreeMap<u32, doc::SeatOverride>) -> Vec<Override<'_>> {
+    overrides
+        .iter()
+        .map(|(&oid, over)| Override {
+            oid,
+            flags: over.flags.iter().fold(0, |acc, f| acc | f.bit()),
+            over,
+        })
+        .collect()
+}
+
 /// What [`Expansion::push_seats`] needs to know about one row.
 struct RowSpec<'d, 'a> {
     node: u32,
@@ -186,7 +205,7 @@ struct RowSpec<'d, 'a> {
     seat_base: u32,
     oids: &'a [[u32; 2]],
     removed: &'a [u32],
-    overrides: &'d BTreeMap<u32, doc::SeatOverride>,
+    overrides: &'a [Override<'d>],
     category: Option<&'d str>,
 }
 
@@ -273,6 +292,7 @@ impl<'d> Expansion<'d> {
         }
 
         let total = self.reserve(block.rows.iter().map(|r| (r.rid, r.seats)))?;
+        let overrides = resolve(&block.seat_overrides);
         let row_count = block.rows.len() as u32; // ≤ MAX_OBJECTS, checked by reserve
         let rl = &block.row_labels;
         let row_rule = rule(
@@ -381,7 +401,7 @@ impl<'d> Expansion<'d> {
                     seat_base,
                     oids: &row.oids,
                     removed: &row.removed,
-                    overrides: &block.seat_overrides,
+                    overrides: &overrides,
                     category: block.category.as_deref(),
                 },
                 place,
@@ -415,6 +435,7 @@ impl<'d> Expansion<'d> {
             .ok_or(Kind::PathTooShort)?;
 
         self.reserve(core::iter::once((row.id, row.seats)))?;
+        let overrides = resolve(&row.seat_overrides);
         let sl = &row.seat_labels;
         let seat_rule = rule(
             sl.scheme, &sl.start, sl.step, &sl.prefix, &sl.suffix, &sl.custom, overflow,
@@ -449,7 +470,7 @@ impl<'d> Expansion<'d> {
                 seat_base: 0,
                 oids: &row.oids,
                 removed: &row.removed,
-                overrides: &row.seat_overrides,
+                overrides: &overrides,
                 category: row.category.as_deref(),
             },
             place,
@@ -509,7 +530,12 @@ impl<'d> Expansion<'d> {
                 .write(expanded.seat_ordinal(index), &mut LabelBuf::new())
                 .map_err(|error| Kind::Label { rid, error })?;
             let oid = oids.next().ok_or(Kind::OidRuns { rid })?;
-            let over = spec.overrides.get(&oid);
+            let resolved = spec
+                .overrides
+                .binary_search_by_key(&oid, |o| o.oid)
+                .ok()
+                .and_then(|i| spec.overrides.get(i));
+            let over = resolved.map(|o| o.over);
             let mut pos = place(k);
             if let Some([dx, dy]) = over.and_then(|o| o.nudge) {
                 pos = [pos[0] + dx, pos[1] + dy];
@@ -533,7 +559,7 @@ impl<'d> Expansion<'d> {
                 row,
                 index,
                 removed,
-                flags: over.map_or(0, |o| o.flags.iter().fold(0, |acc, f| acc | f.bit())),
+                flags: resolved.map_or(0, |o| o.flags),
                 category: over.and_then(|o| o.category.as_deref()).or(spec.category),
                 label,
             });
