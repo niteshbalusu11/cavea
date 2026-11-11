@@ -16,20 +16,37 @@ const HOLD_TIMEOUT_MS = 20_000;
 let loading: Promise<unknown> | undefined;
 
 /**
+ * Subresource Integrity of the files this build ships with, which the
+ * script-tag build sets (05 §1), so a script pinned with `integrity` pins the
+ * WASM and the atlas it fetches. Only the SDK's own locations are checked
+ * (its default and `assets.baseUrl`), never a host's `assets.wasm`.
+ */
+const pinned: { wasm?: string; atlas?: string } = {};
+export const pin = (hashes: { wasm: string; atlas: string }): void => {
+  Object.assign(pinned, hashes);
+};
+
+/**
  * Fetches, compiles and instantiates the WASM once per page (streaming
  * compilation when given a URL or `Response`); every map shares the module.
  * The first call's source wins. A failed load is not kept: the next call
- * tries again.
+ * tries again. `assets` as the map's options: `wasm`, else `baseUrl`.
  */
-export function loadWasm(source?: InitInput): Promise<unknown> {
+export function loadWasm(assets?: SeatMapOptions["assets"]): Promise<unknown> {
   if (typeof WebAssembly === "undefined") {
     return Promise.reject(new CaveaError("wasm_unavailable", "WebAssembly is not available", true));
   }
-  const input = source ?? new URL("../wasm/cavea_web_bg.wasm", import.meta.url);
+  const own = assets?.wasm === undefined;
+  const input: InitInput =
+    assets?.wasm ??
+    asset(assets, "cavea_web_bg.wasm") ??
+    new URL("../wasm/cavea_web_bg.wasm", import.meta.url);
   // Fetched here, so an HTTP failure keeps its status (05 §9: a 404 is not retried).
   loading ??= (
     typeof input === "string" || input instanceof URL
-      ? fetchOk(input).then((r) => init({ module_or_path: r }))
+      ? fetchOk(input, undefined, own ? pinned.wasm : undefined).then((r) =>
+          init({ module_or_path: r }),
+        )
       : init({ module_or_path: input })
   ).catch((error: unknown) => {
     loading = undefined;
@@ -51,8 +68,19 @@ function once(key: string, start: () => Promise<Uint8Array>): Promise<Uint8Array
 }
 
 /** `url`'s response; one that is not OK throws with its status. */
-async function fetchOk(url: string | URL, signal?: AbortSignal): Promise<Response> {
-  const response = await fetch(url, signal === undefined ? {} : { signal });
+async function fetchOk(
+  url: string | URL,
+  signal?: AbortSignal,
+  integrity?: string,
+): Promise<Response> {
+  const request: RequestInit = {};
+  if (signal !== undefined) {
+    request.signal = signal;
+  }
+  if (integrity !== undefined) {
+    request.integrity = integrity;
+  }
+  const response = await fetch(url, request);
   if (!response.ok) {
     throw httpError(String(url), response.status);
   }
@@ -66,7 +94,9 @@ async function fetchBytes(url: string | URL, signal?: AbortSignal): Promise<Uint
 const href = (url: string | URL): string => new URL(url, document.baseURI).href;
 const atlas = (assets: SeatMapOptions["assets"]): Promise<Uint8Array> => {
   const url = asset(assets, "glyphs.png");
-  return once(`atlas ${url === undefined ? "" : href(url)}`, () => loadGlyphAtlas(url));
+  return once(`atlas ${url === undefined ? "" : href(url)}`, () =>
+    loadGlyphAtlas(url, pinned.atlas),
+  );
 };
 
 /**
@@ -82,10 +112,7 @@ export function preload(
     return Promise.resolve();
   }
   const { assets, chart } = options;
-  const jobs: Array<Promise<unknown>> = [
-    loadWasm(assets?.wasm ?? asset(assets, "cavea_web_bg.wasm")),
-    atlas(assets),
-  ];
+  const jobs: Array<Promise<unknown>> = [loadWasm(assets), atlas(assets)];
   if (chart?.url !== undefined) {
     const url = chart.url;
     jobs.push(once(href(url), () => fetchBytes(url)));
@@ -152,7 +179,7 @@ function hex(value: string): string {
 export function browserEnv(): Env {
   return {
     wasm: async (assets) => {
-      await loadWasm(assets?.wasm ?? asset(assets, "cavea_web_bg.wasm"));
+      await loadWasm(assets);
       return (canvas): EngineView => new View(canvas);
     },
     // A chart `preloadSeatMap` fetched is used once it is in.

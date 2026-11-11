@@ -1,0 +1,11 @@
+{
+  "name": "cavea-fixture-webpack",
+  "private": true,
+  "scripts": {
+    "build": "webpack --mode production --entry ./src/main.js"
+  },
+  "devDependencies": {
+    "webpack": "5.112.2",
+    "webpack-cli": "7.3.1"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "cavea-fixture-vite",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "vite": "8.3.8"
+  }
+}

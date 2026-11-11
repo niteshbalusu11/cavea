@@ -467,6 +467,36 @@ Each kind's first round, run while the machine was busier, has the high p99; the
 
 Browser coverage uses Playwright locally and a device cloud for what it cannot reach.
 
+**Bundlers, frameworks and page policies** (WEB-013 to WEB-016, WEB-018): `bun fixtures/run.ts [check…]`, from the repository root after `cargo xtask build-web`, on demand and never in CI. It builds `@cavea/renderer` and `@cavea/react` (`bun run build`), packs them (`bun pm pack`), and for each fixture in `fixtures/` (each outside the bun workspace, with its tools pinned in its own `package.json` and `bun.lock`) copies it to `target/tmp/compat/`, installs the lockfile with bun and unpacks the two tarballs into its `node_modules`, as a package manager does; builds run under Node (from PATH or `nixpkgs#nodejs`), as most customers run them. The page is the theatre preset (`cavea gen theatre`, compiled) with a custom adapter, served by a static server on a free port and loaded in headless Chromium (PATH or `nixpkgs#chromium`; WebGL2 on SwiftShader, software rendering) over the DevTools protocol, each visit in a fresh browser context. A check passes when the page's `onMetrics` reports the first frame with no error through `onError` and no policy violation; for the bundlers, also when the output holds the WASM as a file of its own and no script inlines it (no base64 `AGFzbQ`, no `data:application/wasm`). It records where the WASM and the atlas were fetched from. `csp-server` starts `cavea-server` (debug build) on a database of its own in the `deploy/compose.yaml` PostgreSQL, sets up a workspace, the chart, an event and a publishable key through the API, and drops the database at the end; the page is on `localhost`, the server on `127.0.0.1`, so they are different origins. The runner fails clearly when an install needs the network and has none, prints a table, and exits 1 if any row fails.
+
+| Check | What it shows |
+|---|---|
+| `script-tag` | `cavea.min.js` by a script tag with `integrity`: the WASM and the atlas from beside the script (`/lib/v0/`), and from `assets.baseUrl` when the script is elsewhere |
+| `vite`, `vite-dev`, `webpack`, `rollup`, `esbuild` | The shared page bundled with each, configured as 05 §13 says; the map draws from the files the bundler wrote |
+| `next` | A Next.js App Router app: a server component page holding a client component with `<SeatMap>`, and a page whose client component imports `@cavea/renderer` with `import()`. `next build` prerenders both (the server render: an import that touched the DOM would fail it), the HTML holds the container, and the page hydrates and draws under `next start` |
+| `react18` | `@cavea/react`'s own tests (`packages/react/src/index.test.ts`) under React 18 instead of the workspace's 19 |
+| `csp-custom`, `csp-server`, `csp-cdn` | The policies of 05 §10 with `require-trusted-types-for 'script'`: the map draws with no violation; then each source is taken away in turn and the map must fail the way 05 §10 says. `csp-cdn` also serves a WASM with one byte changed from the CDN, which the script's pinned hash must refuse |
+
+**Measured locally** (2026-11-11; Linux; Chromium 157.0.8103.38 headless, SwiftShader; Node 24.21.0; bun 1.4.2). Every row passed:
+
+| Check | Version | Result |
+|---|---|---|
+| script-tag | `cavea.min.js` | First frame; `/lib/v0/cavea_web_bg.wasm`, `/lib/v0/glyphs.png` |
+| script-tag with `assets.baseUrl` | `cavea.min.js` | First frame; `/static/cavea/cavea_web_bg.wasm`, `/static/cavea/glyphs.png` |
+| vite (build) | Vite 8.3.8 | First frame; `/assets/cavea_web_bg-<hash>.wasm`, `/assets/glyphs-<hash>.png` |
+| vite-dev | Vite 8.3.8 | First frame; `/node_modules/@cavea/renderer/cavea_web_bg.wasm` |
+| webpack | webpack 5.112.2, webpack-cli 7.3.1 | First frame; `/<hash>.wasm`, `/<hash>.png` |
+| rollup | Rollup 4.68.2, node-resolve 16.0.3 | First frame; `/cavea_web_bg.wasm`, `/glyphs.png` (copied by the fixture's plugin) |
+| esbuild | esbuild 0.28.2 | First frame; `/cavea_web_bg.wasm`, `/glyphs.png` (copied) |
+| next `/` and `/direct` | Next.js 16.4.6, React 19.3.1 | Built, server-rendered with the container, hydrated, first frame; `/_next/static/media/cavea_web_bg.<hash>.wasm` |
+| react18 | React 18.3.1 | 6 of 6 tests |
+| csp-custom | — | Draws; without `'wasm-unsafe-eval'` `wasm_unavailable` at once; without `connect-src 'self'` `wasm_unavailable` after the retries |
+| csp-server, transport `auto` and `sse` | `cavea-server` | Draws, realtime frames arrive (WebSocket; EventSource); without the server's origin `chart_fetch_failed` or `state_connect_failed`; without its `ws:` origin, EventSource after two refused sockets |
+| csp-cdn | — | Draws from the CDN's files; without `'wasm-unsafe-eval'` or the CDN in `connect-src`, `wasm_unavailable`; a changed WASM on the CDN, `wasm_unavailable` |
+| Trusted Types | — | No violation under `require-trusted-types-for 'script'` in any CSP row |
+
+The `csp-server` check found that Chromium fires only `error`, never `close`, on a WebSocket a policy refuses, which left `caveaServer` waiting 60 s for silence before trying again; it now counts the `error` (05 §4.1). These are Chromium results in software rendering on one machine, not other browsers or GPUs.
+
 ## 9. Designer
 
 - **Command inverses:** for random command sequences, applying then undoing every command returns the original document, byte for byte.

@@ -1,0 +1,12 @@
+{
+  "name": "cavea-fixture-rollup",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "rollup -c"
+  },
+  "devDependencies": {
+    "@rollup/plugin-node-resolve": "16.0.3",
+    "rollup": "4.68.2"
+  }
+}
