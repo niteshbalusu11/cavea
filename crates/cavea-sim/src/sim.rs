@@ -35,8 +35,9 @@
 //! holds the public reduction of the committed state at its `seq`, never past
 //! the store's), INV-10 (replay refuses a second booking), INV-11 (each batch
 //! from the node that acquired its epoch, epochs never going back), that no
-//! command is logged twice or after its batch failed, and that the callers of
-//! a batch that failed or lost its reply get `unavailable`. At the end of a run: a
+//! command is logged twice or after its batch failed, and that every caller
+//! waiting on an actor whose commit failed or lost its reply gets
+//! `unavailable`. At the end of a run: a
 //! serial replay of the log through the model reproduces every reply clients
 //! received, and no hold was used at or after its expiry.
 
@@ -344,6 +345,7 @@ async fn clients(
     reg: Reg,
     mut jobs: mpsc::UnboundedReceiver<Job>,
     results: Arc<Mutex<Vec<(u64, Reply)>>>,
+    submitted: Arc<Mutex<HashSet<u64>>>,
     progress: Arc<AtomicU64>,
 ) {
     while let Some(job) = jobs.recv().await {
@@ -353,6 +355,8 @@ async fn clients(
                 for (id, request) in batch {
                     match reg.submit(EVENTS[event], request).await {
                         Ok(pending) => {
+                            // In the actor's mailbox now: its fate is the actor's.
+                            lock(&submitted).insert(id);
                             let (results, progress) = (results.clone(), progress.clone());
                             tokio::spawn(async move {
                                 let reply = pending.await;
@@ -439,6 +443,11 @@ struct Sim {
     forward: Vec<u64>,
     nodes: Vec<Node>,
     results: Arc<Mutex<Vec<(u64, Reply)>>>,
+    /// Requests a node's registry has put in an actor's mailbox.
+    submitted: Arc<Mutex<HashSet<u64>>>,
+    /// Requests waiting on an actor when its commit failed, panicked or lost
+    /// its reply: each must get `unavailable` (08 §4.3, "Stopping").
+    doomed: HashSet<u64>,
     reqs: Vec<Req>,
     pipelines: u64,
     subs: Vec<Sub>,
@@ -549,6 +558,8 @@ impl Sim {
             progress,
             nodes: Vec::new(),
             results: Arc::default(),
+            submitted: Arc::default(),
+            doomed: HashSet::new(),
             reqs: Vec::new(),
             pipelines: 0,
             subs: Vec::new(),
@@ -593,6 +604,7 @@ impl Sim {
             reg.clone(),
             rx,
             self.results.clone(),
+            self.submitted.clone(),
             self.progress.clone(),
         ));
         Ok(Node {
@@ -937,6 +949,17 @@ impl Sim {
             }
             if decision != Decision::Commit {
                 self.dead.insert((gate.event, gate.epoch));
+                // Everyone in the actor's batches and mailbox, keyed refusals
+                // and no-ops in a batch without log rows included.
+                let submitted = lock(&self.submitted);
+                let waiting = self.reqs.iter().enumerate().filter(|(id, r)| {
+                    r.node == gate.node
+                        && EVENTS.get(r.event) == Some(&gate.event)
+                        && r.reply.is_none()
+                        && !r.lost
+                        && submitted.contains(&(*id as u64))
+                });
+                self.doomed.extend(waiting.map(|(id, _)| id as u64));
             }
             let _ = gate.tx.send(decision);
         }
@@ -1181,9 +1204,11 @@ impl Sim {
         req.hi = ev.replay.seq;
         let logged = ev.logged.get(&req.request.actor).copied();
         // 13 §3.2: a caller whose batch failed, or was written but lost its
-        // reply, gets an error, never a success.
-        let dead =
-            self.failed.contains(&req.request.actor) || self.lost.contains(&req.request.actor);
+        // reply, gets an error, never a success; so does every other caller
+        // waiting on that actor.
+        let dead = self.failed.contains(&req.request.actor)
+            || self.lost.contains(&req.request.actor)
+            || self.doomed.contains(&id);
         ensure!(
             !dead || reply == Err(Failure::Unavailable),
             "failed batch acknowledged",
@@ -1678,8 +1703,15 @@ impl Sim {
                     rec.seq,
                     rec.actor
                 );
+                // A keyed request runs once: a duplicate or a retry, even
+                // after a lost reply and a reload, replays the first result.
                 if let Some(f) = r.family {
-                    family_reply.insert(f, reply.clone());
+                    ensure!(
+                        family_reply.insert(f, reply.clone()).is_none(),
+                        "idempotency",
+                        "{} ran again under a key already logged",
+                        rec.actor
+                    );
                 }
                 if let Some(got) = delivered(r) {
                     ensure!(
