@@ -331,7 +331,8 @@ async fn read(
     let mut by_name = Map::new();
     let mut custom = Map::new();
     let mut taken = 0;
-    for (status, count) in counts {
+    // A free object may have a row (for its channel): it is not taken.
+    for (status, count) in counts.into_iter().filter(|(status, _)| *status != 0) {
         taken += count;
         match status {
             1 => by_name.insert("held".into(), count.into()),

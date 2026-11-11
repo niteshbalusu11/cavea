@@ -8,7 +8,8 @@ use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use cavea_core::label::LabelRule;
+use cavea_core::label::{LabelRule, Scheme};
+use cavea_core::limits::MAX_LABEL_LEN;
 use cavea_engine::{
     ActorConfig, ChartProvider, ChartVersionId, ChartView, Clock, EventId, Idx, Registry,
     RegistryConfig, StoreError, Timestamp,
@@ -207,18 +208,6 @@ fn build(bytes: &[u8]) -> Result<Chart, String> {
         .checked_add(c.objects.len())
         .filter(|&n| n == full.oids.len())
         .ok_or("object count does not match the oids")?;
-    let mut customs = Vec::with_capacity(c.label_rules.len());
-    for l in &c.label_rules {
-        let list = (0..l.custom_count)
-            .map(|k| {
-                s(l.custom_first
-                    .checked_add(k)
-                    .ok_or("custom label overflow")?)
-                .map(str::to_owned)
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        customs.push(list);
-    }
     let exceptions: HashMap<u32, u32> = c
         .label_exceptions
         .iter()
@@ -250,17 +239,7 @@ fn build(bytes: &[u8]) -> Result<Chart, String> {
                     .label_rules
                     .get(row.label_rule as usize)
                     .ok_or("seat without a label")?;
-                let rule = LabelRule {
-                    scheme: l.scheme,
-                    start: l.start,
-                    step: l.step,
-                    overflow: l.overflow,
-                    prefix: s(l.prefix)?,
-                    suffix: s(l.suffix)?,
-                    custom: customs
-                        .get(row.label_rule as usize)
-                        .map_or(&[], Vec::as_slice),
-                };
+                let (prefix, suffix) = (s(l.prefix)?, s(l.suffix)?);
                 let position = u32::from(g.position) + k;
                 let within = cavea_core::label::seat_ordinal(
                     row.direction.into(),
@@ -272,7 +251,32 @@ fn build(bytes: &[u8]) -> Result<Chart, String> {
                     .ordinal_base
                     .checked_add(within)
                     .ok_or("ordinal overflow")?;
-                rule.write(ordinal, &mut seat).map_err(|e| e.to_string())?;
+                if l.scheme == Scheme::Custom {
+                    // As `LabelRule::write` does for a custom list, without
+                    // copying the list: overlapping ranges in a hostile file
+                    // cannot multiply memory.
+                    let text = (ordinal < l.custom_count)
+                        .then(|| l.custom_first.checked_add(ordinal))
+                        .flatten()
+                        .ok_or("custom labels exhausted")?;
+                    seat.push_str(prefix);
+                    seat.push_str(s(text)?);
+                    seat.push_str(suffix);
+                    if seat.len() > MAX_LABEL_LEN {
+                        return Err("seat label too long".into());
+                    }
+                } else {
+                    let rule = LabelRule {
+                        scheme: l.scheme,
+                        start: l.start,
+                        step: l.step,
+                        overflow: l.overflow,
+                        prefix,
+                        suffix,
+                        custom: &[],
+                    };
+                    rule.write(ordinal, &mut seat).map_err(|e| e.to_string())?;
+                }
             }
             let mut label = String::new();
             cavea_compiler::write_full_label(template, section, s(row.label)?, &seat, &mut label)

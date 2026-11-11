@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use cavea_compiler::document::Node;
+use cavea_compiler::document::{LabelScheme, Node, SeatDirection, SeatLabels};
 use cavea_compiler::{ChartDocument, Expansion, write_full_label};
 use cavea_engine::{ManualClock, ObjectRef, Timestamp};
 use cavea_format::Artefact;
@@ -152,6 +152,10 @@ async fn seat_flow() {
         let (response, p) = post(&app, &t.secret, &ev("hold"), body).await;
         assert_problem(&response, &p, Code::VersionConflict);
         assert_eq!(p["details"]["version"], t.hash.as_str());
+        let body = json!({ "event": t.event, "max_objects": 1_000_001 });
+        let (response, p) = post(&app, &t.secret, "/v1/hold-tokens", body).await;
+        assert_problem(&response, &p, Code::InvalidRequest);
+        assert_eq!(p["details"]["field"], "max_objects");
         let body = json!({ "event": t.event, "ttl_seconds": 59 });
         let (response, p) = post(&app, &t.secret, "/v1/hold-tokens", body).await;
         assert_problem(&response, &p, Code::InvalidRequest);
@@ -241,6 +245,13 @@ async fn event_rules() {
         let (_, original) = get(&app, sk, &format!("/v1/events/{}", t.event)).await;
         assert_eq!(original["version"]["number"], 1);
         assert_eq!(original["counts"]["free"], 2_000);
+        // A free object with a row (for its channel) is still free.
+        sqlx::query("INSERT INTO object_state (event_id, oid, status, channel, seq) SELECT id, 7, 0, 1, 0 FROM events WHERE key = 'e1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (_, e1) = get(&app, sk, "/v1/events/e1").await;
+        assert_eq!((&e1["counts"]["free"], &e1["counts"]["custom"]), (&json!(2_000), &json!({})));
 
         // Refusals.
         let (response, p) = create(json!({ "key": "e3", "chart": t.chart, "version": 9 })).await;
@@ -497,18 +508,61 @@ async fn chart_provider() {
             version_id(&pool, &b.chart).await,
         );
 
-        let expected = expected_labels(&cavea_testkit::synthetic::stadium(2_000, 1));
-        let charts = PgCharts::new(pool.clone(), 2_000);
-        let chart = charts.get(va).await.unwrap();
-        assert_eq!(chart.view.len(), expected.len());
-        for (oid, label) in &expected {
-            let idx = chart.view.resolve(&ObjectRef::Label(label.as_str().into()));
-            let idx = idx.unwrap_or_else(|| panic!("{label} not found"));
-            assert_eq!(
-                (chart.view.oid(idx), chart.label(idx)),
-                (Some(*oid), Some(label.as_str()))
-            );
+        // The default rules, and a chart with custom, right-to-left and
+        // centre-out continuous seat labels.
+        let mut doc = cavea_testkit::synthetic::stadium(2_000, 1);
+        doc.name = "labels".into();
+        for (n, node) in doc.nodes.iter_mut().enumerate().take(3) {
+            let Node::Section(section) = node else {
+                continue;
+            };
+            let Some(Node::RowBlock(block)) = section.children.first_mut() else {
+                continue;
+            };
+            block.seat_labels = match n {
+                0 => SeatLabels {
+                    scheme: LabelScheme::Custom,
+                    custom: (1..=500).map(|i| format!("c{i}")).collect(),
+                    prefix: "P".into(),
+                    ..SeatLabels::default()
+                },
+                1 => SeatLabels {
+                    scheme: LabelScheme::Alpha,
+                    direction: SeatDirection::Rtl,
+                    ..SeatLabels::default()
+                },
+                _ => SeatLabels {
+                    direction: SeatDirection::CenterOut,
+                    continuous: true,
+                    suffix: "s".into(),
+                    ..SeatLabels::default()
+                },
+            };
         }
+        let body = json!({ "key": "labels", "name": "labels",
+            "document": serde_json::from_slice::<Value>(&doc.to_json().unwrap()).unwrap() });
+        let (response, created) = post(&app, &a.secret, "/v1/charts", body).await;
+        assert_eq!(response.status(), 201, "{created}");
+        let uri = "/v1/charts/labels/publish";
+        let (response, v) = call(&app, Method::POST, uri, Some(&a.secret), None).await;
+        assert_eq!(response.status(), 201, "{v}");
+        let vl = version_id(&pool, "labels").await;
+        let charts = PgCharts::new(pool.clone(), 2_000);
+        let default = cavea_testkit::synthetic::stadium(2_000, 1);
+        for (version, doc) in [(va, &default), (vl, &doc)] {
+            let expected = expected_labels(doc);
+            let chart = charts.get(version).await.unwrap();
+            assert_eq!(chart.view.len(), expected.len());
+            for (oid, label) in &expected {
+                let idx = chart.view.resolve(&ObjectRef::Label(label.as_str().into()));
+                let idx = idx.unwrap_or_else(|| panic!("{label} not found"));
+                assert_eq!(
+                    (chart.view.oid(idx), chart.label(idx)),
+                    (Some(*oid), Some(label.as_str()))
+                );
+            }
+        }
+        assert!(expected_labels(&doc).values().any(|l| l.ends_with("-Pc1")));
         // Bounded: one 2,000-object chart fits; the older one goes.
         charts.get(vb).await.unwrap();
         assert_eq!(charts.cached(), 1);

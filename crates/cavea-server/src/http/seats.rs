@@ -23,9 +23,10 @@ use tracing::Instrument as _;
 
 use super::auth::{Auth, SecretKey, has_hex_tail, push_hex, sha256};
 use super::events::{Settings, archived};
-use super::extract::{Json, Path, check_object_count};
+use super::extract::{Json, Path, check_object_count, invalid_field};
 use super::{ApiError, AppState, Code};
 use crate::seats::{Chart, event_id};
+use cavea_core::limits::MAX_OBJECTS;
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
@@ -313,6 +314,10 @@ async fn create_token(
     let mut token = String::from("ht_");
     push_hex(&mut token, &bytes);
     let hash = token_hash(&token);
+    // Stored as `int`; no chart has more objects than this anyway.
+    if body.max_objects.is_some_and(|m| m > MAX_OBJECTS) {
+        return Err(invalid_field("max_objects", "must be at most 1,000,000"));
+    }
     let done = submit(&state, &auth, Find::Key(&body.event), |target| {
         Ok(Command::CreateHold {
             token: hash,
