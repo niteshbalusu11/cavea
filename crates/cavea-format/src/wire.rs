@@ -263,7 +263,12 @@ impl<'a> Snapshot<'a> {
         Ok(())
     }
 
+    /// The areas, for a receiver with `objects` objects (the snapshot's own
+    /// count, as for [`Snapshot::runs`]).
     pub fn areas(&self, objects: u32) -> Result<Areas<'a>, WireError> {
+        if objects != self.objects {
+            return Err(WireError::CountMismatch);
+        }
         Ok(Areas(self.areas.items(objects)?))
     }
 }

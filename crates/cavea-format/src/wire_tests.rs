@@ -567,11 +567,12 @@ fn hostile_frames_give_typed_errors() {
     }
 
     // Checks against the receiver's object count.
-    let s = snapshot_frame(1, 1, &[0, 0, 1], &[]);
+    let s = snapshot_frame(1, 1, &[0, 0, 1], &[(2, 1)]);
     let ServerFrame::Snapshot(s) = server(&s, Public) else {
         panic!("not a snapshot");
     };
     assert_eq!(s.runs(4).err(), Some(CountMismatch));
+    assert_eq!(s.areas(4).err(), Some(CountMismatch));
     assert_eq!(s.write_into(&mut [0; 2]), Err(CountMismatch));
     let d = delta(1, 2, &[2, 3, 1, 1, 0, 1, 7, 1]);
     let ServerFrame::Delta(d) = server(&d, Public) else {
