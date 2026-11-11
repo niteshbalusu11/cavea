@@ -511,6 +511,11 @@ describe("the designer module", () => {
     expect(failure(() => s.setField({ field: "floor", value: Number.NaN }))).toMatchObject({
       kind: "arguments",
     });
+    // Nor can a BigInt or a cycle, which plain JavaScript can pass.
+    expect(args("set_field", [{ field: "floor", value: 1n }])).toBe("arguments");
+    const cycle: Record<string, unknown> = {};
+    cycle["self"] = cycle;
+    expect(args("set_field", [cycle])).toBe("arguments");
     expect(s.export()).toBe(before);
 
     // A disposed session.

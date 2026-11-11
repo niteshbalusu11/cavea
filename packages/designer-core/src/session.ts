@@ -107,6 +107,25 @@ export async function loadDesigner(options: LoadOptions = {}): Promise<Designer>
   };
 }
 
+/**
+ * The arguments as JSON, or an `arguments` failure for what JSON cannot
+ * carry: NaN and infinities (`JSON.stringify` would write `null`, which a
+ * nullable argument takes as a value), a `BigInt`, a cycle.
+ */
+function encode(args: unknown[]): string {
+  try {
+    return JSON.stringify(args, (_key, value: unknown) => {
+      if (typeof value === "number" && !Number.isFinite(value)) {
+        throw new Error(`${value} is not a finite number`);
+      }
+      return value;
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DesignerError({ kind: "arguments", message });
+  }
+}
+
 /** Parses a reply, or turns what the module threw into a `panic`. */
 function settle(module: Module, run: () => string, onPanic: () => void = () => {}): unknown {
   if (module.broken !== null) {
@@ -160,14 +179,7 @@ export class Session extends Calls {
     if (handle === null) {
       throw new DesignerError({ kind: "disposed" });
     }
-    // `JSON.stringify` writes NaN and infinities as `null`, which a nullable
-    // argument would take as a value.
-    const json = JSON.stringify(args, (_key, value: unknown) => {
-      if (typeof value === "number" && !Number.isFinite(value)) {
-        throw new DesignerError({ kind: "arguments", message: `${value} is not a finite number` });
-      }
-      return value;
-    });
+    const json = encode(args);
     return settle(
       this.#module,
       () => handle.call(method, json),
