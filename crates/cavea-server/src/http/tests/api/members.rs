@@ -349,6 +349,69 @@ async fn invitations_work_once_for_their_email() {
     .await;
 }
 
+/// CON-012: of two acceptances of one link at once, one joins and the other
+/// is refused, with one user and one `member.joined` row; an email that is
+/// already a member's cannot be invited; a link accepted by someone who
+/// became a member meanwhile is used up, keeps their role and writes no row.
+#[tokio::test]
+#[ignore = "needs CAVEA_TEST_DATABASE_URL"]
+async fn invitations_hold_under_a_race_and_for_members() {
+    let _serial = serial();
+    with_db(async move |pool| {
+        let app = api(&pool, Some(ADMIN));
+        let a = Tenant::create(&app, "a").await;
+        let (_, owner) = member(&pool, &a.id, Role::Owner, "owner@a.example").await;
+        let invite = async |email: &str| {
+            let body = json!({ "email": email, "role": "viewer" });
+            let uri = "/console/api/members";
+            as_member(&app, Method::POST, uri, &owner, &a.id, Some(body)).await
+        };
+        let accept = async |token: &str| {
+            let body = json!({ "token": token, "password": PASSWORD });
+            let uri = "/console/api/invitations/accept";
+            call(&app, Method::POST, uri, None, Some(body)).await
+        };
+        let joined = async || -> i64 {
+            sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE action = 'member.joined'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
+
+        let (_, created) = invite("racer@a.example").await;
+        let token = token_of(created["link"].as_str().unwrap()).to_owned();
+        let ((first, _), (second, _)) = tokio::join!(accept(&token), accept(&token));
+        let mut statuses = [first.status().as_u16(), second.status().as_u16()];
+        statuses.sort_unstable();
+        assert_eq!(statuses, [200, 401]);
+        let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE email = $1")
+            .bind("racer@a.example")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!((users, joined().await), (1, 1));
+
+        let (response, problem) = invite("owner@a.example").await;
+        assert_eq!(response.status(), 409, "{problem}");
+
+        // Invited as a viewer, then made an admin by other means before
+        // opening the link: they stay an admin.
+        let (_, created) = invite("late@a.example").await;
+        let token = token_of(created["link"].as_str().unwrap()).to_owned();
+        let (user, session) = member(&pool, &a.id, Role::Admin, "late@a.example").await;
+        let headers = console(&session, None);
+        let uri = "/console/api/invitations/accept";
+        let body = Some(json!({ "token": token }));
+        let (response, me) = call_with(&app, Method::POST, uri, None, &refs(&headers), body).await;
+        assert_eq!(response.status(), 200, "{me}");
+        assert_eq!(me["workspaces"][0]["role"], "admin");
+        assert_eq!(joined().await, 1, "usr_{user} joined nothing");
+        let (response, _) = accept(&token).await;
+        assert_eq!(response.status(), 401);
+    })
+    .await;
+}
+
 /// CON-013: one row per sensitive action, written in the action's own
 /// transaction (a failing audit write leaves the action undone), with
 /// identifiers only: no password, token, key or email, nor anything of an
@@ -360,6 +423,16 @@ async fn audit_rows_follow_their_actions() {
     with_db(async move |pool| {
         let app = api(&pool, Some(ADMIN));
         let a = Tenant::create(&app, "a").await;
+        let made: (String, String) = sqlx::query_as(
+            "SELECT actor, detail->>'secret_key' FROM audit_log
+              WHERE action = 'workspace.created' AND target = $1",
+        )
+        .bind(&a.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(made.0, "admin");
+        assert!(made.1.starts_with("key_"), "{made:?}");
         sqlx::query("DELETE FROM audit_log")
             .execute(&pool)
             .await
@@ -373,6 +446,18 @@ async fn audit_rows_follow_their_actions() {
         assert_eq!(response.status(), 401);
         let (response, _) = sign_in("owner@a.example", "not-a-real-password-9").await;
         assert_eq!(response.status(), 401);
+        // Written off the reply's path: wait for it, so that the order below
+        // is the order of the actions.
+        for _ in 0..200 {
+            let failed: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            if failed > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         let (response, _) = sign_in("owner@a.example", PASSWORD).await;
         assert_eq!(response.status(), 200);
         let body = json!({ "kind": "secret", "name": "console" });
@@ -455,7 +540,6 @@ async fn audit_rows_follow_their_actions() {
             actions,
             [
                 "console.sign_in_failed",
-                "console.sign_in_failed",
                 "console.sign_in",
                 "api_key.created",
                 "api_key.revoked",
@@ -467,19 +551,19 @@ async fn audit_rows_follow_their_actions() {
         );
         let usr = format!("usr_{owner_id}");
         let ws = &a.id[3..];
+        // No row for the email that is no account's; the account's failure.
         assert_eq!(rows[0].1, "anonymous");
-        assert_eq!(rows[0].2, None, "nothing of an email that is no account's");
-        assert_eq!(rows[1].2.as_deref(), Some(owner_id.as_str()));
+        assert_eq!(rows[0].2.as_deref(), Some(owner_id.as_str()));
         assert_eq!(
-            (rows[2].1.as_str(), rows[2].3.as_deref()),
+            (rows[1].1.as_str(), rows[1].3.as_deref()),
             (usr.as_str(), None)
         );
         assert_eq!(
-            (rows[3].1.as_str(), rows[3].3.as_deref()),
+            (rows[2].1.as_str(), rows[2].3.as_deref()),
             (usr.as_str(), Some(ws))
         );
-        assert_eq!(rows[4].1, a.secret_id);
-        assert_eq!(rows[5].4.as_deref(), Some(a.chart.as_str()));
+        assert_eq!(rows[3].1, a.secret_id);
+        assert_eq!(rows[4].4.as_deref(), Some(a.chart.as_str()));
         let text = format!("{rows:?}");
         for secret in [
             PASSWORD,
@@ -509,8 +593,7 @@ async fn audit_rows_follow_their_actions() {
         let (_, rest) = as_member(&app, Method::GET, &uri, &owner, &a.id, None).await;
         let listed =
             page["data"].as_array().unwrap().len() + rest["data"].as_array().unwrap().len();
-        // All but the failed sign-in of an email that is no account's.
-        assert_eq!(listed, rows.len() - 1, "{rest}");
+        assert_eq!(listed, rows.len(), "{rest}");
     })
     .await;
 }

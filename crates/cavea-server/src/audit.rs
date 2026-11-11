@@ -9,16 +9,24 @@
 //! `anonymous` for a failed sign-in), the workspace, the user it concerns, a
 //! target (`usr_…`, `key_…`, `inv_…`, `ws_…`, or a chart's or event's key),
 //! small facts such as a role or a version number, and the request's id.
-//! Never a secret, a password, a request body, or an email: a failed sign-in
-//! for an address that is no account's records nothing of the address.
+//! Never a secret, a password, a request body, or an email.
+//!
+//! A failed sign-in changes nothing, so its row is written after the reply
+//! has been decided, on a task of its own ([`sign_in_failed`]), and only for
+//! an email that is an account's: whoever sends attempts controls how many
+//! there are, and the back-off per account (`console::guard`) bounds the rows
+//! of each account, whereas an unknown email would be a row per attempt from
+//! every address. Writing off the reply's path also keeps an account's
+//! existence out of the reply's timing.
 
 use serde_json::Value;
-use sqlx::PgConnection;
+use sqlx::{PgConnection, PgPool};
+use tracing::Instrument as _;
 
 use crate::http::Auth;
 
 /// Every action recorded (`audit_log.action`).
-pub const ACTIONS: [&str; 17] = [
+pub const ACTIONS: [&str; 18] = [
     "console.setup",
     "console.sign_in",
     "console.sign_in_failed",
@@ -29,6 +37,7 @@ pub const ACTIONS: [&str; 17] = [
     "member.role_changed",
     "member.removed",
     "invitation.revoked",
+    "workspace.created",
     "workspace.renamed",
     "api_key.created",
     "api_key.revoked",
@@ -97,10 +106,37 @@ const INSERT: &str = "INSERT INTO audit_log
   (workspace_id, actor, user_id, action, target, detail, request_id)
 VALUES ($1::uuid, $2, $3::uuid, $4, $5, $6::jsonb, $7)";
 
-/// Write `entry` on `tx`, the transaction of the change it records (or, for
-/// a failed sign-in, which changes nothing, any connection).
+/// Write `entry` on `tx`, the transaction of the change it records.
 pub async fn record(tx: &mut PgConnection, entry: Entry<'_>) -> Result<(), sqlx::Error> {
+    insert(tx, entry, cavea_telemetry::request_id()).await
+}
+
+/// Record a failed sign-in to `user`'s account (32 hex digits), on a task of
+/// its own; a failure to write it is logged, not answered.
+pub fn sign_in_failed(db: &PgPool, user: String) {
+    let db = db.clone();
     let request = cavea_telemetry::request_id();
+    let write = async move {
+        let entry = Entry::console("anonymous", &user, "console.sign_in_failed");
+        let mut conn = db.acquire().await?;
+        insert(&mut conn, entry, request).await
+    };
+    let span = cavea_telemetry::db_span("audit");
+    tokio::spawn(
+        async move {
+            if let Err(error) = write.await {
+                tracing::warn!(%error, "cannot record a failed console sign-in");
+            }
+        }
+        .instrument(span),
+    );
+}
+
+async fn insert(
+    conn: &mut PgConnection,
+    entry: Entry<'_>,
+    request: Option<cavea_telemetry::RequestId>,
+) -> Result<(), sqlx::Error> {
     sqlx::query(INSERT)
         .bind(entry.workspace)
         .bind(entry.actor)
@@ -109,7 +145,7 @@ pub async fn record(tx: &mut PgConnection, entry: Entry<'_>) -> Result<(), sqlx:
         .bind(entry.target)
         .bind(entry.detail.map(|d| d.to_string()))
         .bind(request.as_ref().map(|r| r.as_str()))
-        .execute(tx)
+        .execute(conn)
         .await?;
     Ok(())
 }

@@ -320,24 +320,15 @@ async fn sign_in(
             .map_err(busy)?,
         None => false,
     };
-    // The account's id when the email is one's; nothing of an address that
-    // is no account's.
+    // The account's id when the email is one's: a row for it, off the
+    // reply's path; nothing for an address that is no account's (`audit`).
     let known = user.as_ref().map(|(id, _)| id.clone());
     let Some((user, _)) = user.filter(|_| verified) else {
         state.sign_in.failed(&account, addr, now);
         tracing::info!("console sign-in refused");
-        let mut conn = state.db.acquire().await?;
-        let entry = Entry {
-            workspace: None,
-            actor: "anonymous",
-            user: known.as_deref(),
-            action: "console.sign_in_failed",
-            target: None,
-            detail: None,
-        };
-        audit::record(&mut conn, entry)
-            .instrument(cavea_telemetry::db_span("audit"))
-            .await?;
+        if let Some(known) = known {
+            audit::sign_in_failed(&state.db, known);
+        }
         return Err(credentials());
     };
     state.sign_in.succeeded(&account, addr, now);

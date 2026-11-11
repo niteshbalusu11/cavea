@@ -151,7 +151,7 @@ struct Created {
     secret_key: KeyView,
 }
 
-/// The workspace and its first secret key, in one statement.
+/// The workspace, its first secret key and the audit row, in one statement.
 const CREATE: &str = concat!(
     "WITH w AS (
   INSERT INTO workspaces (id, key, name) VALUES (gen_random_uuid(), $1, $2)
@@ -160,6 +160,11 @@ const CREATE: &str = concat!(
   INSERT INTO api_keys (id, workspace_id, kind, prefix, hash, name)
   SELECT gen_random_uuid(), w.id, 'secret', $3, $4, 'Initial secret key' FROM w
   RETURNING *
+), a AS (
+  INSERT INTO audit_log (workspace_id, actor, action, target, detail, request_id)
+  SELECT w.id, 'admin', 'workspace.created', 'ws_' || replace(w.id::text, '-', ''),
+         jsonb_build_object('secret_key', 'key_' || replace(k.id::text, '-', '')), $5
+    FROM w, k
 )
 SELECT ",
     workspace_columns!(),
@@ -198,6 +203,7 @@ async fn create(
         .bind(&body.name)
         .bind(&new.prefix)
         .bind(new.hash.as_slice())
+        .bind(cavea_telemetry::request_id().as_ref().map(|r| r.as_str()))
         .fetch_one(&state.db)
         .instrument(cavea_telemetry::db_span("create_workspace"))
         .await;

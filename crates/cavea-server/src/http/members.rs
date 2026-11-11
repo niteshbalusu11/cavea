@@ -737,7 +737,8 @@ async fn take(
 }
 
 /// Make `user` a member as invited, with the audit row. A user already in
-/// the workspace keeps their role.
+/// the workspace (a member since the invitation was made) keeps their role,
+/// and the invitation is used up without a row: nothing changed.
 async fn join(
     tx: &mut sqlx::PgConnection,
     invitation: &str,
@@ -745,12 +746,15 @@ async fn join(
     user: &str,
     role: &str,
 ) -> Result<(), ApiError> {
-    sqlx::query(JOIN)
+    let joined = sqlx::query(JOIN)
         .bind(user)
         .bind(workspace)
         .bind(role)
         .execute(&mut *tx)
         .await?;
+    if joined.rows_affected() == 0 {
+        return Ok(());
+    }
     let actor = format!("usr_{user}");
     let target = format!("inv_{invitation}");
     let entry = Entry {
@@ -851,16 +855,24 @@ type AuditRow = (
 );
 
 /// The workspace's rows, and the instance's rows (sign-ins and the like) of
-/// users who are its members now; newest first.
+/// users who are its members now; newest first. Each part is read backwards
+/// on its index, at most a page of it (a page per member for the second), so
+/// a page costs the same however long the log is (08 §5).
 const LIST_AUDIT: &str = concat!(
     "SELECT a.id, ",
     rfc3339!("a", ".at"),
     ", a.actor, a.action, a.target, a.detail::text, a.request_id
-  FROM audit_log a
- WHERE (a.workspace_id = $1::uuid
-        OR (a.workspace_id IS NULL AND a.user_id IN
-            (SELECT user_id FROM memberships WHERE workspace_id = $1::uuid)))
-   AND ($2::bigint IS NULL OR a.id < $2)
+  FROM ((SELECT id FROM audit_log
+          WHERE workspace_id = $1::uuid AND ($2::bigint IS NULL OR id < $2)
+          ORDER BY id DESC LIMIT $3)
+        UNION ALL
+        (SELECT x.id FROM memberships m CROSS JOIN LATERAL
+           (SELECT id FROM audit_log
+             WHERE workspace_id IS NULL AND user_id = m.user_id
+               AND ($2::bigint IS NULL OR id < $2)
+             ORDER BY id DESC LIMIT $3) x
+          WHERE m.workspace_id = $1::uuid)) page
+  JOIN audit_log a ON a.id = page.id
  ORDER BY a.id DESC
  LIMIT $3"
 );
