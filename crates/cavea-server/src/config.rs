@@ -11,6 +11,7 @@ use cavea_telemetry::LogFormat;
 
 use crate::http::AdminKey;
 use crate::http::auth::normalise_origin;
+use crate::net::TrustedProxies;
 use sqlx::ConnectOptions as _;
 use sqlx::postgres::PgConnectOptions;
 
@@ -51,6 +52,15 @@ pub struct Config {
     /// `CAVEA_RT_MAX_PER_IP`: WebSocket and SSE connections one client IP may
     /// hold open at once.
     pub rt_max_per_ip: NonZeroU32,
+    /// `CAVEA_TRUSTED_PROXIES`: proxies whose `X-Forwarded-For` names the
+    /// client (08 §12). None by default: the socket's peer is the client.
+    pub trusted_proxies: TrustedProxies,
+    /// `CAVEA_RATE_LIMIT_HOLDS`: hold-token creations, holds and releases per
+    /// minute per publishable key and client address; 0 is unlimited.
+    pub rate_limit_holds: u32,
+    /// `CAVEA_RATE_LIMIT_READS`: other public requests per minute per
+    /// publishable key and client address; 0 is unlimited.
+    pub rate_limit_reads: u32,
 }
 
 impl Config {
@@ -85,6 +95,9 @@ impl Config {
             rt_max_per_ip: setting("CAVEA_RT_MAX_PER_IP", || {
                 NonZeroU32::MIN.saturating_add(199)
             })?,
+            trusted_proxies: setting("CAVEA_TRUSTED_PROXIES", TrustedProxies::default)?,
+            rate_limit_holds: setting("CAVEA_RATE_LIMIT_HOLDS", || 120)?,
+            rate_limit_reads: setting("CAVEA_RATE_LIMIT_READS", || 3_000)?,
         }
         .checked()
     }

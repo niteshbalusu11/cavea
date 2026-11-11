@@ -139,6 +139,8 @@ pub struct ApiError {
     code: Code,
     message: Cow<'static, str>,
     details: Map<String, Value>,
+    /// Seconds for `Retry-After`, beyond `overloaded`'s default.
+    retry_after: Option<u64>,
     /// Logged, never sent: the cause of an internal error.
     cause: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
@@ -151,6 +153,7 @@ impl ApiError {
             code,
             message: Cow::Borrowed(code.row().2),
             details: Map::new(),
+            retry_after: None,
             cause: None,
         }
     }
@@ -176,6 +179,13 @@ impl ApiError {
     #[must_use]
     pub fn with_detail(mut self, key: &str, value: impl Into<Value>) -> Self {
         self.details.insert(key.to_owned(), value.into());
+        self
+    }
+
+    /// Send `Retry-After: <seconds>`.
+    #[must_use]
+    pub fn with_retry_after(mut self, seconds: u64) -> Self {
+        self.retry_after = Some(seconds);
         self
     }
 
@@ -209,7 +219,9 @@ impl IntoResponse for ApiError {
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/problem+json"),
         );
-        if self.code == Code::Overloaded {
+        if let Some(seconds) = self.retry_after {
+            headers.insert(header::RETRY_AFTER, HeaderValue::from(seconds));
+        } else if self.code == Code::Overloaded {
             headers.insert(
                 header::RETRY_AFTER,
                 HeaderValue::from_static(OVERLOADED_RETRY_AFTER),

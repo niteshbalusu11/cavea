@@ -206,7 +206,7 @@ async fn public_hold(app: &Router, t: &Tenant, token: &str, idx: &[u32]) -> u64 
     held["seq"].as_u64().unwrap()
 }
 
-async fn public_token(app: &Router, t: &Tenant, event: &str) -> String {
+pub(super) async fn public_token(app: &Router, t: &Tenant, event: &str) -> String {
     let body = json!({ "event": event });
     let (response, token) = call(
         app,
@@ -509,7 +509,8 @@ async fn snapshot_and_polling() {
         let before = frame.seq();
         let (parts, body) = get(&format!("{state}&after_seq={before}"), &[]).await;
         assert_eq!((parts.status.as_u16(), body.len()), (204, 0));
-        assert_eq!(parts.headers[header::CACHE_CONTROL], cache);
+        // Not true after the next publication: never cached.
+        assert_eq!(parts.headers[header::CACHE_CONTROL], "no-store");
         let token = public_token(&app, &a, &a.event).await;
         let seq = public_hold(&app, &a, &token, &[7]).await;
         let mut delta = None;
@@ -518,6 +519,8 @@ async fn snapshot_and_polling() {
             if parts.status == 200 {
                 match wire::decode_server(&body, wire::View::Public).unwrap() {
                     wire::ServerFrame::Delta(d) if d.to_seq == seq => {
+                        // Still true later, only less current: cacheable.
+                        assert_eq!(parts.headers[header::CACHE_CONTROL], cache);
                         delta = Some((
                             d.from_seq,
                             d.changes(1_000_000).unwrap().collect::<Vec<_>>(),
@@ -628,7 +631,7 @@ async fn open_sse(app: &Router, uri: &str, headers: &[(header::HeaderName, &str)
         response.headers()[header::CONTENT_TYPE],
         "text/event-stream"
     );
-    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-cache");
     response.into_body()
 }
 

@@ -28,6 +28,7 @@ use tracing::subscriber::DefaultGuard;
 
 use super::{ApiError, AppState, Code, Json, finish, router};
 use crate::config::Config;
+use crate::limiter::Limiter;
 use crate::realtime::{Realtime, Timing};
 use crate::seats::{Seats, ServerClock};
 
@@ -55,12 +56,19 @@ fn state() -> AppState {
         snapshot_max_age: 1,
         rt_max_connections: std::num::NonZeroU32::MIN.saturating_add(99),
         rt_max_per_ip: std::num::NonZeroU32::MIN.saturating_add(9),
+        trusted_proxies: crate::net::TrustedProxies::default(),
+        rate_limit_holds: 120,
+        rate_limit_reads: 3_000,
     };
     // Never connects: no route under test reaches the database.
     let db = sqlx::postgres::PgPoolOptions::new().connect_lazy_with(Default::default());
     AppState {
         seats: Seats::new(db.clone(), &config, ServerClock::System),
         realtime: Realtime::new(100, 10, Timing::default()),
+        limiter: Arc::new(Limiter::new(
+            config.rate_limit_holds,
+            config.rate_limit_reads,
+        )),
         config: Arc::new(config),
         db,
     }

@@ -5,19 +5,23 @@
 //! and [`Auth::workspace`] is the only way to obtain a [`WorkspaceId`]: every
 //! query is scoped by the workspace of the credential, never of the request.
 
+use std::convert::Infallible;
 use std::fmt;
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use axum::extract::FromRequestParts;
-use axum::http::header;
+use axum::extract::{ConnectInfo, FromRequestParts};
 use axum::http::request::Parts;
-use cavea_engine::Authority;
+use axum::http::{Method, header};
+use cavea_engine::{Authority, Clock as _};
 use sha2::{Digest as _, Sha256};
 use subtle::ConstantTimeEq as _;
 use tracing::Instrument as _;
 
 use super::{ApiError, AppState, Code};
+use crate::limiter::{Budget, Limited};
+use crate::net::{client_addr, group};
 
 /// Random bytes in a new API key: 256 bits from the operating system.
 const KEY_BYTES: usize = 32;
@@ -288,6 +292,7 @@ impl FromRequestParts<AppState> for PublishableKey {
                 allowed_origins,
             } if auth.kind == KeyKind::Publishable => {
                 check_origin(parts, allowed_origins.as_deref())?;
+                limit(parts, state, &auth)?;
                 Ok(Self(auth))
             }
             _ => Err(wrong_kind("This endpoint requires a publishable key.")),
@@ -305,6 +310,7 @@ impl FromRequestParts<AppState> for QueryKey {
                 allowed_origins,
             } if auth.kind == KeyKind::Publishable => {
                 check_origin(parts, allowed_origins.as_deref())?;
+                limit(parts, state, &auth)?;
                 Ok(Self(auth))
             }
             _ => Err(wrong_kind("This endpoint requires a publishable key.")),
@@ -321,6 +327,54 @@ impl FromRequestParts<AppState> for AdminKeyAuth {
             Credential::Key { .. } => Err(wrong_kind("This endpoint requires the admin key.")),
         }
     }
+}
+
+/// The client's address as it is counted: [`client_addr`] behind
+/// `CAVEA_TRUSTED_PROXIES`, [`group`]ed. `None` without a socket (tests).
+#[derive(Debug, Clone, Copy)]
+pub struct ClientIp(pub Option<IpAddr>);
+
+impl ClientIp {
+    fn of(parts: &Parts, state: &AppState) -> Self {
+        let peer = parts.extensions.get::<ConnectInfo<SocketAddr>>();
+        Self(peer.map(|ConnectInfo(peer)| {
+            group(client_addr(
+                peer.ip(),
+                &parts.headers,
+                &state.config.trusted_proxies,
+            ))
+        }))
+    }
+}
+
+impl FromRequestParts<AppState> for ClientIp {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Infallible> {
+        Ok(Self::of(parts, state))
+    }
+}
+
+/// The rate limit of a publishable key from the client's address (08 §12):
+/// `POST`s (hold-token creation, hold, release) draw on the holds budget,
+/// everything else, realtime connections included, on the reads budget.
+fn limit(parts: &Parts, state: &AppState, auth: &Auth) -> Result<(), ApiError> {
+    let budget = if parts.method == Method::POST {
+        Budget::Holds
+    } else {
+        Budget::Reads
+    };
+    let key = u128::from_str_radix(auth.key.uuid(), 16).unwrap_or_default();
+    let ClientIp(addr) = ClientIp::of(parts, state);
+    let now = state.seats.clock.now().0;
+    state
+        .limiter
+        .check(budget, key, addr, now)
+        .map_err(|Limited(seconds)| {
+            ApiError::new(Code::RateLimited)
+                .with_message("Too many requests from this client; retry after the given delay.")
+                .with_retry_after(seconds)
+        })
 }
 
 fn wrong_kind(message: &'static str) -> ApiError {

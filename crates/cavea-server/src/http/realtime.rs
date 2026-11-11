@@ -9,7 +9,6 @@
 //! per frame at `info`.
 
 use std::convert::Infallible;
-use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -17,7 +16,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::body::{Body, Bytes, HttpBody};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{ConnectInfo, FromRequestParts, State};
+use axum::extract::{FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::map_response;
@@ -31,7 +30,7 @@ use tokio::sync::mpsc;
 use tokio::time::{Instant, timeout};
 use tracing::{Instrument as _, Span, field, info, info_span};
 
-use super::auth::{Auth, QueryKey, has_hex_tail};
+use super::auth::{Auth, ClientIp, QueryKey, has_hex_tail};
 use super::extract::{Path, Query, invalid};
 use super::public::none_match;
 use super::seats::{Find, Target, target, token_hash};
@@ -85,9 +84,9 @@ struct StateQuery {
 
 /// The public SNAPSHOT with `ETag: "<seq>"`, or with `after_seq`, one DELTA
 /// from it, the SNAPSHOT, or `204` when nothing was published after it. Read
-/// from the engine's published state, without a message to the actor. Every
-/// answer may be cached for `CAVEA_SNAPSHOT_MAX_AGE`: any of them is a correct
-/// answer that old.
+/// from the engine's published state, without a message to the actor. A frame
+/// may be cached for `CAVEA_SNAPSHOT_MAX_AGE`: it stays true, only less
+/// current. A `204` may not: it stops being true at the next publication.
 async fn state(
     QueryKey(auth): QueryKey,
     Path(event): Path<String>,
@@ -116,7 +115,13 @@ async fn state(
         }
         Some(after) => match registry.after(target.id, after).await {
             Ok(Some(frame)) => frame_body(frame),
-            Ok(None) => StatusCode::NO_CONTENT.into_response(),
+            Ok(None) => {
+                let mut response = StatusCode::NO_CONTENT.into_response();
+                response
+                    .headers_mut()
+                    .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+                return Ok(response);
+            }
             Err(_) => return Err(unavailable()),
         },
     };
@@ -138,19 +143,6 @@ fn frame_body(frame: Frame) -> Response {
 }
 
 // ---- connections ----
-
-/// The client's IP: the socket's peer. `CAVEA_TRUSTED_PROXIES` (SRV-018) will
-/// read a forwarding header here instead. `None` without a socket (tests).
-pub(super) struct ClientIp(Option<IpAddr>);
-
-impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
-    type Rejection = Infallible;
-
-    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Infallible> {
-        let peer = parts.extensions.get::<ConnectInfo<SocketAddr>>();
-        Ok(Self(peer.map(|ConnectInfo(addr)| addr.ip())))
-    }
-}
 
 /// A connection slot, or why there is none (12 §3 T11).
 fn admit(state: &AppState, ClientIp(ip): ClientIp) -> Result<Slot, ApiError> {
@@ -453,9 +445,12 @@ struct StreamQuery {
 }
 
 /// `GET /v1/public/events/{event}/stream`: the frames of the WebSocket, each
-/// base64 in a `data:` line, DELTA, SNAPSHOT and PRIVATE with `id: <seq>`.
-/// Resumes from `Last-Event-ID` (an `EventSource` reconnecting), else from
-/// `last_seq`. No hold token, so no PRIVATE frames.
+/// base64 in a `data:` line, SNAPSHOT and DELTA with `id: <seq>`. Resumes from
+/// `Last-Event-ID` (an `EventSource` reconnecting), else from `last_seq`. No
+/// hold token, so no PRIVATE frames. A client that stops reading blocks the
+/// task's write once the one-frame channel and the connection's write queue
+/// (hyper's: at most 16 chunks) are full, and is dropped at the stall limit
+/// like a WebSocket.
 async fn stream(
     QueryKey(auth): QueryKey,
     Path(event): Path<String>,
@@ -489,7 +484,7 @@ async fn stream(
     let headers = response.headers_mut();
     let pairs = [
         (header::CONTENT_TYPE, "text/event-stream"),
-        (header::CACHE_CONTROL, "no-store"),
+        (header::CACHE_CONTROL, "no-cache"),
     ];
     for (name, value) in pairs {
         headers.insert(name, HeaderValue::from_static(value));

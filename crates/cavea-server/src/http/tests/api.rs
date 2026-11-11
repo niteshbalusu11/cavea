@@ -887,5 +887,6 @@ async fn tenant_isolation() {
 }
 
 mod charts;
+mod limits;
 mod realtime;
 mod seats;
