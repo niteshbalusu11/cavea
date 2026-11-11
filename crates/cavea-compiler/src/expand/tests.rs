@@ -207,17 +207,17 @@ fn row_and_seat_numbering() {
     // Back to front with continuous serpentine numbering: the back row is "A"
     // and numbered first, left to right; the next row forward continues right
     // to left, and the front row left to right again. Row 1's override keeps its
-    // place in the sequence.
+    // place ("C", as "B" is skipped) in the sequence.
     let mut b = rows_block(
-        r#""rowLabels":{"scheme":"alpha","direction":"back-to-front","prefix":"R"},
+        r#""rowLabels":{"scheme":"alpha","direction":"back-to-front","prefix":"R","skip":["b"]},
            "seatLabels":{"direction":"serpentine","continuous":true}"#,
         &[2, 3, 2],
     );
     b.rows[1].label = Some("Mid".into());
     let got = labels(&expand(&b));
     let want = [
-        ("RC", "6"),
-        ("RC", "7"),
+        ("RD", "6"),
+        ("RD", "7"),
         ("Mid", "5"),
         ("Mid", "4"),
         ("Mid", "3"),
@@ -286,6 +286,21 @@ fn rejects_out_of_limit_and_malformed_blocks() {
             error: LabelError::OutOfRange
         }
     );
+    // Roman labels are not longest at the ends: 3888 is MMMDCCCLXXXVIII.
+    let roman = rows_block(
+        &format!(
+            r#""seatLabels":{{"scheme":"roman","start":3887,"prefix":"{}"}}"#,
+            "p".repeat(50)
+        ),
+        &[3],
+    );
+    assert_eq!(
+        error(&roman),
+        ExpandErrorKind::Label {
+            rid: 100,
+            error: LabelError::TooLong
+        }
+    );
     let custom = rows_block(
         r#""seatLabels":{"scheme":"custom","custom":["a","b"]}"#,
         &[3],
@@ -348,5 +363,62 @@ fn free_row_follows_its_polyline() {
             node: 40,
             kind: ExpandErrorKind::PathTooShort
         }
+    );
+    let mut overflowing = row.clone();
+    overflowing.path = doc::Path::Polyline {
+        points: vec![[-1e308, 0.0], [1e308, 0.0], [1e308, 10.0]],
+    };
+    let err = e.push_row(&overflowing, AlphaOverflow::Double).unwrap_err();
+    assert_eq!(err.kind, ExpandErrorKind::InvalidNumber { field: "path" });
+}
+
+/// Compiled charts are content-hashed, so a document must expand to the same
+/// bits everywhere. This pins every position of a document that uses arcs (both
+/// signs), bulge, skew, stagger, offsets, nudges and a diagonal polyline. A
+/// change here changes compiled charts. To run it in the wasm32 build, where a
+/// failing test traps:
+///
+/// ```sh
+/// cargo test -p cavea-compiler --target wasm32-unknown-unknown --no-run
+/// bun -e 'const [w] = process.argv.slice(-1); new WebAssembly.Instance(new WebAssembly.Module(await Bun.file(w).arrayBuffer())).exports.main(0, 0)' target/wasm32-unknown-unknown/debug/deps/cavea_compiler-*.wasm
+/// ```
+#[test]
+fn positions_are_bit_identical() {
+    let doc = br#"{"schema":1,"name":"d","nextOid":9000,"nodes":[
+        {"id":1,"type":"rowBlock","seatPitch":52.5,"rowPitch":91.3,"skew":7.25,"stagger":0.37,
+         "curve":{"kind":"arc","radius":1234.567},
+         "rows":[{"rid":2,"seats":23,"offset":3.1,"oids":[[100,23]]},
+                 {"rid":3,"seats":24,"oids":[[200,24]]},
+                 {"rid":4,"seats":25,"offset":-17.9,"oids":[[300,25]]}],
+         "seatOverrides":{"205":{"nudge":[0.3,-1.7]}}},
+        {"id":5,"type":"rowBlock","seatPitch":48,"rowPitch":88,"skew":-33.3,"align":"right",
+         "curve":{"kind":"arc","radius":-2222.2},
+         "rows":[{"rid":6,"seats":17,"oids":[[400,17]]},{"rid":7,"seats":17,"oids":[[500,17]]}]},
+        {"id":8,"type":"rowBlock","seatPitch":55,"rowPitch":95,"skew":12.5,"align":"left",
+         "curve":{"kind":"bulge","amount":-41.3},
+         "rows":[{"rid":9,"seats":11,"oids":[[600,11]]},{"rid":10,"seats":12,"oids":[[700,12]]}]},
+        {"id":11,"type":"row","path":{"kind":"polyline","points":[[0,0],[100.3,37.1],[160.9,141.7],[150,300]]},
+         "seatPitch":31.7,"seats":13,"oids":[[800,13]]}]}"#;
+    let doc = crate::ChartDocument::from_json(doc).unwrap();
+    let mut e = Expansion::new();
+    for node in &doc.nodes {
+        match node {
+            Node::RowBlock(b) => e.push_row_block(b, AlphaOverflow::Double).unwrap(),
+            Node::Row(r) => e.push_row(r, AlphaOverflow::Double).unwrap(),
+            _ => unreachable!(),
+        }
+    }
+    // FNV-1a over the bits of every coordinate.
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for bits in e.seats.iter().flat_map(|s| s.pos).map(f64::to_bits) {
+        for byte in bits.to_le_bytes() {
+            hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    let dump: Vec<_> = e.seats.iter().map(|s| s.pos.map(f64::to_bits)).collect();
+    assert_eq!(
+        (e.seats.len(), hash),
+        (142, 0x90e9_d29c_110a_c30c),
+        "{dump:x?}"
     );
 }

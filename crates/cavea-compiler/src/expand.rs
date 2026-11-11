@@ -5,7 +5,10 @@
 //! node's own coordinate space (before its origin and rotation are applied). Each
 //! node's rows are pushed in physical order (front row first) and each row's seats
 //! left to right, removed positions included and marked. Seats borrow strings from
-//! the document, so expansion allocates once per node and never per seat.
+//! the document, so expansion allocates a few times per node and never per seat.
+//!
+//! An override keyed by an `oid` that is not in the node is ignored here;
+//! reporting it belongs to validation (03 §3.2).
 //!
 //! Positions use only exactly rounded `f64` arithmetic and [`crate::detmath`], so
 //! the same document expands to the same bits on every target.
@@ -26,6 +29,8 @@ pub struct Expansion<'d> {
     pub seats: Vec<Seat<'d>>,
 }
 
+/// One row: a block row, or a free-form row. Its seats are
+/// `seats[first_seat..first_seat + seat_count]`, left to right.
 #[derive(Clone, Copy, Debug)]
 pub struct ExpandedRow<'d> {
     /// Id of the `rowBlock` or `row` node.
@@ -72,6 +77,7 @@ impl ExpandedRow<'_> {
     }
 }
 
+/// One seat position, in the node's own space.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Seat<'d> {
     /// Node space, nudge included.
@@ -103,7 +109,7 @@ pub enum ExpandErrorKind {
         rid: u32,
         seats: u32,
     },
-    /// More than [`MAX_OBJECTS`] seats or rows.
+    /// More than [`MAX_OBJECTS`] seat positions (removed ones included) or rows.
     TooManyObjects,
     /// The `oids` runs do not cover the row's positions exactly, or overflow.
     OidRuns {
@@ -273,29 +279,39 @@ impl<'d> Expansion<'d> {
             rl.scheme, &rl.start, rl.step, &rl.prefix, &rl.suffix, &rl.custom, overflow,
         )?;
         let skipped = row_rule.skipped_ordinals(&rl.skip);
+        // Each row's label ordinal, `label::skip_ordinal` for every row in one
+        // pass, so a long `skip` list is walked once per block, not once per row.
+        let mut ordinals = Vec::with_capacity(block.rows.len());
+        let (mut next, mut skips) = (0u32, skipped.iter().peekable());
+        for _ in 0..row_count {
+            while skips.next_if_eq(&&next).is_some() {
+                next = next.saturating_add(1);
+            }
+            ordinals.push(next);
+            next = next.saturating_add(1);
+        }
         let sl = &block.seat_labels;
         let seat_rule = rule(
             sl.scheme, &sl.start, sl.step, &sl.prefix, &sl.suffix, &sl.custom, overflow,
         )?;
         let seat_direction = seat_direction(sl.direction)?;
-        let front_to_back = rl.direction == doc::RowDirection::FrontToBack;
-        let direction = if front_to_back {
-            label::RowDirection::FrontToBack
-        } else {
-            label::RowDirection::BackToFront
+        let direction = match rl.direction {
+            doc::RowDirection::FrontToBack => label::RowDirection::FrontToBack,
+            doc::RowDirection::BackToFront => {
+                ordinals.reverse();
+                label::RowDirection::BackToFront
+            }
         };
 
         let mut in_front = 0u32;
-        for (i, row) in (0u32..).zip(&block.rows) {
+        for ((i, row), ordinal) in (0u32..).zip(&block.rows).zip(ordinals) {
             let rid = row.rid;
             let order = label::row_ordinal(direction, row_count, i);
             let label = match &row.label {
                 Some(text) => LabelBuf::try_from(text.as_str()),
                 None => {
                     let mut buf = LabelBuf::new();
-                    row_rule
-                        .write(label::skip_ordinal(order, &skipped), &mut buf)
-                        .map(|()| buf)
+                    row_rule.write(ordinal, &mut buf).map(|()| buf)
                 }
             }
             .map_err(|error| Kind::Label { rid, error })?;
@@ -385,10 +401,17 @@ impl<'d> Expansion<'d> {
             let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
             Some((a, b, (dx * dx + dy * dy).sqrt()))
         };
+        let segments = 0..points.len().saturating_sub(1);
+        if segments
+            .clone()
+            .any(|j| segment(j).is_some_and(|(_, _, len)| !len.is_finite()))
+        {
+            return Err(Kind::InvalidNumber { field: "path" });
+        }
         // The last segment with length; seats past the path's end continue along it.
-        let last = (0..points.len().saturating_sub(1))
+        let last = segments
             .rev()
-            .find(|&j| segment(j).is_some_and(|(_, _, len)| len > 0.0 && len.is_finite()))
+            .find(|&j| segment(j).is_some_and(|(_, _, len)| len > 0.0))
             .ok_or(Kind::PathTooShort)?;
 
         self.reserve(core::iter::once((row.id, row.seats)))?;
@@ -459,28 +482,32 @@ impl<'d> Expansion<'d> {
                 _ => return Err(Kind::RemovedOutOfRange { rid, position }),
             }
         }
-        // Ordinals in a row are `seat_base` plus a permutation of 0..seats, and
-        // every way a label can fail grows with the ordinal, so checking the first
-        // and last covers the row.
-        if spec.seats > 0 {
-            let first = spec.seat_base;
-            let last = first
-                .checked_add(spec.seats - 1)
-                .ok_or(LabelError::Overflow);
-            for ordinal in [Ok(first), last] {
-                ordinal
-                    .and_then(|o| spec.seat_rule.write(o, &mut LabelBuf::new()))
-                    .map_err(|error| Kind::Label { rid, error })?;
-            }
-        }
-
         let row = self.rows.len() as u32; // ≤ MAX_OBJECTS, checked by reserve
-        let first_seat = self.seats.len() as u32;
+        let expanded = ExpandedRow {
+            node: spec.node,
+            rid,
+            label: spec.label,
+            first_seat: self.seats.len() as u32, // ≤ MAX_OBJECTS, checked by reserve
+            seat_count: spec.seats as u16,       // ≤ MAX_SEATS_PER_ROW
+            seat_pitch: spec.seat_pitch,
+            seat_rule: spec.seat_rule,
+            seat_direction: spec.seat_direction,
+            order: spec.order,
+            seat_base: spec.seat_base,
+        };
         let mut oids = spec
             .oids
             .iter()
             .flat_map(|&[first, count]| (0..count).map(move |j| first + j));
         for k in 0..spec.seats {
+            // Every position's scheme label must be writable, overridden or not
+            // (a custom list shorter than the row is an error). Roman and custom
+            // label lengths do not grow with the ordinal, so check each one.
+            let index = k as u16; // < MAX_SEATS_PER_ROW
+            expanded
+                .seat_rule
+                .write(expanded.seat_ordinal(index), &mut LabelBuf::new())
+                .map_err(|error| Kind::Label { rid, error })?;
             let oid = oids.next().ok_or(Kind::OidRuns { rid })?;
             let over = spec.overrides.get(&oid);
             let mut pos = place(k);
@@ -504,25 +531,14 @@ impl<'d> Expansion<'d> {
                 pos,
                 oid,
                 row,
-                index: k as u16, // < MAX_SEATS_PER_ROW
+                index,
                 removed,
                 flags: over.map_or(0, |o| o.flags.iter().fold(0, |acc, f| acc | f.bit())),
                 category: over.and_then(|o| o.category.as_deref()).or(spec.category),
                 label,
             });
         }
-        self.rows.push(ExpandedRow {
-            node: spec.node,
-            rid,
-            label: spec.label,
-            first_seat,
-            seat_count: spec.seats as u16, // ≤ MAX_SEATS_PER_ROW
-            seat_pitch: spec.seat_pitch,
-            seat_rule: spec.seat_rule,
-            seat_direction: spec.seat_direction,
-            order: spec.order,
-            seat_base: spec.seat_base,
-        });
+        self.rows.push(expanded);
         Ok(())
     }
 }
