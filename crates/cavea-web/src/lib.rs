@@ -8,6 +8,8 @@ use wasm_bindgen::prelude::wasm_bindgen;
 #[cfg(any(target_arch = "wasm32", test))]
 mod events;
 #[cfg(test)]
+mod schema;
+#[cfg(test)]
 mod traces;
 #[cfg(target_arch = "wasm32")]
 mod view;

@@ -3,13 +3,15 @@
 // types; passed anyway, they are ignored with a development warning.
 import type { ChartSource, StateAdapter } from "./adapter.ts";
 import { CaveaError } from "./errors.ts";
+import type { Lod, ThemeName } from "./generated/engine.ts";
 import type { GestureHandling } from "./host.ts";
 import type { ImageSource } from "./images.ts";
 import { isMessage, MESSAGES, type Messages } from "./messages.ts";
 import type { CategoryPricing, FormatPrice } from "./pricing.ts";
 import type { UiOptions } from "./ui.ts";
 
-export type ThemeName = "light" | "dark" | "high-contrast";
+export type { ThemeName };
+
 /** A built-in theme, `auto` (light or dark, following the system), or tokens over one (05 §8). */
 export type Theme =
   | ThemeName
@@ -148,7 +150,7 @@ export interface Metrics {
   drawCalls: number;
   /** Seats in the ranges the last frame drew. */
   visibleSeats: number;
-  level: "overview" | "crossFade" | "seats" | "detail" | null;
+  level: Lod | null;
   backend: "webgl2";
   /** The device pixel ratio rendered at. */
   pixelRatio: number;

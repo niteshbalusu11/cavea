@@ -158,7 +158,13 @@ fn write_event(event: &Event, out: &mut String) -> bool {
             field(out, "asset");
             string(out, asset);
         }
-        _ => return false,
+        // Kept by the view (`NeedFrame`, `Error`) or not used by the host
+        // yet. Every event is named, so a new one is decided here, and in
+        // `schema.rs`.
+        Event::NeedFrame
+        | Event::SectionEnter { .. }
+        | Event::Announce { .. }
+        | Event::Error { .. } => return false,
     }
     out.push('}');
     true

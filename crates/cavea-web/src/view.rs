@@ -321,12 +321,7 @@ impl View {
     /// overrides as name and value pairs, flattened (04 §19).
     #[wasm_bindgen(js_name = setTheme)]
     pub fn set_theme(&mut self, name: &str, tokens: Vec<String>) -> Result<(), JsError> {
-        let base = match name {
-            "light" => BuiltinTheme::Light,
-            "dark" => BuiltinTheme::Dark,
-            "high-contrast" => BuiltinTheme::HighContrast,
-            _ => return Err(JsError::new("unknown theme")),
-        };
+        let base = BuiltinTheme::from_name(name).ok_or_else(|| JsError::new("unknown theme"))?;
         let mut tokens = tokens.into_iter();
         let mut pairs = Vec::new();
         while let (Some(name), Some(value)) = (tokens.next(), tokens.next()) {

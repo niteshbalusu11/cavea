@@ -5,6 +5,7 @@
 // which uploads it. At most two load at once; a failure is reported and the
 // map carries on without the image.
 import { httpError } from "./errors.ts";
+import type { EngineEvent } from "./generated/engine.ts";
 
 /** Where an image's bytes are: a URL to fetch, or the bytes. */
 export type ImageAsset = string | URL | Blob;
@@ -13,15 +14,7 @@ export type ImageAsset = string | URL | Blob;
 export type ImageSource = (hash: string) => ImageAsset | Promise<ImageAsset>;
 
 /** The engine's request, as `takeEvents` reports it. */
-export interface ImageRequest {
-  type: "imageRequest";
-  id: number;
-  /** The content hash, checked by the engine. */
-  asset: string;
-  /** The bitmap's longest side at most, and its pixels at most. */
-  maxSide: number;
-  maxPixels: number;
-}
+export type ImageRequest = Extract<EngineEvent, { type: "imageRequest" }>;
 
 export interface ImageLoader {
   request(event: ImageRequest): void;

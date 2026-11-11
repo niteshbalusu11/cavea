@@ -99,7 +99,7 @@ type Doc = {
 };
 const used = new Set(chosen.flatMap((c) => c.panels.map((p) => p.chart)));
 /** Background images by served path. */
-const images: Record<string, string> = {};
+const imageFiles: Record<string, string> = {};
 for (const name of used) {
   const spec = cases.charts[name];
   if (spec === undefined) {
@@ -146,7 +146,7 @@ for (const name of used) {
       asset: spec.image.hash,
       role: "background",
     });
-    images[`/assets/${spec.image.hash}`] = join(GOLDEN, spec.image.file);
+    imageFiles[`/assets/${spec.image.hash}`] = join(GOLDEN, spec.image.file);
   }
   const docPath = join(work, `${name}.json`);
   await writeFile(docPath, JSON.stringify(doc));
@@ -174,7 +174,7 @@ const script = await built.outputs[0].text();
 const files: Record<string, string> = {
   "/wasm/cavea_web_bg.wasm": join(ROOT, "packages/renderer/wasm/cavea_web_bg.wasm"),
   "/glyphs.png": join(ROOT, "packages/renderer/assets/glyphs.png"),
-  ...images,
+  ...imageFiles,
 };
 const server = Bun.serve({
   port: 0,

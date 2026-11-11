@@ -5,18 +5,10 @@
 // never inside one, and works the same on an `OffscreenCanvas` in a worker.
 // The font is a family the page already has (system fonts by default):
 // nothing is fetched (12 §3 T20). Text is only ever drawn, never parsed.
+import type { EngineEvent } from "./generated/engine.ts";
 
 /** A request as the engine emits it. */
-export interface TextRequest {
-  type: "textRequest";
-  id: number;
-  text: string;
-  /** Device pixels per em. */
-  px: number;
-  weight: number;
-  /** A CSS font family list. */
-  font: string;
-}
+export type TextRequest = Extract<EngineEvent, { type: "textRequest" }>;
 
 /** The engine's limits on a raster (`text::atlas` in cavea-render). */
 const MAX_WIDTH = 1024;

@@ -8,7 +8,9 @@ import { createImageLoader, type ImageSource } from "./images.ts";
 import { createRasteriser } from "./text.ts";
 import type { EngineView } from "./view.ts";
 
-export type GestureHandling = "greedy" | "cooperative" | "none";
+import type { GestureHandling } from "./generated/engine.ts";
+
+export type { GestureHandling };
 
 export interface AttachOptions {
   /** Default `"greedy"`. */

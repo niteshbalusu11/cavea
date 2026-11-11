@@ -52,7 +52,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **FND-004** `cargo xtask build-web`: build, `wasm-opt`, brotli, emit size report (01 §6)
 - [x] **FND-005** Payload size gate in CI with a hard cap and a +3% warning (13 §6.3): `cargo xtask build-web` fails above +3% over the committed baseline
 - [x] **FND-006** Release profile tuning for WASM: LTO, `panic = "abort"`, optimisation level, allocator choice; measure each (01 §5)
-- [ ] **FND-007** Generate TypeScript types from Rust for options, events and payloads (05 §3, §5)
+- [x] **FND-007** Generate TypeScript types from Rust for options, events and payloads (05 §3, §5)
 - [x] **FND-008** Workspace lint configuration: moderate clippy set, strict `tsc`, oxc rules (01 §4)
 - [x] **FND-009** Changelog tooling and commit conventions (01 §6)
 - [x] **FND-010** Nix development environment: `flake.nix` with every non-trivial tool, `.envrc` using the flake, so `direnv allow` loads everything (ORCHESTRATION §5, §10)

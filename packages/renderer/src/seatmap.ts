@@ -6,6 +6,7 @@ import { staticState, type AdapterContext, type HoldResult, type Snapshot } from
 import { createA11y, type A11y } from "./a11y.ts";
 import { CaveaError, isDevelopment, permanent, warner, type CaveaErrorCode } from "./errors.ts";
 import type { ChartInfo, ObjectInfo, RendererEvent } from "./events.ts";
+import type { ObjectDetails } from "./generated/engine.ts";
 import type { AttachOptions, Attached } from "./host.ts";
 import { localeDirection, translator } from "./messages.ts";
 import {
@@ -375,7 +376,7 @@ export async function createMap(
     label: string,
   ): (ObjectInfo & { status: number; place?: [number, number] }) | undefined {
     const json = view?.object(label);
-    return json === undefined ? undefined : (JSON.parse(json) as ObjectInfo & { status: number });
+    return json === undefined ? undefined : (JSON.parse(json) as ObjectDetails);
   }
 
   function lookup(label: string): SeatObject {

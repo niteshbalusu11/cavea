@@ -183,116 +183,11 @@ export declare function warner(on: boolean): (message: string) => void;
 ## events.d.ts
 
 ```ts
-import type { ImageRequest } from "./images.js";
-import type { TextRequest } from "./text.js";
+import type { ChartInfo, EngineEvent, ObjectInfo } from "./generated/engine.js";
 import type { EngineView } from "./view.js";
-/** One object as the engine reports it. */
-export interface ObjectInfo {
-    /** Full label, for example `"Orchestra-C-12"`. */
-    label: string;
-    /** Category key. */
-    category: string;
-    /** Section label; empty outside a section. */
-    section: string;
-    row: string;
-    seat: string;
-    /** `SFLG` bits: 0 accessible, 1 companion, 2 restricted view, 3 aisle. */
-    flags: number;
-}
-/** Chart metadata, from the engine's `Ready` (04 §3). */
-export interface ChartInfo {
-    name: string;
-    floors: Array<{
-        name: string;
-        level: number;
-        seats: number;
-    }>;
-    /** `floor`: index into `floors`. */
-    sections: Array<{
-        label: string;
-        floor: number;
-        seats: number;
-    }>;
-    /** `color`: RGBA bytes; `objects`: bookable objects in the category. */
-    categories: Array<{
-        key: string;
-        label: string;
-        color: number[];
-        objects: number;
-    }>;
-    objects: number;
-    seats: number;
-}
-export type RendererEvent = 
-/** A chart was loaded. */
-({
-    type: "ready";
-} & ChartInfo)
-/** Hold these labels, then answer with `holdOk` or `holdFailed`. */
- | {
-    type: "holdRequest";
-    request: number;
-    labels: string[];
-}
-/** Release these labels; there is no answer. */
- | {
-    type: "releaseRequest";
-    request: number;
-    labels: string[];
-}
-/** `expiresAt`: when the buyer's holds expire (Unix ms), if known. */
- | {
-    type: "selectionChanged";
-    expiresAt: number | null;
-    selected: ObjectInfo[];
-}
-/**
- * Rule `min`: the selection is not ready for checkout (`objects` is the
- * selection). Any other rule (`max`, `not_free`, a server code): `objects`
- * were refused and the selection is as it was.
- */
- | {
-    type: "selectionInvalid";
-    rule: string;
-    objects: string[];
-}
-/** The selection meets the minimum again. */
- | {
-    type: "selectionValid";
-}
-/** `at`: the object's centre in CSS pixels on the canvas. */
- | {
-    type: "objectHover";
-    object: ObjectInfo;
-    at: [number, number];
-} | {
-    type: "objectHover";
-    object: null;
-    at: null;
-} | {
-    type: "objectFocus";
-    object: ObjectInfo;
-    at: [number, number];
-} | {
-    type: "objectFocus";
-    object: null;
-    at: null;
-}
-/** A selected object was taken; it is no longer selected. */
- | {
-    type: "objectUnavailable";
-    label: string;
-}
-/** The buyer's hold on these selected objects is gone (expired, or released elsewhere). */
- | {
-    type: "holdLost";
-    labels: string[];
-}
-/** A delta did not follow the state at `seq`: fetch a new snapshot. */
- | {
-    type: "resync";
-    seq: number | null;
-}
+export type { ChartInfo, ObjectInfo };
+/** What the engine reports, and what the host adds. */
+export type RendererEvent = EngineEvent
 /**
  * A host-side failure the map carries on without: `glyphAtlas` when the
  * atlas could not be fetched, decoded or used, so seats have no labels;
@@ -303,20 +198,173 @@ export type RendererEvent =
     type: "error";
     code: "glyphAtlas" | "engine" | "image";
     message: string;
-}
-/** Draw this string and answer with `setText`; the host does, between frames. */
- | TextRequest
-/** Load this background image and answer with `setImage`; the host does. */
- | ImageRequest | {
-    type: "cameraChanged";
-    centre: [number, number];
-    zoom: number;
-    /** The lowest and highest zoom, for the current chart and size (04 §13). */
-    range: [number, number];
-    lod: "overview" | "crossFade" | "seats" | "detail";
 };
 /** The events `view` emitted since the last call, oldest first. */
 export declare function takeEvents(view: EngineView): RendererEvent[];
+```
+
+## generated/engine.d.ts
+
+```ts
+export type CategoryInfo = {
+    key: string;
+    label: string;
+    /** RGBA bytes. */
+    color: [number, number, number, number];
+    /** Bookable objects in the category. */
+    objects: number;
+};
+/** Chart metadata, from the engine's `Ready` (04 §3). */
+export type ChartInfo = {
+    name: string;
+    floors: FloorInfo[];
+    sections: SectionInfo[];
+    categories: CategoryInfo[];
+    /** Bookable objects: seats, then tables booked whole, booths and areas. */
+    objects: number;
+    seats: number;
+};
+/** An engine event, as `View.takeEvents` reports it (04 §3). */
+export type EngineEvent = ({
+    /** A chart was loaded. */
+    type: "ready";
+} & ChartInfo) | {
+    /** Hold these labels, then answer with `holdOk` or `holdFailed`. */
+    type: "holdRequest";
+    request: number;
+    labels: string[];
+} | {
+    /** Release these labels; there is no answer. */
+    type: "releaseRequest";
+    request: number;
+    labels: string[];
+} | {
+    /** `expiresAt`: when the buyer's holds expire (Unix ms), if known. */
+    type: "selectionChanged";
+    expiresAt: number | null;
+    selected: ObjectInfo[];
+} | {
+    /**
+     * Rule `min`: the selection is not ready for checkout (`objects` is the
+     * selection). Any other rule (`max`, `not_free`, a server code):
+     * `objects` were refused and the selection is as it was.
+     */
+    type: "selectionInvalid";
+    rule: string;
+    objects: string[];
+} | {
+    /** The selection meets the minimum again. */
+    type: "selectionValid";
+} | {
+    /**
+     * The object under the pointer and its centre in CSS pixels on the
+     * canvas; both `null` when it leaves every object.
+     */
+    type: "objectHover";
+    object: ObjectInfo | null;
+    at: [number, number] | null;
+} | {
+    /**
+     * The keyboard focus shown and where the camera brings it to rest;
+     * both `null` when it is hidden.
+     */
+    type: "objectFocus";
+    object: ObjectInfo | null;
+    at: [number, number] | null;
+} | {
+    /** A selected object was taken; it is no longer selected. */
+    type: "objectUnavailable";
+    label: string;
+} | {
+    /**
+     * The buyer's hold on these selected objects is gone (expired, or
+     * released elsewhere).
+     */
+    type: "holdLost";
+    labels: string[];
+} | {
+    /** A delta did not follow the state at `seq`: fetch a new snapshot. */
+    type: "resync";
+    seq: number | null;
+} | {
+    /** The camera moved, the level changed, or the zoom range did. */
+    type: "cameraChanged";
+    centre: [number, number];
+    zoom: number;
+    /**
+     * The lowest and highest zoom, for the current chart and size
+     * (04 §13).
+     */
+    range: [number, number];
+    lod: Lod;
+} | {
+    /**
+     * Draw this string and answer with `setText`; the host does, between
+     * frames (04 §12).
+     */
+    type: "textRequest";
+    id: number;
+    text: string;
+    /** Device pixels per em. */
+    px: number;
+    weight: number;
+    /** A CSS font family. */
+    font: string;
+} | {
+    /**
+     * Load this background image and answer with `setImage`, scaled down
+     * to at most `maxSide` pixels a side and `maxPixels` in all (04 §7).
+     */
+    type: "imageRequest";
+    id: number;
+    /** The asset's content hash: 32 lowercase hex digits. */
+    asset: string;
+    maxSide: number;
+    maxPixels: number;
+};
+export type FloorInfo = {
+    name: string;
+    level: number;
+    seats: number;
+};
+/** Which gestures move the map (04 §14). */
+export type GestureHandling = "greedy" | "cooperative" | "none";
+/** The level of detail (04 §10). */
+export type Lod = "overview" | "crossFade" | "seats" | "detail";
+/** An object with its state, as `View.object` reports it. */
+export type ObjectDetails = {
+    label: string;
+    category: string;
+    section: string;
+    row: string;
+    seat: string;
+    flags: number;
+    /** The public status code: 0 available, 1 unavailable. */
+    status: number;
+    /** Its place in its row: the n-th of so many. */
+    place: [number, number];
+};
+/** One object as the engine reports it. */
+export type ObjectInfo = {
+    /** Full label, for example `"Orchestra-C-12"`. */
+    label: string;
+    /** Category key. */
+    category: string;
+    /** Section label; empty outside a section. */
+    section: string;
+    row: string;
+    seat: string;
+    /** `SFLG` bits: 0 accessible, 1 companion, 2 restricted view, 3 aisle. */
+    flags: number;
+};
+export type SectionInfo = {
+    label: string;
+    /** Index into `floors`. */
+    floor: number;
+    seats: number;
+};
+/** A built-in theme (04 §19), as `View.setTheme` takes its name. */
+export type ThemeName = "light" | "dark" | "high-contrast";
 ```
 
 ## host.d.ts
@@ -325,7 +373,8 @@ export declare function takeEvents(view: EngineView): RendererEvent[];
 import { type RendererEvent } from "./events.js";
 import { type ImageSource } from "./images.js";
 import type { EngineView } from "./view.js";
-export type GestureHandling = "greedy" | "cooperative" | "none";
+import type { GestureHandling } from "./generated/engine.js";
+export type { GestureHandling };
 export interface AttachOptions {
     /** Default `"greedy"`. */
     gestureHandling?: GestureHandling;
@@ -384,20 +433,15 @@ export declare function attach(view: EngineView, canvas: HTMLCanvasElement, opti
 ## images.d.ts
 
 ```ts
+import type { EngineEvent } from "./generated/engine.js";
 /** Where an image's bytes are: a URL to fetch, or the bytes. */
 export type ImageAsset = string | URL | Blob;
 /** Where the image with content hash `hash` (32 lowercase hex digits) is. */
 export type ImageSource = (hash: string) => ImageAsset | Promise<ImageAsset>;
 /** The engine's request, as `takeEvents` reports it. */
-export interface ImageRequest {
+export type ImageRequest = Extract<EngineEvent, {
     type: "imageRequest";
-    id: number;
-    /** The content hash, checked by the engine. */
-    asset: string;
-    /** The bitmap's longest side at most, and its pixels at most. */
-    maxSide: number;
-    maxPixels: number;
-}
+}>;
 export interface ImageLoader {
     request(event: ImageRequest): void;
     /** Stops: loads in flight are aborted and their answers dropped. */
@@ -523,12 +567,13 @@ export declare const localeDirection: (locale: string) => "ltr" | "rtl";
 ```ts
 import type { ChartSource, StateAdapter } from "./adapter.js";
 import { CaveaError } from "./errors.js";
+import type { Lod, ThemeName } from "./generated/engine.js";
 import type { GestureHandling } from "./host.js";
 import type { ImageSource } from "./images.js";
 import { type Messages } from "./messages.js";
 import type { CategoryPricing, FormatPrice } from "./pricing.js";
 import type { UiOptions } from "./ui.js";
-export type ThemeName = "light" | "dark" | "high-contrast";
+export type { ThemeName };
 /** A built-in theme, `auto` (light or dark, following the system), or tokens over one (05 §8). */
 export type Theme = ThemeName | "auto" | {
     base?: ThemeName | "auto";
@@ -684,7 +729,7 @@ export interface Metrics {
     drawCalls: number;
     /** Seats in the ranges the last frame drew. */
     visibleSeats: number;
-    level: "overview" | "crossFade" | "seats" | "detail" | null;
+    level: Lod | null;
     backend: "webgl2";
     /** The device pixel ratio rendered at. */
     pixelRatio: number;
@@ -875,29 +920,6 @@ export interface Platform {
 /** Seat state and holds from `cavea-server` (05 §4). Invalid options throw a fatal `CaveaError`. */
 export declare function caveaServer(options: CaveaServerOptions): StateAdapter;
 export declare function serverAdapter(input: CaveaServerOptions, platform: () => Platform): StateAdapter;
-```
-
-## text.d.ts
-
-```ts
-/** A request as the engine emits it. */
-export interface TextRequest {
-    type: "textRequest";
-    id: number;
-    text: string;
-    /** Device pixels per em. */
-    px: number;
-    weight: number;
-    /** A CSS font family list. */
-    font: string;
-}
-export interface Rasteriser {
-    /** Draws `request`: width, height, the em drawn at and the coverage bytes; empty if it cannot. */
-    draw(request: TextRequest): [number, number, number, Uint8Array];
-    /** Releases the canvas. */
-    release(): void;
-}
-export declare function createRasteriser(): Rasteriser;
 ```
 
 ## ui.d.ts
