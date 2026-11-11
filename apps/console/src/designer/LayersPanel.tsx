@@ -37,6 +37,9 @@ function zone(e: DragEvent, row: LayerRow): Drop {
   return { kind: y < 0.5 ? "before" : "after", id: row.id };
 }
 
+/** The rows a row's expanded children take below it. */
+const span = (r: LayerRow) => (r.expanded === true ? r.children : 0);
+
 export const rowName = (r: LayerRow): string =>
   r.name ?? msg("layers.unnamed", { kind: msg(`kind.${r.kind}`), id: String(r.id) });
 
@@ -93,33 +96,53 @@ export function LayersPanel(props: { editor: Editor }) {
   );
 
   /** What a drag or a move takes: the selected rows shown, if `row` is one. */
-  const subjects = (row: LayerRow) =>
-    row.selected
-      ? page()
-          .rows.filter((r) => r.selected)
-          .map((r) => r.id)
-      : [row.id];
+  const subjects = (row: LayerRow): LayerRow[] =>
+    row.selected ? page().rows.filter((r) => r.selected) : [row];
   const move = (ids: number[], to: Drop) => {
     if (editor.run((s) => s.moveLayers(ids, to)) !== undefined) editor.reveal(ids[0]);
   };
-  /** One row up or down, into and out of sections on the way (Alt+arrow). */
+  /** The section row holding the child at `index`. */
+  const parentOf = (index: number): LayerRow | undefined => {
+    let i = index - 1;
+    while (i > 0 && (rowAt(i)?.depth ?? 0) > 0) i--;
+    return rowAt(Math.max(0, i));
+  };
+  /** One row up or down, past the moving rows, into and out of sections on
+   * the way (Alt+arrow). */
   const step = (row: LayerRow, dir: -1 | 1) => {
-    const ids = subjects(row);
+    const rows = subjects(row);
+    const ids = rows.map((r) => r.id);
+    const moving = new Set(ids);
+    // The end of the moving rows in the direction of the move.
+    const edge = rows.reduce(
+      (e, r) => (dir < 0 ? (r.index < e.index ? r : e) : r.index > e.index ? r : e),
+      row,
+    );
     if (dir < 0) {
-      let prev = rowAt(row.index - 1);
-      if (row.kind === "section")
-        while (prev !== undefined && prev.depth > 0) prev = rowAt(prev.index - 1);
+      let prev = rowAt(edge.index - 1);
+      while (
+        prev !== undefined &&
+        (moving.has(prev.id) || (edge.kind === "section" && prev.depth > 0))
+      ) {
+        prev = rowAt(prev.index - 1);
+      }
       if (prev === undefined) return;
       return move(
         ids,
-        prev.depth > row.depth ? { kind: "after", id: prev.id } : { kind: "before", id: prev.id },
+        prev.depth > edge.depth ? { kind: "after", id: prev.id } : { kind: "before", id: prev.id },
       );
     }
-    const next = rowAt(row.index + 1 + (row.expanded === true ? row.children : 0));
-    if (next === undefined) return;
-    if (row.kind !== "section" && next.depth < row.depth)
+    let next = rowAt(edge.index + 1 + span(edge));
+    while (next !== undefined && moving.has(next.id)) next = rowAt(next.index + 1 + span(next));
+    if (next === undefined) {
+      // The last child of the last section leaves it, after the section.
+      const parent = edge.depth > 0 ? parentOf(edge.index) : undefined;
+      if (parent !== undefined) move(ids, { kind: "after", id: parent.id });
+      return;
+    }
+    if (edge.kind !== "section" && next.depth < edge.depth)
       return move(ids, { kind: "before", id: next.id });
-    if (row.kind !== "section" && next.kind === "section" && next.expanded === true) {
+    if (edge.kind !== "section" && next.kind === "section" && next.expanded === true) {
       const child = rowAt(next.index + 1);
       return move(
         ids,
@@ -156,9 +179,7 @@ export function LayersPanel(props: { editor: Editor }) {
       ArrowLeft: () => {
         if (row?.expanded === true) return void expand(row, false);
         if (row !== undefined && row.depth > 0) {
-          let i = row.index - 1;
-          while (i > 0 && (rowAt(i)?.depth ?? 0) > 0) i--;
-          moveCursor(Math.max(0, i));
+          moveCursor(parentOf(row.index)?.index ?? 0);
         }
       },
       Enter: () => row && click(row, e),
@@ -239,7 +260,7 @@ export function LayersPanel(props: { editor: Editor }) {
                     setMenuRow(row);
                   }}
                   onDragStart={(e) => {
-                    dragged = subjects(row);
+                    dragged = subjects(row).map((r) => r.id);
                     e.dataTransfer?.setData("text/plain", dragged.join(","));
                     if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
                   }}

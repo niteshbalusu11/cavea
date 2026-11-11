@@ -76,9 +76,9 @@ export function actions(editor: Editor, save: () => void): Record<string, () => 
 export function bindKeys(editor: Editor, act: Record<string, () => void>): () => void {
   const mac = isMac();
   /** Keys whose key down went to the tool, so that their key up does too. */
-  const held = new Set<string>();
+  const held = new Map<string, Key>();
   const send = (kind: "keyDown" | "keyUp", e: KeyboardEvent, key: Key) => {
-    if (kind === "keyDown") held.add(e.key.toLowerCase());
+    if (kind === "keyDown") held.set(e.key.toLowerCase(), key);
     else if (!held.delete(e.key.toLowerCase())) return;
     editor.key(kind, key, modifiers(e, mac));
   };
@@ -118,10 +118,19 @@ export function bindKeys(editor: Editor, act: Record<string, () => void>): () =>
     const key = toKey(e.key);
     if (key !== null) send("keyUp", e, key);
   };
+  // A key released in another window sends no key up here: release what
+  // the tool holds (Space's hand tool) when the window loses focus.
+  const blur = () => {
+    for (const key of held.values())
+      editor.key("keyUp", key, { shift: false, alt: false, ctrl: false });
+    held.clear();
+  };
   window.addEventListener("keydown", down);
   window.addEventListener("keyup", up);
+  window.addEventListener("blur", blur);
   return () => {
     window.removeEventListener("keydown", down);
     window.removeEventListener("keyup", up);
+    window.removeEventListener("blur", blur);
   };
 }
