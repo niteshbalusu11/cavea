@@ -414,3 +414,33 @@ fn nothing_pulses_at_overview_and_a_pulse_ends_on_time_across_levels() {
     assert_eq!(end, 464.0, "the batch began at the tick at 80 ms");
     assert_eq!(e.scene.as_ref().unwrap().scene.fx[1], 0);
 }
+
+#[test]
+fn a_seat_taken_again_pulses_its_full_time_and_nothing_pulses_before_a_frame() {
+    let mut e = venue();
+    snapshot(&mut e, 1, &[]);
+    at_seat_px(&mut e, 8.0, 0.0);
+    let fx = |e: &E| e.scene.as_ref().unwrap().scene.fx[0];
+    // Taken (batch from 16 ms to 416), freed, taken again (batch to 616).
+    delta(&mut e, 1, &[(0, 1)]);
+    tick(&mut e, 16.0);
+    delta(&mut e, 2, &[(0, 0)]);
+    tick(&mut e, 116.0);
+    delta(&mut e, 3, &[(0, 1)]);
+    tick(&mut e, 216.0);
+    tick(&mut e, 420.0);
+    assert_eq!(fx(&e), 4, "the newer batch still runs");
+    tick(&mut e, 620.0);
+    assert_eq!(fx(&e), 0);
+
+    // A delta before the first frame starts no pulse: the camera is not
+    // placed yet, and the fit may be at overview.
+    let mut e = Engine::new(Fake::default());
+    e.handle(Command::LoadChart {
+        ccf: compile(VENUE),
+    });
+    resize(&mut e, W, H, 1.0, 3.0);
+    snapshot(&mut e, 1, &[]);
+    delta(&mut e, 1, &[(0, 1)]);
+    assert!(e.state.pulses.is_empty());
+}

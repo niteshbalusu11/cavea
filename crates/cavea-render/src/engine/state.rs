@@ -120,8 +120,9 @@ impl<B: GpuBackend> Engine<B> {
         for &idx in &unreleased {
             self.selection.confirm_release(idx);
         }
-        // Seats pulse only where they are drawn: not at overview (04 §10).
-        let pulsing = !self.reduced_motion && self.seat_alpha() > 0.0;
+        // Seats pulse only where they are drawn: not at overview (04 §10),
+        // and not before the first frame has placed the camera.
+        let pulsing = !self.reduced_motion && self.camera.is_some() && self.seat_alpha() > 0.0;
         let Some(loaded) = &mut self.scene else {
             return;
         };
@@ -216,17 +217,28 @@ impl<B: GpuBackend> Engine<B> {
         if pulses.is_empty() {
             return;
         }
+        let fx = &mut loaded.scene.fx;
+        let mut ended = false;
         while let Some(p) = pulses.first() {
             if now_ms.is_some_and(|now| p.end_ms.is_none_or(|end| now < end)) {
                 break;
             }
             let p = pulses.remove(0);
             for i in p.seats {
-                if let Some(fx) = loaded.scene.fx.get_mut(i as usize) {
+                if let Some(fx) = fx.get_mut(i as usize) {
                     *fx &= !FX_PULSE;
                 }
             }
             grow_dirty(&mut loaded.dirty, p.span);
+            ended = true;
+        }
+        // A seat taken again since is in a newer batch: its pulse goes on.
+        if ended {
+            for i in pulses.iter().flat_map(|p| &p.seats) {
+                if let Some(fx) = fx.get_mut(*i as usize) {
+                    *fx |= FX_PULSE;
+                }
+            }
         }
         // The shader animates pulses with the frame time.
         self.dirty = true;
