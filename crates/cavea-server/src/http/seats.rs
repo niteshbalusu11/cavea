@@ -263,6 +263,13 @@ struct Indices {
 }
 
 impl Objects {
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Labels(labels) => labels.is_empty(),
+            Self::Indices(i) => i.idx.is_empty(),
+        }
+    }
+
     /// Engine references. `idx` must be of the event's own chart version: a
     /// caller with another version's file is told which one to fetch.
     fn refs(&self, target: &Target) -> Result<Vec<ObjectRef>, ApiError> {
@@ -486,6 +493,13 @@ async fn release(
         Ok(Command::Release {
             token: token_hash(&body.hold_token),
             objects: match &body.objects {
+                // An empty list releases nothing; leaving it out releases all.
+                Some(objects) if objects.is_empty() => {
+                    return Err(invalid_field(
+                        "objects",
+                        "must not be empty; leave it out to release all",
+                    ));
+                }
                 Some(objects) => objects.refs(target)?,
                 None => Vec::new(),
             },

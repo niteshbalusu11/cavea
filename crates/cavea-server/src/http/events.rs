@@ -354,16 +354,25 @@ async fn read(
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UpdateEvent {
-    #[serde(default)]
-    name: Option<String>,
+    /// Left out: unchanged. `null`: cleared.
+    #[serde(default, deserialize_with = "present")]
+    name: Option<Option<String>>,
     /// Replaces the settings as a whole: a field left out takes its default.
     #[serde(default)]
     settings: Option<Settings>,
 }
 
+/// A field that is present, `null` included: `Some(None)` for `null`.
+fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    d: D,
+) -> Result<Option<Option<T>>, D::Error> {
+    Option::deserialize(d).map(Some)
+}
+
 const UPDATE: &str = concat!(
     "WITH e AS (
-  UPDATE events SET name = coalesce($3, name), settings = coalesce($4::jsonb, settings)
+  UPDATE events SET name = CASE WHEN $5 THEN $3 ELSE name END,
+                    settings = coalesce($4::jsonb, settings)
    WHERE workspace_id = $1::uuid AND key = $2 AND archived_at IS NULL
   RETURNING *
 )
@@ -384,7 +393,7 @@ async fn update(
     Json(body): Json<UpdateEvent>,
 ) -> Result<axum::Json<Event>, ApiError> {
     cavea_telemetry::record_event(&key);
-    if let Some(name) = &body.name {
+    if let Some(Some(name)) = &body.name {
         check_text("name", name)?;
     }
     let settings = match body.settings {
@@ -395,8 +404,9 @@ async fn update(
         let row: Option<EventRow> = sqlx::query_as(UPDATE)
             .bind(auth.workspace().uuid())
             .bind(&key)
-            .bind(body.name.as_deref())
+            .bind(body.name.as_ref().and_then(Option::as_deref))
             .bind(settings.as_deref())
+            .bind(body.name.is_some())
             .fetch_optional(&state.db)
             .await?;
         if let Some(row) = row {

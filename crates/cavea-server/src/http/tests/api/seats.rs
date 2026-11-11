@@ -181,6 +181,11 @@ async fn seat_flow() {
         let body = json!({ "hold_token": second, "objects": [&seats_56[0]] });
         let (response, _) = post(&app, &t.secret, &ev("hold"), body).await;
         assert_eq!(response.status(), 200);
+        // An empty list is refused rather than read as "all".
+        let body = json!({ "hold_token": first, "objects": [] });
+        let (response, p) = post(&app, &t.secret, &ev("release"), body).await;
+        assert_problem(&response, &p, Code::InvalidRequest);
+        assert_eq!(p["details"]["field"], "objects");
         // Without objects: all of the token's; the token stays valid.
         let body = json!({ "hold_token": first });
         let (response, released) = post(&app, &t.secret, &ev("release"), body).await;
@@ -297,6 +302,12 @@ async fn event_rules() {
         assert_eq!(response.status(), 200, "{patched}");
         assert_eq!(patched["settings"], json!({ "hold_ttl_seconds": 900, "max_objects": 5 }));
         assert_eq!(patched["name"], "Three");
+        let body = json!({ "settings": {} });
+        let (_, kept) = call(&app, Method::PATCH, "/v1/events/e3", Some(sk), Some(body)).await;
+        assert_eq!(kept["name"], "Three");
+        let body = json!({ "name": null });
+        let (_, cleared) = call(&app, Method::PATCH, "/v1/events/e3", Some(sk), Some(body)).await;
+        assert_eq!(cleared["name"], Value::Null);
 
         // The list, a page at a time.
         let (_, page) = get(&app, sk, "/v1/events?limit=2").await;
