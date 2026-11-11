@@ -1067,7 +1067,7 @@ export declare class Cavea {
     readonly assets: {
         /** Upload a PNG, JPEG or WebP image. `created` is false when the
          * workspace already had these bytes. */
-        upload: (bytes: Blob | ArrayBuffer | Uint8Array<ArrayBuffer>, options?: CallOptions) => Promise<{
+        upload: (bytes: Blob | ArrayBuffer | Uint8Array, options?: CallOptions) => Promise<{
             asset: Asset;
             created: boolean;
         }>;

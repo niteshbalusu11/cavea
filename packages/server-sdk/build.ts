@@ -85,11 +85,11 @@ async function manifest(): Promise<string> {
     // Nothing is published before the release pipeline (OPS-001).
     private: true,
     description:
-      "Cavea server's REST API for a ticketing backend (Node 20+, bun). Holds a secret key: never in a browser",
+      "Cavea server's REST API for a ticketing backend (Node 20.3+, bun). Holds a secret key: never in a browser",
     license: "UNLICENSED",
     type: "module",
     sideEffects: false,
-    engines: { node: ">=20" },
+    engines: { node: ">=20.3" },
     main: "./index.js",
     module: "./index.js",
     types: "./index.d.ts",

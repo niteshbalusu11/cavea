@@ -449,10 +449,14 @@ export class Cavea {
     /** Upload a PNG, JPEG or WebP image. `created` is false when the
      * workspace already had these bytes. */
     upload: async (
-      bytes: Blob | ArrayBuffer | Uint8Array<ArrayBuffer>,
+      bytes: Blob | ArrayBuffer | Uint8Array,
       options?: CallOptions,
     ): Promise<{ asset: Asset; created: boolean }> => {
-      const body = bytes instanceof Blob ? bytes : new Blob([bytes]);
+      // A copy of a view: its buffer may be shared or larger than the view.
+      const body =
+        bytes instanceof Blob
+          ? bytes
+          : new Blob([bytes instanceof Uint8Array ? bytes.slice() : bytes]);
       const answer = await this.#send("uploadAsset", { body }, options);
       return { asset: answer.reply, created: answer.status === 201 };
     },
