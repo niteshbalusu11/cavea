@@ -598,6 +598,12 @@ impl<B: GpuBackend> Engine<B> {
             }
         };
 
+        // Request ids carry on from the old chart's atlas, so a late answer
+        // for it is ignored.
+        let text_atlas = self
+            .scene
+            .as_ref()
+            .map_or_else(TextAtlas::default, |l| l.text_atlas.successor());
         self.release_scene();
         self.reset_selection();
         self.events.push(Event::Ready(scene.info()));
@@ -614,7 +620,7 @@ impl<B: GpuBackend> Engine<B> {
             mesh_dirty: None,
             sections,
             seat_labels: Labels::default(),
-            text_atlas: TextAtlas::default(),
+            text_atlas,
             map_labels: MapLabels::default(),
             palette_bytes,
         });

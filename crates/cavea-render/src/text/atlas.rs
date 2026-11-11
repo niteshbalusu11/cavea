@@ -100,6 +100,9 @@ pub struct TextAtlas {
     build: u32,
     /// Whether a lookup was refused only by the per-build cap.
     pub capped: bool,
+    /// Entries were forgotten to make room for new strings while their
+    /// rasters still take space, which a clear gives back.
+    evicted: bool,
     /// Changes when a raster arrives or the atlas is cleared, so labels
     /// built from it are built again.
     pub generation: u32,
@@ -135,10 +138,13 @@ impl TextAtlas {
         font: &str,
         events: &mut Vec<Event>,
     ) -> Option<Raster> {
+        if self.entries.len() >= MAX_ENTRIES {
+            self.evict();
+        }
         let at = match self.entries.binary_search_by(|e| e.key.cmp(&key)) {
             Ok(at) => at,
             Err(_) if text.is_empty() => return None,
-            Err(_) if self.entries.len() >= MAX_ENTRIES || self.pending >= MAX_PENDING => {
+            Err(_) if self.pending >= MAX_PENDING || self.entries.len() >= MAX_ENTRIES => {
                 return self.nearest(key);
             }
             Err(_) if self.requested >= REQUESTS_PER_BUILD => {
@@ -181,6 +187,16 @@ impl TextAtlas {
         }
     }
 
+    /// Forgets the drawn and failed strings this build has not used, so new
+    /// ones can be tracked; their texels are reused at the next clear.
+    fn evict(&mut self) {
+        let build = self.build;
+        let before = self.entries.len();
+        self.entries
+            .retain(|e| matches!(e.state, State::Pending(_)) || e.used == build);
+        self.evicted |= self.entries.len() < before;
+    }
+
     /// The ready raster of `key`'s source and weight nearest in size,
     /// preferring larger ones; marks it used.
     fn nearest(&mut self, key: Key) -> Option<Raster> {
@@ -221,17 +237,21 @@ impl TextAtlas {
         let Some(at) = (self.entries.iter()).position(|e| e.state == State::Pending(id)) else {
             return Ok(());
         };
-        if width > MAX_RASTER_WIDTH
-            || height > MAX_RASTER_HEIGHT
-            || px == 0
-            || px > u32::from(BUCKETS[BUCKETS.len() - 1])
-            || pixels.len() as u64 != u64::from(width) * u64::from(height)
-        {
-            return Err(BackendError::InvalidData);
-        }
         self.pending = self.pending.saturating_sub(1);
         self.generation = self.generation.wrapping_add(1);
-        let state = if width == 0 || height == 0 {
+        let empty = width == 0 || height == 0;
+        let refused = width > MAX_RASTER_WIDTH
+            || height > MAX_RASTER_HEIGHT
+            || !empty && (px == 0 || px > u32::from(BUCKETS[BUCKETS.len() - 1]))
+            || pixels.len() as u64 != u64::from(width) * u64::from(height);
+        if refused {
+            // Never asked for again; the answer is the host's error.
+            if let Some(entry) = self.entries.get_mut(at) {
+                entry.state = State::Failed;
+            }
+            return Err(BackendError::InvalidData);
+        }
+        let state = if empty {
             State::Failed
         } else {
             match self.place(backend, width, height)? {
@@ -279,12 +299,16 @@ impl TextAtlas {
         if self.texture.is_none() {
             self.make(backend, START_SIDE.min(max))?;
         }
+        // Each step frees or adds space, at most once each: the loop ends.
+        let mut cleared = false;
         loop {
             if let Some(spot) = self.pack(width + 1, height + 1) {
                 return Ok(Some(spot));
             }
-            if self.entries.iter().any(|e| e.used != self.build) {
+            let unused = |e: &Entry| matches!(e.state, State::Ready(_)) && e.used != self.build;
+            if !cleared && (self.evicted || self.entries.iter().any(unused)) {
                 self.clear();
+                cleared = true;
             } else if self.side < max {
                 self.make(backend, (self.side * 2).min(max))?;
             } else {
@@ -331,13 +355,23 @@ impl TextAtlas {
     /// Forgets every raster, keeping the requests still out.
     fn clear(&mut self) {
         self.shelves.clear();
+        self.evicted = false;
         self.entries
             .retain(|e| matches!(e.state, State::Pending(_)));
         self.generation = self.generation.wrapping_add(1);
     }
 
-    /// Releases the texture and forgets everything: a new chart or font.
-    /// Answers to earlier requests are then ignored.
+    /// A fresh atlas whose request ids follow this one's, so an answer meant
+    /// for this atlas is never taken for one of its own (a new chart).
+    pub fn successor(&self) -> Self {
+        Self {
+            next_request: self.next_request,
+            ..Self::default()
+        }
+    }
+
+    /// Releases the texture and forgets everything: a new font. Answers to
+    /// earlier requests are then ignored.
     pub fn reset(&mut self, backend: &mut impl GpuBackend) {
         if let Some(texture) = self.texture.take() {
             backend.destroy(ResourceId::Texture(texture));

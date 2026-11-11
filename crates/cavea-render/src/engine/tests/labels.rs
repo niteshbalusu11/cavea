@@ -530,3 +530,73 @@ fn measure_map_labels() {
         );
     }
 }
+
+/// Asks for `key`'s string in the current build and returns the request id.
+fn ask(atlas: &mut TextAtlas, source: Source, text: &str) -> Option<u32> {
+    let key = Key {
+        source,
+        weight: 400,
+        bucket: 0,
+    };
+    let mut events = Vec::new();
+    atlas.lookup(key, text, "f", &mut events);
+    events.into_iter().find_map(|e| match e {
+        Event::TextRequest { id, .. } => Some(id),
+        _ => None,
+    })
+}
+
+#[test]
+fn the_atlas_never_stalls_on_pending_entries_empty_answers_or_many_strings() {
+    let mut backend = Fake::default();
+    // A pending request the next build does not use, and a raster too wide
+    // for the first texture: it grows instead of clearing forever.
+    let mut atlas = TextAtlas::default();
+    atlas.begin();
+    ask(&mut atlas, Source::String(0), "a").unwrap();
+    atlas.begin();
+    let id = ask(&mut atlas, Source::String(1), "b").unwrap();
+    atlas
+        .supply(&mut backend, id, [1024, 10, 16], &[1; 10_240])
+        .unwrap();
+    assert_eq!(atlas.rects(), (vec![[0, 0, 1024, 10]], MAX_SIDE));
+
+    // Empty answers settle their requests: the host's "cannot draw".
+    let mut atlas = TextAtlas::default();
+    for i in 0..200 {
+        atlas.begin();
+        let id = ask(&mut atlas, Source::String(i), "\u{200d}").unwrap();
+        atlas.supply(&mut backend, id, [0, 0, 0], &[]).unwrap();
+    }
+
+    // Past the most strings it tracks, the ones not in use make room.
+    let mut atlas = TextAtlas::default();
+    let mut n = 0;
+    while n < crate::text::atlas::MAX_ENTRIES as u32 + 100 {
+        atlas.begin();
+        for _ in 0..REQUESTS_PER_BUILD {
+            let id = ask(&mut atlas, Source::String(n), "x").expect("asked");
+            atlas.supply(&mut backend, id, [1, 1, 16], &[1]).unwrap();
+            n += 1;
+        }
+    }
+}
+
+#[test]
+fn an_answer_for_the_previous_chart_is_never_taken_for_the_new_ones() {
+    let mut e = Engine::new(Fake::default());
+    e.handle(Command::LoadChart { ccf: chart() });
+    resize(&mut e, W, H, 1.0, 3.0);
+    let old: Vec<u32> = requests(&tick(&mut e, 0.0)).iter().map(|r| r.0).collect();
+    assert!(!old.is_empty());
+    e.handle(Command::LoadChart { ccf: chart() });
+    let new = requests(&tick(&mut e, 16.0));
+    assert!(!new.is_empty());
+    assert!(new.iter().all(|r| !old.contains(&r.0)), "{old:?} {new:?}");
+    // The late answer changes nothing.
+    answer(&mut e, &[(old[0], "STAGE".into(), 16)]);
+    assert!(
+        e.drain_events()
+            .all(|ev| !matches!(ev, Event::Error { .. }))
+    );
+}

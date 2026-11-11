@@ -190,7 +190,10 @@ impl MapLabels {
                 .any(|&c| !seat_labels.skipped(c).is_empty());
         let chunks = if dynamic_seats { view.chunks } else { &[] };
         let flags = u32::from(view.sections) | u32::from(view.seats) << 1;
+        // Seat labels: the seats' state, and which chunks' labels are built
+        // (two a frame), since a chunk built later may add some.
         let state = if dynamic_seats { view.state_gen } else { 0 };
+        let built = if view.seats { seat_labels.built } else { 0 };
         self.now.clear();
         self.now.extend([
             flags,
@@ -199,6 +202,7 @@ impl MapLabels {
             atlas.generation,
             view.sold_out_gen,
             state,
+            built,
         ]);
         self.now
             .extend([self.sec.len(), chunks.len()].map(|n| n as u32));
