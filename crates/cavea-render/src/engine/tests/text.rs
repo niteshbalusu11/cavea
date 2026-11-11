@@ -44,7 +44,7 @@ fn line(n: u32) -> Vec<u8> {
     ))
 }
 
-fn atlas() -> Command {
+pub(super) fn atlas() -> Command {
     let [w, h] = text::ATLAS_SIZE;
     Command::SetGlyphAtlas {
         rgba: vec![0; (w * h * 4) as usize],

@@ -218,19 +218,21 @@ fn loading_a_second_chart_releases_the_first() {
     let (s, d, p) = ids(&e);
     let [o1, o2] = e.scene.as_ref().unwrap().overlay;
     let [m1, m2] = e.scene.as_ref().unwrap().mesh.unwrap();
+    // The row labels' buffers, made by its first frame.
+    let labels = e.scene.as_ref().unwrap().map_labels.buffers();
+    let labels = labels.into_iter().flatten().map(ResourceId::Buffer);
     load(&mut e, two_seats([0.0, 0.0], [10.0, 10.0]));
-    assert_eq!(
-        e.backend.destroyed,
-        [
-            ResourceId::Buffer(BufferId(s)),
-            ResourceId::Buffer(BufferId(d)),
-            ResourceId::Texture(TextureId(p)),
-            ResourceId::Buffer(o1),
-            ResourceId::Buffer(o2),
-            ResourceId::Buffer(m1),
-            ResourceId::Buffer(m2),
-        ]
-    );
+    let mut expected = vec![
+        ResourceId::Buffer(BufferId(s)),
+        ResourceId::Buffer(BufferId(d)),
+        ResourceId::Texture(TextureId(p)),
+        ResourceId::Buffer(o1),
+        ResourceId::Buffer(o2),
+        ResourceId::Buffer(m1),
+        ResourceId::Buffer(m2),
+    ];
+    expected.extend(labels);
+    assert_eq!(e.backend.destroyed, expected);
     // Only the new chart's five resources are alive, and it is what is drawn.
     assert_eq!(e.backend.buffers.len() + e.backend.textures.len(), 5);
     tick(&mut e, 16.0);
@@ -321,6 +323,8 @@ fn themes_rewrite_the_palette_and_clear_colour_and_no_instance_data() {
     assert_rows(&e, &light, [BLUE, BROWN]);
     assert_eq!(e.backend.clears.last(), Some(&light.clear()));
     let buffers = e.backend.buffers.clone();
+    // Writes from here on: the first frame uploaded the row labels.
+    let first = e.backend.buffer_writes.len();
     let mut t = 16.0;
     for base in [
         BuiltinTheme::Dark,
@@ -366,7 +370,11 @@ fn themes_rewrite_the_palette_and_clear_colour_and_no_instance_data() {
     assert_eq!(e.backend.dims.last(), Some(&0.5));
     // No instance data was touched by any of it, only the section tints.
     let [vertices, _] = e.scene.as_ref().unwrap().mesh.unwrap();
-    assert!(e.backend.buffer_writes.iter().all(|w| w.0 == vertices.0));
+    assert!(
+        e.backend.buffer_writes[first..]
+            .iter()
+            .all(|w| w.0 == vertices.0)
+    );
     let instances = |b: &BTreeMap<u32, Vec<u8>>| {
         let mut b = b.clone();
         b.remove(&vertices.0);

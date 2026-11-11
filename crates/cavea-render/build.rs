@@ -15,8 +15,8 @@ use naga::{
     valid::{Capabilities, ValidationFlags, Validator},
 };
 
-/// Programs translated at build time; `text` and `image` come in later slices.
-const PROGRAMS: &[&str] = &["shape", "mesh", "glyph"];
+/// Programs translated at build time; `image` comes in a later slice.
+const PROGRAMS: &[&str] = &["shape", "mesh", "glyph", "text"];
 
 fn main() {
     if let Err(message) = run() {

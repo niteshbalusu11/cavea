@@ -7,7 +7,7 @@
 //!   pos    : f32 × 2                    cat    : u16
 //!   half   : u16  (half size, ¼ cu)     visual : u8
 //!   angle  : u8   (360° / 256)          fx     : u8
-//!   shape  : u8
+//!   shape  : u8   (bit 7: accessible)
 //! ```
 
 use std::ops::Range;
@@ -21,6 +21,9 @@ pub mod shape {
     pub const ROUNDED_SQUARE: u8 = 1;
     pub const CHAIR: u8 = 2;
     pub const DIAMOND: u8 = 3;
+    /// Set on the shape of a seat flagged accessible (`SFLG` bit 0): the
+    /// `shape` program draws its mark at the detail level (04 §7 pass 8).
+    pub const ACCESSIBLE: u8 = 0x80;
 }
 
 /// Per-seat values that never change after load.

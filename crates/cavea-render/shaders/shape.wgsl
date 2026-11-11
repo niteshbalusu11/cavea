@@ -1,6 +1,8 @@
 // The `shape` program (docs/04-renderer.md §8): instanced quads with a
-// signed-distance seat shape, fill, stroke and shader anti-aliasing.
-// Translated to GLSL ES 3.00 by build.rs; the instance layout is §6.
+// signed-distance seat shape, fill, stroke and shader anti-aliasing, and
+// the pictograms of §7: seat icons drawn over their seats at the detail
+// level, and decoration icons. Translated to GLSL ES 3.00 by build.rs; the
+// instance layout is §6.
 
 struct Globals {
     // World (chart units) to clip space.
@@ -18,6 +20,91 @@ struct Globals {
     // The pass's opacity: seats fade in over the level-of-detail cross-fade
     // (04 §10).
     alpha: f32,
+    // 0 seats or overlays; 1 seats with their icons; 2 decoration icons, the
+    // instance's shape being the icon (src/backend/mod.rs `mode`).
+    mode: f32,
+}
+
+// The pictograms (04 §7), original artwork: each a union of round-capped
+// strokes (x0, y0, x1, y1, in a box from -1 to 1, y down) of the radius in
+// RADII. Icon i (from 1: tick, cross, accessible, entrance, exit, stairs,
+// toilets, bar, lift) is strokes FIRST[i - 1] to FIRST[i].
+const STROKES = array<vec4<f32>, 55>(
+    vec4<f32>(-0.72, 0.0, -0.22, 0.5),
+    vec4<f32>(-0.22, 0.5, 0.75, -0.5),
+    vec4<f32>(-0.6, -0.6, 0.6, 0.6),
+    vec4<f32>(-0.6, 0.6, 0.6, -0.6),
+    vec4<f32>(-0.1, -0.78, -0.1, -0.78),
+    vec4<f32>(-0.2, -0.45, -0.28, 0.08),
+    vec4<f32>(-0.2, -0.2, 0.15, -0.2),
+    vec4<f32>(-0.28, 0.08, 0.25, 0.08),
+    vec4<f32>(0.25, 0.08, 0.42, 0.55),
+    vec4<f32>(0.42, 0.55, 0.62, 0.55),
+    vec4<f32>(0.17, 0.645, -0.104, 0.855),
+    vec4<f32>(-0.104, 0.855, -0.445, 0.81),
+    vec4<f32>(-0.445, 0.81, -0.655, 0.536),
+    vec4<f32>(-0.655, 0.536, -0.61, 0.195),
+    vec4<f32>(-0.61, 0.195, -0.336, -0.015),
+    vec4<f32>(0.15, -0.8, 0.75, -0.8),
+    vec4<f32>(0.75, -0.8, 0.75, 0.8),
+    vec4<f32>(0.75, 0.8, 0.15, 0.8),
+    vec4<f32>(-0.85, 0.0, 0.35, 0.0),
+    vec4<f32>(0.0, -0.35, 0.35, 0.0),
+    vec4<f32>(0.0, 0.35, 0.35, 0.0),
+    vec4<f32>(-0.15, -0.8, -0.75, -0.8),
+    vec4<f32>(-0.75, -0.8, -0.75, 0.8),
+    vec4<f32>(-0.75, 0.8, -0.15, 0.8),
+    vec4<f32>(-0.35, 0.0, 0.85, 0.0),
+    vec4<f32>(0.5, -0.35, 0.85, 0.0),
+    vec4<f32>(0.5, 0.35, 0.85, 0.0),
+    vec4<f32>(-0.85, 0.7, -0.4, 0.7),
+    vec4<f32>(-0.4, 0.7, -0.4, 0.25),
+    vec4<f32>(-0.4, 0.25, 0.05, 0.25),
+    vec4<f32>(0.05, 0.25, 0.05, -0.2),
+    vec4<f32>(0.05, -0.2, 0.5, -0.2),
+    vec4<f32>(0.5, -0.2, 0.5, -0.65),
+    vec4<f32>(0.5, -0.65, 0.85, -0.65),
+    vec4<f32>(-0.45, -0.68, -0.45, -0.68),
+    vec4<f32>(-0.45, -0.33, -0.45, 0.78),
+    vec4<f32>(0.0, -0.85, 0.0, 0.85),
+    vec4<f32>(0.45, -0.68, 0.45, -0.68),
+    vec4<f32>(0.45, -0.33, 0.45, 0.2),
+    vec4<f32>(0.27, 0.32, 0.63, 0.32),
+    vec4<f32>(0.38, 0.35, 0.38, 0.78),
+    vec4<f32>(0.52, 0.35, 0.52, 0.78),
+    vec4<f32>(-0.65, -0.65, 0.65, -0.65),
+    vec4<f32>(-0.65, -0.65, 0.0, 0.05),
+    vec4<f32>(0.65, -0.65, 0.0, 0.05),
+    vec4<f32>(0.0, 0.05, 0.0, 0.7),
+    vec4<f32>(-0.4, 0.75, 0.4, 0.75),
+    vec4<f32>(-0.75, -0.85, 0.75, -0.85),
+    vec4<f32>(0.75, -0.85, 0.75, 0.85),
+    vec4<f32>(0.75, 0.85, -0.75, 0.85),
+    vec4<f32>(-0.75, 0.85, -0.75, -0.85),
+    vec4<f32>(-0.3, -0.15, 0.0, -0.5),
+    vec4<f32>(0.0, -0.5, 0.3, -0.15),
+    vec4<f32>(-0.3, 0.15, 0.0, 0.5),
+    vec4<f32>(0.0, 0.5, 0.3, 0.15),
+);
+const RADII = array<f32, 55>(0.17, 0.17, 0.17, 0.17, 0.17, 0.13, 0.1, 0.12, 0.11, 0.1, 0.09, 0.09, 0.09, 0.09, 0.09, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.16, 0.17, 0.05, 0.16, 0.17, 0.12, 0.07, 0.07, 0.1, 0.1, 0.1, 0.1, 0.1, 0.08, 0.08, 0.08, 0.08, 0.1, 0.1, 0.1, 0.1);
+// The seat's icon at the detail level (04 §7 pass 8, §9), by visual state
+// (available, unavailable, selected pending, selected held) and whether the
+// seat is accessible (shape bit 7, src/seat.rs): one icon per seat, the
+// selection's tick first, then the unavailable cross, then the accessible
+// mark. 0 is none.
+const SEAT_ICONS = array<u32, 8>(0u, 3u, 2u, 2u, 1u, 1u, 1u, 1u);
+const FIRST = array<u32, 10>(0u, 2u, 4u, 15u, 21u, 27u, 34u, 42u, 47u, 55u);
+
+// The distance from p to icon `icon`, in the icon box's units.
+fn icon_distance(icon: u32, p: vec2<f32>) -> f32 {
+    var d = 1.0e9;
+    for (var i = FIRST[icon - 1u]; i < FIRST[icon]; i = i + 1u) {
+        let s = STROKES[i];
+        let ab = s.zw - s.xy;
+        let t = clamp(dot(p - s.xy, ab) / max(dot(ab, ab), 1.0e-6), 0.0, 1.0);
+        d = min(d, length(p - s.xy - ab * t) - RADII[i]);
+    }
+    return d;
 }
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -45,6 +132,11 @@ struct SeatOut {
     // Half size in device pixels.
     @location(3) @interpolate(flat) half_px: f32,
     @location(4) @interpolate(flat) shape_fx: vec2<u32>,
+    // The icon drawn over the seat (0 none), and its ink.
+    @location(5) @interpolate(flat) icon: u32,
+    @location(6) @interpolate(flat) ink: vec4<f32>,
+    // `uv` turned upright, for the icon.
+    @location(7) upright: vec2<f32>,
 }
 
 @vertex
@@ -69,6 +161,17 @@ fn vs_main(seat: SeatIn) -> SeatOut {
     out.stroke = textureLoad(palette, vec2<i32>(column + 1, row), 0);
     out.half_px = half_px;
     out.shape_fx = vec2<u32>(seat.angle_shape.y, seat.visual_fx.y);
+    out.ink = textureLoad(palette, vec2<i32>(column + 2, row), 0);
+    out.upright = vec2<f32>(uv.x * c - uv.y * s, uv.x * s + uv.y * c);
+    out.icon = 0u;
+    let visual = seat.visual_fx.x;
+    if globals.mode == 1.0 && visual < 4u {
+        let accessible = (seat.angle_shape.y >> 7u) & 1u;
+        out.icon = SEAT_ICONS[visual * 2u + accessible];
+    } else if globals.mode == 2.0 {
+        out.icon = seat.angle_shape.y + 4u;
+        out.upright = uv;
+    }
     return out;
 }
 
@@ -79,8 +182,20 @@ fn rounded_box(uv: vec2<f32>, radius: f32) -> f32 {
 
 @fragment
 fn fs_main(seat: SeatOut) -> @location(0) vec4<f32> {
-    let shape = seat.shape_fx.x;
+    let shape = seat.shape_fx.x & 3u;
     let fx = seat.shape_fx.y;
+    // Icons fill 0.62 of a seat's half size, and nearly all of a decoration
+    // icon's square.
+    var icon_cover = 0.0;
+    if seat.icon != 0u {
+        let scale = select(0.62, 0.95, globals.mode == 2.0);
+        let icon_d = icon_distance(seat.icon, seat.upright / scale) * scale;
+        icon_cover = clamp(0.5 - icon_d * seat.half_px, 0.0, 1.0) * seat.ink.a;
+    }
+    if globals.mode == 2.0 {
+        let a = icon_cover * globals.alpha;
+        return vec4<f32>(seat.ink.rgb * a, a);
+    }
     var d: f32;
     if shape == 0u {
         d = length(seat.uv) - 1.0;
@@ -110,6 +225,7 @@ fn fs_main(seat: SeatOut) -> @location(0) vec4<f32> {
         let pulse = 0.5 + 0.5 * sin(globals.time * 12.566371);
         color = mix(color, seat.stroke, 0.7 * pulse);
     }
+    color = mix(color, vec4<f32>(seat.ink.rgb, 1.0), icon_cover);
     var alpha = color.a * coverage * globals.alpha;
     if (fx & 1u) != 0u {
         alpha = alpha * globals.dim;

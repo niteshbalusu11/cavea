@@ -117,6 +117,25 @@ fn write_event(event: &Event, out: &mut String) -> bool {
                 },
             );
         }
+        Event::TextRequest {
+            id,
+            text,
+            px,
+            weight,
+            font,
+        } => {
+            kind(out, "textRequest");
+            field(out, "id");
+            let _ = write!(out, "{id}");
+            field(out, "text");
+            string(out, text);
+            field(out, "px");
+            let _ = write!(out, "{px}");
+            field(out, "weight");
+            let _ = write!(out, "{weight}");
+            field(out, "font");
+            string(out, font);
+        }
         _ => return false,
     }
     out.push('}');

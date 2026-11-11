@@ -11,7 +11,8 @@ use std::{fmt, ops::Range};
 /// nothing creates pipelines at run time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pipeline {
-    /// Instanced signed-distance quads: seats, tables, booths, overlays.
+    /// Instanced signed-distance quads: seats and their icons, tables,
+    /// booths, overlays, decoration icons.
     Shape,
     /// Indexed triangles: decoration and section fills.
     Mesh,
@@ -133,6 +134,18 @@ pub struct Uniforms {
     /// The pass's opacity, multiplying everything it draws: the
     /// level-of-detail cross-fade (04 §10). 1 otherwise.
     pub alpha: f32,
+    /// What the pass draws. `Shape`: [`mode::PLAIN`], [`mode::SEAT_ICONS`]
+    /// (seats with their icons, at detail) or [`mode::DECORATION_ICONS`].
+    /// `Glyph`: [`mode::SEAT_ICONS`] hides the label of a seat that shows a
+    /// state icon. `Text`: unused.
+    pub mode: f32,
+}
+
+/// Values of [`Uniforms::mode`].
+pub mod mode {
+    pub const PLAIN: f32 = 0.0;
+    pub const SEAT_ICONS: f32 = 1.0;
+    pub const DECORATION_ICONS: f32 = 2.0;
 }
 
 impl Uniforms {
@@ -149,6 +162,7 @@ impl Uniforms {
             self.dim,
             self.time,
             self.alpha,
+            self.mode,
         ];
         let columns = self.view.iter().enumerate().flat_map(|(i, column)| {
             column
@@ -176,15 +190,17 @@ pub struct DrawCall<'a> {
     /// buffer (12 bytes per vertex: x, y as `f32`, RGBA8 colour, as `MESH`
     /// stores them) and the `u32` index buffer. `Glyph`: the label buffer
     /// (`text::LABEL_STRIDE` bytes per seat) and the seats' dynamic buffer.
+    /// `Text`: the text instance buffer (`label::TEXT_STRIDE` bytes each).
     pub buffers: [Option<BufferId>; 2],
     /// `Shape`: the palette texture. `Glyph`: the glyph atlas, then the
-    /// palette. `Mesh`: none.
+    /// palette. `Text`: the dynamic text atlas. `Mesh`: none.
     pub textures: [Option<TextureId>; 2],
     pub uniforms: Uniforms,
     /// `Shape`: instance ranges, in order. WebGL2 has no base instance, so
     /// the GL backend rebinds attribute offsets per range (04 §11). `Mesh`:
     /// ranges of the index buffer, each drawn as triangles. `Glyph`: ranges
-    /// of seats (`idx`), which index the dynamic buffer.
+    /// of seats (`idx`), which index the dynamic buffer. `Text`: instance
+    /// ranges.
     pub ranges: &'a [Range<u32>],
     /// `Glyph`: for each range, the instance of the label buffer that holds
     /// its first seat. Empty for the other pipelines.
