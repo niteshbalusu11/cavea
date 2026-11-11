@@ -246,6 +246,14 @@ pub struct SecretKey(pub Auth);
 #[derive(Debug, Clone)]
 pub struct PublishableKey(pub Auth);
 
+/// Requires a publishable key in the `key` query parameter, from an allowed
+/// origin if the key has an allow-list: for the realtime routes, which
+/// `WebSocket` and `EventSource` reach without custom headers and a CDN caches
+/// by URL (08 §8.2, §8.5). A publishable key is not a secret; nothing else
+/// travels in a URL.
+#[derive(Debug, Clone)]
+pub struct QueryKey(pub Auth);
+
 /// Requires the admin key (`CAVEA_ADMIN_KEY`).
 #[derive(Debug, Clone, Copy)]
 pub struct AdminKeyAuth;
@@ -287,6 +295,23 @@ impl FromRequestParts<AppState> for PublishableKey {
     }
 }
 
+impl FromRequestParts<AppState> for QueryKey {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
+        match resolve(query_key(parts)?, state).await? {
+            Credential::Key {
+                auth,
+                allowed_origins,
+            } if auth.kind == KeyKind::Publishable => {
+                check_origin(parts, allowed_origins.as_deref())?;
+                Ok(Self(auth))
+            }
+            _ => Err(wrong_kind("This endpoint requires a publishable key.")),
+        }
+    }
+}
+
 impl FromRequestParts<AppState> for AdminKeyAuth {
     type Rejection = ApiError;
 
@@ -311,7 +336,10 @@ fn unauthorized(reason: &'static str) -> ApiError {
 /// Resolve the bearer token: `401` unless it is the admin key or an unrevoked
 /// API key.
 async fn credential(parts: &Parts, state: &AppState) -> Result<Credential, ApiError> {
-    let token = bearer(parts)?;
+    resolve(bearer(parts)?, state).await
+}
+
+async fn resolve(token: &str, state: &AppState) -> Result<Credential, ApiError> {
     if let Some(admin) = &state.config.admin_key
         && admin.matches(token)
     {
@@ -365,14 +393,30 @@ fn bearer(parts: &Parts) -> Result<&str, ApiError> {
     let (scheme, token) = value
         .split_once(' ')
         .ok_or_else(|| unauthorized("malformed"))?;
-    if !scheme.eq_ignore_ascii_case("bearer")
-        || token.is_empty()
-        || token.len() > TOKEN_MAX
-        || !token.bytes().all(|b| b.is_ascii_graphic())
-    {
+    if !scheme.eq_ignore_ascii_case("bearer") || !well_formed(token) {
         return Err(unauthorized("malformed"));
     }
     Ok(token)
+}
+
+/// The value of the one `key` query parameter. Keys are hex, so it is taken
+/// as it stands: anything percent-encoded is malformed.
+fn query_key(parts: &Parts) -> Result<&str, ApiError> {
+    let mut keys = parts
+        .uri
+        .query()
+        .unwrap_or_default()
+        .split('&')
+        .filter_map(|pair| pair.strip_prefix("key="));
+    let token = keys.next().ok_or_else(|| unauthorized("missing"))?;
+    if keys.next().is_some() || !well_formed(token) || token.contains('%') {
+        return Err(unauthorized("malformed"));
+    }
+    Ok(token)
+}
+
+fn well_formed(token: &str) -> bool {
+    !token.is_empty() && token.len() <= TOKEN_MAX && token.bytes().all(|b| b.is_ascii_graphic())
 }
 
 /// The origin allow-list of a publishable key (12 §3 T3). A request without

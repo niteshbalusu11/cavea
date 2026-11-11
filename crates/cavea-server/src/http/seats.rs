@@ -61,7 +61,7 @@ pub(super) fn public_routes() -> Router<AppState> {
 /// Random bytes in a hold token: 256 bits from the operating system.
 const TOKEN_BYTES: usize = 32;
 
-fn token_hash(token: &str) -> TokenHash {
+pub(super) fn token_hash(token: &str) -> TokenHash {
     TokenHash(sha256(token))
 }
 
@@ -91,12 +91,12 @@ fn rfc3339(t: Timestamp) -> String {
 
 /// An event, as a seat request needs it.
 pub(super) struct Target {
-    id: EventId,
+    pub(super) id: EventId,
     pub(super) key: String,
     version: ChartVersionId,
     /// The pinned version's public hash.
     pub(super) hash: String,
-    archived: bool,
+    pub(super) archived: bool,
     pub(super) settings: Settings,
 }
 

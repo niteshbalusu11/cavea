@@ -565,9 +565,9 @@ Seat rules (secret-key routes; the public ones follow the public table):
 | Method and path | Purpose |
 |---|---|
 | `GET /v1/public/events/{event}` | Chart URL, hold lifetime, selection rules |
-| `GET /v1/public/events/{event}/state` | Binary snapshot; `?after_seq=n` returns a delta if still buffered |
-| `GET /v1/public/events/{event}/stream` | SSE stream |
-| `GET /v1/public/rt` | WebSocket |
+| `GET /v1/public/events/{event}/state?key=pk_…` | Binary snapshot (§8.5); `&after_seq=n` returns a delta if still buffered |
+| `GET /v1/public/events/{event}/stream?key=pk_…` | SSE stream |
+| `GET /v1/public/rt?key=pk_…` | WebSocket (§8.2) |
 | `POST /v1/public/hold-tokens` | Create a hold token |
 | `GET /v1/public/hold-tokens/current` | The caller's token (in `Cavea-Hold-Token`): expiry and held objects |
 | `POST /v1/public/events/{event}/hold` | Hold with the caller's token |
@@ -578,7 +578,7 @@ Seat rules (secret-key routes; the public ones follow the public table):
 | `GET /v1/public/charts/{hash}.ccf` | Compiled chart (no credential; 03 §4.6) |
 | `GET /v1/public/assets/{hash}` | Background images |
 
-Public rules (publishable key; SRV-015 built the event, hold-token, hold and release routes; `state`, `stream`, `rt`, `best-available`, `sections`, `rows` and `assets` arrive with realtime, best-available, the list view and asset upload):
+Public rules (publishable key; SRV-015 built the event, hold-token, hold and release routes, RT-003 to RT-010 `state` and `rt`; `stream` and `after_seq` (RT-007, RT-008), `best-available`, `sections`, `rows` and `assets` arrive with the realtime fallbacks, best-available, the list view and asset upload):
 
 - **Event:** `GET /v1/public/events/{event}` returns `{event, chart: {hash, url}, hold_ttl_seconds, max_objects}`: the pinned version's public hash and file (above), the lifetime of a buyer's token, and the object limit of a buyer's token, which is also the maximum-selection rule (02 §12). Nothing else: no name, counts, settings beyond these, or anything of the backend's. `Cache-Control: private, max-age=30` and `Vary: Authorization`: the buyer's browser keeps it across page loads, per key; a shared cache must not, since the answer depends on the credential (another workspace's key names another event by the same key). An archived event is still described; its seat routes are `400 archived`.
 - **Hold tokens:** `POST /v1/public/hold-tokens` takes `{event, max_objects?}` and returns `201` with `{hold_token, event, seq, expires_at, max_objects}`. The lifetime is the event's `hold_ttl_seconds` (no `ttl_seconds`: unknown fields are refused). `max_objects` defaults to the event's and may lower it; above it, or 0, is `invalid_field`. Buyers cannot extend: a stalled checkout is the backend's to extend.
@@ -586,6 +586,7 @@ Public rules (publishable key; SRV-015 built the event, hold-token, hold and rel
 - **The token after a reload:** `GET /v1/public/hold-tokens/current` with the token in `Cavea-Hold-Token` returns `{event, expires_at, max_objects, objects}` as committed (`Cache-Control: no-store`), for `selection.restore` (05 §4). A missing or malformed header, an unknown or expired token and another workspace's are all `404` (`missing: "hold_token"`).
 - **Where the buyer's token travels:** in the JSON body or the `Cavea-Hold-Token` header, never in a URL. Public requests cross the open internet and the customer's CDN and proxies, which log URLs; the secret-key routes, called by the customer's backend, keep the token in the path and the server logs only route templates there.
 - **Idempotency:** public routes take no `Idempotency-Key` (§6.1).
+- **Realtime routes** (`state`, `stream`, `rt`) take the publishable key in the `key` query parameter, not in `Authorization` (D-31): `WebSocket` and `EventSource` cannot set headers, and the snapshot must be cacheable by URL (§8.5). The key is checked as everywhere else: unknown or revoked `401`, another kind `403`, an `Origin` off its allow-list `403`. A secret key in a URL is refused like any wrong kind, and query strings are never logged. The hold token never goes in these URLs either: it travels inside SUBSCRIBE (§8.2).
 
 The compiled chart route takes no credential and ignores any sent. A chart file is named by its content hash alone: the URL must be the same for every buyer so that browsers and CDNs can cache it, a credential in a header would keep CDNs from caching it and force a CORS preflight, and a publishable key in the URL would change it on every key rotation. The hash identifies the bytes, so the route is unambiguous across workspaces (two workspaces that publish identical charts serve one identical file), and it exposes nothing a buyer of the event does not already download: 128 bits cannot be guessed, and the chart's key and workspace are not in the URL. It serves only public artefacts of published versions; the full artefact is never served. Private charts are P2 (03 §4.6).
 
@@ -838,7 +839,7 @@ A frame is a type byte followed by its fields in the order listed, with nothing 
 | `0x02` | SNAPSHOT | `v64` `seq` · `v32` object count · `u8` encoding · `v32` state length · state (that many bytes) · `list(v32 value)` areas |
 | `0x03` | DELTA | `v64` `from_seq` · `v64` `to_seq` · `list(u8 code)` changes · `list(v32 value)` area changes |
 | `0x04` | PRIVATE | `v64` hold expiry (Unix ms) · `list()` held objects · `list(v32 quantity)` held area quantities |
-| `0x05` | RESYNC | Nothing. The client fell behind; fetch a new snapshot |
+| `0x05` | RESYNC | Nothing. The client fell behind and frames were dropped; the current SNAPSHOT (and PRIVATE) follows on the same stream (§8.3) |
 | `0x06` | PING | `v64` nonce |
 | `0x07` | CLOSE | `u8` reason |
 
@@ -865,16 +866,28 @@ The server picks the encoding with the smallest state, ties going to the lower n
 
 Tokens are opaque bytes; a present token may be empty.
 
+**Connecting** (`GET /v1/public/rt?key=pk_…`; 12 §3 T11):
+
+- **Upgrade.** The key is checked on the upgrade request (§6.2, §11), so a refusal is an HTTP status: `401` or `403` for the key, `403` (`reason: "origin"`) for an `Origin` that `CAVEA_CORS_ORIGINS` (a list) or the key's allow-list does not admit, `429 rate_limited` past `CAVEA_RT_MAX_PER_IP` open connections from the client's IP (the socket's peer address until trusted proxies exist, §12), `503 overloaded` past `CAVEA_RT_MAX_CONNECTIONS` on the node, `400` (`reason: "upgrade"`) for a request that is not a WebSocket upgrade. CORS does not apply to WebSockets, so checking `Origin` here is the only cross-site gate; a request without `Origin` (not a browser) is accepted, as on every public route.
+- **SUBSCRIBE first.** The client's first message must be SUBSCRIBE, within 10 s of the upgrade; otherwise the connection is closed without a frame. Before it, PONG, text or a frame that does not decode is CLOSE 6; version 0 is CLOSE 4; unknown frame types are skipped (§8.6).
+- **The event.** SUBSCRIBE's event key is looked up in the key's workspace: another workspace's event and an unknown one are both CLOSE 5. An archived event is CLOSE 1.
+- **The hold token** in SUBSCRIBE (inside the connection, never in the URL) must be a live hold of that event, in that workspace, with an object limit of 1 to 100: every buyer's token is (the event's `max_objects` is at most 100, §6.2), and the renderer refuses a PRIVATE set of more than 100 objects. Anything else (unknown, expired, another event's or workspace's, or a secret-key token without a limit or above 100) is CLOSE 5, the same frame as an unknown event, so nothing tells which. A backend that hands a browser its own token (`session: "continue"`) creates it with `max_objects`.
+- **The session token** is ignored until session tokens exist (SRV-016).
+- **After SUBSCRIBE** the client sends only PONG. A second SUBSCRIBE, text, a frame that does not decode, more than 10 messages between two PINGs, or a message over 2 KiB (SUBSCRIBE with both tokens at their limits is under 1,100 bytes) is CLOSE 6 and the connection is closed.
+
 ### 8.3 Behaviour
 
 - On SUBSCRIBE the server replies HELLO, then either the DELTAs since `last_seq` (if still in the 60-second ring buffer) or a SNAPSHOT, then PRIVATE if a hold token was given. Nothing follows HELLO for a `last_seq` equal to the current one; a `last_seq` of 0 always gets the SNAPSHOT. The engine's `Registry::subscribe` returns these frames and a receiver of everything published after them, taken under the same lock, so no delta between the two is lost or repeated.
 - Deltas are coalesced over an interval of 100 ms: at most one publication per interval (§4.5). With more than 20,000 subscribers on an event the interval stretches in proportion to the subscriber count, 100 ms × subscribers / 20,000, up to 500 ms at 100,000 subscribers, so the frames sent per second for one event stay at 200,000. The count is read when the publication is due, and a pending publication is rechecked at each 100 ms step, so subscribers leaving shortens it.
 - If an object changes twice within an interval, only the final state is sent (`wire::coalesce`). A change the public cannot see (held to booked, or a code that went and came back within the interval) is left out of the DELTA. An interval in which `seq` advanced but nothing public changed (an extend, a hold token created, held to booked) still publishes a DELTA, with no changes, so that every subscriber's `seq` follows the committed one. An interval with no commit publishes nothing.
 - A subscriber whose send queue exceeds 64 frames is sent RESYNC and its queue is cleared. The engine's broadcast channel keeps the last 64 publications for all subscribers together, so a receiver that falls further behind costs nothing more: it is told it lagged, receives nothing until it takes the current SNAPSHOT (`Subscription::resync`), and continues from there.
+- **One connection, one task.** It writes and flushes each frame before it takes the next, so its own queue is one frame; the rest of its send queue is its position in the broadcast channel, shared. A client that stops reading fills its socket buffers (bounded by the kernel), then blocks the write; its subscription falls behind, and once the write completes it gets RESYNC, then the current SNAPSHOT and PRIVATE, then DELTAs from there. A write that has not completed in 30 s ends the connection without a CLOSE. RESYNCs are counted for `cavea_rt_resyncs_total`, subscribers for `cavea_rt_subscribers` (§15).
 - **PRIVATE.** Each publication carries the committed hold of every token touched since the last one (holds and releases, extends, bookings, expiry, creation). A subscriber that gave a hold token gets a PRIVATE frame right after the DELTA of a publication that touched its token, and none otherwise; it is encoded by that subscriber, so a subscriber whose token did not change does no work beyond a map lookup. A PRIVATE frame is always the token's committed hold at the `seq` of the DELTA it follows (or of the frames it follows on SUBSCRIBE), never ahead of the public state the client has. A token with no hold gets an expiry of 0 and no objects.
-- When the event's actor stops, every subscription ends: after a failure (the event reloads; the transport subscribes again with the subscriber's `seq`, which resumes it or sends a SNAPSHOT), or after a clean stop at shutdown (CLOSE 3). A subscriber keeps the actor from being evicted.
+- When the event's actor stops, every subscription ends: after a failure (the event reloads; the transport subscribes again with the subscriber's `seq`, which resumes it or sends a SNAPSHOT), or after a clean stop at shutdown (CLOSE 3). A subscriber keeps the actor from being evicted. The connection does the resubscribing itself: the client sees more DELTAs or a SNAPSHOT, never a second HELLO. If the event cannot be had again, it is CLOSE 3.
+- **Shutdown** (§14): every connection is sent CLOSE 3 and closed as soon as the signal arrives, before requests drain.
+- **Archive and upgrade.** CLOSE 1 is sent to a SUBSCRIBE for an archived event. A subscriber already connected when the event is archived keeps receiving its state (holds still expire) until it reconnects, and keeps its actor loaded until then. CLOSE 2 waits for chart upgrades (EVT-002).
 - **Polling** (`after_seq=n`, §8.4): nothing new if `n` is current; otherwise one DELTA from `n`, the buffered deltas merged, if the ring buffer reaches back to `n`, or else the SNAPSHOT.
-- PING every 25 s; a connection silent for 60 s is closed.
+- PING every 25 s; a connection silent for 60 s is closed. These are the protocol's PING and PONG frames, not WebSocket control frames: a browser's script sees neither control frames nor their timing, so a PING lets the client detect a dead server too. Any message from the client counts as not silent; the client answers each PING with PONG and its nonce. Each connection has one timer, set to the next PING or the silence deadline, whichever is first, so an idle connection wakes once every 25 s. The timer is served before the next frame, so a feed that never pauses does not delay either. No CLOSE is sent to a silent client.
 - **Public streams** carry public codes only (`02-domain-model.md` §4.2). **Manager streams** (`GET /v1/events/{event}/rt`, secret key or console session) carry domain statuses.
 - Viewers with channels get a stream computed for their channel set. Channel sets are cached per event, so cost grows with distinct sets, not with viewers.
 
@@ -890,7 +903,10 @@ SSE and polling have no client-to-server frames: the SUBSCRIBE fields travel as 
 
 ### 8.5 Caching the snapshot
 
-- `GET /v1/public/events/{event}/state` returns a SNAPSHOT frame with `ETag: "<seq>"` and `Cache-Control: public, max-age=1, stale-while-revalidate=5` (configurable).
+- `GET /v1/public/events/{event}/state?key=pk_…` returns the current public SNAPSHOT frame (`Content-Type: application/vnd.cavea.frame`, one frame of this section) with `ETag: "<seq>"` and `Cache-Control: public, max-age=1, stale-while-revalidate=5` (the max age is `CAVEA_SNAPSHOT_MAX_AGE`). `If-None-Match` listing the tag (weak or strong) or `*` is `304` with the same headers. It is read from the engine's published snapshot without a message to the actor; an event not loaded is loaded first. Every snapshot's `seq` is a point deltas resume from (D-27), so one cached for a second is as good a start as a fresh one.
+- **Scoping and caching (D-31).** Event keys are unique only within a workspace, so the URL names the workspace through the publishable key in `key`: the URL is then the whole cache key, different for every workspace's event of the same key, and a CDN caches it like any public file. A key in `Authorization` would stop shared caches (a cache that ignored it would serve one workspace's state for another's event of the same key) and force a CORS preflight; a request with only `key` is a simple GET and is not preflighted. A publishable key is not a secret: it is in every page that embeds the renderer. Rotating it changes the URL, which costs one cache miss.
+- **What a cached answer skips.** A CDN hit is served without the key's checks: a revoked key's URL, or a page whose `Origin` the key's allow-list refuses, may get a cached snapshot for up to `max-age` plus `stale-while-revalidate`. That is accepted: the public snapshot shows only which seats are unavailable (D-12), as any buyer of the event sees, and the allow-list is a hurdle, not a guarantee (12 §3 T3). Errors (`401`, `403`, `404`, `503`) carry `Cache-Control: no-store`. With `CAVEA_CORS_ORIGINS` a list, responses vary by `Origin` (`Vary: Origin`): a CDN must then key on `Origin` or have the setting left at `*`.
+- **Events.** An unknown event, and another workspace's, are `404`. An archived event's snapshot is still served: reads keep working (§6.2).
 - With a CDN in front, the opening rush of an on-sale hits the CDN, not the server. Clients then catch up through deltas.
 - Channel-specific snapshots are `private` and not cached by intermediaries.
 
@@ -916,8 +932,8 @@ SSE and polling have no client-to-server frames: the SUBSCRIBE fields travel as 
 | 2 | Chart upgraded | Reload the chart, then resubscribe |
 | 3 | Server shutting down | Reconnect with backoff |
 | 4 | Unsupported version | Stop and report |
-| 5 | No such event for this credential | Stop and report |
-| 6 | The server could not decode the client's frame | Reconnect with backoff |
+| 5 | No such event for this credential, or a hold token that may not be followed on it (§8.2) | Stop and report; without the token, subscribe again |
+| 6 | The server could not decode the client's frame, or did not expect it (§8.2) | Reconnect with backoff |
 
 ## 9. Webhooks
 
@@ -976,7 +992,8 @@ CORS (public routes):
 - `CAVEA_CORS_ORIGINS` is the outer gate, enforced by the browser: `*` (default) answers `Access-Control-Allow-Origin: *`; a list answers with the request's `Origin` if it is on the list (compared without regard to case), and with no CORS headers otherwise, plus `Vary: Origin` on every public response.
 - Preflight (`OPTIONS`) carries no credential, so it is answered from the setting alone: `204` with `Access-Control-Allow-Methods: GET, POST`, `Access-Control-Allow-Headers: Authorization, Content-Type, Cavea-Hold-Token, Cavea-Request-Id` and `Access-Control-Max-Age: 7200`. Other responses, errors included, carry `Access-Control-Expose-Headers: Cavea-Request-Id, Retry-After`, so the renderer can read every problem+json and its request id.
 - The key's allow-list is the inner gate, checked on the request itself: an origin the setting admits but the key does not is `403` (`reason: "origin"`), with the CORS headers, so the page sees why. An origin must pass both. With a list in the setting, the key's list can only narrow it.
-- Credentials mode is off: no `Access-Control-Allow-Credentials`, no cookies; the key goes in `Authorization`, which is why every request with it is preflighted.
+- Credentials mode is off: no `Access-Control-Allow-Credentials`, no cookies; the key goes in `Authorization`, which is why every request with it is preflighted, except on the realtime routes, which take it in the `key` query parameter (§6.2, D-31) and are simple requests.
+- WebSockets are not subject to CORS: the upgrade checks `Origin` against both `CAVEA_CORS_ORIGINS` (a list) and the key's allow-list itself, and refuses with `403` (§8.2).
 
 Admin key and workspaces:
 
@@ -1005,8 +1022,10 @@ Admin key and workspaces:
 | `CAVEA_ADMIN_KEY` | none | The operator's key for `/v1/workspaces`: 32 to 512 printable ASCII characters. Unset, those endpoints refuse every request (§11) |
 | `CAVEA_DB_POOL` | 16 | Connection pool size |
 | `CAVEA_HOLD_TTL` | 900 | Default hold lifetime in seconds |
-| `CAVEA_DELTA_INTERVAL_MS` | 100 | |
-| `CAVEA_SNAPSHOT_MAX_AGE` | 1 | Seconds, for the cache header |
+| `CAVEA_DELTA_INTERVAL_MS` | 100 | Not read yet: the engine's interval is fixed at 100 ms (§8.3) |
+| `CAVEA_SNAPSHOT_MAX_AGE` | 1 | Seconds a shared cache may keep the public snapshot (`max-age`, §8.5) |
+| `CAVEA_RT_MAX_CONNECTIONS` | 60000 | Realtime connections the node holds open at most; beyond, the upgrade is `503 overloaded` (§8.2) |
+| `CAVEA_RT_MAX_PER_IP` | 200 | Realtime connections one client IP may hold open; beyond, `429 rate_limited`. High enough for buyers behind one carrier or office NAT |
 | `CAVEA_TRUSTED_PROXIES` | none | CIDR list |
 | `CAVEA_CORS_ORIGINS` | `*` | Origins the public endpoints answer across: `*`, or a comma-separated list such as `https://tickets.example.com,http://localhost:5173` (§11) |
 | `CAVEA_LOG_RETENTION_DAYS` | 400 | `event_log` partitions older than this are dropped |
@@ -1022,7 +1041,7 @@ Admin key and workspaces:
 - **Minimum:** 1 vCPU, 512 MB, PostgreSQL 15. **Recommended for on-sales:** 4 vCPU, 8 GB, PostgreSQL on fast storage in the same network.
 - **PostgreSQL:** `synchronous_commit = on`. Backups and point-in-time recovery are the customer's responsibility; the docs give a recipe.
 - **TLS:** terminate at the customer's proxy or load balancer. WebSocket upgrade must be allowed.
-- **Shutdown:** on SIGTERM, stop accepting commands, flush pending batches, send CLOSE to subscribers, release leases, exit within 20 s. The server stops accepting connections and gives requests in flight up to 10 s to finish (their commands reach their actors); then the registry stops every actor, each committing what it accepted and releasing its lease, within what is left of the 20 s. Realtime subscribers do not exist yet.
+- **Shutdown:** on SIGTERM, stop accepting commands, flush pending batches, send CLOSE to subscribers, release leases, exit within 20 s. First every realtime connection is sent CLOSE 3 and closed (a CLOSE that cannot be written within 1 s is dropped; a connection whose write is blocked by a client that does not read, or that has not sent SUBSCRIBE yet, ends at once), so that long-lived connections never hold the drain open or eat into the actors' time; clients reconnect with backoff to another node or the restarted one and resume from their `seq`. The server stops accepting connections and gives requests in flight up to 10 s to finish (their commands reach their actors); then the registry stops every actor, each committing what it accepted and releasing its lease, within what is left of the 20 s.
 - **Upgrade:** replace the image and restart. Migrations run automatically; a migration that cannot run online is called out in the release notes.
 - **Reference files:** `deploy/compose.yaml`, `deploy/helm/`, a systemd unit.
 
@@ -1054,12 +1073,14 @@ request {request_id, method, route, status, duration_ms, workspace, event, event
 commit {event_id, seq, commands}   one per batch; follows_from each apply span in it
 actor {event_id}                   one per loaded event: its load, actor and lease release
 └─ heartbeat                       an idle lease renewal
+realtime {request_id, transport, workspace, event}   one per realtime connection
 ```
 
 - `route` is the matched template (`/v1/events/{event_key}`), or `<unmatched>`; the raw path is never logged because it carries customer keys. Query strings, headers and bodies are never logged.
 - Each request logs one `request completed` record when it finishes: `info`, or `debug` for a successful `/healthz`.
 - A batch serves many requests, so `commit` is not a child of any one of them. Its `follows_from` links lead to each `apply` span and through it to the request id, for trace export. In logs, the engine records the batch's `event_id` and `seq` (as `commit_seq`) on the span that submitted each command (the request span, when the handler submits from it), so a record inside `commit {event_id: E, seq: 42}` and the `request completed` records with `event_id: E, commit_seq: 42` belong together. `seq` alone is per event and does not identify a commit. `event_id` is the event's UUID as 32 hex digits; `event` is the customer's event key.
 - A JSON record lists every enclosing span with its fields under `spans`, outermost first, so a record inside `apply` carries the request id.
+- A realtime connection outlives its upgrade request, whose `request completed` record (`101`) is logged when the connection opens. Its own `realtime` span carries that request's id and logs two records at `info`: `realtime subscribed` (`last_seq`, `private`) and `realtime connection closed` (`duration_ms`, `frames`, `resyncs`, `reason`: `client_closed`, `idle`, `stalled`, `bad_frame`, `shutdown`, `unavailable`, `handshake_timeout`, `unsupported_version`, `not_found`, `archived`). Nothing is logged per frame at `info`, and no frame content, key or token ever.
 
 ## 16. Failure modes
 

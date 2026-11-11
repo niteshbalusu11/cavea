@@ -28,12 +28,14 @@ use tracing::subscriber::DefaultGuard;
 
 use super::{ApiError, AppState, Code, Json, finish, router};
 use crate::config::Config;
+use crate::realtime::{Realtime, Timing};
 use crate::seats::{Seats, ServerClock};
 
-/// Tests in this module run one at a time. `tracing` caches per callsite,
+/// Tests in this module, and others that log through the engine, run one at a
+/// time. `tracing` caches per callsite,
 /// process-wide, whether any subscriber wants it; a test thread with no
 /// subscriber can race another test's capture into caching "never".
-fn serial() -> MutexGuard<'static, ()> {
+pub(crate) fn serial() -> MutexGuard<'static, ()> {
     static LOCK: Mutex<()> = Mutex::new(());
     LOCK.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -50,11 +52,15 @@ fn state() -> AppState {
         heartbeat_secs: std::num::NonZeroU32::MIN.saturating_add(4),
         admin_key: None,
         cors_origins: crate::config::CorsOrigins::Any,
+        snapshot_max_age: 1,
+        rt_max_connections: std::num::NonZeroU32::MIN.saturating_add(99),
+        rt_max_per_ip: std::num::NonZeroU32::MIN.saturating_add(9),
     };
     // Never connects: no route under test reaches the database.
     let db = sqlx::postgres::PgPoolOptions::new().connect_lazy_with(Default::default());
     AppState {
         seats: Seats::new(db.clone(), &config, ServerClock::System),
+        realtime: Realtime::new(100, 10, Timing::default()),
         config: Arc::new(config),
         db,
     }

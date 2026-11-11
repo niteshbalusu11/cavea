@@ -128,16 +128,18 @@ impl PgCharts {
                 return Ok(chart.clone());
             }
         }
-        let bytes: Option<Vec<u8>> =
-            sqlx::query_scalar("SELECT full_ccf FROM chart_versions WHERE id = $1::uuid")
+        let row: Option<(Vec<u8>, Vec<u8>)> =
+            sqlx::query_as("SELECT full_ccf, hash FROM chart_versions WHERE id = $1::uuid")
                 .bind(format!("{:032x}", version.0))
                 .fetch_optional(&self.pool)
                 .instrument(cavea_telemetry::db_span("read_chart_version"))
                 .await
                 .map_err(|e| StoreError::Unavailable(e.to_string()))?;
-        let bytes =
-            bytes.ok_or_else(|| StoreError::Inconsistent("unknown chart version".into()))?;
-        let chart = tokio::task::spawn_blocking(move || build(&bytes))
+        let (bytes, hash) =
+            row.ok_or_else(|| StoreError::Inconsistent("unknown chart version".into()))?;
+        let hash = <[u8; 16]>::try_from(hash)
+            .map_err(|_| StoreError::Inconsistent("chart version hash is not 16 bytes".into()))?;
+        let chart = tokio::task::spawn_blocking(move || build(&bytes, hash))
             .await
             .map_err(|e| StoreError::Inconsistent(e.to_string()))?
             .map_err(|why| {
@@ -189,8 +191,9 @@ impl ChartProvider for PgCharts {
 /// `cavea_format::full_label`, composed as the compiler composed them (03
 /// §3.1 step 6), other objects as stored. Every input is treated as hostile:
 /// a label that cannot be composed, or a missing or duplicate label or `oid`,
-/// is an error, never a panic.
-fn build(bytes: &[u8]) -> Result<Chart, String> {
+/// is an error, never a panic. `hash` is the version's public content hash,
+/// which HELLO carries (08 §8.1).
+fn build(bytes: &[u8], hash: [u8; 16]) -> Result<Chart, String> {
     let c = cavea_format::decode(bytes, Artefact::Full).map_err(|e| e.to_string())?;
     let full = c.full.as_ref().ok_or("no full-artefact data")?;
     let total = (c.meta.seat_count as usize)
@@ -207,7 +210,8 @@ fn build(bytes: &[u8]) -> Result<Chart, String> {
         labels.push(label.ok_or("object without a label")?.into());
     }
     let view = ChartView::new(full.oids.iter().copied().zip(labels.iter().cloned()))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .with_hash(hash);
     Ok(Chart {
         view: Arc::new(view),
         labels: labels.into(),

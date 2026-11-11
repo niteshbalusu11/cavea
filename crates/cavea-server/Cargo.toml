@@ -8,8 +8,9 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-# `query` adds serde_urlencoded, for the problem+json `Query` extractor.
-axum = { workspace = true, features = ["tokio", "http1", "json", "matched-path", "query"] }
+# `query` adds serde_urlencoded, for the problem+json `Query` extractor. `ws`
+# adds tokio-tungstenite and tungstenite for the realtime WebSocket (08 §8).
+axum = { workspace = true, features = ["tokio", "http1", "json", "matched-path", "query", "ws"] }
 # Brotli (quality 11) of each published chart's public artefact (03 §4.6); the
 # workspace's version, already built for xtask.
 brotli.workspace = true
@@ -44,9 +45,19 @@ subtle = { version = "2.6.1", default-features = false }
 # cavea-engine) for the compile permits.
 tokio = { workspace = true, features = ["time", "sync"] }
 tracing.workspace = true
+# The WebSocket's error type, to tell an oversized message from a broken
+# connection; the version axum's `ws` already builds.
+tungstenite = { version = "0.29.0", default-features = false }
 
 [dev-dependencies]
 cavea-testkit.workspace = true
+# `SinkExt` and `StreamExt` for that client; already built for axum.
+futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
+# Paused time for the realtime timers' tests; no crate beyond tokio's own.
+tokio = { workspace = true, features = ["test-util"] }
+# A WebSocket client for the realtime tests: the crate axum's `ws` already
+# builds, with its client handshake (also already built).
+tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["handshake"] }
 tower = { workspace = true, features = ["util"] }
 tracing-subscriber.workspace = true
 

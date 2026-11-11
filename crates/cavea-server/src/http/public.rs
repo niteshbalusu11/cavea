@@ -254,7 +254,7 @@ fn accepts_brotli(headers: &HeaderMap) -> bool {
 
 /// Whether `If-None-Match` lists `etag`, compared weakly (RFC 9110 §13.1.2),
 /// and whether it is `*`, which matches if the file exists.
-fn none_match(headers: &HeaderMap, etag: &HeaderValue) -> (bool, bool) {
+pub(super) fn none_match(headers: &HeaderMap, etag: &HeaderValue) -> (bool, bool) {
     let etag = etag.as_bytes();
     let (mut listed, mut any) = (false, false);
     for tag in headers

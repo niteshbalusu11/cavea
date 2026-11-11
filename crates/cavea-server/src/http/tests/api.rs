@@ -549,6 +549,8 @@ enum Needs {
     Admin,
     Secret,
     Publishable,
+    /// A publishable key in the `key` query parameter: the realtime routes.
+    QueryKey,
     /// No credential: a public file whose URL names it (08 §6.2).
     Nothing,
 }
@@ -557,7 +559,7 @@ fn credential(tenant: &Tenant, needs: Needs) -> Option<&str> {
     match needs {
         Needs::Admin => Some(ADMIN),
         Needs::Secret => Some(&tenant.secret),
-        Needs::Publishable => Some(&tenant.publishable),
+        Needs::Publishable | Needs::QueryKey => Some(&tenant.publishable),
         Needs::Nothing => None,
     }
 }
@@ -744,6 +746,16 @@ const ROUTES: &[(Method, &str, Needs, u16, Option<&str>)] = &[
         Some(r#"{"hold_token":"{token}"}"#),
     ),
     (
+        Method::GET,
+        "/v1/public/events/{event}/state",
+        Needs::QueryKey,
+        200,
+        None,
+    ),
+    // Without an upgrade; a WebSocket naming another workspace's event is in
+    // `realtime::websocket_follows_the_event`.
+    (Method::GET, "/v1/public/rt", Needs::QueryKey, 400, None),
+    (
         Method::DELETE,
         "/v1/hold-tokens/{token}",
         Needs::Secret,
@@ -765,6 +777,12 @@ const ROUTES: &[(Method, &str, Needs, u16, Option<&str>)] = &[
         None,
     ),
 ];
+
+/// `path` with `key` in its query string.
+fn with_key(path: &str, key: &str) -> String {
+    let join = if path.contains('?') { '&' } else { '?' };
+    format!("{path}{join}key={key}")
+}
 
 /// Placeholders that name an identifier of the tenant under test.
 const IDENTIFIERS: [&str; 5] = ["{key}", "{chart}", "{hash}", "{event}", "{token}"];
@@ -800,6 +818,11 @@ async fn tenant_isolation() {
             // the others ignore them.
             let headers = [(header::IF_MATCH, "*"), (HOLD_TOKEN, a.token.as_str())];
             let call = async |token: Option<&str>| {
+                // A realtime route takes whatever key it is given in its URL.
+                let (path, token) = match (needs, token) {
+                    (Needs::QueryKey, Some(key)) => (with_key(&path, key), None),
+                    _ => (path.clone(), token),
+                };
                 call_with(&app, method.clone(), &path, token, &headers, body.clone()).await
             };
             if *needs == Needs::Nothing {
@@ -814,7 +837,7 @@ async fn tenant_isolation() {
             let (response, problem) = call(None).await;
             assert_problem(&response, &problem, Code::Unauthorized);
             for wrong in [Needs::Admin, Needs::Secret, Needs::Publishable] {
-                if wrong != *needs {
+                if wrong != *needs && !(wrong == Needs::Publishable && *needs == Needs::QueryKey) {
                     let (response, problem) = call(credential(&a, wrong)).await;
                     assert_problem(&response, &problem, Code::Forbidden);
                 }
@@ -849,4 +872,5 @@ async fn tenant_isolation() {
 }
 
 mod charts;
+mod realtime;
 mod seats;
