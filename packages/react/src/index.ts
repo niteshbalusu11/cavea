@@ -173,7 +173,12 @@ function SeatMapComponent(props: SeatMapProps, ref: ForwardedRef<SeatMapInstance
           // The latest prop; for the three fixed at creation, the first one
           // when the prop is taken away (a warning says so).
           [name]: isCallback(name)
-            ? (...args: unknown[]) => ((latest.current[name] ?? value) as Fn | undefined)?.(...args)
+            ? (...args: unknown[]) =>
+                (
+                  (latest.current[name] ?? (PRESENCE.has(name) ? value : undefined)) as
+                    | Fn
+                    | undefined
+                )?.(...args)
             : value,
         });
       }

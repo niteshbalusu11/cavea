@@ -233,6 +233,11 @@ test("callbacks reach the latest prop without recreating the map", async () => {
   await view.render({ state, onHoldPending: noop, onSelectionValid: () => seen.push("added") });
   created[0]!.options.onSelectionValid?.();
   expect(seen).toEqual(["second", "added"]);
+  // Taken away: not called any more.
+  await view.render({ state });
+  created[0]!.options.onSelectionValid?.();
+  created[0]!.options.onHoldPending?.();
+  expect(seen).toEqual(["second", "added"]);
   expect(created).toHaveLength(1);
   await view.unmount();
 });
