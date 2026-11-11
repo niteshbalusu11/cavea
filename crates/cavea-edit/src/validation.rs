@@ -238,7 +238,9 @@ impl Validator {
                 encode = full.encode.clone();
             }
             _ => {
-                items.extend(self.chart.iter().map(|f| (f, false)));
+                // Chart-level errors are stale while the chart has changed.
+                let changed = self.basis.is_none();
+                items.extend(self.chart.iter().map(|f| (f, changed)));
                 // Past a chart-wide limit the compiler stops checking the
                 // nodes beyond it, which a unit alone still reports: the
                 // units' findings are then only a guide until the pass.

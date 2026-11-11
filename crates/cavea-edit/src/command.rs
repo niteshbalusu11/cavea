@@ -1018,12 +1018,20 @@ impl Document {
         let wanted: BTreeSet<u32> = oids.into_iter().collect();
         let mut found = Vec::with_capacity(wanted.len());
         for &oid in &wanted {
+            // The nearest run starting at or below the oid that holds it:
+            // in a valid row the first one tried; runs that overlap (E009)
+            // are searched further, so a seat the expansion has is found.
             let k = runs.partition_point(|r| r.0 <= oid);
-            let hit = k.checked_sub(1).and_then(|k| runs.get(k)).and_then(|r| {
-                let pos = r.3.checked_add(oid - r.0)?;
-                let seats = lines.get(r.2)?.0;
-                (oid - r.0 < r.1 && pos < seats).then_some((oid, r.2, pos))
-            });
+            let hit = runs
+                .get(..k)
+                .unwrap_or_default()
+                .iter()
+                .rev()
+                .find_map(|r| {
+                    let pos = r.3.checked_add(oid - r.0)?;
+                    let seats = lines.get(r.2)?.0;
+                    (oid - r.0 < r.1 && pos < seats).then_some((oid, r.2, pos))
+                });
             found.push(hit.ok_or(CommandError::MissingSeat { id, oid })?);
         }
         if let SeatEdit::Remove | SeatEdit::Restore = edit {

@@ -1014,6 +1014,41 @@ fn panel_state_follows_the_document() {
     s.select(Level::Section(30), [20]);
     s.number(&num).expect("applies what it previews");
     assert_eq!(current(&mut s), preview);
+    // Sol review round 2 (S6): overlapping oid runs (E009) still let
+    // renumbering clear the override it previews as cleared.
+    let mut runs = Session::load(chart()).expect("load");
+    runs.apply(Command::SetSeatOverride {
+        id: 10,
+        oid: 102,
+        value: None,
+    })
+    .expect("clear");
+    let mut v = serde_json::to_value(runs.document().snapshot()).expect("json");
+    v["nodes"][0]["rows"][1]["oids"] = serde_json::json!([[101, 1], [300, 4]]);
+    v["nodes"][0]["seatOverrides"] = serde_json::json!({ "103": { "label": "W3" } });
+    let mut runs = Session::load(serde_json::from_value(v).expect("doc")).expect("load");
+    runs.select(Level::Top, [10]);
+    let shown = runs.preview_numbering(&num).expect("preview").clone();
+    runs.number(&num).expect("applies what it previews");
+    assert_eq!(current(&mut runs), shown);
+    // S7: chart-level findings are stale once the chart changes.
+    let bad = Category {
+        key: "std".into(),
+        label: "S".into(),
+        color: "#2563EB".into(),
+        accessible: false,
+    };
+    let mut c = serde_json::to_value(chart()).expect("json");
+    c["categories"][0]["color"] = serde_json::json!("bad");
+    let mut fix = Session::load(serde_json::from_value(c).expect("doc")).expect("load");
+    while !fix.validate(1).done {}
+    fix.update_category("std", bad).expect("fix the colour");
+    let colour = fix
+        .validation()
+        .findings
+        .into_iter()
+        .find(|f| f.message.contains("colour"));
+    assert!(colour.is_some_and(|f| f.stale));
     // Undo of a rename of the active category.
     s.set_category(Some("std".into()));
     let vip = Category {
