@@ -8,7 +8,29 @@
   "rules": {
     "eqeqeq": "error",
     "typescript/no-explicit-any": "error",
-    "typescript/consistent-type-imports": "error"
+    "typescript/consistent-type-imports": "error",
+    "no-eval": "error",
+    "no-new-func": "error",
+    "no-script-url": "error",
+    "no-restricted-properties": [
+      "error",
+      {
+        "property": "innerHTML",
+        "message": "User strings are text, never markup (12 §3 T7): use textContent or a Solid expression."
+      },
+      { "property": "outerHTML", "message": "Markup from strings is not allowed (12 §3 T7)." },
+      {
+        "property": "insertAdjacentHTML",
+        "message": "Markup from strings is not allowed (12 §3 T7)."
+      },
+      { "property": "setHTMLUnsafe", "message": "Markup from strings is not allowed (12 §3 T7)." },
+      {
+        "property": "createContextualFragment",
+        "message": "Markup from strings is not allowed (12 §3 T7)."
+      },
+      { "object": "document", "property": "write", "message": "Not allowed (12 §3 T7)." },
+      { "object": "document", "property": "writeln", "message": "Not allowed (12 §3 T7)." }
+    ]
   },
   "env": {
     "builtin": true,

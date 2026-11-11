@@ -1,8 +1,9 @@
 // A small fake of the DOM the built-in interface uses, for tests only (bun
 // has no DOM, and the package takes no dependency for one). It records what
 // matters to the tests: the tree, attributes, text, inline style and
-// listeners. Parsing markup is not faked: setting `innerHTML` throws, so a
-// test fails if any path tries it.
+// listeners. Parsing markup is not faked: `innerHTML`, `outerHTML`,
+// `insertAdjacentHTML` and `setHTMLUnsafe` throw, so a test fails if any path
+// tries one (12 §3 T7).
 
 export class FakeNode extends EventTarget {
   readonly tagName: string;
@@ -113,6 +114,15 @@ export class FakeNode extends EventTarget {
   }
   set innerHTML(_value: string) {
     throw new Error("innerHTML is never used");
+  }
+  set outerHTML(_value: string) {
+    throw new Error("outerHTML is never used");
+  }
+  insertAdjacentHTML(_where: string, _markup: string): never {
+    throw new Error("insertAdjacentHTML is never used");
+  }
+  setHTMLUnsafe(_markup: string): never {
+    throw new Error("setHTMLUnsafe is never used");
   }
   get offsetWidth(): number {
     return 200;
