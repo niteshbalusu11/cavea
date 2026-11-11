@@ -331,7 +331,7 @@ async fn run<S: SeatStore, C: Clock>(
             publisher.end(End::Stopped);
             return Ok(());
         }
-        let next_publish = publisher.due();
+        let next_publish = publisher.wake_at(now);
         if publish_timer.as_ref().map(|(at, _)| *at) != next_publish {
             publish_timer = next_publish.map(|at| (at, Box::pin(clock.sleep_until(at))));
         }

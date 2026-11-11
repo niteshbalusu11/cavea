@@ -571,6 +571,19 @@ impl Publisher {
         )
     }
 
+    /// When the actor should next look at [`Self::due`]: the due time, or
+    /// sooner, at the next 100 ms step after `now`, while a stretched
+    /// interval is pending, since subscribers leaving shortens it.
+    pub(crate) fn wake_at(&self, now: Timestamp) -> Option<Timestamp> {
+        let due = self.due()?;
+        let Some(last) = self.last_publish.filter(|_| due > now) else {
+            return Some(due);
+        };
+        let steps = now.0.saturating_sub(last.0) / INTERVAL_MS + 1;
+        let step = last.0.saturating_add(steps.saturating_mul(INTERVAL_MS));
+        Some(Timestamp(step.min(due.0)))
+    }
+
     /// Publish everything committed since the last publication: one DELTA,
     /// the SNAPSHOT at its `to_seq`, and the touched tokens' holds.
     pub(crate) fn publish(&mut self, now: Timestamp) -> Result<(), InvariantViolation> {

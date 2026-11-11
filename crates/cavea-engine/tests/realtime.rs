@@ -646,8 +646,17 @@ async fn the_interval_stretches_with_more_than_twenty_thousand_subscribers() {
     store.clock().advance_ms(1);
     settle().await;
     assert_eq!(reg.snapshot(EV).await.unwrap().seq(), 2);
+
+    // Subscribers leaving shortens a pending interval.
+    reg.send(EV, status(&[3], Status::BLOCKED)).await.unwrap();
+    settle().await;
+    store.clock().advance_ms(50);
+    settle().await;
     drop(subs);
     assert_eq!(reg.subscribers(EV), 0);
+    store.clock().advance_ms(50);
+    settle().await;
+    assert_eq!(reg.snapshot(EV).await.unwrap().seq(), 3);
 }
 
 #[tokio::test]
