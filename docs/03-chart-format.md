@@ -19,6 +19,8 @@ A chart exists in two forms.
 
 ## 2. Chart document (schema 1)
 
+Field names are exact. A field the schema does not define is an error, not ignored, so a document that parses is fully represented and the designer saves everything it loads. Optional fields with a default are written back with their value.
+
 ### 2.1 Top level
 
 ```jsonc
@@ -120,9 +122,10 @@ Rules:
 - Row index 0 is the front row (nearest the focal point).
 - `curve.kind = "arc"`: rows are concentric arcs. Row *i* has radius `radius + i × rowPitch`; seats are spaced `seatPitch` along the arc. A positive radius curves towards the front.
 - `curve.kind = "bulge"`: each row is displaced by `amount × (1 − (2t − 1)²)` for `t` from 0 to 1 along the row.
-- `oids` is a list of `[first, count]` runs covering the row's seat positions in physical order. Runs keep identities stable when seats are added at either end.
-- `removed` lists seat positions that leave a physical gap. A gap splits the row into segments.
-- `seatOverrides` is keyed by `oid`.
+- `oids` is a list of `[first, count]` runs covering the row's seat positions in physical order. Runs keep identities stable when seats are added at either end. The runs must cover exactly `seats` positions.
+- `removed` lists seat positions (0-based, from the left end) that leave a physical gap. A gap splits the row into segments. A removed position keeps its `oid` and its seat number, so removing a seat never renames the others.
+- A row's `label` replaces the scheme's label; the row keeps its place in the sequence.
+- `seatOverrides` is keyed by `oid`. An override may set `flags` (`accessible`, `companion`, `restrictedView`, `aisle`, `removable`), `category`, `label` and `nudge` (`[dx, dy]` in node space).
 
 ### 2.5 Label schemes
 
@@ -148,11 +151,26 @@ Seat labels:
 | `continuous` | Numbering carries on from the previous row |
 | `prefix`, `suffix` | Strings |
 
+Tables also take `clockwise` and `counterclockwise`; rows reject them.
+
+Details:
+
+- Both rules accept every scheme; the tables show the usual ones. `start` is a number or a label in the scheme (`"A"`, `"XII"`, `"7"`). The defaults are the first label (`1`, `A`, `I`), and `2` for `even`.
+- `odd` and `even` must start on a number of that parity; their `step` counts odd or even numbers.
+- `alpha` runs `A`–`Z`, then follows `settings.alphaOverflow`. `roman` covers 1 to 3,999. A label longer than 64 bytes, prefix and suffix included, is an error.
+- `skip` lists bare labels (no prefix or suffix), compared case-insensitively. With a `step` above 1 it removes values from the stepped sequence: `start "A"`, `step 2`, `skip ["I"]` gives A, C, E, G, K. A label not on the sequence has no effect, and each label must be listed: skipping `I` does not skip `II`.
+- `custom` labels in order from the list; `start`, `step` and `skip` do not apply. A list shorter than the row is an error.
+- Seat positions are numbered from the left end of the row in node space, removed positions included.
+- `center-out` puts the first label on the centre position, then alternates one to the right, one to the left. In an even-length row the centre is the left of the two middle positions, so the left half carries the 1st, 3rd, 5th labels and the right half the 2nd, 4th, 6th: `5 3 1 2 4 6`.
+- `serpentine` numbers the 1st, 3rd, 5th rows in row-label order left to right and the others right to left.
+- "Previous row" for `continuous` and the row order for `serpentine` follow the row labels: with `back-to-front` numbering starts at the back.
+
 ### 2.6 Other bookable nodes
 
 ```jsonc
 { "id": 40, "type": "row", "path": { "kind": "polyline", "points": [[0,0],[500,40]] },
-  "seatPitch": 55, "seats": 9, "oids": [[400, 9]], "label": "A", "seatLabels": { ... } }
+  "seatPitch": 55, "seats": 9, "oids": [[400, 9]], "label": "A", "seatLabels": { ... },
+  "category": "standard", "removed": [], "seatOverrides": {} }   // last three optional, as in rowBlock
 
 { "id": 50, "type": "table", "shape": "round", "radius": 90, "seats": 8,
   "bookAs": "seats",                       // seats | table
@@ -164,6 +182,8 @@ Seat labels:
 { "id": 70, "type": "area", "shape": { "points": [[0,0],[900,0],[900,600],[0,600]] },
   "label": "Standing", "capacity": 500, "oid": 700, "category": "ga" }
 ```
+
+`path.kind` is `polyline` only: the designer stores a curved row as points along the curve. The node `id` is also the row's id. A `table` with `"shape": "rect"` takes `size: [w, h]` instead of `radius`.
 
 ### 2.7 Decoration nodes
 
@@ -179,6 +199,8 @@ Seat labels:
 { "id": 83, "type": "image", "asset": "b3a1…", "size": [4000, 3000], "opacity": 0.5,
   "role": "reference" }                    // reference | background
 ```
+
+`shape` geometry by `kind`: `rect` and `ellipse` take `size` (and `rect` an optional `cornerRadius`); `polygon` (closed) and `line` (open) take `points`; `path` takes `d`, SVG path data.
 
 ### 2.8 Migrations
 

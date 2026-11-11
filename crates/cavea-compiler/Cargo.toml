@@ -6,5 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[dependencies]
+serde.workspace = true
+# Exact float parsing so a document saved after loading keeps every coordinate.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+
 [lints]
 workspace = true
