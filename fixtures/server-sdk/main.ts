@@ -2,7 +2,13 @@
 // packed `@cavea/server-sdk` installed as a dependency, type-checked in a
 // strict project without the DOM library, compiled and run under Node.
 // Prints one JSON line of what it saw.
-import { Cavea, CaveaError, isCaveaError, type Chart, type HoldTokenCreated } from "@cavea/server-sdk";
+import {
+  Cavea,
+  CaveaError,
+  isCaveaError,
+  type Chart,
+  type HoldTokenCreated,
+} from "@cavea/server-sdk";
 
 const env = (name: string): string => {
   const value = process.env[name];
