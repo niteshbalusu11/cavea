@@ -47,6 +47,12 @@ jobs:
           echo "195ddc94f9bc89f45abdabb0b9eea86023d727ba90eac8b35b80f2544fc30572  $RUNNER_TEMP/binaryen.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/binaryen.tar.gz" -C "$RUNNER_TEMP" binaryen-version_132/bin/wasm-opt
           echo "$RUNNER_TEMP/binaryen-version_132/bin" >> "$GITHUB_PATH"
+      # The gate also bundles @cavea/renderer's public entry with bun (no
+      # install: the package has no dependencies), so it measures the whole
+      # payload: SDK and glue, WASM, atlas.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
       # The wasm32 build of cavea-web plus bindings; the web job consumes the output.
       - run: cargo xtask build-web
       - uses: actions/upload-artifact@v7

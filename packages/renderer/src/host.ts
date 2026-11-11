@@ -2,8 +2,9 @@
 // and frame scheduler, input forwarding and resize observation. The engine reads
 // no clock: every command carries `event.timeStamp` or the
 // `requestAnimationFrame` time, both on the `performance.now()` clock.
-import { defaultMaxDpr, type View } from "../wasm/cavea_web.js";
+import { defaultMaxDpr } from "../wasm/cavea_web.js";
 import { takeEvents, type RendererEvent } from "./events.ts";
+import type { EngineView } from "./view.ts";
 
 export type GestureHandling = "greedy" | "cooperative" | "none";
 
@@ -22,6 +23,8 @@ export interface AttachOptions {
   glyphAtlas?: Promise<Uint8Array>;
   /** Called after every frame the host runs, with its time. */
   onFrame?: (time: number) => void;
+  /** Called when the page is hidden (`false`) or shown again (`true`). */
+  onVisibility?: (visible: boolean) => void;
   /**
    * Called with the engine's events after each frame, and after input or an
    * `update()` that produced any, outside the frame.
@@ -58,7 +61,7 @@ function pointerType(type: string): number {
  * the engine asks for frames and the page is visible.
  */
 export function attach(
-  view: View,
+  view: EngineView,
   canvas: HTMLCanvasElement,
   options: AttachOptions = {},
 ): Attached {
@@ -68,6 +71,15 @@ export function attach(
   const cleanup: Array<() => void> = [];
   let handle = 0;
   let detached = false;
+
+  /** Runs a view call; a throw becomes an `error` event, never the page's. */
+  function guard(call: () => unknown): void {
+    try {
+      call();
+    } catch (error) {
+      options.onEvents?.([{ type: "error", code: "engine", message: String(error) }]);
+    }
+  }
 
   function update(): void {
     // Taken even without a listener, so they do not pile up in the view.
@@ -82,7 +94,7 @@ export function attach(
 
   function frame(time: number): void {
     handle = 0;
-    view.frame(time);
+    guard(() => view.frame(time));
     options.onFrame?.(time);
     update();
   }
@@ -98,20 +110,22 @@ export function attach(
 
   function send(event: PointerEvent, kind: number): void {
     const rect = canvas.getBoundingClientRect();
-    view.pointer(
-      kind,
-      event.pointerId,
-      pointerType(event.pointerType),
-      event.clientX - rect.left,
-      event.clientY - rect.top,
-      event.timeStamp,
+    guard(() =>
+      view.pointer(
+        kind,
+        event.pointerId,
+        pointerType(event.pointerType),
+        event.clientX - rect.left,
+        event.clientY - rect.top,
+        event.timeStamp,
+      ),
     );
     update();
   }
 
   function cancelAll(time: number): void {
     for (const [id, type] of pressed) {
-      view.pointer(CANCEL, id, type, 0, 0, time);
+      guard(() => view.pointer(CANCEL, id, type, 0, 0, time));
     }
     pressed.clear();
     update();
@@ -159,13 +173,17 @@ export function attach(
             ? canvas.clientHeight
             : 1;
       const rect = canvas.getBoundingClientRect();
-      const taken = view.wheel(
-        event.deltaX * scale,
-        event.deltaY * scale,
-        event.clientX - rect.left,
-        event.clientY - rect.top,
-        event.ctrlKey,
-        event.timeStamp,
+      let taken = false;
+      guard(
+        () =>
+          (taken = view.wheel(
+            event.deltaX * scale,
+            event.deltaY * scale,
+            event.clientX - rect.left,
+            event.clientY - rect.top,
+            event.ctrlKey,
+            event.timeStamp,
+          )),
       );
       if (taken) {
         event.preventDefault();
@@ -184,12 +202,13 @@ export function attach(
     } else {
       update();
     }
+    options.onVisibility?.(!document.hidden);
   };
   document.addEventListener("visibilitychange", onVisibility);
   cleanup.push(() => document.removeEventListener("visibilitychange", onVisibility));
 
   const resize = (): void => {
-    view.resize(canvas.clientWidth, canvas.clientHeight, devicePixelRatio, maxDpr);
+    guard(() => view.resize(canvas.clientWidth, canvas.clientHeight, devicePixelRatio, maxDpr));
     update();
   };
   const observer = new ResizeObserver(resize);

@@ -3,6 +3,7 @@
 //! - `build-web`: build `cavea-web` for `wasm32-unknown-unknown` with the
 //!   size-tuned `wasm-release` profile, generate the JavaScript and TypeScript
 //!   bindings into `packages/renderer/wasm/`, run `wasm-opt` when it is on `PATH`,
+//!   bundle `@cavea/renderer`'s public entry with `bun build --minify`,
 //!   print raw and brotli sizes, and enforce the payload gate
 //!   (`docs/13-testing-benchmarks.md` §6.3) against [`BASELINE`].
 //!   `--update-baseline` records the measured size as the new baseline.
@@ -34,8 +35,11 @@ const BASELINE: &str = "xtask/payload-baseline.json";
 const PAYLOAD_CAP: usize = 200_000;
 /// Growth over the baseline, in percent, that fails the build.
 const MAX_GROWTH_PERCENT: usize = 3;
-/// Files of the payload, by extension: the JavaScript glue and the WASM.
-const PAYLOAD: [&str; 2] = ["js", "wasm"];
+/// The public entry of `@cavea/renderer`, relative to the workspace root. Its
+/// production bundle (the SDK and the wasm-bindgen glue it imports, minified
+/// and tree-shaken, as a customer's bundler makes it) is the payload's
+/// JavaScript.
+const ENTRY: &str = "packages/renderer/src/index.ts";
 /// The glyph atlas, the rest of the payload (`docs/01-architecture.md` §5),
 /// relative to the workspace root. Baked by `tools/glyph-atlas`; a PNG, so its
 /// brotli size is about its own.
@@ -129,7 +133,17 @@ fn build_web(mode: Mode) -> Result<()> {
 
     let wasm = out_dir.join("cavea_web_bg.wasm");
     let wasm_opt_version = wasm_opt(&wasm)?;
-    let measured = size_report(&out_dir, &root.join(ATLAS))?;
+    let bundle = target_dir.join("payload/renderer.min.js");
+    run(Command::new("bun")
+        .current_dir(&root)
+        .args(["build", "--minify", "--target", "browser"])
+        // What production bundlers define; development warnings then fold away.
+        .args(["--define", "process.env.NODE_ENV=\"production\"", ENTRY])
+        .arg("--outfile")
+        .arg(&bundle))
+    .context("bundling the SDK needs bun (`nix develop` provides it)")?;
+    let measured = size_report(&[bundle, wasm, root.join(ATLAS)])?;
+    println!("bytes; brotli at quality 11. Output: {}", out_dir.display());
     if demo {
         println!("demo build: includes the synthetic generator; not the production payload");
         return Ok(());
@@ -289,21 +303,12 @@ fn wasm_opt_version(output: &str) -> Option<String> {
     words.next().map(str::to_owned)
 }
 
-/// Prints the size of each payload file and returns their brotli total.
-fn size_report(dir: &Path, atlas: &Path) -> Result<usize> {
-    let mut files: Vec<PathBuf> = fs::read_dir(dir)?
-        .map(|entry| entry.map(|e| e.path()))
-        .collect::<Result<_, _>>()?;
-    files.retain(|path| {
-        path.extension()
-            .is_some_and(|ext| PAYLOAD.iter().any(|p| ext == *p))
-    });
-    files.sort();
-    files.push(atlas.to_path_buf());
-
+/// Prints the size of each payload file (the SDK bundle, the WASM and the
+/// atlas) and returns their brotli total.
+fn size_report(files: &[PathBuf]) -> Result<usize> {
     println!("\n{:<28} {:>10} {:>10}", "payload", "raw", "brotli");
     let (mut total_raw, mut total_br) = (0, 0);
-    for path in &files {
+    for path in files {
         let bytes = fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
         let br = brotli_len(&bytes)?;
         total_raw += bytes.len();
@@ -318,7 +323,6 @@ fn size_report(dir: &Path, atlas: &Path) -> Result<usize> {
         "{:<28} {total_raw:>10} {total_br:>10}",
         "total (js + wasm + atlas)"
     );
-    println!("bytes; brotli at quality 11. Output: {}", dir.display());
     Ok(total_br)
 }
 

@@ -1,7 +1,7 @@
 // Engine events as the host receives them: one batch per frame or command,
 // never one call per seat (docs/04-renderer.md §3, §16). The public SDK
 // (docs/05-web-sdk.md §5) builds its callbacks on these.
-import type { View } from "../wasm/cavea_web.js";
+import type { EngineView } from "./view.ts";
 
 /** One object as the engine reports it. */
 export interface ObjectInfo {
@@ -17,7 +17,21 @@ export interface ObjectInfo {
   flags: number;
 }
 
+/** Chart metadata, from the engine's `Ready` (04 §3). */
+export interface ChartInfo {
+  name: string;
+  floors: Array<{ name: string; level: number; seats: number }>;
+  /** `floor`: index into `floors`. */
+  sections: Array<{ label: string; floor: number; seats: number }>;
+  /** `color`: RGBA bytes; `objects`: bookable objects in the category. */
+  categories: Array<{ key: string; label: string; color: number[]; objects: number }>;
+  objects: number;
+  seats: number;
+}
+
 export type RendererEvent =
+  /** A chart was loaded. */
+  | ({ type: "ready" } & ChartInfo)
   /** Hold these labels, then answer with `holdOk` or `holdFailed`. */
   | { type: "holdRequest"; request: number; labels: string[] }
   /** Release these labels; there is no answer. */
@@ -45,9 +59,10 @@ export type RendererEvent =
   | { type: "resync"; seq: number | null }
   /**
    * A host-side failure the map carries on without: `glyphAtlas` when the
-   * atlas could not be fetched, decoded or used, so seats have no labels.
+   * atlas could not be fetched, decoded or used, so seats have no labels;
+   * `engine` when a frame or input call threw.
    */
-  | { type: "error"; code: "glyphAtlas"; message: string }
+  | { type: "error"; code: "glyphAtlas" | "engine"; message: string }
   | {
       type: "cameraChanged";
       centre: [number, number];
@@ -56,7 +71,7 @@ export type RendererEvent =
     };
 
 /** The events `view` emitted since the last call, oldest first. */
-export function takeEvents(view: View): RendererEvent[] {
+export function takeEvents(view: EngineView): RendererEvent[] {
   const json = view.takeEvents();
   return json === undefined ? [] : (JSON.parse(json) as RendererEvent[]);
 }
