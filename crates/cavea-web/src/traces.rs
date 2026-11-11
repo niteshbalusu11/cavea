@@ -329,16 +329,26 @@ fn traces_produce_their_events() {
     for path in &paths {
         let trace: Value = serde_json::from_str(&fs::read_to_string(path).expect("readable"))
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        let actual = replay(&trace, &mut charts);
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy())
+            .unwrap_or_default();
+        let guards = trace["about"].as_str().unwrap_or_default();
+        // A trace that cannot run (a hold answered that was never asked
+        // for, an engine error, frames that never stop) fails by name.
+        let run =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| replay(&trace, &mut charts)));
+        let Ok(actual) = run else {
+            failures.push(format!(
+                "{name}: could not be replayed (above)\n  guards: {guards}"
+            ));
+            continue;
+        };
         let expected_path = path.with_extension("events");
         if bless {
             fs::write(&expected_path, &actual).expect("writable");
             continue;
         }
-        let name = path
-            .file_stem()
-            .map(|s| s.to_string_lossy())
-            .unwrap_or_default();
         let Ok(expected) = fs::read_to_string(&expected_path) else {
             failures.push(format!(
                 "{name}: no {}; write it with CAVEA_BLESS=1",
@@ -357,7 +367,7 @@ fn traces_produce_their_events() {
             failures.push(format!(
                 "{name}: first difference at line {}\n  expected {want}\n  actual   {got}\n  guards: {}",
                 n + 1,
-                trace["about"].as_str().unwrap_or_default()
+                guards
             ));
         }
     }
