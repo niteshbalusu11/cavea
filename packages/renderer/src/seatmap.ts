@@ -9,6 +9,7 @@ import {
   type HoldResult,
   type Snapshot,
 } from "./adapter.ts";
+import { createA11y, type A11y } from "./a11y.ts";
 import { CaveaError, isDevelopment, warner, type CaveaErrorCode } from "./errors.ts";
 import type { ChartInfo, ObjectInfo, RendererEvent } from "./events.ts";
 import type { AttachOptions, Attached } from "./host.ts";
@@ -192,6 +193,14 @@ export async function createMap(
   /** The ticket type chosen for each selected object whose category has types. */
   const chosen = new Map<string, string>();
   let ui: ReturnType<typeof createUi> | undefined;
+  let a11y: A11y | undefined;
+  /** The keyboard focus shown, and the seat last moved clear of the controls. */
+  let focusLabel: string | null = null;
+  let nudged: string | null = null;
+  /** The buyer's selection changes of the batch being delivered, said at its end. */
+  let changes: { added: string[]; removed: string[] } | undefined;
+  /** Labels a toast spoke of (taken, lost, refused): their removal is not said again. */
+  const told = new Set<string>();
   /** Prices, strings and direction again, after `setPricing` or `setLocale`. */
   let rebuild: (() => void) | undefined;
   let queue: Promise<void> = Promise.resolve();
@@ -363,7 +372,9 @@ export async function createMap(
   }
 
   /** An object's details and public status code, from the view. */
-  function details(label: string): (ObjectInfo & { status: number }) | undefined {
+  function details(
+    label: string,
+  ): (ObjectInfo & { status: number; place?: [number, number] }) | undefined {
     const json = view?.object(label);
     return json === undefined ? undefined : (JSON.parse(json) as ObjectInfo & { status: number });
   }
@@ -507,7 +518,61 @@ export async function createMap(
       }
     } finally {
       delivering = undefined;
+      announce();
     }
+  }
+
+  /**
+   * Says the batch's selection changes (11 §5), once: a removal a toast
+   * already explained (taken, lost, refused) is not said again.
+   */
+  function announce(): void {
+    const batch = changes;
+    changes = undefined;
+    if (batch === undefined || destroyed) {
+      return;
+    }
+    const removed = batch.removed.filter((label) => !told.has(label));
+    for (const label of [...batch.added, ...batch.removed]) {
+      told.delete(label);
+    }
+    if (batch.added.length + removed.length > 0) {
+      a11y?.selection(batch.added, removed, selected.size);
+    }
+  }
+
+  /**
+   * Moves the camera the least that takes the focused seat at `at` out from
+   * under a built-in control, once per seat (11 §3).
+   */
+  function clearControls([x, y]: [number, number]): void {
+    const box = ui?.covered([x, y]);
+    const size = mounted?.size();
+    if (box === null || box === undefined || camera === undefined || size === undefined || nudged === focusLabel) {
+      return;
+    }
+    nudged = focusLabel;
+    // The smallest shift to a side of the box that stays on the map.
+    let best: [number, number] | undefined;
+    for (const [dx, dy] of [
+      [box[0] - x, 0],
+      [box[2] - x, 0],
+      [0, box[1] - y],
+      [0, box[3] - y],
+    ] as const) {
+      const [nx, ny] = [x + dx, y + dy];
+      if (nx >= 0 && nx <= size[0] && ny >= 0 && ny <= size[1]) {
+        if (best === undefined || Math.abs(dx + dy) < Math.abs(best[0] + best[1])) {
+          best = [dx, dy];
+        }
+      }
+    }
+    if (best === undefined) {
+      return;
+    }
+    const [dx, dy] = best;
+    const [cx, cy] = camera.centre;
+    lookAt(cx - dx / camera.zoom, cy - dy / camera.zoom, camera.zoom);
   }
 
   function deliver(event: RendererEvent): void {
@@ -522,6 +587,10 @@ export async function createMap(
         chooseDefaults(event.selected);
         selected = new Map(event.selected.map((o) => [o.label, toSeat(o)]));
         const added = [...selected.keys()].filter((label) => !before.has(label));
+        const removed = [...before.keys()].filter((label) => !selected.has(label));
+        changes ??= { added: [], removed: [] };
+        changes.added.push(...added);
+        changes.removed.push(...removed);
         // A set of own holds without an expiry reports 0.
         expiresAt = event.expiresAt || null;
         if (expiresAt !== null && expiresAt !== deadline) {
@@ -549,6 +618,9 @@ export async function createMap(
       case "selectionInvalid": {
         const rule = event.rule;
         call("onSelectionInvalid", rule, event.objects.map(lookup));
+        for (const label of event.objects) {
+          told.add(label);
+        }
         // `min` is readiness, not a refusal; `not_free` from a hold comes as `objectUnavailable`.
         if (rule !== "min") {
           ui?.toast(
@@ -586,12 +658,23 @@ export async function createMap(
           event.at,
         );
         ui?.hover(event.object?.label ?? null, event.at);
+        if (event.type === "objectFocus") {
+          focusLabel = event.object?.label ?? null;
+          a11y?.focus(focusLabel);
+          if (event.at !== null) {
+            clearControls(event.at);
+          }
+        }
         break;
       case "objectUnavailable":
+        told.add(event.label);
         call("onObjectUnavailable", lookup(event.label));
         ui?.toast(t("taken", { seat: event.label }));
         break;
       case "holdLost": {
+        for (const label of event.labels) {
+          told.add(label);
+        }
         call("onHoldLost", event.labels.map(lookup));
         const expired = deadline !== null && serverNow() >= deadline - EXPIRED_SLACK_MS;
         if (expired) {
@@ -725,7 +808,7 @@ export async function createMap(
       root?.setAttribute("dir", dir === "auto" ? localeDirection(locale) : dir);
     }
     root?.setAttribute("lang", locale);
-    mounted?.canvas.setAttribute("aria-label", t("mapLabel"));
+    a11y?.refresh();
     const v = view;
     engine(() => v?.setMessage("soldOut", t("soldOut")));
   }
@@ -886,6 +969,19 @@ export async function createMap(
     };
     const shell = createUi(root, canvas, uiHost);
     ui = shell;
+    a11y = createA11y(canvas, root, {
+      get t() {
+        return t;
+      },
+      get prices() {
+        return book;
+      },
+      describe(label) {
+        const object = find(label);
+        const place = details(label)?.place;
+        return object && place ? { ...object, place } : object;
+      },
+    });
     rebuild = () => {
       book = priceBook();
       uiHost.t = t;
@@ -1116,15 +1212,16 @@ export async function createMap(
     }
   }
   function zoomBy(factor: number): void {
-    const size = mounted?.size();
-    if (live() === undefined || camera === undefined || size === undefined) {
-      return;
+    if (live() !== undefined && camera !== undefined) {
+      lookAt(...camera.centre, camera.zoom * factor);
     }
-    const scale = camera.zoom * factor;
+  }
+  /** Flies to `scale` CSS pixels per chart unit about the chart point (`x`, `y`). */
+  function lookAt(x: number, y: number, scale: number): void {
+    const size = mounted?.size() ?? [0, 0];
     // The engine fits bounds inside a margin of `FIT_PADDING_PX` (24) on each side.
     const room = (px: number): number => Math.max(px - 48, 1) / scale;
     const [width, height] = [room(size[0]), room(size[1])];
-    const [x, y] = camera.centre;
     fly({ x: x - width / 2, y: y - height / 2, width, height }, undefined, false, true);
   }
   for (const name of LATER_METHODS.split(" ")) {

@@ -46,5 +46,9 @@ export interface EngineView {
   frame(time: number): boolean;
   pointer(kind: number, id: number, type: number, x: number, y: number, time: number): void;
   wheel(dx: number, dy: number, x: number, y: number, ctrl: boolean, time: number): boolean;
+  /** `KeyboardEvent.key`; `mods` bits shift, ctrl, alt, meta. Whether the map took it. */
+  key(key: string, mods: number): boolean;
+  /** The map gained (from the keyboard) or lost the page's focus. */
+  setFocusShown(shown: boolean): void;
   takeEvents(): string | undefined;
 }

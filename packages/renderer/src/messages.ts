@@ -9,6 +9,15 @@ export type Message = string | ({ other: string } & Partial<Record<Intl.LDMLPlur
 
 export const MESSAGES = {
   mapLabel: "Seat map",
+  mapRole: "seat map",
+  mapHelp: "Use the arrow keys to move between seats, and Enter to choose one.",
+  place: "{index} of {count} in the row",
+  seatSelected: "{seat} selected.",
+  seatDeselected: "{seat} deselected.",
+  selectedCount: {
+    one: "{count} seat selected.",
+    other: "{count} seats selected.",
+  } as Message,
   zoomIn: "Zoom in",
   zoomOut: "Zoom out",
   zoomFit: "Show the whole map",

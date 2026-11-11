@@ -217,6 +217,44 @@ export function attach(
     false,
   );
 
+  // The keyboard (11 §3): only while the canvas has the page's focus, and
+  // only the keys the map takes are kept from the page.
+  listen(
+    "keydown",
+    (event) => {
+      if (event.isComposing) {
+        return;
+      }
+      const mods =
+        (event.shiftKey ? 1 : 0) |
+        (event.ctrlKey ? 2 : 0) |
+        (event.altKey ? 4 : 0) |
+        (event.metaKey ? 8 : 0);
+      let taken = false;
+      guard(() => (taken = view.key(event.key, mods)));
+      if (taken) {
+        event.preventDefault();
+      }
+      update();
+    },
+    false,
+  );
+  const focused = (shown: boolean): void => {
+    guard(() => view.setFocusShown(shown));
+    update();
+  };
+  // Focus from the keyboard shows the remembered focus; a click's does not.
+  listen("focus", () => {
+    let visible = true;
+    try {
+      visible = canvas.matches(":focus-visible");
+    } catch {
+      // No `:focus-visible`: show it.
+    }
+    focused(visible);
+  });
+  listen("blur", () => focused(false));
+
   // Not passive: preventing the default is what lets the browser restore
   // the context. The view stops drawing; restored, it makes everything again
   // from the engine's copies and redraws. (The DOM types lack these events.)

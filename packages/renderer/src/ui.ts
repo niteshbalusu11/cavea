@@ -51,6 +51,8 @@ export interface Ui {
   /** The selection changed; `label` was just selected alone (the tooltip may pin to it). */
   selected(label: string | null): void;
   toast(text: string): void;
+  /** The box, in CSS pixels on the map, of a control over `at` (with a margin), if any. */
+  covered(at: [number, number]): [number, number, number, number] | null;
   destroy(): void;
 }
 
@@ -65,6 +67,8 @@ const TOASTS = 3;
 /** The tooltip's distance from the object's centre, and from the map's edges. */
 const GAP = 14;
 const EDGE = 8;
+/** A focused seat's centre is kept this far from a control. */
+const COVER = 16;
 /** A tap selects within this long of the press. */
 const TAP_MS = 1500;
 
@@ -127,6 +131,7 @@ export const UI_CSS =
   "align-items:center;gap:8px;pointer-events:none}.zc .ts{inset-inline-end:68px}" +
   `.to{pointer-events:auto;display:flex;align-items:center;max-width:100%;padding-inline-start:12px;` +
   `background:var(--_fg);color:var(--_bg);border-radius:${R};box-shadow:${PANEL};animation:var(--_t) .2s ease-out}` +
+  ".vh{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}" +
   ".s,.e{position:absolute;inset:0;z-index:1;display:grid;place-content:center;justify-items:center;gap:12px;" +
   "padding:24px;text-align:center;background:var(--_bg)}" +
   `.k{position:absolute;inset:24px;border-radius:${R};background:var(--_seat-unavailable-fill);` +
@@ -225,9 +230,12 @@ export function createUi(root: HTMLElement, canvas: HTMLElement, host: UiHost): 
   // Zoom controls: disabled at the limits with `aria-disabled`, so focus stays.
   let zoomIn: HTMLButtonElement | undefined;
   let zoomOut: HTMLButtonElement | undefined;
+  /** Controls a focused seat must not be under. */
+  const panels: HTMLElement[] = [];
   if (options.zoomControls !== false) {
     root.classList.add("zc");
     const group = make("div", "z", "zoom-controls", root);
+    panels.push(group);
     group.setAttribute("role", "group");
     const zoomButton = (how: "in" | "out" | "fit", id: "zoomIn" | "zoomOut" | "zoomFit") => {
       const b = button(group, `zoom-${how}`, () => t(id), ICONS[how]);
@@ -249,6 +257,7 @@ export function createUi(root: HTMLElement, canvas: HTMLElement, host: UiHost): 
   let legend: Ui["legend"] | undefined;
   if (options.legend !== false) {
     const details = make("details", "l p", "legend", root);
+    panels.push(details);
     details.open = host.size()[0] >= 600;
     const summary = make("summary", "b", "button legend-summary", details);
     const categories = make("ul", "", "legend-categories", details);
@@ -602,6 +611,22 @@ export function createUi(root: HTMLElement, canvas: HTMLElement, host: UiHost): 
       for (const oldest of [...toasts.keys()].slice(0, -TOASTS)) {
         drop(oldest);
       }
+    },
+    covered([x, y]) {
+      const base = root.getBoundingClientRect();
+      for (const panel of panels) {
+        const r = panel.getBoundingClientRect();
+        const box: [number, number, number, number] = [
+          r.left - base.left - COVER,
+          r.top - base.top - COVER,
+          r.right - base.left + COVER,
+          r.bottom - base.top + COVER,
+        ];
+        if (r.width > 0 && x > box[0] && x < box[2] && y > box[1] && y < box[3]) {
+          return box;
+        }
+      }
+      return null;
     },
     destroy() {
       dead = true;

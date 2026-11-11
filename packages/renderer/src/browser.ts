@@ -127,8 +127,6 @@ export function browserEnv(): Env {
       const root = doc.createElement("div");
       root.className = "r";
       const canvas = doc.createElement("canvas");
-      // Until the accessible list view exists (A11Y-001).
-      canvas.setAttribute("role", "img");
       root.append(canvas);
       shadow.append(root);
       return {
