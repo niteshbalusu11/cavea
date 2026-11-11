@@ -4,9 +4,10 @@
 //! [`compile`] runs, in order: the schema and structure checks the pipeline
 //! needs (steps 1–2), expansion (3), the transform to world coordinates (4),
 //! row segmentation (5), labelling and the uniqueness check (6–7), ranking (8),
-//! `idx` order and render chunks (9–10), quantisation (13), and encoding with
-//! the content hash (14–15). Outlines, section label anchors and tessellation
-//! (11–12) are the next slice: [`section_outline`] is where they plug in.
+//! `idx` order and render chunks (9–10), section outlines, label anchors and
+//! tessellation (11–12, in [`crate::geometry`] and [`crate::tessellate`]),
+//! decoration nodes, quantisation (13), and encoding with the content hash
+//! (14–15).
 //!
 //! Everything here is deterministic: no platform maths beyond `+ − × ÷ √`,
 //! no hash-map iteration, and every sort has a total order.
@@ -23,6 +24,8 @@ use crate::detmath;
 use crate::document::{self as doc, ChartDocument, Node};
 use crate::expand::{ExpandedRow, Expansion, Seat};
 use crate::finding::{Code, Detail, Finding, Findings, expand_code};
+use crate::geometry::{self, OutlineError, P};
+use crate::tessellate::{self, Subpath, TessError};
 
 /// The document schema this compiler reads.
 pub const SCHEMA: u32 = 1;
@@ -180,6 +183,8 @@ struct Place {
     sin: f64,
     cos: f64,
     origin: [f64; 2],
+    /// The rotation reduced to whole turns, degrees.
+    degrees: f64,
 }
 
 impl Place {
@@ -187,6 +192,7 @@ impl Place {
         sin: 0.0,
         cos: 1.0,
         origin: [0.0, 0.0],
+        degrees: 0.0,
     };
 
     fn new(origin: [f64; 2], rotation: f64) -> Result<Self, &'static str> {
@@ -198,8 +204,14 @@ impl Place {
         }
         // Whole turns first: `sin_cos` is accurate only for moderate angles.
         // `%` is C's `fmod`, whose result is exact, so every target agrees.
-        let (sin, cos) = detmath::sin_cos(detmath::radians(rotation % 360.0));
-        Ok(Self { sin, cos, origin })
+        let degrees = rotation % 360.0;
+        let (sin, cos) = detmath::sin_cos(detmath::radians(degrees));
+        Ok(Self {
+            sin,
+            cos,
+            origin,
+            degrees,
+        })
     }
 
     /// With y down, this matrix turns +x towards +y: clockwise on screen.
@@ -247,11 +259,72 @@ fn point_box([x, y]: Point) -> Bounds {
     [x, y, x, y]
 }
 
-/// The outline mesh range, label anchor and largest label size of a section.
-/// Neutral values until the outline slice (FMT-010, FMT-017, FMT-018) computes
-/// the hull, its triangles and the pole of inaccessibility here.
-fn section_outline(_bounds: Bounds) -> ((u32, u32), Point, u16) {
-    ((0, 0), [0, 0], 0)
+/// A world point in chart units as a `MESH` vertex, if it is within the
+/// quantised range (03 §3.1.1).
+fn mesh_point(p: [f64; 2]) -> Option<[f32; 2]> {
+    quantise_point(p).map(|_| [p[0] as f32, p[1] as f32])
+}
+
+/// A quantised box that contains every point of `pts`: minima rounded down
+/// and maxima up to quarter units. `None` out of range.
+fn outer_box(pts: &[[f64; 2]]) -> Option<Bounds> {
+    let q = |v: f64, up: bool| {
+        let v = if up {
+            (v * 4.0).ceil()
+        } else {
+            (v * 4.0).floor()
+        };
+        quantise(v / 4.0)
+    };
+    let mut b: Option<Bounds> = None;
+    for &[x, y] in pts {
+        grow(
+            &mut b,
+            [q(x, false)?, q(y, false)?, q(x, true)?, q(y, true)?],
+        );
+    }
+    b
+}
+
+/// The integer nearest `x`, ties to even, for `x` in `0..=2³¹`.
+fn round_even(x: f64) -> f64 {
+    const TOINT: f64 = 1.5 / f64::EPSILON;
+    (x + TOINT) - TOINT
+}
+
+/// A fraction in `0..=1` as a byte, 255 for 1. `None` outside the range.
+fn unit_byte(x: f64) -> Option<u8> {
+    (0.0..=1.0)
+        .contains(&x)
+        .then(|| round_even(x * 255.0) as u8)
+}
+
+/// Degrees clockwise as a binary angle, 65,536 per turn, nearest, ties to even.
+fn binary_angle(degrees: f64) -> u16 {
+    let mut d = degrees % 360.0;
+    if d < 0.0 {
+        d += 360.0;
+    }
+    (round_even(d * (65_536.0 / 360.0)) as u32 % 65_536) as u16
+}
+
+/// A size in quarter units, at least one.
+fn quarter_size(x: f64) -> Option<u16> {
+    quantise(x)
+        .and_then(|q| u16::try_from(q).ok())
+        .filter(|&q| q > 0)
+}
+
+/// Section outline vertices are white: the renderer tints them (03 §4.2.3).
+const OUTLINE_COLOR: ccf::Rgba = [255, 255, 255, 255];
+/// Half the default row pitch: the outline padding of a section without row
+/// blocks.
+const DEFAULT_PADDING: f64 = 47.5;
+
+/// A decoration node to compile, with its parent's placement.
+struct Decoration<'d> {
+    node: &'d Node,
+    parent: Place,
 }
 
 /// A bookable node to expand, and where it sits in the world.
@@ -285,6 +358,8 @@ struct Unit<'d> {
     /// Position among the document's top-level nodes.
     order: usize,
     members: Vec<Member<'d>>,
+    /// The section's placement in the world; identity outside sections.
+    place: Place,
 }
 
 struct FloorInfo<'d> {
@@ -331,6 +406,8 @@ struct Compiler<'d> {
     floor_index: BTreeMap<u32, usize>,
     /// Every `id`, `rid` and `oid` with the node it belongs to.
     ids: Vec<(u32, u32)>,
+    /// Visible decoration nodes in document order.
+    decorations: Vec<Decoration<'d>>,
 }
 
 impl<'d> Compiler<'d> {
@@ -343,6 +420,7 @@ impl<'d> Compiler<'d> {
             floors: Vec::new(),
             floor_index: BTreeMap::new(),
             ids: Vec::new(),
+            decorations: Vec::new(),
         }
     }
 
@@ -463,8 +541,16 @@ impl<'d> Compiler<'d> {
                             section: None,
                             order,
                             members: vec![member],
+                            place: Place::IDENTITY,
                         });
                     }
+                }
+                Node::Shape(_) | Node::Text(_) | Node::Icon(_) | Node::Image(_) => {
+                    let _ = self.floor(node_floor(node), id, f);
+                    self.decorations.push(Decoration {
+                        node,
+                        parent: Place::IDENTITY,
+                    });
                 }
                 other => unsupported(other, f),
             }
@@ -495,20 +581,20 @@ impl<'d> Compiler<'d> {
         for child in s.children.iter().filter(|c| !is_hidden(c)) {
             let id = node_id(child);
             self.ids.push((id, id));
+            // A child is on its section's floor; naming another is an error.
+            if let Some(own) = node_floor(child)
+                && let Some(mine) = self.floor(Some(own), id, f)
+                && floor.is_some_and(|sf| sf != mine)
+            {
+                let section_floor = s.floor.unwrap_or(self.default_floor_id());
+                let detail = Detail::FloorConflict {
+                    floor: own,
+                    section_floor,
+                };
+                f.push(Code::E007, Some(id), detail);
+            }
             match child {
                 Node::RowBlock(_) | Node::Row(_) => {
-                    // A child is on its section's floor; naming another is an error.
-                    if let Some(own) = node_floor(child)
-                        && let Some(mine) = self.floor(Some(own), id, f)
-                        && floor.is_some_and(|sf| sf != mine)
-                    {
-                        let section_floor = s.floor.unwrap_or(self.default_floor_id());
-                        let detail = Detail::FloorConflict {
-                            floor: own,
-                            section_floor,
-                        };
-                        f.push(Code::E007, Some(id), detail);
-                    }
                     if let Some(place) = place
                         && let Some(m) = self.member(child, place, f)
                     {
@@ -521,6 +607,14 @@ impl<'d> Compiler<'d> {
                     };
                     f.push(Code::Unsupported, Some(id), detail);
                 }
+                Node::Shape(_) | Node::Text(_) | Node::Icon(_) | Node::Image(_) => {
+                    if let Some(parent) = place {
+                        self.decorations.push(Decoration {
+                            node: child,
+                            parent,
+                        });
+                    }
+                }
                 other => unsupported(other, f),
             }
         }
@@ -529,6 +623,7 @@ impl<'d> Compiler<'d> {
             section: Some(s),
             order,
             members,
+            place: place?,
         })
     }
 
@@ -650,6 +745,23 @@ impl<'d> Compiler<'d> {
         }
         b.close_chunk();
         b.check_labels(e, f);
+        let decorations = std::mem::take(&mut self.decorations);
+        let mut d = Decorated::default();
+        for deco in &decorations {
+            d.node(self, deco, &mut b.vertices, f);
+        }
+        let mut indices = std::mem::take(&mut b.outline_indices);
+        let mut draws = Vec::new();
+        for (layer, part) in [(ccf::Layer::Below, d.below), (ccf::Layer::Above, d.above)] {
+            if !part.is_empty() {
+                draws.push(ccf::Draw {
+                    layer,
+                    index_first: indices.len() as u32, // ≤ 3 × MAX_VERTICES per part
+                    index_count: part.len() as u32,
+                });
+                indices.extend(part);
+            }
+        }
 
         let mut first = 0u32;
         let floors = self
@@ -708,10 +820,14 @@ impl<'d> Compiler<'d> {
             seat_flags: b.seat_flags,
             objects: Vec::new(),
             tables: Vec::new(),
-            mesh: ccf::Mesh::default(),
-            texts: Vec::new(),
-            icons: Vec::new(),
-            images: Vec::new(),
+            mesh: ccf::Mesh {
+                vertices: b.vertices,
+                indices,
+                draws,
+            },
+            texts: d.texts,
+            icons: d.icons,
+            images: d.images,
             full: Some(ccf::Full {
                 oids: b.oids,
                 ranks,
@@ -759,6 +875,13 @@ struct Builder<'d> {
     chunk: Option<((usize, u32), ccf::RenderChunk)>,
     floor_seats: Vec<(u32, Option<Bounds>)>,
     bounds: Option<Bounds>,
+    /// The current section's seats in its own space, for its outline.
+    local: Vec<[f64; 2]>,
+    /// `MESH` vertices, and the indices of section outlines in `SECT` order.
+    vertices: Vec<ccf::Vertex>,
+    outline_indices: Vec<u32>,
+    /// Points of explicit outlines so far.
+    outline_points: usize,
 }
 
 impl<'d> Builder<'d> {
@@ -779,7 +902,9 @@ impl<'d> Builder<'d> {
                 row_count: 0,
                 category,
                 entrance: c.strings.opt(s.entrance.as_deref()),
-                mesh_first: 0,
+                // An empty range where the outline would start, so that
+                // outline ranges tile the start of the index buffer.
+                mesh_first: self.outline_indices.len() as u32,
                 mesh_count: 0,
                 bounds: [0; 4],
                 label_anchor: [0, 0],
@@ -789,6 +914,7 @@ impl<'d> Builder<'d> {
             (index, s)
         });
         let (seats_before, rows_before) = (self.seat_pos.len(), self.rows.len());
+        self.local.clear();
         let mut bounds = None;
         for m in &unit.members {
             let mut problems = Problems::default();
@@ -821,9 +947,112 @@ impl<'d> Builder<'d> {
             s.seat_count = (self.seat_pos.len() - seats_before) as u32;
             s.row_count = (self.rows.len() - rows_before) as u32;
             s.bounds = bounds.unwrap_or_default();
-            let ((first, count), anchor, size) = section_outline(s.bounds);
-            (s.mesh_first, s.mesh_count, s.label_anchor, s.label_size) =
-                (first, count, anchor, size);
+        }
+        if let Some((index, s)) = section {
+            self.outline(unit, index, s, f);
+        }
+    }
+
+    /// Step 11–12 for one section: its outline (explicit, or computed from its
+    /// seats), the outline's triangles, the label anchor and size, and the
+    /// bounds grown to cover the outline.
+    fn outline(&mut self, unit: &Unit<'d>, index: u32, s: &'d doc::Section, f: &mut Findings) {
+        let node = Some(s.id);
+        let poly = match &s.outline {
+            doc::Outline::Auto => {
+                let pitch = unit
+                    .members
+                    .iter()
+                    .filter_map(|m| match m.node {
+                        Bookable::Block(b) => Some(b.row_pitch),
+                        Bookable::Row(_) => None,
+                    })
+                    .fold(None, |a: Option<f64>, p| Some(a.map_or(p, |a| a.max(p))));
+                let padding = pitch.map_or(DEFAULT_PADDING, |p| p / 2.0);
+                geometry::auto_outline(&self.local, padding)
+            }
+            doc::Outline::Points(pts) => {
+                self.outline_points = self.outline_points.saturating_add(pts.points.len());
+                if self.outline_points > geometry::MAX_OUTLINE_POINTS {
+                    let detail = Detail::TooMany {
+                        what: "outline points in the chart",
+                        limit: geometry::MAX_OUTLINE_POINTS as u32,
+                    };
+                    f.push(Code::E006, node, detail);
+                    return;
+                }
+                match geometry::explicit_outline(&pts.points) {
+                    Ok(poly) => poly,
+                    Err(e) => {
+                        let (code, detail) = match e {
+                            OutlineError::NotFinite => {
+                                (Code::E005, Detail::InvalidValue { field: "outline" })
+                            }
+                            OutlineError::TooManyPoints => (
+                                Code::E006,
+                                Detail::TooMany {
+                                    what: "outline points",
+                                    limit: geometry::MAX_POINTS as u32,
+                                },
+                            ),
+                            OutlineError::ZeroSize => (
+                                Code::E005,
+                                Detail::Geometry {
+                                    problem: "zero size",
+                                },
+                            ),
+                            OutlineError::SelfIntersecting => (
+                                Code::E005,
+                                Detail::Geometry {
+                                    problem: "self-intersecting outline",
+                                },
+                            ),
+                        };
+                        f.push(code, node, detail);
+                        return;
+                    }
+                }
+            }
+        };
+        if poly.is_empty() {
+            return;
+        }
+        let place = unit.place;
+        let world: Vec<P> = poly.iter().map(|&p| place.apply(p)).collect();
+        let Some(outer) = outer_box(&world) else {
+            f.push(Code::E005, node, Detail::OutOfRange);
+            return;
+        };
+        let first = self.outline_indices.len();
+        let paths: [Subpath; 1] = [(poly, true)];
+        let tess = tessellate::tessellate(
+            &paths,
+            None,
+            OUTLINE_COLOR,
+            |p| mesh_point(place.apply(p)),
+            &mut self.vertices,
+            &mut self.outline_indices,
+        );
+        if let Err(e) = tess {
+            f.push(tess_code(e), node, tess_detail(e));
+            return;
+        }
+        let anchor = quantise_point(geometry::pole(&world)).unwrap_or_default();
+        let chars = s.label.as_deref().map_or(0, |l| l.chars().count());
+        let at = [f64::from(anchor[0]) / 4.0, f64::from(anchor[1]) / 4.0];
+        let size = geometry::label_size(&world, at, chars);
+        if let Some(rec) = self.sections.get_mut(index as usize) {
+            rec.mesh_first = first as u32; // ≤ 3 × MAX_VERTICES
+            rec.mesh_count = (self.outline_indices.len() - first) as u32;
+            rec.label_anchor = anchor;
+            rec.label_size = size;
+            rec.bounds = if rec.seat_count > 0 {
+                let mut b = rec.bounds;
+                grow_box(&mut b, outer);
+                b
+            } else {
+                outer
+            };
         }
     }
 
@@ -888,7 +1117,11 @@ impl<'d> Builder<'d> {
                 }),
             }
 
-            let world = ctx.place[1].apply(ctx.place[0].apply(seat.pos));
+            let local = ctx.place[0].apply(seat.pos);
+            if ctx.section.is_some() {
+                self.local.push(local);
+            }
+            let world = ctx.place[1].apply(local);
             let pos = quantise_point(world).unwrap_or_else(|| {
                 problems.out_of_range = true;
                 [0, 0]
@@ -1120,6 +1353,285 @@ impl<'d> Builder<'d> {
     }
 }
 
+fn tess_code(e: TessError) -> Code {
+    match e {
+        TessError::TooManyVertices => Code::E006,
+        TessError::OutOfRange | TessError::TooComplex | TessError::Failed => Code::E005,
+    }
+}
+
+fn tess_detail(e: TessError) -> Detail {
+    match e {
+        TessError::TooManyVertices => Detail::TooMany {
+            what: "mesh vertices",
+            limit: tessellate::MAX_VERTICES as u32,
+        },
+        TessError::OutOfRange => Detail::OutOfRange,
+        TessError::TooComplex => Detail::Geometry {
+            problem: "crosses itself too often",
+        },
+        TessError::Failed => Detail::Geometry {
+            problem: "cannot be tessellated",
+        },
+    }
+}
+
+/// Largest coordinate, in chart units, accepted in a shape's own space.
+const MAX_LOCAL: f64 = (1u32 << 30) as f64;
+
+/// The compiled decoration tables, filled in document order.
+#[derive(Default)]
+struct Decorated {
+    /// Indices of shapes drawn below and above the seats.
+    below: Vec<u32>,
+    above: Vec<u32>,
+    texts: Vec<ccf::Text>,
+    icons: Vec<ccf::Icon>,
+    images: Vec<ccf::Image>,
+}
+
+impl Decorated {
+    fn node(
+        &mut self,
+        c: &mut Compiler<'_>,
+        deco: &Decoration<'_>,
+        vertices: &mut Vec<ccf::Vertex>,
+        f: &mut Findings,
+    ) {
+        let id = node_id(deco.node);
+        let (origin, rotation) = match deco.node {
+            Node::Shape(n) => (n.origin, n.rotation),
+            Node::Text(n) => (n.origin, n.rotation),
+            Node::Icon(n) => (n.origin, n.rotation),
+            Node::Image(n) => (n.origin, n.rotation),
+            _ => return,
+        };
+        let mut bad = |code: Code, detail: Detail| f.push(code, Some(id), detail);
+        let own = match Place::new(origin, rotation) {
+            Ok(own) => own,
+            Err(field) => return bad(Code::E005, Detail::InvalidValue { field }),
+        };
+        let parent = deco.parent;
+        let world = |p: P| parent.apply(own.apply(p));
+        let angle = binary_angle(own.degrees + parent.degrees);
+        let Some(pos) = quantise_point(world([0.0, 0.0])) else {
+            return bad(Code::E005, Detail::OutOfRange);
+        };
+        let invalid = |field| Detail::InvalidValue { field };
+        match deco.node {
+            Node::Shape(s) => {
+                let style = &s.style;
+                let Some(alpha) = unit_byte(style.opacity) else {
+                    return bad(Code::E005, invalid("opacity"));
+                };
+                let color = |hex: &Option<String>| match hex {
+                    None => Ok(None),
+                    Some(h) => parse_color(h)
+                        .map(|[r, g, b, _]| Some([r, g, b, alpha]))
+                        .ok_or(()),
+                };
+                let Ok(fill) = color(&style.fill) else {
+                    return bad(Code::E005, invalid("fill"));
+                };
+                let Ok(stroke) = color(&style.stroke) else {
+                    return bad(Code::E005, invalid("stroke"));
+                };
+                let width = style.stroke_width;
+                if !(width.is_finite() && (0.0..=MAX_LOCAL).contains(&width)) {
+                    return bad(Code::E005, invalid("strokeWidth"));
+                }
+                let paths = match shape_paths(s) {
+                    Ok(paths) => paths,
+                    Err((code, detail)) => return bad(code, detail),
+                };
+                let out = match s.layer {
+                    doc::Layer::Below => &mut self.below,
+                    doc::Layer::Above => &mut self.above,
+                };
+                let fill = fill.filter(|_| s.kind != doc::ShapeKind::Line);
+                let stroke = stroke.filter(|_| width > 0.0);
+                for (color, width) in [(fill, None), (stroke, Some(width))] {
+                    let Some(color) = color else { continue };
+                    let map = |p: P| mesh_point(world(p));
+                    if let Err(e) = tessellate::tessellate(&paths, width, color, map, vertices, out)
+                    {
+                        return bad(tess_code(e), tess_detail(e));
+                    }
+                }
+            }
+            Node::Text(t) => {
+                let Some(size) = quarter_size(t.size) else {
+                    return bad(Code::E005, invalid("size"));
+                };
+                let Some(color) = parse_color(&t.color) else {
+                    return bad(Code::E005, invalid("color"));
+                };
+                if !(1..=1000).contains(&t.weight) {
+                    return bad(Code::E005, invalid("weight"));
+                }
+                let min_zoom = t.min_zoom as f32;
+                if !(t.min_zoom >= 0.0 && min_zoom.is_finite()) {
+                    return bad(Code::E005, invalid("minZoom"));
+                }
+                self.texts.push(ccf::Text {
+                    text: c.strings.get(&t.text),
+                    pos,
+                    size,
+                    angle,
+                    color,
+                    align: match t.align {
+                        doc::Align::Left => ccf::TextAlign::Left,
+                        doc::Align::Center => ccf::TextAlign::Center,
+                        doc::Align::Right => ccf::TextAlign::Right,
+                    },
+                    weight: t.weight,
+                    min_zoom,
+                });
+            }
+            Node::Icon(i) => {
+                let Some(size) = quarter_size(i.size) else {
+                    return bad(Code::E005, invalid("size"));
+                };
+                let key = match i.icon {
+                    doc::IconKind::Entrance => "entrance",
+                    doc::IconKind::Exit => "exit",
+                    doc::IconKind::Stairs => "stairs",
+                    doc::IconKind::Toilets => "toilets",
+                    doc::IconKind::Bar => "bar",
+                    doc::IconKind::Lift => "lift",
+                };
+                self.icons.push(ccf::Icon {
+                    key: c.strings.get(key),
+                    pos,
+                    size,
+                    angle,
+                });
+            }
+            Node::Image(im) if im.role == doc::ImageRole::Background => {
+                let hex = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b);
+                if !(im.asset.len() == 32 && im.asset.bytes().all(hex)) {
+                    return bad(Code::E007, Detail::BadAsset);
+                }
+                let [w, h] = im.size;
+                if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+                    return bad(Code::E005, invalid("size"));
+                }
+                let Some(opacity) = unit_byte(im.opacity) else {
+                    return bad(Code::E005, invalid("opacity"));
+                };
+                let centre = world([0.0, 0.0]);
+                let corners = [
+                    quantise(centre[0] - w / 2.0),
+                    quantise(centre[1] - h / 2.0),
+                    quantise(centre[0] + w / 2.0),
+                    quantise(centre[1] + h / 2.0),
+                ];
+                let [Some(x0), Some(y0), Some(x1), Some(y1)] = corners else {
+                    return bad(Code::E005, Detail::OutOfRange);
+                };
+                self.images.push(ccf::Image {
+                    asset: c.strings.get(&im.asset),
+                    bounds: [x0, y0, x1, y1],
+                    angle,
+                    opacity,
+                });
+            }
+            // A reference image is for the designer only.
+            _ => {}
+        }
+    }
+}
+
+/// A shape's outline in its own space, flattened to straight edges.
+fn shape_paths(s: &doc::Shape) -> Result<Vec<Subpath>, (Code, Detail)> {
+    let invalid = |field| (Code::E005, Detail::InvalidValue { field });
+    let zero = (
+        Code::E005,
+        Detail::Geometry {
+            problem: "zero size",
+        },
+    );
+    let too_many = (
+        Code::E006,
+        Detail::TooMany {
+            what: "shape points",
+            limit: geometry::MAX_POINTS as u32,
+        },
+    );
+    let paths = match s.kind {
+        doc::ShapeKind::Rect | doc::ShapeKind::Ellipse => {
+            let [w, h] = s.size.ok_or(invalid("size"))?;
+            if !(w.is_finite() && h.is_finite() && w.abs() <= MAX_LOCAL && h.abs() <= MAX_LOCAL) {
+                return Err(invalid("size"));
+            }
+            if w <= 0.0 || h <= 0.0 {
+                return Err(zero);
+            }
+            let pts = if s.kind == doc::ShapeKind::Rect {
+                let r = s.corner_radius.unwrap_or(0.0);
+                if !(r.is_finite() && r >= 0.0) {
+                    return Err(invalid("cornerRadius"));
+                }
+                tessellate::rect(w, h, r)
+            } else {
+                tessellate::ellipse(w / 2.0, h / 2.0)
+            };
+            vec![(pts, true)]
+        }
+        doc::ShapeKind::Polygon | doc::ShapeKind::Line => {
+            let pts = s.points.as_deref().ok_or(invalid("points"))?;
+            if pts.len() > geometry::MAX_POINTS {
+                return Err(too_many);
+            }
+            if !pts
+                .iter()
+                .flatten()
+                .all(|v| v.is_finite() && v.abs() <= MAX_LOCAL)
+            {
+                return Err(invalid("points"));
+            }
+            let mut out: Vec<P> = Vec::with_capacity(pts.len());
+            for &p in pts {
+                if out.last() != Some(&p) {
+                    out.push(p);
+                }
+            }
+            let closed = s.kind == doc::ShapeKind::Polygon;
+            let degenerate = if closed {
+                out.len() < 3 || geometry::area(&out) == 0.0
+            } else {
+                out.len() < 2
+            };
+            if degenerate {
+                return Err(zero);
+            }
+            vec![(out, closed)]
+        }
+        doc::ShapeKind::Path => {
+            let d = s.d.as_deref().ok_or(invalid("d"))?;
+            let paths = tessellate::parse_path(d).map_err(|e| match e {
+                tessellate::PathError::Syntax => (
+                    Code::E005,
+                    Detail::Geometry {
+                        problem: "path data",
+                    },
+                ),
+                tessellate::PathError::TooManyPoints => too_many,
+            })?;
+            let pts = || paths.iter().flat_map(|(p, _)| p.iter());
+            if !pts().flatten().all(|v| v.abs() <= MAX_LOCAL) {
+                return Err(invalid("d"));
+            }
+            let first = pts().next().copied();
+            if pts().all(|p| Some(*p) == first) {
+                return Err(zero);
+            }
+            paths
+        }
+    };
+    Ok(paths)
+}
+
 /// Problems found per seat but reported once per node.
 #[derive(Default)]
 struct Problems {
@@ -1179,9 +1691,16 @@ fn node_id(node: &Node) -> u32 {
 
 fn node_floor(node: &Node) -> Option<u32> {
     match node {
+        Node::Section(n) => n.floor,
         Node::RowBlock(n) => n.floor,
         Node::Row(n) => n.floor,
-        _ => None,
+        Node::Table(n) => n.floor,
+        Node::Booth(n) => n.floor,
+        Node::Area(n) => n.floor,
+        Node::Shape(n) => n.floor,
+        Node::Text(n) => n.floor,
+        Node::Icon(n) => n.floor,
+        Node::Image(n) => n.floor,
     }
 }
 
@@ -1200,8 +1719,7 @@ fn is_hidden(node: &Node) -> bool {
     }
 }
 
-/// Bookable non-seat objects are not compiled yet and block the compile;
-/// decoration nodes are left for the decoration slice (FMT-019).
+/// Bookable non-seat objects are not compiled yet and block the compile.
 fn unsupported(node: &Node, f: &mut Findings) {
     let kind = match node {
         Node::Table(_) => "table",

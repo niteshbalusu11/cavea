@@ -37,7 +37,7 @@ impl Rng {
 /// Generates valid chart documents: floors with and without focal points,
 /// rotated sections, row blocks with every curve, skew, stagger, removed
 /// seats, overrides and label schemes, free-form rows, rows outside sections,
-/// and decoration nodes (which this slice skips).
+/// explicit and automatic outlines, and every kind of decoration node.
 struct Gen {
     r: Rng,
     next: u32,
@@ -77,6 +77,9 @@ impl Gen {
             if g.r.chance(50) {
                 let node = g.bookable(&format!(r#""floor":{fl},"category":"c1","#));
                 nodes.push(node);
+            }
+            if g.r.chance(50) {
+                nodes.push(g.decoration());
             }
         }
         let cats: Vec<String> = (0..4)
@@ -122,10 +125,7 @@ impl Gen {
             children.push(self.bookable(category));
         }
         if self.r.chance(30) {
-            let shape = self.id();
-            children.push(format!(
-                r#"{{"id":{shape},"type":"shape","kind":"rect","size":[10,10]}}"#
-            ));
+            children.push(self.decoration());
         }
         if self.r.chance(10) {
             let hidden = self.bookable(r#""hidden":true,"#);
@@ -133,10 +133,80 @@ impl Gen {
         }
         let place = self.place();
         let priority = self.r.real(0.5, 2.0);
+        // A convex explicit outline, or the automatic one.
+        let outline = if self.r.chance(25) {
+            let (n, radius) = (self.r.int(3, 12), self.r.real(100.0, 3000.0));
+            let pts: Vec<String> = (0..n)
+                .map(|k| {
+                    let (s, c) = (k as f64 * core::f64::consts::TAU / n as f64).sin_cos();
+                    format!("[{},{}]", radius * c, radius * s)
+                })
+                .collect();
+            format!(r#""outline":{{"points":[{}]}},"#, pts.join(","))
+        } else {
+            String::new()
+        };
         format!(
-            r#"{{"id":{id},"type":"section","floor":{floor},{label}{place},"category":"c0","priority":{priority},"children":[{}]}}"#,
+            r#"{{"id":{id},"type":"section","floor":{floor},{label}{outline}{place},"category":"c0","priority":{priority},"children":[{}]}}"#,
             children.join(",")
         )
+    }
+
+    /// A valid decoration node of any kind.
+    fn decoration(&mut self) -> String {
+        let id = self.id();
+        let place = self.place();
+        let style = format!(
+            r##""style":{{"fill":"#A0B0C0","stroke":"#102030","strokeWidth":{},"opacity":{}}},"layer":"{}""##,
+            self.r.real(0.0, 20.0),
+            self.r.real(0.0, 1.0),
+            self.r.pick(&["below", "above"])
+        );
+        let (w, h) = (self.r.real(1.0, 2000.0), self.r.real(1.0, 2000.0));
+        let body = match self.r.int(0, 8) {
+            0 => format!(
+                r#""type":"shape","kind":"rect","size":[{w},{h}],"cornerRadius":{},{style}"#,
+                self.r.real(0.0, 300.0)
+            ),
+            1 => format!(r#""type":"shape","kind":"ellipse","size":[{w},{h}],{style}"#),
+            2 | 3 => {
+                let pts: Vec<String> = (0..self.r.int(3, 9))
+                    .map(|_| {
+                        format!(
+                            "[{},{}]",
+                            self.r.real(-500.0, 500.0),
+                            self.r.real(-500.0, 500.0)
+                        )
+                    })
+                    .collect();
+                let kind = self.r.pick(&["polygon", "line"]);
+                format!(
+                    r#""type":"shape","kind":"{kind}","points":[{}],{style}"#,
+                    pts.join(",")
+                )
+            }
+            4 => format!(
+                r#""type":"shape","kind":"path","d":"M0 0 C{w} 0 {w} {h} 0 {h} q-50 -50 -10 -100 t20 -30 Z M10 10 h50 v{h} H5 z",{style}"#
+            ),
+            5 => format!(
+                r##""type":"text","text":"T{id}","size":{},"color":"#FFFFFF","align":"{}","minZoom":{}"##,
+                self.r.real(1.0, 300.0),
+                self.r.pick(&["left", "center", "right"]),
+                self.r.real(0.0, 4.0)
+            ),
+            6 => format!(
+                r#""type":"icon","icon":"{}","size":{}"#,
+                self.r.pick(&["exit", "lift", "bar"]),
+                self.r.real(1.0, 100.0)
+            ),
+            _ => format!(
+                r#""type":"image","asset":"{:032x}","size":[{w},{h}],"opacity":{},"role":"{}""#,
+                self.r.next(),
+                self.r.real(0.0, 1.0),
+                self.r.pick(&["background", "reference"])
+            ),
+        };
+        format!(r#"{{"id":{id},{body},{place}}}"#)
     }
 
     fn seat_labels(&mut self) -> String {
@@ -536,9 +606,29 @@ const FIXED: &str = r##"{"schema":1,"name":"fixed","nextOid":9000,
     {"id":20,"type":"section","floor":2,"label":"Circle","rotation":180,
      "children":[{"id":21,"type":"row","path":{"kind":"polyline","points":[[0,0],[100.3,37.1],[160.9,141.7]]},
        "seatPitch":31.7,"seats":9,"oids":[[800,9]],"label":"AA","category":"b",
-       "seatLabels":{"scheme":"alpha","direction":"center-out"}}]}]}"##;
+       "seatLabels":{"scheme":"alpha","direction":"center-out"}}]},
+    {"id":30,"type":"section","floor":1,"label":"Box","origin":[-900.5,300],"rotation":-20.25,"category":"a",
+     "outline":{"points":[[-50,-60],[700,-60],[760,200],[300,320],[-50,200]]},
+     "children":[{"id":31,"type":"row","path":{"kind":"polyline","points":[[0,0],[600,0]]},"seats":11,"oids":[[900,11]],"label":"Z"},
+       {"id":32,"type":"text","text":"Box seats","size":40.5,"color":"#202020","origin":[300,250],"rotation":10,"minZoom":0.25},
+       {"id":33,"type":"shape","kind":"rect","size":[100,40],"cornerRadius":12.5,"origin":[300,-30],"rotation":5,
+        "style":{"fill":"#AA0000","stroke":"#000000","strokeWidth":3,"opacity":0.75}}]},
+    {"id":40,"type":"shape","kind":"ellipse","size":[1200,300],"origin":[0,-900],"rotation":3,
+     "style":{"fill":"#1F2937","stroke":"#F9FAFB","strokeWidth":8}},
+    {"id":41,"type":"shape","kind":"polygon","points":[[0,0],[300,10],[150,260],[60,90]],"origin":[1500,-700],"layer":"above",
+     "style":{"fill":"#336699","stroke":"#000000","strokeWidth":2.5,"opacity":0.4}},
+    {"id":42,"type":"shape","kind":"line","points":[[0,0],[200,40],[260,-30]],"origin":[-1500,-700],"style":{"stroke":"#123456","strokeWidth":6}},
+    {"id":43,"type":"shape","kind":"path","origin":[-200,-1300],"layer":"above",
+     "d":"M0 0 L100 0 C150 0 200 50 200 100 S150 200 100 200 Q50 200 20 150 T0 100 Z m300 0 h50 v50 h-50 z",
+     "style":{"fill":"#445566","stroke":"#000000","strokeWidth":1.5}},
+    {"id":44,"type":"text","text":"STAGE","size":120,"weight":600,"color":"#F9FAFB","align":"center","origin":[0,-900]},
+    {"id":45,"type":"icon","icon":"exit","size":80,"origin":[-1200,100],"rotation":-90},
+    {"id":46,"type":"image","asset":"00112233445566778899aabbccddeeff","size":[4000,3000],"opacity":0.3,"role":"background","origin":[0,-200]},
+    {"id":47,"type":"image","asset":"b3a1","size":[4000,3000],"role":"reference"}]}"##;
 
-/// The same document gives the same bytes, here and in the wasm32 build. A
+/// The same document gives the same bytes, here and in the wasm32 build. It
+/// covers a rotated section with an automatic outline, an explicit outline,
+/// every shape kind with a stroke, text, an icon and a background image. A
 /// change to the stored hash changes every compiled chart. To run it in
 /// wasm32 (a failing test traps):
 ///
@@ -552,8 +642,18 @@ fn compiled_bytes_are_deterministic() {
     let b = compile_json(FIXED).unwrap();
     assert_eq!((&a.public, &a.full), (&b.public, &b.full));
     decode_both(&a);
+    let chart = decode_both(&a);
+    let kinds = (
+        chart.sections.len(),
+        chart.mesh.draws.len(),
+        chart.texts.len(),
+    );
+    assert_eq!(
+        (kinds, chart.icons.len(), chart.images.len()),
+        ((3, 2, 2), 1, 1)
+    );
     let hex: String = a.public_hash.iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!(hex, "c9dbbf070a0cb90a649d32388dc93f54");
+    assert_eq!(hex, "cec6bf086691b432823d81fb2d64686c");
 }
 
 /// One row of 10: position 3 removed, and position 7 nudged 30 cu right, so
@@ -774,9 +874,10 @@ fn bookable_objects_this_slice_cannot_compile_are_reported() {
             (Code::Unsupported, Some(70))
         ]
     );
-    // A decoration alone is skipped, not an error.
+    // A chart of decoration alone compiles.
     let json = r##"{"schema":1,"name":"t","nextOid":9,"nodes":[{"id":8,"type":"text","text":"STAGE","size":120,"color":"#FFFFFF"}]}"##;
-    assert_eq!(decode_both(&compile_json(json).unwrap()).seat_pos.len(), 0);
+    let chart = decode_both(&compile_json(json).unwrap());
+    assert_eq!((chart.seat_pos.len(), chart.texts.len()), (0, 1));
 }
 
 /// Whole turns of rotation, however many, place seats as no rotation does.
@@ -807,6 +908,279 @@ fn empty_rows_store_no_label_rule() {
     );
     let chart = decode_both(&compile_json(&json).unwrap());
     assert!(chart.rows.is_empty() && chart.label_rules.is_empty());
+}
+
+/// Area covered by the triangles of `indices`.
+fn tri_area(chart: &Chart, first: u32, count: u32) -> f64 {
+    let v = |i: u32| {
+        let p = chart.mesh.vertices[i as usize].pos;
+        [f64::from(p[0]), f64::from(p[1])]
+    };
+    chart.mesh.indices[first as usize..(first + count) as usize]
+        .chunks(3)
+        .map(|t| {
+            let (a, b, c) = (v(t[0]), v(t[1]), v(t[2]));
+            ((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])).abs() / 2.0
+        })
+        .sum()
+}
+
+/// Section outline ranges, in `SECT` order, then the draw ranges, tile the
+/// index buffer.
+fn assert_mesh_partition(chart: &Chart) {
+    let ranges = chart
+        .sections
+        .iter()
+        .map(|s| (s.mesh_first, s.mesh_count))
+        .chain(
+            chart
+                .mesh
+                .draws
+                .iter()
+                .map(|d| (d.index_first, d.index_count)),
+        );
+    let mut next = 0;
+    for (first, count) in ranges {
+        assert_eq!(first, next);
+        next += count;
+    }
+    assert_eq!(next as usize, chart.mesh.indices.len());
+    assert_eq!(chart.mesh.indices.len() % 3, 0);
+}
+
+/// A chart holding one top-level node.
+fn one_node(node: &str) -> Chart {
+    let json = format!(r#"{{"schema":1,"name":"m","nextOid":99,"nodes":[{node}]}}"#);
+    let chart = decode_both(&compile_json(&json).unwrap_or_else(|e| panic!("{e}")));
+    assert_mesh_partition(&chart);
+    chart
+}
+
+/// Shapes become triangles that cover them: plain areas exactly, curves
+/// within the flattening tolerance, strokes at their width with mitred
+/// corners. Explicit outlines are tessellated in world space and white.
+#[test]
+fn meshes_cover_their_shapes() {
+    let tol = tessellate::TOLERANCE;
+    let c = one_node(
+        r##"{"id":1,"type":"shape","kind":"rect","size":[1200,300],"style":{"fill":"#102030"}}"##,
+    );
+    assert_eq!(c.mesh.draws.len(), 1);
+    let d = c.mesh.draws[0];
+    assert_eq!((d.layer, d.index_first), (cavea_format::Layer::Below, 0));
+    assert_eq!(tri_area(&c, 0, d.index_count), 360_000.0);
+    assert!(
+        c.mesh
+            .vertices
+            .iter()
+            .all(|v| v.color == [0x10, 0x20, 0x30, 255])
+    );
+
+    // A rounded rectangle: corner points on their circles, area short of the
+    // true one by at most the arc length × tolerance. Opacity 0.5 is 128.
+    let c = one_node(
+        r##"{"id":1,"type":"shape","kind":"rect","size":[200,100],"cornerRadius":30,"layer":"above","style":{"fill":"#FF0000","opacity":0.5}}"##,
+    );
+    assert_eq!(c.mesh.draws[0].layer, cavea_format::Layer::Above);
+    for v in &c.mesh.vertices {
+        let [x, y] = v.pos.map(f64::from);
+        let (cx, cy) = (x.abs() - 70.0, y.abs() - 20.0);
+        if cx > 0.0 && cy > 0.0 {
+            assert!(((cx * cx + cy * cy).sqrt() - 30.0).abs() < 1e-3, "{x} {y}");
+        }
+        assert_eq!(v.color, [255, 0, 0, 128]);
+    }
+    let exact = 20_000.0 - (4.0 - core::f64::consts::PI) * 900.0;
+    let got = tri_area(&c, 0, c.mesh.indices.len() as u32);
+    assert!(got <= exact && got >= exact - 2.0 * core::f64::consts::PI * 30.0 * tol);
+
+    let c = one_node(
+        r##"{"id":1,"type":"shape","kind":"ellipse","size":[600,200],"origin":[0,2000],"style":{"fill":"#00FF00"}}"##,
+    );
+    for v in &c.mesh.vertices {
+        let [x, y] = v.pos.map(f64::from);
+        assert!(((x / 300.0).powi(2) + ((y - 2000.0) / 100.0).powi(2) - 1.0).abs() < 1e-5);
+    }
+    let exact = core::f64::consts::PI * 300.0 * 100.0;
+    let got = tri_area(&c, 0, c.mesh.indices.len() as u32);
+    assert!(got <= exact && got >= exact - 1_405.0 * tol, "{got}");
+
+    // A stroked line is as wide as its stroke; a stroked square's corners are
+    // mitred, not bevelled.
+    let c = one_node(
+        r##"{"id":1,"type":"shape","kind":"line","points":[[0,0],[100,0]],"origin":[0,3000],"style":{"fill":"#FFFFFF","stroke":"#0000FF","strokeWidth":10}}"##,
+    );
+    assert!(
+        c.mesh
+            .vertices
+            .iter()
+            .all(|v| (v.pos[1] - 3000.0).abs() == 5.0)
+    );
+    assert_eq!(tri_area(&c, 0, c.mesh.indices.len() as u32), 1_000.0);
+    let c = one_node(
+        r##"{"id":1,"type":"shape","kind":"rect","size":[100,100],"style":{"stroke":"#000000","strokeWidth":10}}"##,
+    );
+    let extent = c
+        .mesh
+        .vertices
+        .iter()
+        .map(|v| v.pos[0].abs().max(v.pos[1].abs()));
+    assert_eq!(extent.fold(0.0f32, f32::max), 55.0);
+    assert_eq!(
+        tri_area(&c, 0, c.mesh.indices.len() as u32),
+        110.0 * 110.0 - 90.0 * 90.0
+    );
+
+    // An explicit outline, rotated 90° with its section: the triangles cover
+    // it, the bounds cover it, and the anchor is at its centre.
+    let json = r##"{"schema":1,"name":"o","nextOid":99,"categories":[{"key":"a","label":"A","color":"#000000"}],
+      "nodes":[{"id":1,"type":"section","label":"Box","rotation":90,"origin":[1000,0],"category":"a",
+        "outline":{"points":[[0,0],[400,0],[400,300],[0,300]]},
+        "children":[{"id":2,"type":"row","path":{"kind":"polyline","points":[[100,150],[300,150]]},"seats":3,"oids":[[10,3]],"label":"A"}]},
+        {"id":3,"type":"shape","kind":"rect","size":[10,10],"style":{"fill":"#FFFFFF"}}]}"##;
+    let c = decode_both(&compile_json(json).unwrap());
+    assert_mesh_partition(&c);
+    let s = c.sections[0];
+    assert_eq!(tri_area(&c, s.mesh_first, s.mesh_count), 120_000.0);
+    let outline = &c.mesh.indices[s.mesh_first as usize..(s.mesh_first + s.mesh_count) as usize];
+    for &i in outline {
+        let v = c.mesh.vertices[i as usize];
+        assert_eq!(v.color, [255; 4]);
+        assert!((v.pos[0] - 700.0).abs() < 1e-3 || (v.pos[0] - 1000.0).abs() < 1e-3);
+        assert!(v.pos[1].abs() < 1e-3 || (v.pos[1] - 400.0).abs() < 1e-3);
+    }
+    assert_eq!(s.bounds, [2800, 0, 4000, 1600]);
+    assert_eq!(s.label_anchor, [3400, 800]);
+    // "Box" in the world's 300 × 400 box: 3 × 0.6 × size < 300 gives 666
+    // quarter units.
+    assert_eq!(s.label_size, 666);
+}
+
+/// Section outline bounds: an automatic outline grows the section's bounds
+/// past its seats, and a section without seats has no outline.
+#[test]
+fn auto_outlines_reach_the_chart() {
+    let json = r##"{"schema":1,"name":"o","nextOid":999,"categories":[{"key":"a","label":"A","color":"#000000"}],
+      "nodes":[{"id":1,"type":"section","label":"Stalls","rotation":30,"category":"a",
+        "children":[{"id":2,"type":"rowBlock","curve":{"kind":"arc","radius":1500},"rows":[{"rid":3,"seats":20,"oids":[[10,20]]},{"rid":4,"seats":20,"oids":[[30,20]],"removed":[3,4]}]}]},
+        {"id":5,"type":"section","label":"Empty"}]}"##;
+    let c = decode_both(&compile_json(json).unwrap());
+    assert_mesh_partition(&c);
+    let (s, empty) = (c.sections[0], c.sections[1]);
+    assert!(s.mesh_count >= 9 && s.label_size > 0);
+    let seat_box = c.rows.iter().fold(c.rows[0].bounds, |b, r| {
+        [
+            b[0].min(r.bounds[0]),
+            b[1].min(r.bounds[1]),
+            b[2].max(r.bounds[2]),
+            b[3].max(r.bounds[3]),
+        ]
+    });
+    // At least the padding (47.5 cu, 190 quarter units) beyond the seats.
+    assert!(s.bounds[0] <= seat_box[0] - 190 && s.bounds[3] >= seat_box[3] + 190);
+    assert!(c.mesh.vertices.iter().all(|v| {
+        let q = v.pos.map(|x| (x * 4.0) as i32);
+        q[0] >= s.bounds[0]
+            && q[0] <= s.bounds[2] + 1
+            && q[1] >= s.bounds[1]
+            && q[1] <= s.bounds[3] + 1
+    }));
+    let (ax, ay) = (f64::from(s.label_anchor[0]), f64::from(s.label_anchor[1]));
+    assert!(
+        ax > f64::from(s.bounds[0])
+            && ax < f64::from(s.bounds[2])
+            && ay > f64::from(s.bounds[1])
+            && ay < f64::from(s.bounds[3])
+    );
+    assert_eq!(
+        (
+            empty.mesh_count,
+            empty.bounds,
+            empty.label_anchor,
+            empty.label_size
+        ),
+        (0, [0; 4], [0, 0], 0)
+    );
+}
+
+/// Text, icons and background images keep their fields through compile and
+/// decode, placed through their section; reference images are not compiled.
+#[test]
+fn decorations_round_trip() {
+    let json = r##"{"schema":1,"name":"d","nextOid":99,"nodes":[
+      {"id":1,"type":"section","rotation":90,"origin":[100,0],"children":[
+        {"id":2,"type":"text","text":"STAGE","size":120,"weight":600,"color":"#F9FAFB","align":"center","minZoom":0.5,"origin":[10,0],"rotation":45}]},
+      {"id":3,"type":"icon","icon":"entrance","size":80,"origin":[-50.3,20]},
+      {"id":4,"type":"image","asset":"0123456789abcdef0123456789abcdef","size":[4000,3000],"opacity":0.5,"role":"background","origin":[2000,1500]},
+      {"id":5,"type":"image","asset":"not a hash","size":[1,1],"role":"reference"}]}"##;
+    let c = decode_both(&compile_json(json).unwrap());
+    let t = c.texts[0];
+    assert_eq!(c.strings.get(t.text), Some("STAGE"));
+    assert_eq!(
+        (
+            t.pos, t.size, t.angle, t.color, t.align, t.weight, t.min_zoom
+        ),
+        (
+            [400, 40],
+            480,
+            24_576,
+            [0xF9, 0xFA, 0xFB, 255],
+            cavea_format::TextAlign::Center,
+            600,
+            0.5
+        )
+    );
+    let i = c.icons[0];
+    assert_eq!(c.strings.get(i.key), Some("entrance"));
+    assert_eq!((i.pos, i.size, i.angle), ([-201, 80], 320, 0));
+    assert_eq!(c.images.len(), 1);
+    let im = c.images[0];
+    assert_eq!(
+        c.strings.get(im.asset),
+        Some("0123456789abcdef0123456789abcdef")
+    );
+    assert_eq!(
+        (im.bounds, im.angle, im.opacity),
+        ([0, 0, 16_000, 12_000], 0, 128)
+    );
+}
+
+#[test]
+fn bad_decorations_and_outlines_name_their_nodes() {
+    let json = r##"{"schema":1,"name":"b","nextOid":99,"nodes":[
+      {"id":1,"type":"text","text":"x","size":10,"color":"#GGGGGG"},
+      {"id":2,"type":"shape","kind":"rect","size":[0,10],"style":{"fill":"#000000"}},
+      {"id":3,"type":"image","asset":"ABCDEF","size":[10,10],"role":"background"},
+      {"id":4,"type":"shape","kind":"path","d":"M0 0 A 10 10 0 0 1 20 20","style":{"fill":"#000000"}},
+      {"id":5,"type":"section","outline":{"points":[[0,0],[100,100],[100,0],[0,100]]}},
+      {"id":6,"type":"shape","kind":"polygon","points":[[0,0],[1,1],[0,1]],"style":{"fill":"red"}},
+      {"id":7,"type":"shape","kind":"line","points":[[5,5],[5,5]],"style":{"stroke":"#000000","strokeWidth":1}},
+      {"id":8,"type":"text","text":"x","size":0,"color":"#000000"},
+      {"id":9,"type":"icon","icon":"bar","size":10,"floor":7},
+      {"id":10,"type":"shape","kind":"ellipse","size":[1e300,10],"style":{"fill":"#000000"}},
+      {"id":11,"type":"shape","kind":"rect","size":[10,10],"origin":[6e8,0],"style":{"fill":"#000000"}}]}"##;
+    let got: Vec<_> = findings(json)
+        .into_iter()
+        .map(|f| (f.code, f.node))
+        .collect();
+    // Floors are checked while planning, before outlines and decoration.
+    let want: Vec<_> = [
+        (Code::E007, 9),
+        (Code::E005, 5),
+        (Code::E005, 1),
+        (Code::E005, 2),
+        (Code::E007, 3),
+        (Code::E005, 4),
+        (Code::E005, 6),
+        (Code::E005, 7),
+        (Code::E005, 8),
+        (Code::E005, 10),
+        (Code::E005, 11),
+    ]
+    .into_iter()
+    .map(|(c, n)| (c, Some(n)))
+    .collect();
+    assert_eq!(got, want);
 }
 
 /// Structurally random documents, nonsense included: compiling never panics,
@@ -886,7 +1260,75 @@ fn mutate(doc: &mut ChartDocument, r: &mut Rng) {
 }
 
 fn mutate_node(node: &mut Node, r: &mut Rng, w: f64, n: u32) {
+    // A zigzag that crosses itself many times.
+    let zigzag = |n: u32| -> Vec<[f64; 2]> {
+        (0..n)
+            .map(|k| {
+                [
+                    f64::from(k % 7) * 100.0,
+                    f64::from(k % 5) * 130.0 - f64::from(k),
+                ]
+            })
+            .collect()
+    };
     match node {
+        Node::Section(s) if r.chance(40) => {
+            s.outline = doc::Outline::Points(doc::Points {
+                points: match r.int(0, 3) {
+                    0 => vec![[0.0, 0.0], [w, 0.0], [0.0, 100.0]],
+                    1 => zigzag(n + 4),
+                    2 => zigzag(5000),
+                    _ => vec![[1.0, 1.0]; (n % 4) as usize],
+                },
+            })
+        }
+        Node::Shape(sh) => match r.int(0, 9) {
+            0 => sh.size = Some([w, 1.0]),
+            1 => sh.corner_radius = Some(w),
+            2 => sh.points = Some(vec![[w, 0.0], [0.0, 1.0], [1.0, 1.0]]),
+            3 => {
+                sh.kind = doc::ShapeKind::Polygon;
+                sh.points = Some(zigzag(n * 4 + 3));
+                sh.style.fill = Some("#000000".into());
+            }
+            4 => {
+                sh.kind = doc::ShapeKind::Path;
+                sh.d = Some(
+                    [
+                        "M",
+                        "M0 0 L",
+                        "M0 0 Z Z 1",
+                        "M 1e400 0 L 1 1",
+                        "M0 0 c 1 2 3",
+                        "m0 0 l5 5 5",
+                    ][(n % 6) as usize]
+                        .into(),
+                );
+            }
+            5 => sh.style.stroke_width = w,
+            6 => sh.style.opacity = w,
+            7 => {
+                sh.kind = doc::ShapeKind::Path;
+                sh.d = Some(format!(
+                    "M0 0 {}",
+                    "C 9e5 0 -9e5 9e5 1 1 ".repeat(n as usize * 4)
+                ));
+            }
+            8 => sh.style.stroke = Some("#12345".into()),
+            _ => sh.origin = [w, w],
+        },
+        Node::Text(t) => match r.int(0, 3) {
+            0 => t.size = w,
+            1 => t.min_zoom = w,
+            2 => t.weight = n as u16 * 20,
+            _ => t.rotation = w,
+        },
+        Node::Icon(i) => i.size = w,
+        Node::Image(im) => match r.int(0, 2) {
+            0 => im.size = [w, 1.0],
+            1 => im.opacity = w,
+            _ => im.asset = "f".repeat(n as usize),
+        },
         Node::Section(s) => match r.int(0, 5) {
             0 => s.origin = [w, 1.0],
             1 => s.rotation = w,
@@ -930,15 +1372,17 @@ fn mutate_node(node: &mut Node, r: &mut Rng, w: f64, n: u32) {
     }
 }
 
-/// 100,000 seats in 40 sections. Run with
-/// `cargo test -p cavea-compiler --release -- --ignored --nocapture compile_100k`.
+/// 100,000 seats in 100 rotated, curved sections, the size the slice reports
+/// are measured on. Run with
+/// `cargo test -p cavea-compiler --release -- --ignored --nocapture compile_100k`;
+/// with `CAVEA_DUMP=<path>` set it also writes the public artefact there.
 #[test]
 #[ignore = "timing, run by hand in release mode"]
 fn compile_100k_timing() {
     let mut nodes = Vec::new();
     let mut oid = 100_000u32;
-    for s in 0..40 {
-        let rows: Vec<String> = (0..25)
+    for s in 0..100 {
+        let rows: Vec<String> = (0..10)
             .map(|i| {
                 let row = format!(
                     r#"{{"rid":{},"seats":100,"oids":[[{oid},100]]}}"#,
@@ -952,15 +1396,15 @@ fn compile_100k_timing() {
             r#"{{"id":{},"type":"section","label":"S{s}","category":"a","rotation":{},"origin":[{},{}],"children":[{{"id":{},"type":"rowBlock","curve":{{"kind":"arc","radius":3000}},"rows":[{}]}}]}}"#,
             10 + s * 2,
             s * 9,
-            (s % 8) * 6000,
-            (s / 8) * 3000,
+            (s % 10) * 6000,
+            (s / 10) * 3000,
             11 + s * 2,
             rows.join(",")
         ));
     }
     let json = format!(
         r##"{{"schema":1,"name":"100k","nextOid":999999,"categories":[{{"key":"a","label":"A","color":"#000000"}}],
-          "floors":[{{"id":1,"name":"F","focalPoint":[20000,-2000]}}],"nodes":[{}]}}"##,
+          "floors":[{{"id":1,"name":"F","focalPoint":[30000,-2000]}}],"nodes":[{}]}}"##,
         nodes.join(",")
     );
     let doc = ChartDocument::from_json(json.as_bytes()).unwrap();
@@ -972,6 +1416,9 @@ fn compile_100k_timing() {
         assert_eq!(c.stats.seats, 100_000);
     }
     let c = compile(&doc).unwrap();
+    if let Ok(path) = std::env::var("CAVEA_DUMP") {
+        std::fs::write(path, &c.public).unwrap();
+    }
     eprintln!(
         "100k seats: best of 5 {:.1} ms; public {} B, full {} B, {:?}",
         best * 1e3,

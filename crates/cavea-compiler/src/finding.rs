@@ -102,6 +102,13 @@ pub enum Detail {
     },
     /// A world position that does not fit the compiled format (±2²⁹ cu).
     OutOfRange,
+    /// Geometry that cannot be drawn: a self-intersecting outline, a shape of
+    /// zero size, path data that does not parse.
+    Geometry {
+        problem: &'static str,
+    },
+    /// An image `asset` that is not a content hash (32 lowercase hex digits).
+    BadAsset,
     /// More than the limit of this kind.
     TooMany {
         what: &'static str,
@@ -161,6 +168,8 @@ impl fmt::Display for Finding {
             Detail::DuplicateId { id, first } => write!(f, "id {id} is also used in node {first}"),
             Detail::InvalidValue { field } => write!(f, "invalid {field}"),
             Detail::OutOfRange => f.write_str("position outside ±2^29 chart units"),
+            Detail::Geometry { problem } => f.write_str(problem),
+            Detail::BadAsset => f.write_str("asset is not a 32-digit lowercase hex hash"),
             Detail::TooMany { what, limit } => write!(f, "more than {limit} {what}"),
             Detail::UnsupportedNode { kind } => write!(f, "{kind} nodes are not compiled yet"),
         }

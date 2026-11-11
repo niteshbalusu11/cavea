@@ -39,6 +39,9 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 ] }
 serde = { version = "1", default-features = false, features = ["std", "derive"] }
 serde_json = "1"
+# Compile-time tessellation of outlines and shapes (01 §4). `std` only; no curves
+# or round joins are handed to it, so its trigonometry is never reached.
+lyon_tessellation = { version = "1.0.23", default-features = false, features = ["std"] }
 # Renderer: WebGL2 bindings at run time; WGSL to GLSL translation at build time only.
 glow = { version = "0.18", default-features = false }
 naga = { version = "30.0.1", default-features = false, features = ["wgsl-in", "glsl-out"] }
