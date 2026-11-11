@@ -791,6 +791,81 @@ async fn migration_rows(pool: &PgPool) -> Vec<i64> {
         .unwrap()
 }
 
+/// A TCP forwarder to PostgreSQL that admits at most `limit` connections
+/// and can be cut and restored: the database full, down, back. Returns its
+/// port, the switch, and how many connections it forwards.
+async fn proxy(
+    target: (String, u16),
+    limit: usize,
+) -> (u16, tokio::sync::watch::Sender<bool>, Arc<AtomicU32>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (up, watch) = tokio::sync::watch::channel(true);
+    let live = Arc::new(AtomicU32::new(0));
+    let count = live.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut client, _) = listener.accept().await.unwrap();
+            if !*watch.borrow() || count.load(Ordering::SeqCst) as usize >= limit {
+                continue; // dropped: the client reads the end of the stream
+            }
+            count.fetch_add(1, Ordering::SeqCst);
+            let (mut down, count, target) = (watch.clone(), count.clone(), target.clone());
+            tokio::spawn(async move {
+                let mut server = tokio::net::TcpStream::connect(target).await.unwrap();
+                tokio::select! {
+                    _ = tokio::io::copy_bidirectional(&mut client, &mut server) => {}
+                    _ = down.wait_for(|up| !*up) => {}
+                }
+                count.fetch_sub(1, Ordering::SeqCst);
+            });
+        }
+    });
+    (port, up, live)
+}
+
+/// The pool opens every connection at start and keeps them (13 §7.4): a pool
+/// that grew on demand opened PostgreSQL connections inside the first burst
+/// of requests, which put the snapshot route's p99 at 9 to 12 ms on a fresh
+/// process. An unreachable database still stops the start; one that refuses
+/// some connections does not; after an outage the pool serves again.
+#[tokio::test]
+#[ignore = "needs PostgreSQL: set CAVEA_TEST_DATABASE_URL, pass --include-ignored"]
+async fn the_pool_opens_what_it_can_at_start_and_recovers() {
+    with_db(|options| async move {
+        let pool = store::connect(options.clone(), 3).await.unwrap();
+        assert_eq!(pool.size(), 3);
+        // Connections go back to the pool on a task of their own.
+        while pool.num_idle() < 3 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let local = options.clone().host("127.0.0.1");
+        assert!(store::connect(local.clone().port(port), 2).await.is_err());
+
+        let target = (options.get_host().to_owned(), options.get_port());
+        let (port, up, live) = proxy(target, 2).await;
+        let pool = store::connect(local.port(port), 4).await.unwrap();
+        assert_eq!(
+            pool.size(),
+            2,
+            "the start goes on with what PostgreSQL allows"
+        );
+
+        up.send_replace(false);
+        while live.load(Ordering::SeqCst) > 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(sqlx::query("SELECT 1").execute(&pool).await.is_err());
+        up.send_replace(true);
+        sqlx::query("SELECT 1").execute(&pool).await.unwrap();
+    })
+    .await;
+}
+
 #[tokio::test]
 #[ignore = "needs PostgreSQL: set CAVEA_TEST_DATABASE_URL, pass --include-ignored"]
 async fn migrations_apply_once_and_refuse_an_unknown_schema() {
@@ -800,23 +875,23 @@ async fn migrations_apply_once_and_refuse_an_unknown_schema() {
         a.unwrap();
         b.unwrap();
         let pool = store::connect(options.clone(), 2).await.unwrap();
-        assert_eq!(migration_rows(&pool).await, [1, 2, 3, 4, 5]);
+        assert_eq!(migration_rows(&pool).await, [1, 2, 3, 4, 5, 6]);
         // Again: nothing to do.
         store::migrate(&options).await.unwrap();
-        assert_eq!(migration_rows(&pool).await, [1, 2, 3, 4, 5]);
+        assert_eq!(migration_rows(&pool).await, [1, 2, 3, 4, 5, 6]);
 
         // A migration from a newer server.
         sqlx::query(
             "INSERT INTO cavea_migrations (version, description, success, checksum, execution_time)
-             VALUES (6, 'future', true, '\\x00', 0)",
+             VALUES (7, 'future', true, '\\x00', 0)",
         )
         .execute(&pool)
         .await
         .unwrap();
         let err = store::migrate(&options).await.unwrap_err();
-        assert!(matches!(err, MigrationError::Newer(6)), "{err}");
+        assert!(matches!(err, MigrationError::Newer(7)), "{err}");
         assert!(err.to_string().contains("newer"), "{err}");
-        sqlx::query("DELETE FROM cavea_migrations WHERE version = 6")
+        sqlx::query("DELETE FROM cavea_migrations WHERE version = 7")
             .execute(&pool)
             .await
             .unwrap();

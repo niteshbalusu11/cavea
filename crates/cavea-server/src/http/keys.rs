@@ -10,7 +10,9 @@ use super::extract::{Json, Page, Path, Query, check_text, invalid_field};
 use super::openapi::{Needs, Op, Routes};
 use super::staff::Staff;
 use super::{ApiError, AppState, Code, List};
+use crate::audit::{self, Entry};
 use crate::console::Permission;
+use serde_json::json;
 
 pub(super) fn routes() -> Routes {
     Routes::new()
@@ -202,14 +204,27 @@ async fn create(
         }
     };
     let new = NewKey::generate(body.kind)?;
-    let row: KeyRow = sqlx::query_as(CREATE)
-        .bind(auth.workspace().uuid())
-        .bind(body.kind.as_str())
-        .bind(&new.prefix)
-        .bind(new.hash.as_slice())
-        .bind(&body.name)
-        .bind(origins)
-        .fetch_one(&state.db)
+    let actor = auth.actor();
+    let create = async {
+        let mut tx = state.db.begin().await?;
+        let row: KeyRow = sqlx::query_as(CREATE)
+            .bind(auth.workspace().uuid())
+            .bind(body.kind.as_str())
+            .bind(&new.prefix)
+            .bind(new.hash.as_slice())
+            .bind(&body.name)
+            .bind(origins)
+            .fetch_one(&mut *tx)
+            .await?;
+        let id = format!("key_{}", row.0);
+        let entry = Entry::by(&auth, &actor, "api_key.created")
+            .target(&id)
+            .detail(json!({ "kind": body.kind.as_str() }));
+        audit::record(&mut tx, entry).await?;
+        tx.commit().await?;
+        Ok::<_, sqlx::Error>(row)
+    };
+    let row = create
         .instrument(cavea_telemetry::db_span("create_key"))
         .await?;
     let view = KeyView::new(row, Some(new.key))?;
@@ -222,6 +237,10 @@ async fn create(
 const LOCK_WORKSPACE: &str = "SELECT FROM workspaces WHERE id = $1::uuid FOR NO KEY UPDATE";
 const CALLER_ACTIVE: &str =
     "SELECT EXISTS (SELECT FROM api_keys WHERE id = $1::uuid AND revoked_at IS NULL)";
+/// Whether the key is unrevoked, read under the workspace's lock: only a
+/// revocation that changes it is audited.
+const LIVE: &str =
+    "SELECT revoked_at IS NULL FROM api_keys WHERE workspace_id = $1::uuid AND id = $2::uuid";
 /// Idempotent: revoking a revoked key returns it unchanged.
 const REVOKE: &str = concat!(
     "UPDATE api_keys SET revoked_at = coalesce(revoked_at, now())
@@ -245,6 +264,7 @@ async fn revoke(
             .with_message("A key cannot revoke itself; revoke it with another secret key.")
             .with_detail("reason", "self_revocation"));
     }
+    let actor = auth.actor();
     let revoke = async {
         let mut tx = state.db.begin().await?;
         sqlx::query(LOCK_WORKSPACE)
@@ -262,11 +282,21 @@ async fn revoke(
                 return Err(ApiError::new(Code::Unauthorized).with_detail("reason", "invalid"));
             }
         }
+        let live: Option<bool> = sqlx::query_scalar(LIVE)
+            .bind(auth.workspace().uuid())
+            .bind(id.uuid())
+            .fetch_optional(&mut *tx)
+            .await?;
         let row: Option<KeyRow> = sqlx::query_as(REVOKE)
             .bind(auth.workspace().uuid())
             .bind(id.uuid())
             .fetch_optional(&mut *tx)
             .await?;
+        if live == Some(true) {
+            let target = id.to_string();
+            let entry = Entry::by(&auth, &actor, "api_key.revoked").target(&target);
+            audit::record(&mut tx, entry).await?;
+        }
         tx.commit().await?;
         row.ok_or_else(|| ApiError::new(Code::NotFound))
     };

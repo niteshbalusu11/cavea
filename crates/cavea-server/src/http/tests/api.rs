@@ -901,6 +901,12 @@ const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
     ),
     (Method::DELETE, "/console/api/session", 204, None),
     (Method::GET, "/console/api/members", 200, None),
+    (
+        Method::POST,
+        "/console/api/members",
+        201,
+        Some(r#"{"email":"new-{n}@a.example","role":"viewer"}"#),
+    ),
     // `{user}` is the viewer, left a viewer; `{spare}` a member the matrix
     // adds back before each cell.
     (
@@ -910,6 +916,34 @@ const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
         Some(r#"{"role":"viewer"}"#),
     ),
     (Method::DELETE, "/console/api/members/{spare}", 204, None),
+    (Method::GET, "/console/api/invitations", 200, None),
+    // Added back before each cell, like `{spare}`.
+    (
+        Method::DELETE,
+        "/console/api/invitations/{invitation}",
+        204,
+        None,
+    ),
+    // No such token: refused for everyone alike.
+    (
+        Method::POST,
+        "/console/api/invitations/accept",
+        401,
+        Some(r#"{"token":"0000","password":"not-a-real-password-1"}"#),
+    ),
+    (
+        Method::PATCH,
+        "/console/api/workspace",
+        200,
+        Some(r#"{"name":"a"}"#),
+    ),
+    (Method::GET, "/console/api/audit", 200, None),
+    (
+        Method::POST,
+        "/v1/workspaces/{workspace}/invitations",
+        201,
+        Some(r#"{"email":"owner-{n}@c.example"}"#),
+    ),
 ];
 
 /// Each route's permission (09 §2), written out: `every_route_declares_its_permission`
@@ -948,8 +982,17 @@ const PERMISSIONS: &[(Method, &str, &str)] = &[
     ),
     (Method::GET, "/v1/events/{event}/objects", "events.read"),
     (Method::GET, "/console/api/members", "settings"),
+    (Method::POST, "/console/api/members", "settings"),
     (Method::PATCH, "/console/api/members/{user}", "settings"),
     (Method::DELETE, "/console/api/members/{user}", "settings"),
+    (Method::GET, "/console/api/invitations", "settings"),
+    (
+        Method::DELETE,
+        "/console/api/invitations/{invitation}",
+        "settings",
+    ),
+    (Method::PATCH, "/console/api/workspace", "settings"),
+    (Method::GET, "/console/api/audit", "settings"),
 ];
 
 /// Every route a secret key or a console member may call declares exactly
@@ -1082,8 +1125,15 @@ fn with_key(path: &str, key: &str) -> String {
 }
 
 /// Placeholders that name an identifier of the tenant under test.
-const IDENTIFIERS: [&str; 7] = [
-    "{key}", "{chart}", "{hash}", "{event}", "{token}", "{user}", "{spare}",
+const IDENTIFIERS: [&str; 8] = [
+    "{key}",
+    "{chart}",
+    "{hash}",
+    "{event}",
+    "{token}",
+    "{user}",
+    "{spare}",
+    "{invitation}",
 ];
 
 /// The route that takes the tenant's hold token in `Cavea-Hold-Token`.
@@ -1188,8 +1238,14 @@ struct Members {
     sessions: Vec<(Cred, SessionId)>,
     /// An editor of A whom the member removal row removes: `{spare}`.
     spare: String,
+    /// An invitation to A that its revocation row revokes: `{invitation}`.
+    invitation: String,
 }
 
+const SPARE_INVITATION: &str = "INSERT INTO invitations
+  (id, workspace_id, email, role, token_hash, expires_at)
+VALUES ($1::uuid, $2::uuid, 'invited@a.example', 'viewer', '\\x00', now() + interval '1 day')
+ON CONFLICT DO NOTHING";
 const SPARE_MEMBER: &str = "INSERT INTO memberships (user_id, workspace_id, role)
 VALUES ($1::uuid, $2::uuid, 'editor') ON CONFLICT DO NOTHING";
 
@@ -1206,10 +1262,16 @@ impl Members {
         let (user, _) = member(pool, &b.id, Role::Owner, "outsider@b.example").await;
         users.push((Cred::Outsider, user));
         let (spare, _) = member(pool, &a.id, Role::Editor, "spare@a.example").await;
+        let invitation: String =
+            sqlx::query_scalar("SELECT replace(gen_random_uuid()::text, '-', '')")
+                .fetch_one(pool)
+                .await
+                .unwrap();
         let mut members = Self {
             users,
             sessions: Vec::new(),
             spare,
+            invitation,
         };
         members.sign_in(pool).await;
         members
@@ -1221,6 +1283,7 @@ impl Members {
         template
             .replace("{user}", &format!("usr_{viewer}"))
             .replace("{spare}", &format!("usr_{}", self.spare))
+            .replace("{invitation}", &format!("inv_{}", self.invitation))
     }
 
     fn user(&self, cred: Cred) -> &str {
@@ -1231,10 +1294,16 @@ impl Members {
             .unwrap()
     }
 
-    /// Put back what a successful cell of the removal row took away.
+    /// Put back what a successful cell of the removal rows took away.
     async fn restore(&self, pool: &PgPool, a: &Tenant) {
         sqlx::query(SPARE_MEMBER)
             .bind(&self.spare)
+            .bind(&a.id[3..])
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(SPARE_INVITATION)
+            .bind(&self.invitation)
             .bind(&a.id[3..])
             .execute(pool)
             .await

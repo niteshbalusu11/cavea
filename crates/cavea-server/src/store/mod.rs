@@ -28,15 +28,48 @@ pub use migrations::{MigrationError, migrate};
 /// idempotency retention (08 §6.1), which assumes commits time out within it.
 pub const COMMIT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Open the connection pool: `size` connections at most, the first one now so
-/// that an unreachable database stops startup.
+/// Open the connection pool, `size` connections, and keep them open. A pool
+/// that grew on demand would open a connection (TCP, a PostgreSQL backend,
+/// SCRAM) inside each request of the first burst after a start or a quiet
+/// spell, and the opening rush of an on-sale is such a burst (13 §7.4).
+///
+/// The first connection must open (within [`COMMIT_TIMEOUT`]), so an
+/// unreachable database stops the start as before. The others are opened
+/// now, before the server listens, as far as the database allows: one it
+/// refuses (its `max_connections` reached, say by the process this one
+/// replaces) leaves the rest to be opened later, with a warning, rather than
+/// failing the start. Later, a request that finds no idle connection opens
+/// one, and every 10 minutes the pool retires idle connections past sqlx's
+/// idle timeout (10 minutes) or lifetime (30 minutes) and opens connections
+/// back up to `size` in the background, so a quiet night ends warm.
 pub async fn connect(options: PgConnectOptions, size: u32) -> Result<PgPool, sqlx::Error> {
-    PgPoolOptions::new()
+    let pool = PgPoolOptions::new()
         .max_connections(size)
+        .min_connections(size)
         .acquire_timeout(COMMIT_TIMEOUT)
-        .connect_with(options)
-        .instrument(cavea_telemetry::db_span("connect"))
-        .await
+        .connect_lazy_with(options);
+    let open = async {
+        // Held until all are open, so that each `acquire` opens a new one.
+        let mut held = vec![pool.acquire().await?];
+        while held.len() < size as usize {
+            match pool.acquire().await {
+                Ok(connection) => held.push(connection),
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        open = held.len(),
+                        size,
+                        "PostgreSQL refused some of CAVEA_DB_POOL's connections; the pool opens \
+                         them when it can"
+                    );
+                    break;
+                }
+            }
+        }
+        Ok::<_, sqlx::Error>(())
+    };
+    open.instrument(cavea_telemetry::db_span("connect")).await?;
+    Ok(pool)
 }
 
 /// [`SeatStore`] on PostgreSQL, speaking for one node. Cheap to clone.

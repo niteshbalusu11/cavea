@@ -1,0 +1,17 @@
+# The image builds from sources only (deploy/Dockerfile): no build output,
+# installed packages, history or local settings in the context.
+**/target
+**/node_modules
+**/dist
+packages/*/wasm
+.git
+.github
+.direnv
+.private
+.env
+.env.*
+.DS_Store
+.idea
+.vscode
+fuzz
+docs

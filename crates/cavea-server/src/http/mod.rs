@@ -28,6 +28,7 @@ mod realtime;
 mod seats;
 mod session;
 pub mod staff;
+pub mod web;
 mod workspaces;
 
 use std::sync::Arc;
@@ -70,6 +71,8 @@ pub struct AppState {
     pub asset_memory: crate::assets::Memory,
     /// The console's sign-in back-off (`crate::console::guard`).
     pub sign_in: Arc<crate::console::guard::Guard>,
+    /// The console's files (`web`), compiled in by `cargo xtask build-server`.
+    pub console: web::Files,
 }
 
 /// The whole HTTP surface.
@@ -94,12 +97,13 @@ fn routes() -> openapi::Routes {
         .merge(members::routes())
 }
 
-/// Add the problem+json fallbacks, the default body limit, CORS for the public
-/// routes, the panic layer and the request span layer. The layers only wrap
-/// routes added before them, so every route goes in before this.
+/// Add the fallbacks (the console's files, else problem+json), the default
+/// body limit, CORS for the public routes, the panic layer and the request
+/// span layer. The layers only wrap routes added before them, so every route
+/// goes in before this.
 fn finish(routes: Router<AppState>, state: AppState) -> Router {
     routes
-        .fallback(|| async { ApiError::new(Code::NotFound).with_message("No such endpoint.") })
+        .fallback(web::fallback)
         .method_not_allowed_fallback(|| async {
             ApiError::new(Code::NotFound).with_message("No such endpoint for this method.")
         })

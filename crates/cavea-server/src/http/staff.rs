@@ -6,8 +6,9 @@
 //!   the console cookie, a signed-in member acting in the workspace named by
 //!   `Cavea-Workspace`, whose role grants the route's permission (declared in
 //!   the route table, `openapi::Needs::Staff`).
-//! - [`Member`]: the `/console/api` routes of a workspace (its members): the
-//!   console session only, with the same workspace and permission checks.
+//! - [`Member`]: the `/console/api` routes of a workspace (members,
+//!   invitations, the audit log): the console session only, with the same
+//!   workspace and permission checks.
 //! - [`ConsoleUser`]: the `/console/api` routes of a signed-in user.
 //!
 //! Every non-safe method authenticated by the cookie must carry the session's
@@ -126,15 +127,19 @@ fn is_safe(method: &Method) -> bool {
 
 /// The session from the cookie, checked for CSRF and origin on a non-safe
 /// method before anything is looked up.
-fn cookie_session(parts: &Parts, state: &AppState) -> Result<SessionId, ApiError> {
-    let id = match session_cookie(&parts.headers, state) {
+pub(super) fn cookie_session(
+    headers: &HeaderMap,
+    method: &Method,
+    state: &AppState,
+) -> Result<SessionId, ApiError> {
+    let id = match session_cookie(headers, state) {
         Some(Some(id)) => id,
         Some(None) => return Err(console_session_refused()),
         None => return Err(unauthorized("missing")),
     };
-    if !is_safe(&parts.method) {
-        same_origin(&parts.headers)?;
-        let sent = parts.headers.get(CSRF).map(HeaderValue::as_bytes);
+    if !is_safe(method) {
+        same_origin(headers)?;
+        let sent = headers.get(CSRF).map(HeaderValue::as_bytes);
         let valid = sent.is_some_and(|sent| bool::from(sent.ct_eq(id.csrf().as_bytes())));
         if !valid {
             return Err(ApiError::new(Code::Forbidden)
@@ -149,7 +154,8 @@ fn cookie_session(parts: &Parts, state: &AppState) -> Result<SessionId, ApiError
 /// cookie, no `Authorization`) is `Cache-Control: no-store`: unlike
 /// `Authorization`, a cookie does not keep a shared cache from storing a
 /// response (RFC 9111 §3.5), and one workspace's answer must never be served
-/// for another's request to the same URL. Requests with a key are untouched.
+/// for another's request to the same URL. Requests with a key are untouched,
+/// and so are the console's own files (`web::Shared`), the same for everyone.
 pub async fn no_store_for_cookies(
     axum::extract::State(state): axum::extract::State<AppState>,
     request: axum::extract::Request,
@@ -158,7 +164,7 @@ pub async fn no_store_for_cookies(
     let cookie = !request.headers().contains_key(header::AUTHORIZATION)
         && session_cookie(request.headers(), &state).is_some();
     let mut response = next.run(request).await;
-    if cookie {
+    if cookie && response.extensions().get::<super::web::Shared>().is_none() {
         response
             .headers_mut()
             .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -211,7 +217,8 @@ impl FromRequestParts<AppState> for Staff {
 
 /// Requires a console session of a member whose role grants the route's
 /// permission, in the workspace the request names: the `/console/api` routes
-/// of a workspace (its members), which no API key may call.
+/// of a workspace (members, invitations, the audit log), which no API key
+/// may call.
 #[derive(Debug, Clone)]
 pub struct Member(pub Auth);
 
@@ -236,7 +243,7 @@ async fn member(parts: &Parts, state: &AppState) -> Result<Auth, ApiError> {
         .get::<Permission>()
         .copied()
         .ok_or_else(|| ApiError::internal("the route declares no permission"))?;
-    let id = cookie_session(parts, state).map_err(|e| {
+    let id = cookie_session(&parts.headers, &parts.method, state).map_err(|e| {
         if e.code() == Code::Unauthorized {
             console_session_refused()
         } else {
@@ -278,7 +285,7 @@ impl FromRequestParts<AppState> for ConsoleUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
-        let id = cookie_session(parts, state).map_err(|e| {
+        let id = cookie_session(&parts.headers, &parts.method, state).map_err(|e| {
             if e.code() == Code::Unauthorized {
                 console_session_refused()
             } else {
