@@ -54,7 +54,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **FND-006** Release profile tuning for WASM: LTO, `panic = "abort"`, optimisation level, allocator choice; measure each (01 §5)
 - [ ] **FND-007** Generate TypeScript types from Rust for options, events and payloads (05 §3, §5)
 - [x] **FND-008** Workspace lint configuration: moderate clippy set, strict `tsc`, oxc rules (01 §4)
-- [ ] **FND-009** Changelog tooling and commit conventions (01 §6)
+- [x] **FND-009** Changelog tooling and commit conventions (01 §6)
 - [x] **FND-010** Nix development environment: `flake.nix` with every non-trivial tool, `.envrc` using the flake, so `direnv allow` loads everything (ORCHESTRATION §5, §10)
 
 ### Chart format and compiler
@@ -138,12 +138,12 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **WEB-010** Theme tokens as CSS custom properties, applied live (05 §8)
 - [x] **WEB-011** Message catalogue in English, `messages` override, `locale` (05 §3.4)
 - [x] **WEB-012** `preloadSeatMap` and preload documentation (05 §10)
-- [ ] **WEB-013** Script-tag build (05 §1)
-- [ ] **WEB-014** React wrapper with one-to-one props and imperative ref (05 §11)
-- [ ] **WEB-015** Server-side-rendering safety test with Next.js (05 §10)
-- [ ] **WEB-016** Content Security Policy test page and documentation (05 §10)
+- [x] **WEB-013** Script-tag build (05 §1)
+- [x] **WEB-014** React wrapper with one-to-one props and imperative ref (05 §11)
+- [x] **WEB-015** Server-side-rendering safety test with Next.js (05 §10)
+- [x] **WEB-016** Content Security Policy test page and documentation (05 §10)
 - [x] **WEB-017** Error model and degradation behaviours (05 §9)
-- [ ] **WEB-018** Bundler compatibility checks: Vite, webpack 5, Rollup, esbuild (13 §8)
+- [x] **WEB-018** Bundler compatibility checks: Vite, webpack 5, Rollup, esbuild (13 §8)
 
 ### Accessibility baseline
 

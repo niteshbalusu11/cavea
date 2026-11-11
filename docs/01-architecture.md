@@ -80,7 +80,7 @@ cavea/
 ├─ packages/
 │  ├─ renderer/               # @cavea/renderer (TypeScript wrapper + WASM)
 │  ├─ designer-core/          # @cavea/designer-core (private: the edit core's typed Session)
-│  ├─ react/  vue/  svelte/   # thin wrappers
+│  ├─ react/                  # @cavea/react (built); vue/ svelte/ to come: thin wrappers
 │  ├─ designer-embed/         # @cavea/designer-embed (iframe helper)
 │  ├─ manager-embed/
 │  └─ server-sdk/             # @cavea/server-sdk (Node)
@@ -94,6 +94,8 @@ cavea/
 ├─ sdks/                      # generated server SDKs (PHP, Python, Java, C#, Go)
 ├─ deploy/                    # Dockerfile, compose file, Helm chart
 ├─ bench/                     # chart corpus, traces, load-test scenarios
+├─ fixtures/                  # compatibility fixtures and their runner (13 §8): not workspace members
+├─ tools/                     # glyph atlas baker; changelog list
 ├─ xtask/                     # build orchestration (cargo xtask ...)
 └─ docs/                      # this spec set
 ```
@@ -230,7 +232,13 @@ Drawing 100,000 seats is one instanced draw call, so the GPU is not the constrai
 - `cargo xtask build-web` produces the WASM, runs `wasm-opt`, generates TypeScript types and enforces the size gate against a committed baseline (`13-testing-benchmarks.md` §6.3).
 - `cargo xtask build-designer` builds the designer's module the same way, without a gate; `cargo xtask types` writes the TypeScript types generated from the Rust definitions (D-41), and a test fails when the committed ones are stale.
 - `cargo xtask release` builds the server binary and Docker image, signs both, and writes an SBOM.
+- `bun run build` in `packages/renderer` and `packages/react` writes each package's `dist/`, which is what is published (05 §1); in the monorepo the packages export their TypeScript source, so the apps and tests need no build.
 - Every release publishes: Docker image, npm packages, Swift package, Android library, changelog, upgrade notes.
+
+### Changelog and commit conventions
+
+- **Pull-request titles are the changelog.** A title says what changed for someone using Cavea, in one plain sentence, then the `docs/TODO.md` task ids in parentheses: `Seat map loads from a script tag (WEB-013)`. Pull requests are squash-merged, so the title, with GitHub's `(#N)`, is the one commit on `main`; commit messages on a branch are free and disappear in the squash.
+- **One `CHANGELOG.md`** at the root, for the repository: Cavea releases its packages, server and image together. Pull requests do not edit it: with several builders in flight, a shared "Unreleased" list would conflict on every rebase, and the titles already say it. At a release, `bun tools/changelog.ts` lists the titles merged since the last `v*` tag and the releaser condenses them into the version's section. `bun tools/changelog.ts --check` fails when a commit on `main` since then is not a squash-merged pull request (a direct push the list would miss). No dependency, bot or CI job.
 
 ### Supply chain
 

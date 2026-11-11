@@ -9,14 +9,40 @@ The public JavaScript surface of the renderer. Everything here is semver-stable 
 | Package | Contents |
 |---|---|
 | `@cavea/renderer` | Framework-agnostic renderer: TypeScript API, WASM, font atlas, default styles |
-| `@cavea/react`, `@cavea/vue`, `@cavea/svelte` | Thin wrappers (props in, events out) |
+| `@cavea/react` | React component, `<SeatMap>` (§11) |
+| `@cavea/vue`, `@cavea/svelte` | Thin wrappers (props in, events out). Not yet |
 | `@cavea/designer-embed` | Helper for embedding the designer in an iframe |
 | `@cavea/manager-embed` | Helper for embedding the event manager |
 | `@cavea/server-sdk` | Node client for the server's REST API (never used in the browser) |
 
-A script-tag build (`cavea.min.js` plus `cavea.wasm`) is published for sites without a bundler (not built yet: WEB-013).
+**What a customer installs** (D-55). `@cavea/renderer` is built by `bun run build` in `packages/renderer` into `dist/`, which is the package (`bun pm pack` in it; publishing is OPS-001). Every file is at the top of the package:
 
-**Built today** (WEB-001 to WEB-011, WEB-020 to WEB-025): `createSeatMap`, `staticState`, `customState`, `caveaServer`, `CaveaError` and their types, from `@cavea/renderer`, which has no runtime dependencies, with the built-in interface of §7 (zoom controls, legend, tooltip, toasts, loading and error states), prices (§3.1), the message catalogue (§3.4) and theme tokens as CSS custom properties (§8). Features this document describes but that are not built yet are marked "not yet" with the task that builds them. Options and callbacks that are not built are left out of the TypeScript types, so a typed build fails on them; passed anyway, they are ignored with a development warning (§3.6). `loadRenderer()` loads the shared WASM and reports its `version()`; nothing else below the public API is exported.
+| File | What |
+|---|---|
+| `index.js` | The public API as one ES module, not minified, with `process.env.NODE_ENV` left for the customer's bundler (§3.6). `exports["."]`, with `index.d.ts` |
+| `index.d.ts` and the declarations it imports | The public types; `packages/renderer/api.md` is all of them as one file, so an API change shows in a pull request's diff (the build fails while it is stale) |
+| `cavea.min.js` | The script-tag build: a classic script, minified, production, that sets `window.Cavea` to the public API |
+| `cavea_web_bg.wasm`, `glyphs.png` | The renderer and the seat labels' atlas, beside both scripts (`OFL.txt` is the atlas font's licence) |
+
+The package has no runtime dependencies, `"type": "module"`, `"sideEffects": false`, and exports the four files above by name (`@cavea/renderer/cavea.min.js`, `…/cavea_web_bg.wasm`, `…/glyphs.png`) for hosts that copy or preload them. Importing it touches no browser global.
+
+**Where the WASM and the atlas come from.** Both scripts name them `new URL("./cavea_web_bg.wasm", import.meta.url)` and `new URL("./glyphs.png", import.meta.url)`: beside the script that runs. For `index.js`, a bundler that understands the pattern copies and renames them (§13); without a bundler, an ES module served with them finds them beside it. `cavea.min.js` reads its own URL from `document.currentScript` while it runs, so it finds them beside itself on any origin; loaded where there is no current script (as a module, or evaluated by a loader), it uses the page's URL. `assets.baseUrl` (§3.5) overrides both: the two files under another base, relative to the page. `assets.wasm` brings the WASM itself.
+
+**The script-tag build.** For sites without a bundler:
+
+```html
+<script src="https://cdn.example.com/cavea/0.1.0/cavea.min.js"
+        integrity="sha384-…" crossorigin="anonymous"></script>
+<script>
+  Cavea.createSeatMap(document.getElementById('map'), { chart: { url: '…' }, state: Cavea.customState({ … }) });
+</script>
+```
+
+`window.Cavea` has every export of `@cavea/renderer` (`createSeatMap`, `preloadSeatMap`, `customState`, `staticState`, `caveaServer`, `CaveaError`, `loadRenderer`). It is a production build: development warnings (§3.6) are off; a developer who wants them uses `index.js`. From a CDN on another origin, the CDN sends `Access-Control-Allow-Origin` for the script (needed by `integrity` with `crossorigin`) and for the WASM and the atlas (fetched with `fetch()` in CORS mode).
+
+**Integrity.** The script's own hash goes in its `integrity` attribute (`bun run build` prints it). The page cannot put a hash on what the script fetches, so the script pins them itself: `cavea.min.js` carries the SHA-384 of the WASM and the atlas it was built with and fetches both with `integrity`, so a pinned script pins the files it loads, wherever `assets.baseUrl` points; a changed WASM fails to load (`wasm_unavailable`, fatal; a changed atlas, `glyph_atlas_failed`). A host's own `assets.wasm` is not checked. A `<link rel="preload">` for either file needs the same `integrity` attribute, or the browser fetches it twice. `index.js` pins nothing: a bundler may serve its own copies (and an image optimiser may rewrite the atlas).
+
+**Built today** (WEB-001 to WEB-018, WEB-020 to WEB-025): `createSeatMap`, `staticState`, `customState`, `caveaServer`, `CaveaError` and their types, from `@cavea/renderer`, which has no runtime dependencies, with the built-in interface of §7 (zoom controls, legend, tooltip, toasts, loading and error states), prices (§3.1), the message catalogue (§3.4) and theme tokens as CSS custom properties (§8). Features this document describes but that are not built yet are marked "not yet" with the task that builds them. Options and callbacks that are not built are left out of the TypeScript types, so a typed build fails on them; passed anyway, they are ignored with a development warning (§3.6). `loadRenderer()` loads the shared WASM and reports its `version()`; nothing else below the public API is exported.
 
 ## 2. Quick start
 
@@ -460,9 +486,17 @@ For integrators; the docs site repeats this.
 - **Preload.** `preloadSeatMap({ assets?, chart? })` starts fetching and compiling the WASM, fetching and decoding the glyph atlas and, given `chart: { url }`, fetching the chart, before any container exists, as early as the route is known (on hover of a "Choose seats" link, say). A later `createSeatMap` with the same assets and chart URL uses them: the WASM is compiled once per page whoever asked first, and the atlas and the preloaded chart are shared by every later map. It returns a promise that resolves when everything has settled and never rejects; a failure is not kept, so a later map fetches again (and retries, §9). It is safe to call many times, and on a server: without a DOM it does nothing. Measured on the demo (`?chart=<stadium-100k.ccf>&wait=3000&preload=1|0`: the map created 3 s after the page starts; Chromium 157 headless, SwiftShader software rendering, a fresh profile for each run so the cache is cold, the files served by the Vite dev server on the same machine, so with no network latency): `first_frame`, from `createSeatMap` to the first frame with the chart, 145 to 160 ms without and 50 to 52 ms with (three runs each). On a real network the saving grows by the WASM's and the chart's download time, which preloading overlaps with the page's own work.
 - **Preload hints.** In the page's `<head>`, before any script runs: `<link rel="preload" href="…/cavea_web_bg.wasm" as="fetch" type="application/wasm" crossorigin>`, `<link rel="preload" href="…/glyphs.png" as="fetch" crossorigin>` and, for a chart, `<link rel="preload" href="…/chart.ccf" as="fetch" crossorigin>`; and `<link rel="modulepreload" href="…">` for the bundle's entry chunk. `as="fetch"` with `crossorigin` matches how the map fetches them (`fetch()` in CORS mode), so the browser reuses the preloaded response; a different `as` or a missing `crossorigin` downloads the file twice. A bundler renames the WASM and the atlas with a content hash (`cavea_web_bg-<hash>.wasm`): take the hashed names from its manifest (Vite's `build.manifest`, webpack's `assets-manifest`), or pass `assets.baseUrl` to serve them from a fixed place and preload those URLs.
 - **Self-host assets** on the same origin or a CDN with long cache lifetimes; all files are content-hashed.
-- **Content Security Policy.** WASM compilation needs `script-src 'wasm-unsafe-eval'`. The renderer uses no `eval` and no inline scripts. Realtime needs the server's origin in `connect-src`. Styles need nothing: the interface's stylesheet is one constructed `CSSStyleSheet` adopted by the shadow root (`adoptedStyleSheets`), and positions, colours and tokens are set through the CSSOM (`element.style.setProperty`), neither of which `style-src` governs. Browsers without constructable stylesheets (Safari before 16.4) get a `<style>` element instead, which a policy without `style-src 'unsafe-inline'` (or a nonce, not supported yet) blocks: the map then works unstyled. The colour reading of §8 draws on a 1 × 1 canvas, which needs no permission.
-- **Server-side rendering.** Importing the package on the server is safe; nothing touches `window` until `createSeatMap` runs, which rejects with `not_browser` outside a browser.
-- **Bundlers.** The WASM and the atlas are referenced with `new URL('../wasm/cavea_web_bg.wasm', import.meta.url)` and `new URL('../assets/glyphs.png', import.meta.url)`, which Vite, webpack 5, Rollup and esbuild resolve.
+- **Content Security Policy.** The smallest policies, found by starting from `default-src 'none'` and adding one source at a time until the map draws, then taking each away again (`fixtures/run.ts`, `csp-*` checks; 13 §8 has the results):
+
+  | Set-up | Policy |
+  |---|---|
+  | `index.js` (bundled, or as a module) with a custom adapter, files on the page's origin | `default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'` |
+  | `caveaServer` against a server on another origin | the above, with `connect-src 'self' https://seats.example.com wss://seats.example.com` |
+  | `cavea.min.js` from a CDN | `default-src 'none'; script-src 'self' https://cdn.example.com 'wasm-unsafe-eval'; connect-src 'self' https://cdn.example.com` |
+
+  Each source and why: `script-src` the scripts' origins, and `'wasm-unsafe-eval'` to compile WebAssembly (on browsers that predate it, `'unsafe-eval'` is the only way); `connect-src` every origin the map fetches from, since the WASM, the atlas, the chart, the event and its state are all fetched with `fetch()` (a chart on another origin adds that origin); the server's `wss:` (or `ws:`) origin for the WebSocket, which an `https:` source does not cover. EventSource and polling are `https:` requests. The page's own scripts and styles need what they need; the map needs nothing else: no `img-src` (the atlas is decoded from a fetched blob), no `style-src`, `font-src`, `worker-src` or `'unsafe-inline'`, and no `'unsafe-eval'` where `'wasm-unsafe-eval'` is supported. **What fails without a source**, and how the map says so: without `'wasm-unsafe-eval'`, `createSeatMap` rejects at once with `wasm_unavailable` (fatal, never retried); without the files' origin in `connect-src`, the refused fetch is a network failure, retried three times (§9), then `wasm_unavailable` or `chart_fetch_failed` (whichever fetch is refused first; with `ui.loading` the error state and a recoverable error instead of a rejection); without the server's origin, `chart_fetch_failed` or `state_connect_failed`; without its `wss:` origin, the map works and `caveaServer` falls back to EventSource after two refused sockets (`transport: 'auto'`; a forced `'ws'` keeps retrying). Every refusal also fires the page's `securitypolicyviolation` event. **Styles** need nothing: the interface's stylesheet is one constructed `CSSStyleSheet` adopted by the shadow root (`adoptedStyleSheets`), and positions, colours and tokens are set through the CSSOM (`element.style.setProperty`), neither of which `style-src` governs. Browsers without constructable stylesheets (Safari before 16.4) get a `<style>` element instead, which a policy without `style-src 'unsafe-inline'` (or a nonce, not supported yet) blocks: the map then works unstyled. The colour reading of §8 and the text rasteriser draw on canvases, which need no permission. **Trusted Types:** every policy above was also run with `require-trusted-types-for 'script'` and reported no violation: the SDK never builds HTML or script from strings (no `innerHTML`, `eval`, `Function` or script URLs; text is set as text), so it needs no Trusted Types policy of its own. A host's tooltip function that returns an element built with `innerHTML` is the host's to make compliant.
+- **Server-side rendering.** Importing the package on the server is safe; nothing touches `window` until `createSeatMap` runs, which rejects with `not_browser` outside a browser. Checked with Next.js (13 §8): a server component page with a client component using `@cavea/react`, and one that imports `@cavea/renderer` in an effect with `import()`, both build, render on the server and hydrate.
+- **Bundlers.** See §13: Vite, webpack 5 and Next.js need nothing; Rollup and esbuild do not copy files named with `new URL(…, import.meta.url)`, so the WASM and the atlas are copied beside the bundle (or served elsewhere and named by `assets.baseUrl`).
 - **Size the container** before creating the map. The renderer observes later resizes.
 - **Hiding the container** with `display: none` during creation works: `createSeatMap` still resolves, and the first frame is drawn when the container gets a size.
 
@@ -487,6 +521,16 @@ Rules for every wrapper:
 - Changing `state` or `chart` identity recreates the map; wrappers warn in development if that happens on every render.
 - Unmounting calls `destroy()`.
 
+**`@cavea/react`** (D-56). `<SeatMap>` takes every option of §3 and callback of §5 as a prop, except `signal` (the mount is the map's lifetime), plus `id`, `className` and `style` for the container `<div>`. React 18 and 19 are peer dependencies.
+
+- **Rendering** returns the empty `<div>` and nothing else, on the server too: the map is created in an effect, a microtask after mount, so React's Strict Mode (mount, unmount, mount in one go) cancels its first mount before anything is fetched or connected, and one map is made.
+- **Setters.** After each render, `pricing`, `theme` and `locale` that changed in value (compared as data, so a new object or array with the same content is no change) go to `setPricing`, `setTheme` and `setLocale`; taken away, they go back to the default (`[]`, `'auto'`, the browser's language). Other options have no setter: a change is ignored with a development warning, and applies when the map is next created. `initialView` is read at creation only, without a warning.
+- **Callbacks** are passed to the map as stable functions that call the latest prop, so a new function every render costs nothing and a callback added later is called. Not `onMetrics`, `onError` and `formatPrice`, whose presence changes what the map does (frame timing, development warnings, the price format): they count from creation, and adding or removing one later warns. A `ui.tooltip` function is also the latest prop's.
+- **Recreating.** A new `state` adapter, or a `chart` with another URL (compared as text) or other bytes (by identity), destroys the map and creates another; a new adapter on three renders in a row warns, since it usually means `caveaServer(…)` is called in render: make it once (`useMemo`, or outside the component).
+- **The ref** is the map (§6) once `createSeatMap` resolves, `null` before, while it is recreated and after unmount.
+- **Unmounting** aborts the map's `signal`: a map that is ready is destroyed, one still loading is cancelled (`aborted`, which the component swallows). A start that fails otherwise goes to `onError`, or is rethrown as an unhandled rejection without one.
+- **A state adapter serves one map** (§4: `disconnect` is last), so a component that mounts again with the same adapter object (a parent that unmounts and mounts it, or React hiding and showing it with `<Activity>`) needs a new one: key the adapter's `useMemo` on whatever remounts it. Strict Mode does not, as above.
+
 ## 12. Modes
 
 | Mode | Purpose | Interaction |
@@ -506,6 +550,19 @@ Rules for every wrapper:
 | No canvas, no WASM, or scripting restricted | List view |
 
 Compatibility is tested per release (`13-testing-benchmarks.md` §8).
+
+**Bundlers and frameworks** (checked by `fixtures/run.ts`, each consuming the packed package as a customer would; versions and results in 13 §8):
+
+| Tool | Configuration needed |
+|---|---|
+| Vite (build and dev server) | None: it copies the WASM and the atlas, renamed with a hash, and the dev server serves them from the package |
+| webpack 5 | None: `new URL(…, import.meta.url)` makes both files assets, renamed with a hash, found through `publicPath: 'auto'` |
+| Next.js (App Router; Turbopack) | None, for `@cavea/react` in a client component or `import('@cavea/renderer')` in an effect |
+| Rollup | Copy `cavea_web_bg.wasm` and `glyphs.png` from `@cavea/renderer` beside the output: Rollup copies no file named by `new URL(…, import.meta.url)`. Six lines of plugin (`this.emitFile` of both, `fixtures/rollup/rollup.config.js`), or `@web/rollup-plugin-import-meta-assets`, or a copy step. Rollup also needs `@rollup/plugin-node-resolve`, as for any package |
+| esbuild | `--format=esm` (an IIFE has no `import.meta.url`), and copy both files beside the output: esbuild leaves the `new URL` as it is |
+| No bundler | `cavea.min.js` by a script tag, or `index.js` by `<script type="module">` (or an import map), with the two files beside it |
+
+Instead of copying, any of them can serve the two files from a fixed place and pass `assets.baseUrl`. None inlines the WASM as base64 into the JavaScript.
 
 ## 14. Example: bring your own backend
 
