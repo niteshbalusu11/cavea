@@ -105,6 +105,10 @@ fn finish(routes: Router<AppState>, state: AppState) -> Router {
         })
         .layer(DefaultBodyLimit::max(extract::DEFAULT_BODY_LIMIT))
         .layer(middleware::from_fn_with_state(state.clone(), public::cors))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            staff::no_store_for_cookies,
+        ))
         // Inside the request span, so that a panic's `500` carries the request
         // id and is logged and counted under its route.
         .layer(panic::CatchPanicLayer)

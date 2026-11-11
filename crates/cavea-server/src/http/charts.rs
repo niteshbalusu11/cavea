@@ -353,8 +353,8 @@ struct CreateChart {
 
 const CREATE: &str = concat!(
     "WITH c AS (
-  INSERT INTO charts (id, workspace_id, key, name, draft)
-  VALUES (gen_random_uuid(), $1::uuid, $2, $3, $4::jsonb)
+  INSERT INTO charts (id, workspace_id, key, name, draft, draft_updated_by)
+  VALUES (gen_random_uuid(), $1::uuid, $2, $3, $4::jsonb, $5::uuid)
   RETURNING *
 )
 SELECT ",
@@ -390,6 +390,7 @@ async fn create(
         .bind(&body.key)
         .bind(&body.name)
         .bind(&draft)
+        .bind(auth.user())
         .fetch_one(&state.db)
         .instrument(cavea_telemetry::db_span("create_chart"))
         .await;

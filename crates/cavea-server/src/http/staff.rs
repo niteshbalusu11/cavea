@@ -145,6 +145,27 @@ fn cookie_session(parts: &Parts, state: &AppState) -> Result<SessionId, ApiError
     Ok(id)
 }
 
+/// Every response to a request authenticated by the console cookie (the
+/// cookie, no `Authorization`) is `Cache-Control: no-store`: unlike
+/// `Authorization`, a cookie does not keep a shared cache from storing a
+/// response (RFC 9111 §3.5), and one workspace's answer must never be served
+/// for another's request to the same URL. Requests with a key are untouched.
+pub async fn no_store_for_cookies(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let cookie = !request.headers().contains_key(header::AUTHORIZATION)
+        && session_cookie(request.headers(), &state).is_some();
+    let mut response = next.run(request).await;
+    if cookie {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    response
+}
+
 /// The workspace a console request names: `ws_` and 32 lowercase hex digits.
 fn named_workspace(headers: &HeaderMap) -> Result<String, ApiError> {
     let value = headers.get(WORKSPACE).ok_or_else(|| {

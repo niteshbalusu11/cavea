@@ -1417,6 +1417,11 @@ async fn authorisation_matrix() {
                     send_with(value.as_deref(), &refs(&console_headers), *body, n).await;
                 cells += 1;
                 let at = format!("{method} {template} with {cred:?}");
+                // A cookie without a key: never stored by a shared cache.
+                if !console_headers.is_empty() && value.is_none() {
+                    let cache = response.headers().get(header::CACHE_CONTROL);
+                    assert_eq!(cache.map(|v| v.as_bytes()), Some(&b"no-store"[..]), "{at}");
+                }
                 match expected {
                     Some((code, reason)) => {
                         assert_problem(&response, &answer, code);

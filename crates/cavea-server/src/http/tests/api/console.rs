@@ -604,7 +604,19 @@ async fn a_console_user_is_the_actor() {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(who, (Some(editor.clone()), Some(editor)));
+        assert_eq!(who, (Some(editor.clone()), Some(editor.clone())));
+        // A chart created with its document records its author too.
+        let body = json!({ "key": "by-bob", "name": "n", "document": serde_json::from_str::<Value>(&document).unwrap() });
+        let (response, _) =
+            console_call(&app, Method::POST, "/v1/charts", Some(&id), Some(&a.id), Some(body)).await;
+        assert_eq!(response.status(), 201);
+        let author: Option<String> = sqlx::query_scalar(
+            "SELECT replace(draft_updated_by::text, '-', '') FROM charts WHERE key = 'by-bob'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(author, Some(editor));
     })
     .await;
 }
