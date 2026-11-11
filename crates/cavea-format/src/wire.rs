@@ -1,6 +1,6 @@
 //! The realtime wire protocol (`docs/08-server.md` §8): frame encoders and
 //! decoders shared by the server and every client. Byte layouts and rules are
-//! in 08 §8.1 to §8.4; this module is their implementation.
+//! in 08 §8.1, §8.2 and §8.6; this module is their implementation.
 //!
 //! Decoders borrow from the frame bytes, allocate nothing, and validate every
 //! field before returning. Anything that names an `idx` is handed out only

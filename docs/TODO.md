@@ -213,8 +213,8 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 ### Realtime
 
-- [ ] **RT-001** Frame codecs in `cavea-format`, shared by server and clients (08 §8.1, §8.2)
-- [ ] **RT-002** Snapshot encodings: raw, run-length, bitset; pick the smallest (08 §8.1)
+- [x] **RT-001** Frame codecs in `cavea-format`, shared by server and clients (08 §8.1, §8.2)
+- [x] **RT-002** Snapshot encodings: raw, run-length, bitset; pick the smallest (08 §8.1)
 - [ ] **RT-003** WebSocket endpoint: subscribe, hello, resume from `last_seq` (08 §8.3)
 - [ ] **RT-004** Fan-out of shared pre-encoded frames (08 §4.5)
 - [ ] **RT-005** Slow-consumer detection and RESYNC (08 §8.3)
