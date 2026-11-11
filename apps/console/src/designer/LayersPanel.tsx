@@ -28,7 +28,7 @@ const ICONS: Record<NodeKind, IconName> = {
   shape: "rect",
   text: "text",
   icon: "focal",
-  image: "file",
+  image: "image",
 };
 
 /** Where a drop on `row` lands: into a section by its middle half, else

@@ -284,7 +284,7 @@ pub struct Painter<B: GpuBackend> {
     dark: bool,
     /// The overlay last given to the engine.
     overlay: Option<Overlay>,
-    /// Events for the host: text requests and errors.
+    /// Events for the host: text and image requests and errors.
     events: Vec<Event>,
 }
 
@@ -357,33 +357,38 @@ impl<B: GpuBackend> Painter<B> {
             self.overlay = Some(overlay);
         }
         self.engine.handle(Command::Tick { time_ms });
-        let mut again = baking;
-        for event in self.engine.drain_events() {
-            match event {
-                Event::NeedFrame => again = true,
-                e @ (Event::TextRequest { .. } | Event::Error { .. }) => self.events.push(e),
-                _ => {}
-            }
-        }
-        again
+        self.drain() || baking
     }
 
     /// A command for the engine: `SetText`, `SetGlyphAtlas`, `ContextLost`,
     /// `ContextRestored`. Returns whether a frame is needed.
     pub fn handle(&mut self, command: Command) -> bool {
         self.engine.handle(command);
+        self.drain()
+    }
+
+    /// The host's answer to an image request (04 §7). Returns whether a
+    /// frame is needed.
+    pub fn set_image(&mut self, id: u32, image: Option<&B::Image>) -> bool {
+        self.engine.set_image(id, image);
+        self.drain()
+    }
+
+    fn drain(&mut self) -> bool {
         let mut again = false;
         for event in self.engine.drain_events() {
             match event {
                 Event::NeedFrame => again = true,
-                e @ (Event::TextRequest { .. } | Event::Error { .. }) => self.events.push(e),
+                e @ (Event::TextRequest { .. } | Event::ImageRequest { .. } | Event::Error { .. }) => {
+                    self.events.push(e);
+                }
                 _ => {}
             }
         }
         again
     }
 
-    /// Text requests and errors since the last call.
+    /// Text and image requests and errors since the last call.
     pub fn take_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.events)
     }

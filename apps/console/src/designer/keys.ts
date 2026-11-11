@@ -45,6 +45,10 @@ export interface Shell {
   save: () => void;
   palette: () => void;
   help: () => void;
+  /** Picks an image file to place (07 §4). */
+  image: () => void;
+  /** Shows or hides the rulers (07 §5.2). */
+  rulers: () => void;
 }
 
 /** The shell's side of each live shortcut of the table, by id. */

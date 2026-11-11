@@ -8,8 +8,8 @@
 use std::f64::consts::TAU;
 
 use cavea_compiler::document::{
-    Align, BlockRow, Curve, Layer, Node, Path, Row, RowBlock, RowLabels, SeatLabels, Shape,
-    ShapeKind, Style, Text,
+    Align, BlockRow, Curve, Image, ImageRole, Layer, Node, Path, Row, RowBlock, RowLabels,
+    SeatLabels, Shape, ShapeKind, Style, Text,
 };
 use cavea_core::limits::{MAX_OBJECTS, MAX_SEATS_PER_ROW};
 
@@ -97,6 +97,20 @@ pub enum Draft {
         at: [f64; 2],
         text: String,
     },
+    /// An image `size` wide and high centred on `center`, unturned and
+    /// opaque (03 §2.7). `asset` is its content hash as `POST /v1/assets`
+    /// returns it, 32 lowercase hex digits.
+    Image {
+        center: [f64; 2],
+        size: [f64; 2],
+        asset: String,
+        role: ImageRole,
+    },
+}
+
+/// The form of an asset hash (03 §2.7): 32 lowercase hex digits.
+pub fn valid_asset(asset: &str) -> bool {
+    asset.len() == 32 && asset.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 type Result<T> = std::result::Result<T, CommandError>;
@@ -485,6 +499,29 @@ impl Draft {
                     color: TEXT_COLOR.into(),
                     align: Align::Center,
                     min_zoom: 0.0,
+                })
+            }
+            Draft::Image {
+                center,
+                size,
+                asset,
+                role,
+            } => {
+                finite(center, "origin")?;
+                check(size.iter().all(|&v| v.is_finite() && v >= MIN_SIZE), "size")?;
+                check(valid_asset(asset), "asset")?;
+                Node::Image(Image {
+                    id: 0,
+                    name: None,
+                    floor: None,
+                    origin: *center,
+                    rotation: 0.0,
+                    locked: false,
+                    hidden: false,
+                    asset: asset.clone(),
+                    size: *size,
+                    opacity: 1.0,
+                    role: *role,
                 })
             }
         };

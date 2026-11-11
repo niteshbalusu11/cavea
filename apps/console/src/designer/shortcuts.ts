@@ -240,11 +240,23 @@ export const SHORTCUTS: readonly Shortcut[] = [
     chords: [{ key: "?", shift: "any" }],
     route: "call",
   },
-  later("rulers", "shortcut.rulers", "view", [{ key: "r", mod: true }], "DSN-031"),
+  {
+    id: "rulers",
+    label: "shortcut.rulers",
+    group: "view",
+    chords: [{ key: "r", mod: true }],
+    route: "call",
+  },
+  {
+    id: "image",
+    label: "shortcut.image",
+    group: "tools",
+    chords: [{ key: "i" }],
+    route: "call",
+  },
   later("tool.table", "shortcut.table", "tools", [{ key: "t" }], "DSN-050"),
   later("tool.booth", "shortcut.booth", "tools", [{ key: "b" }], "DSN-051"),
   later("tool.area", "shortcut.area", "tools", [{ key: "g" }], "DSN-052"),
-  later("tool.image", "shortcut.image", "tools", [{ key: "i" }], "DSN-020"),
   later("tool.measure", "shortcut.measure", "tools", [{ key: "m" }], "DSN-054"),
 ];
 

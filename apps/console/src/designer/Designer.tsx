@@ -5,10 +5,13 @@ import { loadDesigner, type Designer, type Session } from "@cavea/designer-core"
 import { useNavigate } from "@solidjs/router";
 import { Tabs } from "@kobalte/core/tabs";
 import {
+  createEffect,
   createResource,
+  createRoot,
   createSignal,
   lazy,
   Match,
+  on,
   onCleanup,
   onMount,
   Show,
@@ -24,6 +27,8 @@ import { Splitter } from "../ui/Splitter.tsx";
 import { CanvasHost } from "./CanvasHost.tsx";
 import { CategoriesPanel } from "./CategoriesPanel.tsx";
 import { createEditor, type Editor } from "./editor.ts";
+import { guidesKey, parseGuides, throttledWriter } from "./guides.ts";
+import { createImageHost } from "./imageHost.ts";
 import { failureMessage, failureOf } from "./errors.ts";
 import { commands } from "./commands.ts";
 import { Help } from "./Help.tsx";
@@ -69,6 +74,10 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
   const [publishing, setPublishing] = createSignal(false);
   const navigate = useNavigate();
   let picker: HTMLInputElement | undefined;
+  let imagePicker: HTMLInputElement | undefined;
+  /** An image picked to start a new chart, placed once that chart opens. */
+  let imageForNew: File | null = null;
+  let newFromImage = false;
 
   const resize = () => setWidth(window.innerWidth);
   window.addEventListener("resize", resize);
@@ -81,11 +90,24 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
     server?.dispose();
     editor()?.dispose();
     pending()?.dispose();
+    images.dispose();
   });
 
+  const images = createImageHost({
+    designer: loading,
+    server: props.server?.ref ?? null,
+    editor,
+  });
+  /** Where a server chart's guides are kept (07 §5.2); a local chart's
+   * last as long as the page. */
+  const guideKey =
+    props.server === undefined
+      ? null
+      : guidesKey(props.server.user, props.server.ref.workspace, props.server.ref.key);
   const install = (session: Session): Editor => {
     editor()?.dispose();
-    const e = createEditor(session, setPanic);
+    const e = createEditor(session, setPanic, images);
+    if (guideKey !== null) keepGuides(e, guideKey);
     // For measuring and debugging in the browser's console; not in builds.
     if (import.meta.env.DEV) Object.assign(window, { caveaEditor: e });
     setEditor(e);
@@ -94,16 +116,39 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
   const server: ServerChart | null =
     props.server === undefined
       ? null
-      : serverChart({ setup: props.server, install, editor, onPanic: setPanic });
+      : serverChart({
+          setup: props.server,
+          install,
+          editor,
+          onPanic: setPanic,
+          settled: () => images.settled(),
+        });
   /** A file opened over a server draft always asks: it replaces the draft. */
   const dirty = () => {
     const e = editor();
     return e !== null && (server !== null || e.views.status.revision !== e.saved().revision);
   };
   const replace = (session: Session) => {
-    if (server === null) install(session);
-    else void server.adopt(session);
+    if (server === null) {
+      const e = install(session);
+      const file = imageForNew;
+      imageForNew = null;
+      if (file !== null) void images.place(e, file);
+    } else void server.adopt(session);
   };
+  /** Places a picked image file (07 §4): in a new chart when it was picked
+   * from the new-chart screen, else in the open one. */
+  const placeImage = async (file: File) => {
+    if (newFromImage) {
+      newFromImage = false;
+      imageForNew = file;
+      await request(emptyChart(msg("designer.untitled")), "");
+      return;
+    }
+    const e = editor();
+    if (e !== null) await images.place(e, file);
+  };
+
   /** Opens chart document JSON (07 §12): a refusal is explained and the
    * open chart kept; a chart that opens replaces the open one, after asking
    * if that has unsaved changes. A file dropped while the module loads
@@ -186,7 +231,8 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
     setDragging(false);
     if (file === undefined) return;
     e.preventDefault();
-    void readFile(file);
+    if (isImage(file) && editor() !== null) void placeImage(file);
+    else void readFile(file);
   };
 
   const choices: Choices = {
@@ -197,6 +243,10 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
         () => setFailed({ file: msg(`template.${t.id}`), message: msg("new.loadFailed") }),
       ),
     open: () => picker?.click(),
+    image: () => {
+      newFromImage = true;
+      imagePicker?.click();
+    },
   };
   const readOnly = server?.readOnly === true;
   const ui = {
@@ -207,6 +257,7 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
     status: server?.indicator,
     readOnly,
     onPreview: () => void loading.then(setPreviewing, () => undefined),
+    onImage: readOnly ? undefined : () => imagePicker?.click(),
   };
   const publishFor = (e: Editor) => {
     const v = e.views.validation;
@@ -240,6 +291,18 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
           e.currentTarget.value = "";
           if (file !== undefined) void readFile(file);
         }}
+      />
+      <input
+        ref={(e) => (imagePicker = e)}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        class="hidden"
+        onChange={(e) => {
+          const file = e.currentTarget.files?.[0];
+          e.currentTarget.value = "";
+          if (file !== undefined) void placeImage(file);
+        }}
+        onCancel={() => (newFromImage = false)}
       />
       <Switch>
         <Match when={width() < MIN_WIDTH}>
@@ -323,6 +386,7 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
         onClose={() => {
           pending()?.dispose();
           setPending(null);
+          imageForNew = null;
         }}
       />
       {server?.dialogs()}
@@ -366,6 +430,34 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
   );
 }
 
+/** Restores the guides stored for a chart into its editor and stores them
+ * again whenever they change (at most twice a second, and as the editor
+ * closes). A record the session refuses is dropped. */
+function keepGuides(e: Editor, key: string): void {
+  const saved = load(key, parseGuides, null);
+  if (saved !== null && !("ok" in e.attempt((s) => s.restoreGuides(saved)))) {
+    save(key, null);
+  }
+  const writer = throttledWriter((g) => save(key, g));
+  createRoot((dispose) => {
+    createEffect(
+      on(
+        () => e.views.guides.map((g) => [g.axis, g.at]),
+        () => writer.put(() => e.session.savedGuides()),
+        { defer: true },
+      ),
+    );
+    e.attach(() => {
+      writer.flush();
+      dispose();
+    });
+  });
+}
+
+/** A file dropped that should be placed as an image rather than opened. */
+const isImage = (file: File) =>
+  file.type.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(file.name);
+
 function Centre(props: { title: string; body?: string | undefined; children?: JSX.Element }) {
   return (
     <div class="flex h-full flex-col items-center justify-center bg-canvas p-6 text-center">
@@ -389,6 +481,7 @@ function Shell(props: {
     status: (() => JSX.Element) | undefined;
     readOnly: boolean;
     onPreview: () => void;
+    onImage: (() => void) | undefined;
   };
   publish: { reason: string | null; run: () => void };
 }) {
@@ -419,6 +512,8 @@ function Shell(props: {
     save: props.save,
     palette: () => setPalette(true),
     help: () => setHelp(true),
+    image: () => props.ui.onImage?.(),
+    rulers: () => setLayout({ rulers: !layout().rulers }),
   });
   onCleanup(bindKeys(editor, act));
   const all = commands(editor, act, {
@@ -446,8 +541,8 @@ function Shell(props: {
         onHelp={() => setHelp(true)}
       />
       <div class="flex min-h-0 flex-1">
-        <ToolRail editor={editor} onInsert={() => setInsert(true)} />
-        <CanvasHost editor={editor} />
+        <ToolRail editor={editor} onInsert={() => setInsert(true)} onImage={props.ui.onImage} />
+        <CanvasHost editor={editor} rulers={layout().rulers} />
         <Splitter
           orientation="vertical"
           label={msg("panel.resize", { panel: msg("panel.panels") })}

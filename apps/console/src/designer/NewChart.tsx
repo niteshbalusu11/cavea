@@ -20,6 +20,8 @@ export interface Choices {
   empty: () => void;
   template: (t: Template) => void;
   open: () => void;
+  /** Place a reference image in a new chart. */
+  image: () => void;
 }
 
 function Card(props: {
@@ -70,10 +72,10 @@ export function NewChart(props: { choices: Choices }): JSX.Element {
           onClick={props.choices.empty}
         />
         <Card
-          icon="file"
+          icon="image"
           title={msg("new.image")}
           body={msg("new.imageBody")}
-          disabled={msg("new.imagePending")}
+          onClick={props.choices.image}
         />
       </div>
       <h2 class="mt-5 mb-2 text-xs font-semibold tracking-wide text-faint uppercase">
@@ -124,6 +126,11 @@ export function NewChartDialog(props: { open: boolean; choices: Choices; onClose
             empty: close(props.choices.empty),
             template: (t) => close(() => props.choices.template(t))(),
             open: close(props.choices.open),
+            // The file picker needs the click's activation: no delay.
+            image: () => {
+              props.onClose();
+              props.choices.image();
+            },
           }}
         />
       </div>

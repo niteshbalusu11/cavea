@@ -351,8 +351,37 @@ const ui = {
   "new.empty": "Draw from scratch",
   "new.emptyBody": "An empty chart with one category.",
   "new.image": "Place a reference image",
-  "new.imageBody": "Trace a floor plan.",
-  "new.imagePending": "Placing an image arrives with the image tool (DSN-020).",
+  "new.imageBody": "Trace a floor plan: a PNG, JPEG or WebP picture.",
+
+  "image.tooLarge": "This picture is larger than {mb} MB, the most the server takes.",
+  "image.type": "Only PNG, JPEG and WebP pictures can be placed.",
+  "image.unreadable": "This file could not be read as a picture.",
+  "image.malformed": "This picture's file is damaged or has data after its end.",
+  "image.dimensions":
+    "This picture is more than {px} pixels wide or high, the most the server takes.",
+  "image.refused": "The server refused the picture, so it was removed: {message}",
+  "image.sessionOnly":
+    "Picture placed. A chart file does not hold pictures: it stays in this page only.",
+  "image.referenceNote": "Reference: for tracing in the designer. Buyers never see it.",
+  "image.backgroundNote": "Background: shown to buyers under the seats.",
+  "image.missing":
+    "The picture could not be loaded. If it never finished uploading, place the file again.",
+  "image.missingLocal":
+    "The picture is not in this page: a chart file does not hold pictures. Place the file again to see it.",
+  "image.uploading": "Uploading the picture…",
+  "image.waiting":
+    "Waiting to upload the picture: the server cannot be reached. Saving waits for it.",
+  "image.sessionNote":
+    "Kept in this page only: the chart file names the picture but does not hold it.",
+  "ruler.top":
+    "Top ruler. Enter adds a vertical guide at the view's centre; Left and Right move it, Shift by 10; Up and Down choose another; Delete removes it.",
+  "ruler.left":
+    "Left ruler. Enter adds a horizontal guide at the view's centre; Up and Down move it, Shift by 10; Left and Right choose another; Delete removes it.",
+  "guide.vertical": "Vertical guide at x {at}",
+  "guide.horizontal": "Horizontal guide at y {at}",
+  "guide.none": "No guide",
+  "image.uploadingCount": "Pictures uploading: {n}",
+  "image.waitingCount": "Pictures waiting to upload: {n}",
   "new.templates": "Start from a template",
   "new.or": "Or",
   "new.loadFailed": "The template could not be loaded. Check the connection and try again.",

@@ -12,6 +12,8 @@ export interface Bindings {
   Canvas: new (canvas: HTMLCanvasElement) => CanvasHandle;
   /** A preview's sample state: a SNAPSHOT frame for a public artefact, or empty. */
   sampleState(chart: Uint8Array, sold: number, seq: number): Uint8Array;
+  /** An image's content hash as `POST /v1/assets` names it. */
+  assetHash(bytes: Uint8Array): string;
 }
 
 /** `cavea_designer::Designer`: every reply is `{"ok": …}` or `{"err": Failure}`. */
@@ -36,8 +38,10 @@ export interface CanvasHandle {
   setTheme(dark: boolean): void;
   /** Draws `designer`'s session if anything changed; whether to draw again. */
   draw(designer: Handle, timeMs: number): boolean;
-  /** Text requests and errors, as JSON. */
+  /** Text and image requests and errors, as JSON. */
   takeEvents(): string;
+  /** The answer to an image request: whether a frame is needed. */
+  setImage(id: number, image: ImageBitmap | undefined): boolean;
   setText(id: number, width: number, height: number, px: number, pixels: Uint8Array): boolean;
   setGlyphAtlas(rgba: Uint8Array): boolean;
   contextLost(): void;

@@ -2,8 +2,8 @@
 // kind, "Mixed" where the selection differs, every change one `setField`
 // (07 §2.3); number fields scrub. The chart's settings when nothing is
 // selected.
-import type { Curve, Field, NodeKind, Num, Shared } from "@cavea/designer-core";
-import { Show, type JSX } from "solid-js";
+import type { Curve, Field, ImageRole, NodeKind, Num, Shared } from "@cavea/designer-core";
+import { For, Show, type JSX } from "solid-js";
 import { formatNumber, msg, msgOf, type MessageId } from "../i18n/messages.ts";
 import { Button } from "../ui/controls.tsx";
 import {
@@ -388,9 +388,50 @@ export function Inspector(props: { editor: Editor; onNumbering: () => void }) {
             {num("height", img().height)}
             {num("opacity", img().opacity, "field.opacity", 0.05)}
             {choice("imageRole", "imageRole", ["reference", "background"], same(img().role))}
+            <ImageStatus editor={editor} role={same(img().role)} asset={same(img().asset)} />
           </Group>
         )}
       </Show>
     </div>
+  );
+}
+
+/** What the person should know about the selected picture (07 §4): who
+ * sees it, whether it is uploaded and loaded, and that a local chart keeps
+ * it for this page only. */
+function ImageStatus(props: { editor: Editor; role: ImageRole | null; asset: string | null }) {
+  const host = () => props.editor.images;
+  const notes = (): { text: string; tone: "muted" | "warning" }[] => {
+    const out: { text: string; tone: "muted" | "warning" }[] = [];
+    if (props.role === "reference") out.push({ text: msg("image.referenceNote"), tone: "muted" });
+    if (props.role === "background") out.push({ text: msg("image.backgroundNote"), tone: "muted" });
+    const asset = props.asset;
+    const h = host();
+    if (h === null || asset === null) return out;
+    if (h.failed().has(asset)) {
+      out.push({ text: msg(h.local ? "image.missingLocal" : "image.missing"), tone: "warning" });
+    } else if (h.pending(asset)) {
+      // Read so that the note follows the uploads.
+      const u = h.uploads();
+      out.push({
+        text: msg(u !== null && u.waiting > 0 ? "image.waiting" : "image.uploading"),
+        tone: "muted",
+      });
+    } else if (h.local) {
+      out.push({ text: msg("image.sessionNote"), tone: "warning" });
+    }
+    return out;
+  };
+  return (
+    <For each={notes()}>
+      {(n) => (
+        <p
+          class="px-3 py-1 text-sm"
+          classList={{ "text-muted": n.tone === "muted", "text-warning": n.tone === "warning" }}
+        >
+          {n.text}
+        </p>
+      )}
+    </For>
   );
 }

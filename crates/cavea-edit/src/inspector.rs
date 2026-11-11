@@ -166,6 +166,9 @@ pub struct ImageFields {
     pub height: Num,
     pub opacity: Num,
     pub role: Shared<ImageRole>,
+    /// The picture's content hash (read only: the shell shows whether it
+    /// is loaded and uploaded).
+    pub asset: Shared<String>,
 }
 
 /// One inspector field with its new value, for every selected node (or
@@ -462,6 +465,7 @@ pub(crate) fn view(doc: &Document, sel: &Selection) -> InspectorView {
             height: n(i.iter().map(|i| i.size[1]).collect(), "height"),
             opacity: n(i.iter().map(|i| i.opacity).collect(), "opacity"),
             role: same(i.iter().map(|i| i.role).collect()).unwrap_or(Shared::Mixed),
+            asset: same(i.iter().map(|i| i.asset.clone()).collect()).unwrap_or(Shared::Mixed),
         });
     }
     out

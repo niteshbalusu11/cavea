@@ -29,6 +29,8 @@
   --c-warning-soft: #fef3c7;
   --c-success: #166534;
   --c-canvas: #fafaf9;
+  /* User guides on the rulers (07 §5.2): the canvas draws them #0891B2. */
+  --c-guide: #0e7490;
   --c-shadow: rgb(28 25 23 / 0.14);
   --c-scrim: rgb(28 25 23 / 0.32);
   color-scheme: light;
@@ -60,6 +62,7 @@
   --c-warning-soft: #3a2a0b;
   --c-success: #4ade80;
   --c-canvas: #1c1917;
+  --c-guide: #22d3ee;
   --c-shadow: rgb(0 0 0 / 0.5);
   --c-scrim: rgb(0 0 0 / 0.55);
   color-scheme: dark;
