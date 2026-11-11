@@ -196,9 +196,9 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **SRV-008** Compile on publish; store public, precompressed and full artefacts (03 §4.6)
 - [x] **SRV-009** Serve compiled charts with immutable caching and content negotiation (03 §4.6)
 - [ ] **SRV-010** Asset upload and serving (08 §6.2)
-- [ ] **SRV-011** Event endpoints: create, get, patch, archive (08 §6.2)
-- [ ] **SRV-012** Hold-token endpoints (08 §6.2)
-- [ ] **SRV-013** Seat operation endpoints: hold, release, book, change status (08 §6.2)
+- [x] **SRV-011** Event endpoints: create, get, patch, archive (08 §6.2)
+- [x] **SRV-012** Hold-token endpoints (08 §6.2)
+- [ ] **SRV-013** Seat operation endpoints: hold, release, book, change status (08 §6.2). Done so far: hold, and release with a hold token; book, release of booked objects and change status remain
 - [ ] **SRV-014** Objects query endpoint (08 §6.2)
 - [ ] **SRV-015** Public endpoints with CORS and origin allow-list (08 §6.2, §11)
 - [ ] **SRV-016** Session token verification and `require_session` (08 §11)
@@ -206,8 +206,8 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [ ] **SRV-018** Rate limiting per key and IP with trusted-proxy handling (08 §12)
 - [ ] **SRV-019** OpenAPI document generated and served (08 §6.1)
 - [ ] **SRV-020** Health, readiness and Prometheus metrics (08 §15)
-- [ ] **SRV-021** Graceful shutdown: flush, close subscribers, release leases (08 §14)
-- [ ] **SRV-022** Startup load of events with outstanding holds (08 §4.7)
+- [ ] **SRV-021** Graceful shutdown: flush, close subscribers, release leases (08 §14). Done so far: on SIGTERM or Ctrl-C the server drains HTTP for up to 10 s, then stops the registry (every actor commits and releases its lease) within the 20 s deadline; closing realtime subscribers remains
+- [x] **SRV-022** Startup load of events with outstanding holds (08 §4.7)
 - [ ] **SRV-023** Dockerfile (distroless, multi-arch) and compose file (08 §14)
 - [x] **SRV-024** Body size, object count and JSON depth limits (12 §3 T19)
 

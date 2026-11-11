@@ -92,11 +92,11 @@ impl fmt::Debug for NewKey {
     }
 }
 
-fn sha256(s: &str) -> [u8; 32] {
+pub(super) fn sha256(s: &str) -> [u8; 32] {
     Sha256::digest(s.as_bytes()).into()
 }
 
-fn push_hex(out: &mut String, bytes: &[u8]) {
+pub(super) fn push_hex(out: &mut String, bytes: &[u8]) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     for b in bytes {
         out.push(char::from(HEX[usize::from(b >> 4)]));
@@ -105,7 +105,7 @@ fn push_hex(out: &mut String, bytes: &[u8]) {
 }
 
 /// Whether `s` is `prefix` followed by `len` lowercase hex digits.
-fn has_hex_tail(s: &str, prefix: &str, len: usize) -> bool {
+pub(super) fn has_hex_tail(s: &str, prefix: &str, len: usize) -> bool {
     s.strip_prefix(prefix).is_some_and(|t| {
         t.len() == len && t.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
     })

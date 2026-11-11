@@ -5,4 +5,5 @@
 pub mod charts;
 pub mod config;
 pub mod http;
+pub mod seats;
 pub mod store;

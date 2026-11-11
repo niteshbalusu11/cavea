@@ -28,6 +28,7 @@ use tracing::subscriber::DefaultGuard;
 
 use super::{ApiError, AppState, Code, Json, finish, router};
 use crate::config::Config;
+use crate::seats::{Seats, ServerClock};
 
 /// Tests in this module run one at a time. `tracing` caches per callsite,
 /// process-wide, whether any subscriber wants it; a test thread with no
@@ -38,20 +39,23 @@ fn serial() -> MutexGuard<'static, ()> {
 }
 
 fn state() -> AppState {
+    let config = Config {
+        listen: ([127, 0, 0, 1], 0).into(),
+        log: "info".to_owned(),
+        log_format: LogFormat::Json,
+        database_url: "postgres://localhost/unused".parse().unwrap(),
+        db_pool: std::num::NonZeroU32::MIN,
+        node_id: "test".to_owned(),
+        lease_secs: std::num::NonZeroU32::MIN.saturating_add(14),
+        heartbeat_secs: std::num::NonZeroU32::MIN.saturating_add(4),
+        admin_key: None,
+    };
+    // Never connects: no route under test reaches the database.
+    let db = sqlx::postgres::PgPoolOptions::new().connect_lazy_with(Default::default());
     AppState {
-        config: Arc::new(Config {
-            listen: ([127, 0, 0, 1], 0).into(),
-            log: "info".to_owned(),
-            log_format: LogFormat::Json,
-            database_url: "postgres://localhost/unused".parse().unwrap(),
-            db_pool: std::num::NonZeroU32::MIN,
-            node_id: "test".to_owned(),
-            lease_secs: std::num::NonZeroU32::MIN.saturating_add(14),
-            heartbeat_secs: std::num::NonZeroU32::MIN.saturating_add(4),
-            admin_key: None,
-        }),
-        // Never connects: no route under test reaches the database.
-        db: sqlx::postgres::PgPoolOptions::new().connect_lazy_with(Default::default()),
+        seats: Seats::new(db.clone(), &config, ServerClock::System),
+        config: Arc::new(config),
+        db,
     }
 }
 

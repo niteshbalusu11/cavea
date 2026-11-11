@@ -271,6 +271,7 @@ dependencies = [
  "axum",
  "brotli",
  "cavea-compiler",
+ "cavea-core",
  "cavea-engine",
  "cavea-format",
  "cavea-telemetry",

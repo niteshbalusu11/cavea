@@ -296,6 +296,13 @@ async fn commit(pool: &PgPool, p: &Params, lease_ms: i64) -> Result<(), StoreErr
         .await
         .map_err(store_error)?;
     if written == 1 {
+        // Inside the `commit` span: ties the batch's `event_id` and `seq` to
+        // the requests whose `commit_seq` they are (08 §15).
+        tracing::debug!(
+            commands = p.log_seq.len(),
+            keys = p.key.len(),
+            "batch written"
+        );
         return Ok(());
     }
     let stored: Option<(i64, i64)> = sqlx::query_as(DIAGNOSE)
