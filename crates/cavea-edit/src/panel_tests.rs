@@ -295,6 +295,11 @@ fn numbering_previews_what_it_applies() {
             assert_eq!(s.editor().undo_len(), entries);
             let hovered = preview.rows.iter().find_map(|row| {
                 let seat = row.seats.first()?;
+                // The canvas finds the hovered seat by `seat_under`.
+                let under = s
+                    .seat_under(seat.at, 1e6)
+                    .expect("a seat under the pointer");
+                assert!(ids.contains(&under.node), "round {round}: not a target");
                 Some((row.node, seat.oid))
             });
             let sample = hovered.and_then(|(node, oid)| s.sample(node, oid));

@@ -54,7 +54,7 @@ pub use inspector::{
 pub use layers::{Drop, LayerClick, LayerRow, LayersPage};
 pub use numbering::{
     Facing, MAX_LIST, NumberedNode, Numbering, NumberingView, Preview, PreviewRow, PreviewSeat,
-    RowLabelsView, SeatLabelsView, Shared,
+    RowLabelsView, SeatLabelsView, SeatRef, Shared,
 };
 pub use selection::{Level, Selection};
 pub use session::{InputResult, Renumbered, Session, ToolView};

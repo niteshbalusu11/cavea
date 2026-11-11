@@ -1705,6 +1705,15 @@ export type SeatOverride = {
   nudge?: [number, number];
 };
 
+/**
+ * A seat position of a row block or row: the hovered seat whose full
+ * label the numbering panel samples (07 §6).
+ */
+export type SeatRef = {
+  node: number;
+  oid: number;
+};
+
 export type SeatShape = "circle" | "rounded" | "chair";
 
 export type Section = {
@@ -2062,6 +2071,7 @@ export interface CallTable {
   cancel_numbering: { args: []; returns: null; error: never };
   number: { args: [numbering: Numbering]; returns: Applied; error: CommandError };
   sample: { args: [node: number, oid: number]; returns: string | null; error: never };
+  seat_under: { args: [at: [number, number], zoom: number]; returns: SeatRef | null; error: never };
   add_category: { args: [index: number | null, category: Category]; returns: Applied; error: CommandError };
   update_category: { args: [key: string, category: Category]; returns: Applied; error: CommandError };
   move_category: { args: [key: string, index: number]; returns: Applied; error: CommandError };
@@ -2451,6 +2461,14 @@ export abstract class Calls {
   /** The hovered seat's full label, with the preview if one is shown. */
   sample(node: number, oid: number): string | null {
     return this.call("sample", [node, oid]);
+  }
+
+  /**
+   * The seat of a selected row block or row under a chart point, at a
+   * zoom (CSS px per chart unit): the seat `sample` describes.
+   */
+  seatUnder(at: [number, number], zoom: number): SeatRef | null {
+    return this.call("seat_under", [at, zoom]);
   }
 
   /** Adds a category at `index`, or at the end when it is `null`. */

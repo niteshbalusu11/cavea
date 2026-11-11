@@ -143,6 +143,15 @@ pub struct SeatLabelsView {
     pub custom: Shared<Vec<String>>,
 }
 
+/// A seat position of a row block or row: the hovered seat whose full
+/// label the numbering panel samples (07 §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeatRef {
+    pub node: u32,
+    pub oid: u32,
+}
+
 /// The labels a numbering would give, without applying it: per row, its
 /// label and each present seat's label at its world position.
 #[derive(Debug, Clone, PartialEq, Serialize)]

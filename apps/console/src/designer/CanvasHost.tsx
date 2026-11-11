@@ -45,6 +45,22 @@ export function CanvasHost(props: { editor: Editor }) {
   /** Touch points down, by pointer id, for the pinch. */
   const touches = new Map<number, [number, number]>();
   let pinch: Pinch | null = null;
+  /** The pointer over the canvas (CSS px), for the hovered seat's sample. */
+  let over: [number, number] | null = null;
+  /** The numbering panel's sample of the hovered seat (07 §6): its full label. */
+  const [sample, setSample] = createSignal<{ at: [number, number]; label: string } | null>(null);
+  const resample = () => {
+    if (over === null || editor.views.numbering === null) return setSample(null);
+    const view = editor.view();
+    const at = over;
+    const seat = editor.run((s) => s.seatUnder(toChart(view, at), view.zoom));
+    const label = seat ? editor.run((s) => s.sample(seat.node, seat.oid)) : null;
+    setSample(typeof label === "string" ? { at, label } : null);
+  };
+  // The panel closed: no sample.
+  createEffect(() => {
+    if (editor.views.numbering === null) setSample(null);
+  });
 
   const local = (e: { clientX: number; clientY: number }): [number, number] => {
     const r = region.getBoundingClientRect();
@@ -156,6 +172,8 @@ export function CanvasHost(props: { editor: Editor }) {
       },
       (names) => {
         if (names.has("cursor")) cursor(editor.session.cursor());
+        // A new preview relabels the seat under a still pointer.
+        if (names.has("numbering")) resample();
       },
     );
     cursor(editor.session.cursor());
@@ -263,6 +281,8 @@ export function CanvasHost(props: { editor: Editor }) {
           const p = pointer(e);
           editor.setPointer(p.world);
           send({ kind: "pointerMove", data: p });
+          over = p.screen;
+          if (editor.views.numbering !== null) resample();
         }}
         onPointerUp={(e) => {
           if (touchUp(e) || e.pointerId !== held) return;
@@ -278,13 +298,28 @@ export function CanvasHost(props: { editor: Editor }) {
         onLostPointerCapture={(e) => {
           if (e.pointerId === held) cancel();
         }}
-        onPointerLeave={() => editor.setPointer(null)}
+        onPointerLeave={() => {
+          editor.setPointer(null);
+          over = null;
+          setSample(null);
+        }}
         onContextMenu={(e) => e.preventDefault()}
         onMouseDown={(e) => {
           // No autoscroll on a middle press: it pans.
           if (e.button === 1) e.preventDefault();
         }}
       />
+      <Show when={sample()}>
+        {(s) => (
+          <div
+            aria-hidden="true"
+            class="pointer-events-none absolute rounded-sm border border-line bg-raised px-1.5 py-0.5 font-mono text-xs text-fg shadow-menu"
+            style={{ left: `${s().at[0] + 14}px`, top: `${s().at[1] + 14}px` }}
+          >
+            {s().label}
+          </div>
+        )}
+      </Show>
       <Show when={failed()}>
         {(message) => (
           <div
