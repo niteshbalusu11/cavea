@@ -1,6 +1,7 @@
 // Engine events as the host receives them: one batch per frame or command,
 // never one call per seat (docs/04-renderer.md §3, §16). The public SDK
 // (docs/05-web-sdk.md §5) builds its callbacks on these.
+import type { TextRequest } from "./text.ts";
 import type { EngineView } from "./view.ts";
 
 /** One object as the engine reports it. */
@@ -63,6 +64,8 @@ export type RendererEvent =
    * `engine` when a frame or input call threw.
    */
   | { type: "error"; code: "glyphAtlas" | "engine"; message: string }
+  /** Draw this string and answer with `setText`; the host does, between frames. */
+  | TextRequest
   | {
       type: "cameraChanged";
       centre: [number, number];

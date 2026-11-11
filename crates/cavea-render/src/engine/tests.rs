@@ -10,6 +10,7 @@ use crate::{
 };
 
 mod chart;
+mod labels;
 mod overview;
 mod select;
 mod state;
@@ -43,6 +44,8 @@ struct Fake {
     dims: Vec<f32>,
     /// Ranges and label buffer bases of each `glyph` draw.
     glyph_draws: Vec<(Vec<Range<u32>>, Vec<u32>)>,
+    /// Every `text` draw: pipeline, buffer, ranges, opacity.
+    text_draws: Vec<(Pipeline, u32, Vec<Range<u32>>, f32)>,
     targets: Vec<Target>,
     clears: Vec<[f32; 4]>,
 }
@@ -97,11 +100,18 @@ impl GpuBackend for Fake {
             .textures
             .get_mut(&id.0)
             .ok_or(BackendError::UnknownResource)?;
-        // Whole-texture writes are all the engine makes.
-        if (region.x, region.y, region.width, region.height) != (0, 0, desc.width, desc.height) {
+        let bpp = desc.format.bytes_per_pixel() as usize;
+        if region.x + region.width > desc.width
+            || region.y + region.height > desc.height
+            || data.len() != (region.width * region.height) as usize * bpp
+        {
             return Err(BackendError::InvalidData);
         }
-        *bytes = data.to_vec();
+        bytes.resize((desc.width * desc.height) as usize * bpp, 0);
+        for (row, line) in data.chunks(region.width as usize * bpp).enumerate() {
+            let at = ((region.y as usize + row) * desc.width as usize + region.x as usize) * bpp;
+            bytes[at..at + line.len()].copy_from_slice(line);
+        }
         self.texture_writes.push((id.0, region));
         Ok(())
     }
@@ -113,11 +123,18 @@ impl GpuBackend for Fake {
         let ranges = call.ranges.to_vec();
         self.calls
             .push((call.pipeline, ranges.clone(), call.uniforms.alpha));
-        if call.pipeline == Pipeline::Shape {
-            self.draws.push(ranges);
-            self.dims.push(call.uniforms.dim);
-        } else if call.pipeline == Pipeline::Glyph {
-            self.glyph_draws.push((ranges, call.bases.to_vec()));
+        let buffer = call.buffers[0].map_or(0, |b| b.0);
+        match call.pipeline {
+            Pipeline::Shape => {
+                self.draws.push(ranges);
+                self.dims.push(call.uniforms.dim);
+            }
+            Pipeline::Glyph => self.glyph_draws.push((ranges, call.bases.to_vec())),
+            Pipeline::Mesh => {}
+            pipeline => {
+                let alpha = call.uniforms.alpha;
+                self.text_draws.push((pipeline, buffer, ranges, alpha));
+            }
         }
         Ok(())
     }

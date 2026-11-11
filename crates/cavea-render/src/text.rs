@@ -24,6 +24,7 @@ use crate::{
     scene::Scene,
 };
 
+pub mod atlas;
 mod glyphs;
 pub use glyphs::{ATLAS_SIZE, CAP_HEIGHT_EM, GLYPHS, RANGE_EM};
 
@@ -92,11 +93,11 @@ pub fn glyph_code(c: char) -> Option<u8> {
     u8::try_from(i + 1).ok()
 }
 
-/// One label instance for `label` centred at `pos` on a seat `seat_cu`
-/// across. `None` when the label is empty, longer than [`MAX_GLYPHS`], or has
-/// a character the atlas does not hold: such a label is skipped whole, never
-/// drawn in part. The dynamic text atlas (REN-026) will draw those.
-pub fn label_instance(label: &str, pos: [f32; 2], seat_cu: f32) -> Option<[u8; LABEL_STRIDE]> {
+/// The glyph codes of `label`, their pen positions from its start in em, its
+/// glyph count and its width in em. `None` when the label is empty, longer
+/// than [`MAX_GLYPHS`], or has a character the atlas does not hold: such a
+/// label is drawn from the dynamic atlas instead (04 §12), never in part.
+pub fn layout(label: &str) -> Option<([u8; MAX_GLYPHS], [f32; MAX_GLYPHS], usize, f32)> {
     let mut codes = [0u8; MAX_GLYPHS];
     let mut origins = [0f32; MAX_GLYPHS];
     let mut n = 0;
@@ -109,9 +110,13 @@ pub fn label_instance(label: &str, pos: [f32; 2], seat_cu: f32) -> Option<[u8; L
         width += glyph.advance;
         n += 1;
     }
-    if n == 0 {
-        return None;
-    }
+    (n > 0).then_some((codes, origins, n, width))
+}
+
+/// One label instance for `label` centred at `pos` on a seat `seat_cu`
+/// across ([`layout`] says which labels have none).
+pub fn label_instance(label: &str, pos: [f32; 2], seat_cu: f32) -> Option<[u8; LABEL_STRIDE]> {
+    let (codes, origins, n, width) = layout(label)?;
     let mut out = [0; LABEL_STRIDE];
     let em = label_em(seat_cu, n, width);
     let fields = pos.into_iter().chain([em]).flat_map(f32::to_le_bytes);
@@ -161,6 +166,9 @@ pub struct Labels {
     /// Per render chunk: its slot, if it has one.
     slot_of: Vec<Option<u8>>,
     clock: u64,
+    /// Per slot: its seats whose label the baked atlas cannot draw, for the
+    /// dynamic atlas.
+    skipped: Vec<Vec<u32>>,
     /// Instance bytes being built, kept so building allocates once.
     scratch: Vec<u8>,
     /// Chunks built since load, for the demo's readout and tests.
@@ -171,6 +179,14 @@ impl Labels {
     /// The GPU buffer, to destroy with the chart.
     pub fn buffer(&self) -> Option<BufferId> {
         self.buffer
+    }
+
+    /// Seats of chunk `c` whose labels the baked atlas cannot draw, if its
+    /// labels are built.
+    pub fn skipped(&self, c: u32) -> &[u32] {
+        let slot = self.slot_of.get(c as usize).copied().flatten();
+        let skipped = slot.and_then(|s| self.skipped.get(usize::from(s)));
+        skipped.map_or(&[], Vec::as_slice)
     }
 
     /// Chunks with a label buffer.
@@ -259,6 +275,7 @@ impl Labels {
         let free = self.slots.len();
         let slot = if free < LABEL_CHUNKS.min(self.slot_of.len()) {
             self.slots.push((c, 0));
+            self.skipped.push(Vec::new());
             free
         } else {
             let lru = (0..self.slots.len())
@@ -295,6 +312,11 @@ impl Labels {
             .get(c as usize)
             .ok_or(BackendError::InvalidData)?;
         self.scratch.clear();
+        let skipped = self
+            .skipped
+            .get_mut(usize::from(slot))
+            .ok_or(BackendError::InvalidData)?;
+        skipped.clear();
         for idx in chunk.seat_first..chunk.seat_first.saturating_add(chunk.seat_count) {
             let seat_cu = scene
                 .row
@@ -302,9 +324,14 @@ impl Labels {
                 .and_then(|&r| chart.rows.get(r as usize))
                 .map_or(scene.seat_size, |r| f32::from(r.seat_size) * 0.25);
             let pos = scene.pos.get(idx as usize).copied().unwrap_or_default();
-            let instance = seat_label(chart, idx)
-                .ok()
-                .and_then(|label| label_instance(label.seat.as_str(), pos, seat_cu));
+            let label = seat_label(chart, idx).ok();
+            let instance = label.and_then(|label| {
+                let instance = label_instance(label.seat.as_str(), pos, seat_cu);
+                if instance.is_none() && !label.seat.as_str().is_empty() {
+                    skipped.push(idx);
+                }
+                instance
+            });
             self.scratch
                 .extend_from_slice(&instance.unwrap_or_default());
         }

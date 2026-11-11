@@ -4,6 +4,7 @@
 // `requestAnimationFrame` time, both on the `performance.now()` clock.
 import { defaultMaxDpr } from "../wasm/cavea_web.js";
 import { takeEvents, type RendererEvent } from "./events.ts";
+import { createRasteriser } from "./text.ts";
 import type { EngineView } from "./view.ts";
 
 export type GestureHandling = "greedy" | "cooperative" | "none";
@@ -71,6 +72,7 @@ export function attach(
   const cleanup: Array<() => void> = [];
   let handle = 0;
   let detached = false;
+  const rasteriser = createRasteriser();
 
   /** Runs a view call; a throw becomes an `error` event, never the page's. */
   function guard(call: () => unknown): void {
@@ -86,7 +88,14 @@ export function attach(
       return;
     }
     // Taken even without a listener, so they do not pile up in the view.
-    const events = takeEvents(view);
+    // Text the engine asks for is drawn here, between frames (04 §12).
+    const events = takeEvents(view).filter((event) => {
+      if (event.type !== "textRequest") {
+        return true;
+      }
+      guard(() => view.setText(event.id, ...rasteriser.draw(event)));
+      return false;
+    });
     if (events.length > 0) {
       options.onEvents?.(events);
     }
@@ -269,6 +278,7 @@ export function attach(
       for (const off of cleanup.splice(0)) {
         off();
       }
+      rasteriser.release();
     },
   };
 }

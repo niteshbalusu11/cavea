@@ -102,6 +102,18 @@ impl View {
         }
         self.need_frame = false;
         self.send(Command::Tick { time_ms })?;
+        #[cfg(feature = "demo")]
+        {
+            let s = self.engine.label_stats();
+            let stats = [
+                s.draws,
+                s.text_draws,
+                s.frame_draws,
+                s.atlas_bytes,
+                s.rasterised,
+            ];
+            DEMO_STATS.with(|cell| cell.set(stats));
+        }
         Ok(self.need_frame)
     }
 
@@ -201,6 +213,34 @@ impl View {
     #[wasm_bindgen(js_name = setGlyphAtlas)]
     pub fn set_glyph_atlas(&mut self, rgba: Vec<u8>) -> Result<(), JsError> {
         self.send(Command::SetGlyphAtlas { rgba })
+    }
+
+    /// The host's raster for a `textRequest` event (04 §12): `width` ×
+    /// `height` coverage bytes drawn at `px` device pixels per em, or an
+    /// empty raster when it cannot draw the string. Drawn from the next frame.
+    #[wasm_bindgen(js_name = setText)]
+    pub fn set_text(
+        &mut self,
+        id: u32,
+        width: u32,
+        height: u32,
+        px: u32,
+        pixels: Vec<u8>,
+    ) -> Result<(), JsError> {
+        self.send(Command::SetText {
+            id,
+            width,
+            height,
+            px,
+            pixels,
+        })
+    }
+
+    /// A built-in string the map draws, from the message catalogue:
+    /// `soldOut` (default "Sold out").
+    #[wasm_bindgen(js_name = setMessage)]
+    pub fn set_message(&mut self, key: String, text: String) -> Result<(), JsError> {
+        self.send(Command::SetMessage { key, text })
     }
 
     /// A built-in theme, `light`, `dark` or `high-contrast`, with token
@@ -458,11 +498,19 @@ impl View {
     /// `cavea-testkit` preset, or with `preset` empty a stadium of `seats`
     /// seats with a pitch below them; from `seed`, with `shape` 0 circle, 1
     /// rounded, 2 chair. A translucent band across the floor is added above
-    /// the seats, to see the upper mesh layer. Returns public CCF bytes for
-    /// `loadChart`.
+    /// the seats, to see the upper mesh layer. With `script` 1 the section
+    /// labels and text objects are replaced by strings in other scripts,
+    /// right-to-left ones among them, to see the platform shape them.
+    /// Returns public CCF bytes for `loadChart`.
     #[cfg(feature = "demo")]
     #[wasm_bindgen(js_name = demoChart)]
-    pub fn demo_chart(seats: u32, seed: u32, shape: u8, preset: &str) -> Result<Vec<u8>, JsError> {
+    pub fn demo_chart(
+        seats: u32,
+        seed: u32,
+        shape: u8,
+        preset: &str,
+        script: u8,
+    ) -> Result<Vec<u8>, JsError> {
         use cavea_compiler::document::{
             ChartDocument, Layer, Node, SeatShape, Shape, ShapeKind, Style,
         };
@@ -514,6 +562,33 @@ impl View {
                 .ok_or_else(|| JsError::new("unknown preset"))?;
             preset.generate(u64::from(seed))
         };
+        if script == 1 {
+            const WORDS: [&str; 8] = [
+                "ملعب",
+                "東スタンド",
+                "גלריה",
+                "Ζώνη",
+                "Партер",
+                "बालकनी",
+                "ระเบียง",
+                "남쪽",
+            ];
+            let mut n = 0;
+            let mut relabel = |nodes: &mut Vec<Node>| {
+                for node in nodes {
+                    match node {
+                        Node::Section(section) => {
+                            let word = WORDS.get(n % WORDS.len()).copied().unwrap_or_default();
+                            n += 1;
+                            section.label = Some(format!("{word} {n}"));
+                        }
+                        Node::Text(text) => "المسرح · במה".clone_into(&mut text.text),
+                        _ => {}
+                    }
+                }
+            };
+            relabel(&mut doc.nodes);
+        }
         doc.settings.seat_shape = match shape {
             0 => SeatShape::Circle,
             1 => SeatShape::Rounded,
@@ -611,6 +686,20 @@ impl View {
         }
         error.map_or(Ok(()), Err)
     }
+}
+
+#[cfg(feature = "demo")]
+thread_local! {
+    static DEMO_STATS: std::cell::Cell<[u32; 5]> = const { std::cell::Cell::new([0; 5]) };
+}
+
+/// Demo only: the counters of the last frame any view drew: seat label
+/// draws, draws of the dynamic atlas and row labels, all draws, dynamic
+/// atlas bytes, strings rasterised.
+#[cfg(feature = "demo")]
+#[wasm_bindgen(js_name = demoTextStats)]
+pub fn demo_text_stats() -> Vec<u32> {
+    DEMO_STATS.with(std::cell::Cell::get).to_vec()
 }
 
 /// No change, in `apply_delta_labels`'s codes.

@@ -16,6 +16,7 @@ pub mod engine;
 pub mod gesture;
 pub mod hit;
 pub mod host;
+pub mod label;
 pub mod overview;
 pub mod protocol;
 pub mod scene;

@@ -13,7 +13,7 @@ use super::{
     BackendError, BufferDesc, BufferId, BufferKind, BufferUsage, Caps, DrawCall, GpuBackend,
     Pipeline, Rect, ResourceId, Sampling, Target, TextureDesc, TextureFormat, TextureId,
 };
-use crate::{seat, shaders, text};
+use crate::{label::TEXT_STRIDE, seat, shaders, text};
 
 /// A linked program and its attribute layout.
 struct Program {
@@ -30,6 +30,7 @@ pub struct GlowBackend {
     shape: Program,
     mesh: Program,
     glyph: Program,
+    text: Program,
     /// The uniform buffer every program reads at binding point 0.
     globals: glow::Buffer,
     buffers: Vec<Option<(glow::Buffer, u32, BufferKind)>>,
@@ -52,6 +53,7 @@ impl GlowBackend {
             let shape = shape_program(&gl)?;
             let mesh = mesh_program(&gl)?;
             let glyph = glyph_program(&gl)?;
+            let text = text_program(&gl)?;
             // The glyph metrics never change: one block at binding point 1.
             let font = gl.create_buffer().map_err(BackendError::Create)?;
             gl.bind_buffer(glow::UNIFORM_BUFFER, Some(font));
@@ -71,6 +73,7 @@ impl GlowBackend {
                 shape,
                 mesh,
                 glyph,
+                text,
                 globals,
                 buffers: Vec::new(),
                 textures: Vec::new(),
@@ -272,6 +275,51 @@ impl GlowBackend {
         Ok(())
     }
 
+    /// Dynamic text: per range, the instances from its start; a triangle
+    /// strip of four vertices each.
+    fn draw_text(&self, call: &DrawCall<'_>) -> Result<(), BackendError> {
+        let (buffer, len) = self.buffer(call.buffers[0])?;
+        let atlas = self
+            .texture(call.textures[0].ok_or(BackendError::UnknownResource)?)?
+            .0;
+        let stride = TEXT_STRIDE as u64;
+        for range in call.ranges {
+            if range.start > range.end
+                || u64::from(range.end) * stride > u64::from(len)
+                || i32::try_from(u64::from(range.end) * stride).is_err()
+            {
+                return Err(BackendError::InvalidData);
+            }
+        }
+        let stride = TEXT_STRIDE as i32;
+        let gl = &self.gl;
+        // SAFETY: see the module documentation; every range was checked above,
+        // so the offsets and counts below fit in i32 and inside the buffer.
+        unsafe {
+            self.uniforms(call);
+            gl.use_program(Some(self.text.program));
+            gl.bind_vertex_array(Some(self.text.vao));
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(atlas));
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
+            for range in call.ranges {
+                let base = (range.start as usize * TEXT_STRIDE) as i32;
+                gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, base);
+                gl.vertex_attrib_pointer_f32(1, 1, glow::FLOAT, false, stride, base + 8);
+                // Integer attributes at the byte offsets of `label.rs`.
+                gl.vertex_attrib_pointer_i32(2, 4, glow::UNSIGNED_SHORT, stride, base + 12);
+                gl.vertex_attrib_pointer_i32(3, 2, glow::SHORT, stride, base + 20);
+                gl.vertex_attrib_pointer_i32(4, 2, glow::UNSIGNED_SHORT, stride, base + 24);
+                gl.vertex_attrib_pointer_i32(5, 4, glow::UNSIGNED_BYTE, stride, base + 28);
+                gl.vertex_attrib_pointer_f32(6, 4, glow::UNSIGNED_BYTE, true, stride, base + 32);
+                let count = (range.end - range.start) as i32;
+                gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, count);
+            }
+            gl.bind_vertex_array(None);
+        }
+        Ok(())
+    }
+
     /// Indexed triangles: each range is a range of the index buffer.
     fn draw_mesh(&self, call: &DrawCall<'_>) -> Result<(), BackendError> {
         let [vertex_id, index_id] = call.buffers;
@@ -370,6 +418,18 @@ fn glyph_program(gl: &glow::Context) -> Result<Program, BackendError> {
     ];
     // SAFETY: see the module documentation.
     unsafe { program(gl, sources, &blocks, &samplers, 6, true) }
+}
+
+/// The `text` program: the globals at binding point 0, the atlas on unit 0.
+fn text_program(gl: &glow::Context) -> Result<Program, BackendError> {
+    let blocks = [
+        (shaders::TEXT_VERT_GLOBALS, 0),
+        (shaders::TEXT_FRAG_GLOBALS, 0),
+    ];
+    let sources = [shaders::TEXT_VERT, shaders::TEXT_FRAG];
+    let samplers = [(shaders::TEXT_FRAG_ATLAS, 0)];
+    // SAFETY: see the module documentation.
+    unsafe { program(gl, sources, &blocks, &samplers, 7, true) }
 }
 
 /// The `mesh` program reads its uniforms in the vertex stage only.
@@ -605,6 +665,7 @@ impl GpuBackend for GlowBackend {
             Pipeline::Shape => self.draw_shape(call),
             Pipeline::Mesh => self.draw_mesh(call),
             Pipeline::Glyph => self.draw_glyph(call),
+            Pipeline::Text => self.draw_text(call),
             other => Err(BackendError::Unsupported(other)),
         }
     }

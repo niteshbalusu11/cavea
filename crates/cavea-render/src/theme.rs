@@ -92,7 +92,16 @@ pub struct Theme {
     pub dim: f32,
     /// `category-<key>` overrides of the chart's colours, last one wins.
     pub categories: Vec<(String, Rgba)>,
+    /// The CSS font family the host draws dynamic text in (04 §12): a system
+    /// stack unless the `font` token names one. Never fetched by the engine.
+    pub font: String,
 }
+
+/// The default font family for dynamic text: the platform's own fonts.
+pub const SYSTEM_FONT: &str =
+    "system-ui, -apple-system, \"Segoe UI\", Roboto, \"Noto Sans\", Arial, sans-serif";
+/// The longest `font` token accepted, in bytes.
+pub const MAX_FONT_BYTES: usize = 256;
 
 /// Why a `SetTheme` was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,13 +150,15 @@ impl Theme {
             section_tint: 0.6,
             dim: 0.35,
             categories: Vec::new(),
+            font: SYSTEM_FONT.to_owned(),
         }
     }
 
     /// `base` with `tokens` applied in order. Names are those of 05 §8, with
     /// or without the `--cavea-` prefix; colours are `#rgb`, `#rrggbb` or
-    /// `#rrggbbaa`, numbers are decimals from 0 to 1. `font`, `radius` and
-    /// `shadow` belong to the host and are ignored here.
+    /// `#rrggbbaa`, numbers are decimals from 0 to 1. `font` is the family
+    /// dynamic text asks the host for; `radius` and `shadow` belong to the
+    /// host and are ignored here.
     pub fn with_tokens(base: BuiltinTheme, tokens: &[ThemeToken]) -> Result<Self, TokenError> {
         let mut theme = Self::builtin(base);
         for token in tokens {
@@ -172,7 +183,14 @@ impl Theme {
                     theme.dim = unit(value).ok_or(TokenError::BadValue)?;
                     continue;
                 }
-                "font" | "radius" | "shadow" => continue,
+                "font" => {
+                    if value.is_empty() || value.len() > MAX_FONT_BYTES {
+                        return Err(TokenError::BadValue);
+                    }
+                    value.clone_into(&mut theme.font);
+                    continue;
+                }
+                "radius" | "shadow" => continue,
                 _ => {
                     let key = name
                         .strip_prefix("category-")

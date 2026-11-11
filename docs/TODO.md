@@ -103,7 +103,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **REN-023** Chunk culling and merging of visible ranges; stay under 64 seat draw calls (04 §11)
 - [x] **REN-024** MSDF atlas bake tool and `glyph` program (04 §12)
 - [x] **REN-025** Seat labels from row rules, built per chunk with an LRU of 64 (04 §12)
-- [ ] **REN-026** Dynamic text atlas, size buckets, `text` program, browser rasteriser (04 §12)
+- [x] **REN-026** Dynamic text atlas, size buckets, `text` program, browser rasteriser (04 §12)
 - [ ] **REN-027** Row labels, section labels, text objects with greedy collision (04 §12)
 - [ ] **REN-028** Icon atlas and seat icons: accessible, tick, cross (04 §7)
 - [x] **REN-029** Camera: fit, limits, clamping, `FlyTo` in log-zoom space (04 §13)

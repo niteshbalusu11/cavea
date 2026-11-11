@@ -26,6 +26,7 @@ use crate::{
     camera::{self, Camera, Limits, Rect, Size},
     cull,
     gesture::{Action, Intent, Recogniser},
+    label::{self, MapLabels},
     overview::{self, Sections},
     protocol::{
         Bounds, BuiltinTheme, CameraTarget, Command, ErrorCode, Event, Lod, ObjectRef, PointerKind,
@@ -33,7 +34,7 @@ use crate::{
     },
     scene::Scene,
     seat::{self, SeatDynamic, SeatStatic},
-    text::{self, LABEL_MIN_EM_PX, Labels},
+    text::{self, LABEL_MIN_EM_PX, Labels, atlas::TextAtlas},
     theme::{PALETTE_WIDTH, Selection, Theme, TokenError, picker_visual, status, visual},
     tuning::{
         INERTIA_STOP_PX_PER_S, INERTIA_TIME_CONSTANT_MS, MAX_BACKING_PX, MAX_DPR_OTHER,
@@ -95,6 +96,13 @@ struct Loaded {
     sections: Sections,
     /// Seat label buffers per render chunk (04 §12).
     seat_labels: Labels,
+    /// Strings the host rasterised, and the labels and icons drawn from it
+    /// and from the baked atlas (04 §12).
+    text_atlas: TextAtlas,
+    map_labels: MapLabels,
+    /// The palette texture's bytes, for the ink of seat labels drawn from
+    /// the dynamic atlas.
+    palette_bytes: Vec<u8>,
 }
 
 /// The glyph atlas as the host sent it, kept so the texture can be made again.
@@ -111,8 +119,15 @@ pub struct LabelStats {
     pub built: u32,
     /// Chunks whose label buffers are kept.
     pub cached: u32,
-    /// Label draw calls in the last frame drawn.
+    /// Label draw calls in the last frame drawn: seat labels from the baked
+    /// atlas, then every draw of the dynamic atlas.
     pub draws: u32,
+    pub text_draws: u32,
+    /// The dynamic atlas: bytes of texture, strings rasterised since load.
+    pub atlas_bytes: u32,
+    pub rasterised: u32,
+    /// Draw calls in the last frame drawn, all passes.
+    pub frame_draws: u32,
 }
 
 /// Input and camera commands waiting for the next `Tick`, in arrival order.
@@ -203,6 +218,17 @@ pub struct Engine<B: GpuBackend> {
     dirty: bool,
     frame_requested: bool,
     context_lost: bool,
+    /// Bumped by every theme change, and by every upload of seat state:
+    /// labels drawn from the dynamic atlas depend on them.
+    theme_gen: u32,
+    state_gen: u32,
+    /// The "sold out" label's text (`SetMessage`) and its generation.
+    sold_out: String,
+    sold_out_gen: u32,
+    /// Draw calls in the frame being drawn and the last one: all, and of
+    /// the dynamic atlas.
+    draws: [u32; 2],
+    last_draws: [u32; 2],
     start_ms: Option<f64>,
     /// Intents seen, for tests.
     #[cfg(test)]
@@ -243,6 +269,12 @@ impl<B: GpuBackend> Engine<B> {
             dirty: false,
             frame_requested: false,
             context_lost: false,
+            theme_gen: 0,
+            state_gen: 0,
+            sold_out: SOLD_OUT.to_owned(),
+            sold_out_gen: 0,
+            draws: [0; 2],
+            last_draws: [0; 2],
             start_ms: None,
             #[cfg(test)]
             intents: Vec::new(),
@@ -350,6 +382,14 @@ impl<B: GpuBackend> Engine<B> {
             } => self.set_rules(max, min, &validators, group_size),
             Command::SetSessionMode(mode) => self.set_session_mode(mode),
             Command::SetGlyphAtlas { rgba } => self.set_glyph_atlas(rgba),
+            Command::SetText {
+                id,
+                width,
+                height,
+                px,
+                pixels,
+            } => self.set_text(id, [width, height, px], &pixels),
+            Command::SetMessage { key, text } => self.set_message(&key, text),
             Command::Tick { time_ms } => self.frame(time_ms),
             Command::ContextLost => self.context_lost = true,
             _ => self.error(
@@ -469,9 +509,12 @@ impl<B: GpuBackend> Engine<B> {
             ));
         }
         let gpu = |error: BackendError| (ErrorCode::Gpu, error.to_string());
-        let mut palette = Vec::new();
-        self.theme
-            .palette(&scene.chart.categories, &scene.chart.strings, &mut palette);
+        let mut palette_bytes = Vec::new();
+        self.theme.palette(
+            &scene.chart.categories,
+            &scene.chart.strings,
+            &mut palette_bytes,
+        );
         let seats = scene.pos.len();
         let dynamic = seat::encode_dynamic(
             &scene.chart.seat_category,
@@ -542,7 +585,7 @@ impl<B: GpuBackend> Engine<B> {
                 created.push(i);
                 Some([v, i])
             };
-            let texture = self.backend.create_texture(desc, Some(&palette));
+            let texture = self.backend.create_texture(desc, Some(&palette_bytes));
             texture.map(|palette| (overlay, mesh, palette))
         });
         let (overlay, mesh, palette) = match resources {
@@ -555,6 +598,12 @@ impl<B: GpuBackend> Engine<B> {
             }
         };
 
+        // Request ids carry on from the old chart's atlas, so a late answer
+        // for it is ignored.
+        let text_atlas = self
+            .scene
+            .as_ref()
+            .map_or_else(TextAtlas::default, |l| l.text_atlas.successor());
         self.release_scene();
         self.reset_selection();
         self.events.push(Event::Ready(scene.info()));
@@ -571,6 +620,9 @@ impl<B: GpuBackend> Engine<B> {
             mesh_dirty: None,
             sections,
             seat_labels: Labels::default(),
+            text_atlas,
+            map_labels: MapLabels::default(),
+            palette_bytes,
         });
         self.flush_selection();
         self.chart_loaded();
@@ -593,19 +645,63 @@ impl<B: GpuBackend> Engine<B> {
                 .into_iter()
                 .chain(loaded.mesh.into_iter().flatten())
                 .chain(loaded.seat_labels.buffer())
+                .chain(loaded.map_labels.text_buffer())
             {
                 self.backend.destroy(ResourceId::Buffer(id));
             }
+            let mut atlas = loaded.text_atlas;
+            atlas.reset(&mut self.backend);
         }
     }
 
     /// Seat label counters (04 §12).
     pub fn label_stats(&self) -> LabelStats {
         let labels = self.scene.as_ref().map(|l| &l.seat_labels);
+        let atlas = self.scene.as_ref().map(|l| &l.text_atlas);
         LabelStats {
             built: labels.map_or(0, |l| l.built),
             cached: labels.map_or(0, |l| l.len() as u32),
             draws: self.label_ranges.len() as u32,
+            text_draws: self.last_draws[1],
+            atlas_bytes: atlas.map_or(0, TextAtlas::bytes),
+            rasterised: atlas.map_or(0, |a| a.rasterised),
+            frame_draws: self.last_draws[0],
+        }
+    }
+
+    /// The host's raster for a `TextRequest` (04 §12): packed into the
+    /// dynamic atlas, drawn from the next frame.
+    fn set_text(&mut self, id: u32, size: [u32; 3], pixels: &[u8]) {
+        let Some(loaded) = &mut self.scene else {
+            return;
+        };
+        match loaded
+            .text_atlas
+            .supply(&mut self.backend, id, size, pixels)
+        {
+            Ok(()) => self.redraw(),
+            Err(BackendError::InvalidData) => {
+                self.error(
+                    ErrorCode::InvalidInput,
+                    "text raster breaks the atlas limits",
+                );
+            }
+            Err(error) => self.error(ErrorCode::Gpu, error.to_string()),
+        }
+    }
+
+    /// A built-in string from the host's message catalogue (WEB-011).
+    fn set_message(&mut self, key: &str, text: String) {
+        if key != "soldOut" {
+            return self.error(ErrorCode::InvalidInput, "unknown message");
+        }
+        if text.len() > 64 {
+            return self.error(ErrorCode::InvalidInput, "message longer than 64 bytes");
+        }
+        if text != self.sold_out {
+            self.sold_out = text;
+            self.sold_out_gen = self.sold_out_gen.wrapping_add(1);
+            self.redraw();
         }
     }
 
@@ -648,23 +744,25 @@ impl<B: GpuBackend> Engine<B> {
                 return self.error(ErrorCode::InvalidInput, "invalid theme token value");
             }
         };
+        let font_changed = theme.font != self.theme.font;
         self.theme = theme;
+        self.theme_gen = self.theme_gen.wrapping_add(1);
         if let Some(loaded) = &mut self.scene {
+            if font_changed {
+                loaded.text_atlas.reset(&mut self.backend);
+            }
             loaded.sections.set_theme(&loaded.scene.chart, &self.theme);
             let chart = &loaded.scene.chart;
-            let mut palette = Vec::new();
+            let palette = &mut loaded.palette_bytes;
             self.theme
-                .palette(&chart.categories, &chart.strings, &mut palette);
+                .palette(&chart.categories, &chart.strings, palette);
             let region = TexRect {
                 x: 0,
                 y: 0,
                 width: PALETTE_WIDTH,
                 height: u32::try_from(chart.categories.len() + 1).unwrap_or(u32::MAX),
             };
-            if let Err(error) = self
-                .backend
-                .update_texture(loaded.palette, region, &palette)
-            {
+            if let Err(error) = self.backend.update_texture(loaded.palette, region, palette) {
                 self.error(ErrorCode::Gpu, error.to_string());
             }
         }
@@ -757,6 +855,7 @@ impl<B: GpuBackend> Engine<B> {
             self.theme.clear(),
         );
         let time = ((time_ms - start) / 1000.0) as f32;
+        self.draws = [0; 2];
         let drawn = self
             .upload()
             .and_then(|()| self.draw_world(viewport, time))
@@ -764,6 +863,7 @@ impl<B: GpuBackend> Engine<B> {
         if let Err((code, message)) = drawn {
             self.error(code, message);
         }
+        self.last_draws = self.draws;
         self.backend.end_frame();
     }
 
@@ -993,6 +1093,7 @@ impl<B: GpuBackend> Engine<B> {
         };
         let scene = &mut loaded.scene;
         if let Some(range) = loaded.dirty.take() {
+            self.state_gen = self.state_gen.wrapping_add(1);
             let bytes = seat::encode_dynamic(
                 &scene.chart.seat_category,
                 &scene.visual,
@@ -1080,8 +1181,7 @@ impl<B: GpuBackend> Engine<B> {
                 ranges: std::slice::from_ref(&range),
                 bases: &[],
             };
-            let gpu = |error: BackendError| (ErrorCode::Gpu, error.to_string());
-            engine.backend.draw(&call).map_err(gpu)
+            submit(&mut engine.backend, &mut engine.draws, &call)
         };
         draw_mesh(self, below, 1.0)?;
         if alpha < 1.0 {
@@ -1091,7 +1191,90 @@ impl<B: GpuBackend> Engine<B> {
             self.draw_seats(camera, viewport, time, alpha)?;
         }
         self.draw_labels(camera, viewport, time)?;
+        self.draw_text(camera, viewport, time)?;
         draw_mesh(self, above, 1.0)
+    }
+
+    /// Seat labels from the dynamic atlas (with pass 9's), then pass 10
+    /// (04 §7, §12): section labels, faded with the fills, and text objects;
+    /// rebuilt only when what they show changes.
+    fn draw_text(
+        &mut self,
+        camera: Camera,
+        viewport: Viewport,
+        time: f32,
+    ) -> Result<(), (ErrorCode, String)> {
+        let seat_alpha = self.seat_alpha();
+        let uniforms = self.world_uniforms(camera, viewport, time, 1.0)?;
+        let Some(loaded) = &mut self.scene else {
+            return Ok(());
+        };
+        let size = viewport.css;
+        let [x0, y0] = camera.to_world([0.0, 0.0], size);
+        let [x1, y1] = camera.to_world([size.width, size.height], size);
+        let view = label::View {
+            rect: [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)].map(|v| v as f32),
+            px_per_cu: uniforms.px_per_cu,
+            ratio: viewport.ratio,
+            sections: seat_alpha < 1.0 && loaded.sections.any(),
+            seats: self.lod == Some(Lod::Detail),
+            chunks: if seat_alpha > 0.0 { &self.visible } else { &[] },
+            theme_gen: self.theme_gen,
+            state_gen: self.state_gen,
+            sold_out: &self.sold_out,
+            sold_out_gen: self.sold_out_gen,
+        };
+        let gpu = |error: BackendError| (ErrorCode::Gpu, error.to_string());
+        let again = loaded
+            .map_labels
+            .prepare(
+                &mut self.backend,
+                &mut loaded.text_atlas,
+                &loaded.scene,
+                &loaded.sections,
+                &loaded.seat_labels,
+                &self.theme,
+                &loaded.palette_bytes,
+                &view,
+                &mut self.events,
+            )
+            .map_err(gpu)?;
+        let labels = &loaded.map_labels;
+        let mut text = uniforms;
+        // The `text` program reads device pixels per CSS pixel here.
+        text.stroke_px = viewport.ratio;
+        let [sections, seats, texts] = labels.ranges.clone();
+        let atlas = loaded.text_atlas.texture();
+        let draw_text = |engine: &mut [u32; 2], backend: &mut B, range: Range<u32>, alpha: f32| {
+            let (Some(buffer), Some(atlas)) = (labels.text_buffer(), atlas) else {
+                return Ok(());
+            };
+            if range.is_empty() || alpha <= 0.0 {
+                return Ok(());
+            }
+            let call = DrawCall {
+                pipeline: Pipeline::Text,
+                buffers: [Some(buffer), None],
+                textures: [Some(atlas), None],
+                uniforms: Uniforms { alpha, ..text },
+                ranges: std::slice::from_ref(&range),
+                bases: &[],
+            };
+            submit(backend, engine, &call)
+        };
+        draw_text(&mut self.draws, &mut self.backend, seats, 1.0)?;
+        draw_text(
+            &mut self.draws,
+            &mut self.backend,
+            sections,
+            1.0 - seat_alpha,
+        )?;
+        draw_text(&mut self.draws, &mut self.backend, texts, 1.0)?;
+        if again {
+            // Requests were held back by the per-frame cap.
+            self.redraw();
+        }
+        Ok(())
     }
 
     /// Draws the active floor's seats in the render chunks the view meets
@@ -1143,8 +1326,7 @@ impl<B: GpuBackend> Engine<B> {
             ranges: &self.ranges,
             bases: &[],
         };
-        let gpu = |error: BackendError| (ErrorCode::Gpu, error.to_string());
-        self.backend.draw(&call).map_err(gpu)
+        submit(&mut self.backend, &mut self.draws, &call)
     }
 
     /// Seat labels (04 §7 pass 9, §12), at the detail level once the atlas
@@ -1195,7 +1377,7 @@ impl<B: GpuBackend> Engine<B> {
             ranges: &self.label_ranges,
             bases: &self.label_bases,
         };
-        self.backend.draw(&call).map_err(gpu)?;
+        submit(&mut self.backend, &mut self.draws, &call)?;
         if waiting {
             // The other visible chunks' labels are built in the next frames.
             self.redraw();
@@ -1298,9 +1480,40 @@ impl<B: GpuBackend> Engine<B> {
             ranges: std::slice::from_ref(&range),
             bases: &[],
         };
-        self.backend.draw(&call).map_err(gpu)
+        submit(&mut self.backend, &mut self.draws, &call)
     }
 }
+
+/// Dropping the engine (the web view's `free`, at `destroy`) deletes every
+/// GPU resource it made, so nothing outlives it on the context.
+impl<B: GpuBackend> Drop for Engine<B> {
+    fn drop(&mut self) {
+        self.release_scene();
+        if let Some(atlas) = self.atlas.take() {
+            self.backend.destroy(ResourceId::Texture(atlas.texture));
+        }
+    }
+}
+
+/// Draws `call`, counting its GPU draw calls (one per range): all, and those
+/// of the dynamic atlas.
+fn submit(
+    backend: &mut impl GpuBackend,
+    counts: &mut [u32; 2],
+    call: &DrawCall<'_>,
+) -> Result<(), (ErrorCode, String)> {
+    let n = call.ranges.len() as u32;
+    counts[0] += n;
+    if call.pipeline == Pipeline::Text {
+        counts[1] += n;
+    }
+    backend
+        .draw(call)
+        .map_err(|error| (ErrorCode::Gpu, error.to_string()))
+}
+
+/// The default text of the "sold out" label (`SetMessage` `soldOut`).
+pub const SOLD_OUT: &str = "Sold out";
 
 /// Bytes per `MESH` vertex as uploaded: x, y as little-endian `f32`, RGBA8.
 const MESH_STRIDE: usize = 12;
