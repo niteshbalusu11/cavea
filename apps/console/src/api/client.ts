@@ -78,13 +78,30 @@ interface Parts {
   body?: unknown;
 }
 
+export interface CallOptions {
+  /** The workspace to act in (`ws_…`) instead of the selected one: for a
+   * page pinned to one workspace's object, such as the designer's chart. */
+  workspace?: string;
+}
+
 /** Calls operation `op`; rejects with an `ApiError`, or with the abort when
  * `signal` cancels it. */
 export async function call<Op extends OperationId>(
   op: Op,
   input: Input<Op>,
   signal: AbortSignal,
+  options: CallOptions = {},
 ): Promise<Reply<Op>> {
+  return (await callWithHeaders(op, input, signal, options)).reply;
+}
+
+/** `call`, with the answer's status and headers (a draft's `ETag`). */
+export async function callWithHeaders<Op extends OperationId>(
+  op: Op,
+  input: Input<Op>,
+  signal: AbortSignal,
+  options: CallOptions = {},
+): Promise<{ reply: Reply<Op>; status: number; headers: Headers }> {
   const info = OPERATIONS[op];
   const parts = input as Parts;
   const url = target(info.path, parts);
@@ -96,10 +113,12 @@ export async function call<Op extends OperationId>(
     headers.set("Cavea-Csrf-Token", context.csrf);
   }
   // A route that checks a permission acts in one workspace (09 §10).
-  const workspace = info.permission === null ? null : context.workspace();
+  const workspace = info.permission === null ? null : (options.workspace ?? context.workspace());
   if (workspace !== null) headers.set("Cavea-Workspace", workspace);
   let body: BodyInit | undefined;
   if (parts.body instanceof Blob) {
+    // Sent as it is, typed by the blob (fetch sets `Content-Type` from it):
+    // an image, or JSON already serialised (a large draft).
     body = parts.body;
   } else if (parts.body !== undefined) {
     headers.set("Content-Type", "application/json");
@@ -131,10 +150,11 @@ export async function call<Op extends OperationId>(
     if (error.sessionLost) context.onSessionLost();
     throw error;
   }
-  if (text === "") return undefined as Reply<Op>;
-  if (!isJson(response)) return text as Reply<Op>;
+  const meta = { status: response.status, headers: response.headers };
+  if (text === "") return { reply: undefined as Reply<Op>, ...meta };
+  if (!isJson(response)) return { reply: text as Reply<Op>, ...meta };
   try {
-    return JSON.parse(text) as Reply<Op>;
+    return { reply: JSON.parse(text) as Reply<Op>, ...meta };
   } catch {
     throw unexpected(response.status, requestId);
   }

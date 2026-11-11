@@ -1,20 +1,24 @@
 // The designer page (07 §3): loads the module, opens the source's chart (or
-// a file, or an empty chart), and lays out the shell around it.
-import { loadDesigner, type Session } from "@cavea/designer-core";
+// a file, or an empty chart), or a server chart's draft (`ServerChart.tsx`),
+// and lays out the shell around it.
+import { loadDesigner, type Designer, type Session } from "@cavea/designer-core";
+import { useNavigate } from "@solidjs/router";
 import { Tabs } from "@kobalte/core/tabs";
 import {
   createResource,
   createSignal,
+  lazy,
   Match,
   onCleanup,
   onMount,
   Show,
+  Suspense,
   Switch,
   type JSX,
 } from "solid-js";
 import { msg } from "../i18n/messages.ts";
 import { load, save } from "../storage.ts";
-import { IconButton } from "../ui/controls.tsx";
+import { Button, IconButton } from "../ui/controls.tsx";
 import { Confirm, notify } from "../ui/overlays.tsx";
 import { Splitter } from "../ui/Splitter.tsx";
 import { CanvasHost } from "./CanvasHost.tsx";
@@ -32,7 +36,9 @@ import { NumberingPanel } from "./NumberingPanel.tsx";
 import { Palette } from "./Palette.tsx";
 import { LAYOUT_KEY, parseLayout, SIDE, SPLIT, type Layout, type PanelTab } from "./layout.ts";
 import { StatusBar, ToolRail } from "./Rails.tsx";
-import { emptyChart, fileName, type ChartSource } from "./source.ts";
+import { PublishDialog } from "./Publish.tsx";
+import { serverChart, type ServerChart, type ServerSetup } from "./ServerChart.tsx";
+import { emptyChart, fileName, localSource, type ChartSource } from "./source.ts";
 import { TopBar } from "./TopBar.tsx";
 import { Tour } from "./Tour.tsx";
 import { TOUR_KEY } from "./tour.ts";
@@ -45,7 +51,10 @@ const NUMBERING_SPLIT = 0.7;
 /** 09 §8: the designer needs 1,280 px. */
 const MIN_WIDTH = 1280;
 
-export function DesignerPage(props: { source: ChartSource }) {
+/** The buyer's renderer, loaded when the preview first opens. */
+const Preview = lazy(() => import("./Preview.tsx"));
+
+export function DesignerPage(props: { source: ChartSource; server?: ServerSetup | undefined }) {
   const loading = loadDesigner();
   const [designer] = createResource(() => loading);
   const [editor, setEditor] = createSignal<Editor | null>(null);
@@ -56,6 +65,9 @@ export function DesignerPage(props: { source: ChartSource }) {
   const [width, setWidth] = createSignal(window.innerWidth);
   const [dragging, setDragging] = createSignal(false);
   const [newOpen, setNewOpen] = createSignal(false);
+  const [previewing, setPreviewing] = createSignal<Designer | null>(null);
+  const [publishing, setPublishing] = createSignal(false);
+  const navigate = useNavigate();
   let picker: HTMLInputElement | undefined;
 
   const resize = () => setWidth(window.innerWidth);
@@ -65,26 +77,40 @@ export function DesignerPage(props: { source: ChartSource }) {
   onCleanup(() => {
     gone = true;
     window.removeEventListener("resize", resize);
+    // `server` is set below, before any cleanup can run.
+    server?.dispose();
     editor()?.dispose();
     pending()?.dispose();
   });
 
-  const dirty = () => {
-    const e = editor();
-    return e !== null && e.views.status.revision !== e.saved().revision;
-  };
-  const install = (session: Session) => {
+  const install = (session: Session): Editor => {
     editor()?.dispose();
     const e = createEditor(session, setPanic);
     // For measuring and debugging in the browser's console; not in builds.
     if (import.meta.env.DEV) Object.assign(window, { caveaEditor: e });
     setEditor(e);
+    return e;
+  };
+  const server: ServerChart | null =
+    props.server === undefined
+      ? null
+      : serverChart({ setup: props.server, install, editor, onPanic: setPanic });
+  /** A file opened over a server draft always asks: it replaces the draft. */
+  const dirty = () => {
+    const e = editor();
+    return e !== null && (server !== null || e.views.status.revision !== e.saved().revision);
+  };
+  const replace = (session: Session) => {
+    if (server === null) install(session);
+    else void server.adopt(session);
   };
   /** Opens chart document JSON (07 §12): a refusal is explained and the
    * open chart kept; a chart that opens replaces the open one, after asking
    * if that has unsaved changes. A file dropped while the module loads
    * waits for it. */
   const request = async (text: string, file: string) => {
+    // A read-only chart takes no file over it (dropped, or opened).
+    if (server?.readOnly === true) return notify(msg("readOnly.refused"), "error");
     const d = await loading.catch(() => undefined);
     if (d === undefined || gone || panic() !== null) return;
     let session: Session;
@@ -97,7 +123,7 @@ export function DesignerPage(props: { source: ChartSource }) {
       return setFailed({ file, message: failureMessage(f) });
     }
     if (gone) return session.dispose();
-    if (!dirty()) return install(session);
+    if (!dirty()) return replace(session);
     pending()?.dispose();
     setPending(session);
   };
@@ -113,7 +139,17 @@ export function DesignerPage(props: { source: ChartSource }) {
     }
     await request(text, file.name);
   };
+  const exportNow = () => {
+    const e = editor();
+    const draft = e?.run((s) => s.export());
+    if (e === null || draft === undefined) return;
+    const name = e.views.title;
+    void localSource
+      .save(draft, name)
+      .then(() => notify(msg("export.done", { file: fileName(name) })));
+  };
   const saveNow = () => {
+    if (server !== null) return server.saveNow();
     const e = editor();
     if (e === null) return;
     const draft = e.run((s) => s.export());
@@ -127,6 +163,13 @@ export function DesignerPage(props: { source: ChartSource }) {
   };
 
   onMount(() => {
+    if (server !== null) {
+      void loading.then(
+        (d) => (gone ? undefined : server.load(d)),
+        () => undefined,
+      );
+      return;
+    }
     void props.source.open().then((text) => {
       if (text !== null) void request(text, msg("designer.untitled"));
     });
@@ -155,10 +198,29 @@ export function DesignerPage(props: { source: ChartSource }) {
       ),
     open: () => picker?.click(),
   };
+  const readOnly = server?.readOnly === true;
   const ui = {
-    onNew: () => setNewOpen(true),
-    onOpen: () => picker?.click(),
+    onNew: server === null ? () => setNewOpen(true) : undefined,
+    onOpen: readOnly ? undefined : () => picker?.click(),
     onSave: saveNow,
+    onExport: server === null ? saveNow : exportNow,
+    status: server?.indicator,
+    readOnly,
+    onPreview: () => void loading.then(setPreviewing, () => undefined),
+  };
+  const publishFor = (e: Editor) => {
+    const v = e.views.validation;
+    const reason =
+      server === null
+        ? msg("topbar.publishLocal")
+        : props.server?.canPublish !== true
+          ? msg("topbar.publishRole", { role: props.server?.role ?? "" })
+          : !v.complete
+            ? msg("topbar.publishChecking")
+            : !v.publishable
+              ? msg("topbar.publishBlocked")
+              : null;
+    return { reason, run: () => setPublishing(true) };
   };
 
   return (
@@ -192,8 +254,36 @@ export function DesignerPage(props: { source: ChartSource }) {
         <Match when={designer.loading}>
           <Centre title={msg("designer.loading")} />
         </Match>
+        <Match
+          when={(() => {
+            const p = server?.phase();
+            return p?.kind === "failed" ? p : null;
+          })()}
+        >
+          {(p) => (
+            <Centre title={p().title} body={p().detail}>
+              <div class="mt-4 flex gap-2">
+                <Button onClick={() => navigate("/charts")}>{msg("serverChart.back")}</Button>
+                <Show when={p().retry}>
+                  <Button
+                    variant="primary"
+                    onClick={() => void loading.then((d) => server?.load(d))}
+                  >
+                    {msg("action.retry")}
+                  </Button>
+                </Show>
+              </div>
+            </Centre>
+          )}
+        </Match>
+        <Match when={server?.phase().kind === "loading"}>
+          <Centre title={msg("serverChart.loading")} />
+        </Match>
         <Match when={editor()} keyed>
-          {(e) => <Shell editor={e} save={saveNow} ui={ui} />}
+          {(e) => <Shell editor={e} save={saveNow} ui={ui} publish={publishFor(e)} />}
+        </Match>
+        <Match when={server !== null}>
+          <Centre title={msg("serverChart.loading")} />
         </Match>
         <Match when={true}>
           <Centre title={msg("new.title")} body={msg("new.body")}>
@@ -228,13 +318,37 @@ export function DesignerPage(props: { source: ChartSource }) {
         onConfirm={() => {
           const session = pending();
           setPending(null);
-          if (session !== null) install(session);
+          if (session !== null) replace(session);
         }}
         onClose={() => {
           pending()?.dispose();
           setPending(null);
         }}
       />
+      {server?.dialogs()}
+      <Show when={previewing() !== null && editor()} keyed>
+        {(e) => (
+          <Suspense fallback={<Centre title={msg("preview.loading")} />}>
+            <Preview
+              designer={previewing() as Designer}
+              session={e.session}
+              onClose={() => setPreviewing(null)}
+            />
+          </Suspense>
+        )}
+      </Show>
+      <Show when={server !== null && editor()} keyed>
+        {(e) => (
+          <PublishDialog
+            open={publishing()}
+            name={e.views.title}
+            chart={server?.chart() ?? null}
+            seats={e.views.status.seats}
+            run={() => server?.publish() ?? Promise.resolve({ kind: "notSaved" })}
+            onClose={() => setPublishing(false)}
+          />
+        )}
+      </Show>
       <Confirm
         open={panic() !== null}
         blocking
@@ -252,7 +366,7 @@ export function DesignerPage(props: { source: ChartSource }) {
   );
 }
 
-function Centre(props: { title: string; body?: string; children?: JSX.Element }) {
+function Centre(props: { title: string; body?: string | undefined; children?: JSX.Element }) {
   return (
     <div class="flex h-full flex-col items-center justify-center bg-canvas p-6 text-center">
       <h1 class="text-lg font-semibold text-fg">{props.title}</h1>
@@ -267,7 +381,16 @@ function Centre(props: { title: string; body?: string; children?: JSX.Element })
 function Shell(props: {
   editor: Editor;
   save: () => void;
-  ui: { onNew: () => void; onOpen: () => void; onSave: () => void };
+  ui: {
+    onNew: (() => void) | undefined;
+    onOpen: (() => void) | undefined;
+    onSave: () => void;
+    onExport: () => void;
+    status: (() => JSX.Element) | undefined;
+    readOnly: boolean;
+    onPreview: () => void;
+  };
+  publish: { reason: string | null; run: () => void };
 }) {
   const editor = props.editor;
   const [layout, setLayoutSignal] = createSignal<Layout>(
@@ -317,6 +440,7 @@ function Shell(props: {
       <TopBar
         editor={editor}
         {...props.ui}
+        publish={props.publish}
         onInsert={() => setInsert(true)}
         onPalette={() => setPalette(true)}
         onHelp={() => setHelp(true)}

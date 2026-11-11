@@ -10,12 +10,16 @@ export interface Bindings {
   default(init?: { module_or_path: WasmSource | Promise<WasmSource> }): Promise<unknown>;
   Designer: new () => Handle;
   Canvas: new (canvas: HTMLCanvasElement) => CanvasHandle;
+  /** A preview's sample state: a SNAPSHOT frame for a public artefact, or empty. */
+  sampleState(chart: Uint8Array, sold: number, seq: number): Uint8Array;
 }
 
 /** `cavea_designer::Designer`: every reply is `{"ok": …}` or `{"err": Failure}`. */
 export interface Handle {
   import(text: string): string;
   call(method: string, args: string): string;
+  /** The open chart's public artefact, or empty when it does not compile. */
+  preview(): Uint8Array;
   free(): void;
 }
 

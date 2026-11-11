@@ -1,7 +1,7 @@
 // The request layer: what each request carries, how failures are read, the
 // ended session, cancellation (09 §10).
 import { beforeEach, expect, test } from "bun:test";
-import { ApiError, call, configure, isAbort } from "./client.ts";
+import { ApiError, call, callWithHeaders, configure, isAbort } from "./client.ts";
 
 interface Seen {
   url: string;
@@ -201,4 +201,23 @@ test("a request that takes too long fails with `timeout`", async () => {
   const e = (await call("listCharts", {}, signal()).catch((x: unknown) => x)) as ApiError;
   expect(e).toBeInstanceOf(ApiError);
   expect(e.code).toBe("timeout");
+});
+
+test("a draft: its etag read from the answer, sent back in If-Match, in the pinned workspace", async () => {
+  answer = async () => json(200, { schema: 1 }, { ETag: '"7"' });
+  const got = await callWithHeaders("getDraft", { path: { chart: "hall" } }, signal(), {
+    workspace: "ws_pinned",
+  });
+  expect(got.headers.get("ETag")).toBe('"7"');
+  expect(header(0, "Cavea-Workspace")).toBe("ws_pinned");
+  const draft = new Blob(['{"schema":1}'], { type: "application/json" });
+  await call(
+    "saveDraft",
+    // A draft already serialised goes as it is.
+    { path: { chart: "hall" }, headers: { "If-Match": '"7"' }, body: draft as never },
+    signal(),
+  );
+  expect(header(1, "If-Match")).toBe('"7"');
+  expect(header(1, "Cavea-Workspace")).toBe("ws_placeholder");
+  expect(seen[1]?.init.body).toBe(draft);
 });

@@ -219,14 +219,31 @@ describe("the designer module", () => {
   test("matches the committed declaration of its bindings", async () => {
     const bindings = (await import(String(new URL("cavea_designer.js", wasm)))) as Bindings;
     const handle: Handle = new bindings.Designer();
-    expect([typeof handle.import, typeof handle.call, typeof handle.free]).toEqual([
-      "function",
-      "function",
-      "function",
-    ]);
+    expect([
+      typeof handle.import,
+      typeof handle.call,
+      typeof handle.preview,
+      typeof handle.free,
+      typeof bindings.sampleState,
+    ]).toEqual(["function", "function", "function", "function", "function"]);
+    // Nothing open: no chart to preview.
+    expect(handle.preview()).toHaveLength(0);
     // Before a chart is open, every call is refused.
     expect(JSON.parse(handle.call("history", "[]"))).toEqual({ err: { kind: "noChart" } });
     handle.free();
+  });
+
+  test("compiles the open chart for the preview, with sample states for it", () => {
+    const s = designer.open(theatre);
+    const chart = s.preview();
+    if (chart === null) throw new Error("the theatre does not compile");
+    // A compiled chart: the format's magic.
+    expect(new TextDecoder().decode(chart.subarray(0, 4))).toBe("CCF1");
+    const frame = designer.sampleState(chart, 0.5, 7);
+    // A SNAPSHOT frame (08 §8.1: type 0x02) at the sequence asked for.
+    expect([frame?.[0], frame?.[1]]).toEqual([0x02, 7]);
+    expect(designer.sampleState(new Uint8Array([1, 2, 3]), 0.5, 1)).toBeNull();
+    s.dispose();
   });
 
   test("runs every call, each reply as the generated types say", () => {
@@ -551,6 +568,9 @@ describe("the designer module", () => {
       call: () => {
         throw new WebAssembly.RuntimeError("unreachable");
       },
+      preview: () => {
+        throw new WebAssembly.RuntimeError("unreachable");
+      },
       free: () => {
         freed += 1;
       },
@@ -561,6 +581,7 @@ describe("the designer module", () => {
     expect(failure(() => one.history())).toEqual({ kind: "panic", message: "unreachable" });
     expect(failure(() => one.history())).toEqual({ kind: "panic", message: "unreachable" });
     expect(failure(() => two.status())).toEqual({ kind: "panic", message: "unreachable" });
+    expect(failure(() => two.preview())).toEqual({ kind: "panic", message: "unreachable" });
     two.dispose();
     expect(freed).toBe(0);
   });

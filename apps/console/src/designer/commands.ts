@@ -30,8 +30,9 @@ export interface Hooks {
   numbering: () => void;
   tab: (tab: PanelTab) => void;
   inspector: () => void;
-  newChart: () => void;
-  open: () => void;
+  /** New chart and Open file, where they apply. */
+  newChart: (() => void) | undefined;
+  open: (() => void) | undefined;
   tour: () => void;
 }
 
@@ -194,8 +195,8 @@ export function commands(editor: Editor, act: Record<string, () => void>, hooks:
     add(`panel.${tab}`, msg(`command.panel.${tab}`), "panels", () => hooks.tab(tab));
   }
   add("panel.inspector", msg("command.panel.inspector"), "panels", hooks.inspector);
-  add("newChart", msg("menu.new"), "file", hooks.newChart);
-  add("open", msg("menu.open"), "file", hooks.open);
+  if (hooks.newChart !== undefined) add("newChart", msg("menu.new"), "file", hooks.newChart);
+  if (hooks.open !== undefined) add("open", msg("menu.open"), "file", hooks.open);
   add("tour", msg("command.tour"), "general", hooks.tour);
   for (const theme of ["system", "light", "dark"] as const) {
     add(`theme.${theme}`, msg(`command.theme.${theme}`), "theme", () => setThemeChoice(theme));

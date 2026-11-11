@@ -20,6 +20,7 @@ import { msg } from "../i18n/messages.ts";
 import { notify } from "../ui/overlays.tsx";
 import { failureMessage, failureOf } from "./errors.ts";
 import { browserScheduler, FrameLoop, type Views } from "./loop.ts";
+import { ReadOnlyRefusal } from "./readonly.ts";
 
 /** The view: the world point at the canvas's centre and the zoom, in CSS
  * pixels per chart unit (07 §3: the shell owns the camera). */
@@ -216,6 +217,12 @@ export function createEditor(session: Session, onPanic: (message: string) => voi
     try {
       return { ok: call(session) };
     } catch (error) {
+      if (error instanceof ReadOnlyRefusal) {
+        return {
+          error: msg("readOnly.refused"),
+          failure: { kind: "arguments", message: "read-only" },
+        };
+      }
       const f = failureOf(error);
       if (f !== null && panic(error)) return { error: msg("panic.title"), failure: f };
       if (f === null || f.kind === "panic") throw error;

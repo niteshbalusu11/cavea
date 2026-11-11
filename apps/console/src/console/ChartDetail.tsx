@@ -1,7 +1,7 @@
 // A chart's page (09 §3.2, CON-006): its name, key, published version and
 // draft state; the Versions tab with "create event from this version"; the
-// Events tab; Settings with archive. Opening the designer on a chart from
-// the server is DSN-035: until then the page offers no such action.
+// Events tab; Settings with archive. Open designer opens its draft in the
+// designer (DSN-035).
 import { A, useParams, useSearchParams } from "@solidjs/router";
 import { createSignal, For, Match, Show, Switch } from "solid-js";
 import { checkChart, checkEventList } from "../api/check.ts";
@@ -10,7 +10,9 @@ import type { Chart, Version } from "../api/generated.ts";
 import { createPages } from "../api/pages.ts";
 import { allows } from "../api/permissions.ts";
 import { componentSignal, createQuery, type Query } from "../api/query.ts";
+import { designerPath } from "../designer/ChartRoute.tsx";
 import { formatNumber, msg } from "../i18n/messages.ts";
+import { buttonClass } from "../ui/controls.tsx";
 import { workspace } from "../session.ts";
 import { Confirm, notify } from "../ui/overlays.tsx";
 import { report } from "./errors.ts";
@@ -121,6 +123,12 @@ function Detail(props: { chart: Chart; query: Query<Chart> }) {
             </Show>
           </p>
         </div>
+        <A
+          href={designerPath(workspace()?.key ?? "", props.chart.key)}
+          class={buttonClass("primary", "h-8")}
+        >
+          {msg("charts.open")}
+        </A>
       </div>
       <TabsFor
         tab={tab()}
