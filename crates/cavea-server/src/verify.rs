@@ -242,7 +242,10 @@ fn record(seq: u64, row: LogRow) -> Result<LogRecord, String> {
         .transpose()
         .map_err(|_| "negative hold_id".to_owned())?;
     let detail: Detail<'_> = match detail.as_deref() {
-        Some(text) => serde_json::from_str(text).map_err(|e| format!("detail: {e}"))?,
+        // serde's message may quote stored values: name only the kind of
+        // error and where it is (12 §4).
+        Some(text) => serde_json::from_str(text)
+            .map_err(|e| format!("detail: {:?} error at column {}", e.classify(), e.column()))?,
         None => Detail {
             status: None,
             expires_at: None,
@@ -338,6 +341,7 @@ pub async fn verify_event(
         log_records: 0,
         log_last_seq: 0,
         replayed_to: 0,
+        // A negative `events.seq` is reported below, as itself.
         events_seq: u64::try_from(events_seq).unwrap_or(0),
         object_rows: 0,
         hold_rows: 0,
@@ -356,7 +360,9 @@ pub async fn verify_event(
     let mut replay = Replay::default();
     let mut replaying = true;
     let mut last: Option<u64> = None;
-    let mut after = (-1_i64, "-infinity".to_owned());
+    // From the lowest `seq` there could be, so that a negative one is read
+    // and reported, not skipped.
+    let mut after = (i64::MIN, "-infinity".to_owned());
     loop {
         let rows: Vec<LogRow> = sqlx::query_as(LOG)
             .bind(&id)
@@ -387,6 +393,8 @@ pub async fn verify_event(
             if seq != expected {
                 let detail = if Some(seq) == last {
                     "repeated".to_owned()
+                } else if seq < expected {
+                    format!("out of order: expected {expected}")
                 } else if seq == expected + 1 {
                     format!("seq {expected} missing")
                 } else {
@@ -451,11 +459,11 @@ pub async fn verify_event(
     }
     report.log_last_seq = last.unwrap_or(0);
     report.replayed_to = replay.seq;
-    if report.events_seq != report.log_last_seq {
+    if events_seq < 0 || report.events_seq != report.log_last_seq {
         report.push(Finding {
             check: "events_seq",
             invariant: Some("INV-5"),
-            stored: Some(report.events_seq.to_string()),
+            stored: Some(events_seq.to_string()),
             replayed: Some(report.log_last_seq.to_string()),
             ..Finding::default()
         });
@@ -507,6 +515,19 @@ pub async fn verify_event(
             });
             continue;
         };
+        // Booking columns belong to a booking: without an order reference
+        // they would be dropped below, unexamined.
+        if order_ref.is_none() && (ticket_type.is_some() || extra.is_some()) {
+            report.push(Finding {
+                check: "object",
+                invariant: Some("INV-6"),
+                oid: Some(oid),
+                label: label(oid),
+                field: Some("booking"),
+                detail: Some("ticket_type or extra stored without an order reference".into()),
+                ..Finding::default()
+            });
+        }
         objects.push(ObjectRow {
             oid,
             status,

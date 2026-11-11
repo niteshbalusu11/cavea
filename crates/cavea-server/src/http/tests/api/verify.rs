@@ -212,9 +212,10 @@ async fn verify_reports_each_corruption_precisely() {
         seats.shutdown().await;
         let charts = PgCharts::new(pool.clone(), 10_000);
         // One event per corruption, each written by the same sequence.
-        const KINDS: [&str; 17] = [
+        const KINDS: [&str; 22] = [
             "clean", "gap", "repeat", "reorder", "flip", "unbook", "double", "expiry", "limit",
-            "unhold", "orphan", "seq", "order", "rehold", "badop", "ghost", "tail",
+            "unhold", "orphan", "seq", "order", "rehold", "badop", "ghost", "tail", "negseq",
+            "zeroseq", "minus", "loose", "detail",
         ];
         let mut events = Vec::new();
         for kind in KINDS {
@@ -486,6 +487,57 @@ async fn verify_reports_each_corruption_precisely() {
             ]
         );
         assert!(r.state_compared && r.log_last_seq == tail - 2);
+
+        // A row with a negative `seq`, and one with `seq` 0, ahead of the log.
+        for (kind, seq, detail) in [("negseq", -2, None), ("zeroseq", 0, Some("out of order: expected 1"))] {
+            sqlx::query(
+                "INSERT INTO event_log (event_id, seq, at, op, actor, hold_id, order_ref, oids, detail)
+                 SELECT event_id, $2, at, op, actor, hold_id, order_ref, oids, detail
+                   FROM event_log WHERE event_id = $1::uuid AND seq = 1",
+            )
+            .bind(format!("{:032x}", e(kind).0))
+            .bind(seq)
+            .execute(&pool)
+            .await
+            .unwrap();
+            let r = verify(&pool, e(kind)).await;
+            let f = only(&r);
+            match detail {
+                None => assert_eq!((f.check, f.detail.as_deref()), ("unreadable_record", Some("negative seq -2"))),
+                Some(d) => assert_eq!((f.check, f.seq, f.detail.as_deref()), ("seq", Some(0), Some(d))),
+            }
+            assert!(!r.state_compared, "{kind}");
+        }
+
+        // `events.seq` negative is reported as it is, not read as 0.
+        sql(&pool, "UPDATE events SET seq = -1 WHERE id = $1::uuid", e("minus")).await;
+        let f = only(&verify(&pool, e("minus")).await).clone();
+        assert_eq!((f.check, f.stored.as_deref()), ("events_seq", Some("-1")));
+
+        // A ticket type on a held object, with no booking to carry it.
+        sql(
+            &pool,
+            "UPDATE object_state SET ticket_type = 'adult' WHERE event_id = $1::uuid AND oid =
+               (SELECT min(oid) FROM object_state WHERE event_id = $1::uuid AND status = 1)",
+            e("loose"),
+        )
+        .await;
+        let f = only(&verify(&pool, e("loose")).await).clone();
+        assert_eq!((f.check, f.field), ("object", Some("booking")));
+
+        // A `detail` that does not decode: reported without the stored value.
+        sql(
+            &pool,
+            "UPDATE event_log SET detail = '{\"expires_at\": \"private-value\"}'
+              WHERE event_id = $1::uuid AND seq = (SELECT min(seq) FROM event_log
+                                                    WHERE event_id = $1::uuid AND op = 1)",
+            e("detail"),
+        )
+        .await;
+        let f = only(&verify(&pool, e("detail")).await).clone();
+        assert_eq!(f.check, "unreadable_record");
+        let shown = f.detail.unwrap();
+        assert!(shown.starts_with("detail: Data error at column") && !shown.contains("private"), "{shown}");
 
         // Every event: the JSON report's shape and the exit codes.
         let (code, out, err) = run(&["--all", "--json"], &url).await;
