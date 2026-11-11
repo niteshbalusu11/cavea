@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cavea_compiler::ChartDocument;
-use cavea_compiler::document::{Category, Curve, Floor, Node, SeatOverride};
+use cavea_compiler::document::{Category, Curve, Floor, Node, SeatFlag, SeatOverride};
 use cavea_testkit::presets::PRESETS;
 use cavea_testkit::synthetic;
 
@@ -151,7 +151,7 @@ pub(crate) fn command(r: &mut Rng, doc: &Document) -> Command {
         End::End
     };
     let cat = |r: &mut Rng| ["standard", "vip", "access", "premium", "x"][r.below(5)].to_string();
-    match r.below(24) {
+    match r.below(30) {
         0 | 1 => {
             let text = match r.below(4) {
                 0 => {
@@ -308,6 +308,60 @@ pub(crate) fn command(r: &mut Rng, doc: &Document) -> Command {
         22 => Command::MoveNodes {
             ids: vec![id],
             delta: [f64::MAX, 0.0],
+        },
+        24 | 25 => {
+            let edit = match r.below(7) {
+                0 => SeatEdit::Remove,
+                1 => SeatEdit::Restore,
+                2 => SeatEdit::Flag {
+                    flag: [SeatFlag::Accessible, SeatFlag::Aisle][r.below(2)],
+                    on: r.below(3) > 0,
+                },
+                3 => SeatEdit::Category {
+                    category: (r.below(3) > 0).then(|| cat(r)),
+                },
+                4 => SeatEdit::Label {
+                    label: (r.below(2) == 0).then(|| "W".repeat(r.below(70))),
+                },
+                5 => SeatEdit::Nudge {
+                    by: [r.f(5.0), r.f(5.0)],
+                },
+                _ => SeatEdit::Nudge {
+                    by: [f64::MAX, f64::MAX],
+                },
+            };
+            let row = block
+                .as_ref()
+                .and_then(|b| b.rows.iter().find(|row| row.rid == rid));
+            let oids = row
+                .and_then(|row| row.oids.first())
+                .map_or(vec![oid], |o| (o[0]..o[0] + o[1].min(5)).collect());
+            Command::EditSeats {
+                id: bid,
+                oids,
+                edit,
+            }
+        }
+        26 => Command::ShiftRows {
+            id: bid,
+            rids: vec![rid],
+            delta: [27.5, -55.0, f64::MAX][r.below(3)],
+        },
+        27 => Command::SetRowLabel {
+            id: bid,
+            rid,
+            label: (r.below(2) == 0).then(|| "AA".into()),
+        },
+        28 => Command::InsertGap {
+            id: bid,
+            rid,
+            at: r.below(6) as u32,
+            count: r.below(3) as u32,
+        },
+        29 => Command::FlipNodes {
+            ids: vec![id, r.pick(&all).unwrap_or(id)],
+            axis: [Axis::Horizontal, Axis::Vertical][r.below(2)],
+            about: r.f(300.0),
         },
         _ => Command::Composite {
             commands: vec![command(r, doc), command(r, doc)],

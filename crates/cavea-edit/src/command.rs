@@ -12,10 +12,12 @@ use std::fmt;
 use std::mem::replace;
 
 use cavea_compiler::document::{
-    Align, BlockRow, Category, Curve, Floor, Node, Outline, RowLabels, SeatLabels, SeatOverride,
-    Settings,
+    Align, BlockRow, Category, Curve, Floor, Node, Outline, RowLabels, SeatFlag, SeatLabels,
+    SeatOverride, Settings,
 };
-use cavea_core::limits::{MAX_CATEGORIES, MAX_FLOORS, MAX_OBJECTS, MAX_SEATS_PER_ROW};
+use cavea_core::limits::{
+    MAX_CATEGORIES, MAX_FLOORS, MAX_LABEL_LEN, MAX_OBJECTS, MAX_SEATS_PER_ROW,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::document::{Document, each_node, node_id};
@@ -141,6 +143,42 @@ pub enum Command {
         oid: u32,
         value: Option<SeatOverride>,
     },
+    /// One edit to many seats of a row block or row, in one pass. Seats
+    /// already as asked are left alone; an override left empty is removed.
+    EditSeats {
+        id: u32,
+        oids: Vec<u32>,
+        edit: SeatEdit,
+    },
+    /// Adds `delta` (chart units) to each row's `offset`.
+    ShiftRows {
+        id: u32,
+        rids: Vec<u32>,
+        delta: f64,
+    },
+    /// Sets or (with `null`) clears a block row's label override.
+    SetRowLabel {
+        id: u32,
+        rid: u32,
+        label: Option<String>,
+    },
+    /// Inserts `count` removed positions, with fresh oids, before position
+    /// `at` of a row: an aisle that keeps every seat. Seats before it stay
+    /// where they are; the rest move `count` pitches towards the end. Only a
+    /// bulge, which depends on the row's length, reshapes (as `addSeats`).
+    InsertGap {
+        id: u32,
+        rid: u32,
+        at: u32,
+        count: u32,
+    },
+    /// Mirrors the nodes about the line `x = about` (`horizontal`) or
+    /// `y = about` (`vertical`) in their parent's space (07 §5.1).
+    FlipNodes {
+        ids: Vec<u32>,
+        axis: Axis,
+        about: f64,
+    },
     /// Applies the commands in order, as one undo step.
     Composite {
         commands: Vec<Command>,
@@ -152,6 +190,39 @@ pub enum Command {
 pub enum End {
     Start,
     End,
+}
+
+/// `horizontal` mirrors left and right (x), `vertical` top and bottom (y).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Axis {
+    Horizontal,
+    Vertical,
+}
+
+/// What `editSeats` does to each seat, tagged by `kind`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum SeatEdit {
+    /// Marks the position removed: a gap that keeps its oid and number.
+    Remove,
+    Restore,
+    Flag {
+        flag: SeatFlag,
+        on: bool,
+    },
+    /// A category override; the seat's inherited category, or `null`, clears
+    /// it. Must name a chart category.
+    Category {
+        category: Option<String>,
+    },
+    Label {
+        label: Option<String>,
+    },
+    /// Adds `by` to the seat's nudge, in node space.
+    Nudge {
+        by: [f64; 2],
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -795,10 +866,232 @@ impl Document {
                 }
                 run(self, Op::Override { id, oid, value })
             }
+            Command::EditSeats { id, oids, edit } => self.edit_seats(id, oids, &edit, &mut run),
+            Command::ShiftRows {
+                id,
+                mut rids,
+                delta,
+            } => {
+                rids.sort_unstable();
+                rids.dedup();
+                for rid in rids {
+                    let mut row = self.row(id, rid)?.0.clone();
+                    row.offset += delta;
+                    if !row.offset.is_finite() {
+                        return Err(CommandError::InvalidValue("offset"));
+                    }
+                    run(self, Op::SetRow { id, row })?;
+                }
+                Ok(())
+            }
+            Command::SetRowLabel { id, rid, label } => {
+                check_label(label.as_deref())?;
+                let row = BlockRow {
+                    label,
+                    ..self.row(id, rid)?.0.clone()
+                };
+                run(self, Op::SetRow { id, row })
+            }
+            Command::InsertGap { id, rid, at, count } => {
+                let (row, _) = self.row(id, rid)?;
+                let mut oids = expand_runs(row, id)?;
+                let mut row = row.clone();
+                if count == 0 {
+                    return Err(CommandError::InvalidValue("count"));
+                }
+                if at == 0 || at >= row.seats {
+                    return Err(CommandError::IndexOutOfRange);
+                }
+                if row.seats.saturating_add(count) > MAX_SEATS_PER_ROW {
+                    return Err(CommandError::Limit("seats per row"));
+                }
+                if self.objects() + u64::from(count) > u64::from(MAX_OBJECTS) {
+                    return Err(CommandError::Limit("objects"));
+                }
+                // The seats before the gap stay: as seats added at the end.
+                row.offset = self.kept_offset(id, &row, End::End, f64::from(count))?;
+                let first = self
+                    .allocate(count.into())
+                    .ok_or(CommandError::IdsExhausted)?;
+                let at_ = at as usize;
+                oids.splice(at_..at_, (0..count).map(|i| first.saturating_add(i)));
+                for p in &mut row.removed {
+                    if *p >= at {
+                        *p = p.saturating_add(count);
+                    }
+                }
+                row.removed.extend(at..at + count);
+                row.removed.sort_unstable();
+                row.seats += count;
+                row.oids = compress(&oids);
+                run(self, Op::SetRow { id, row })?;
+                self.raise_next_oid(first.saturating_add(count), run)
+            }
+            Command::FlipNodes {
+                mut ids,
+                axis,
+                about,
+            } => {
+                ids.sort_unstable();
+                ids.dedup();
+                if let Some(&id) = ids.iter().find(|&&id| self.node(id).is_none()) {
+                    return Err(CommandError::MissingNode(id));
+                }
+                if !about.is_finite() {
+                    return Err(CommandError::InvalidValue("about"));
+                }
+                // A child of a section listed is flipped with it.
+                let listed = |p: u32| ids.binary_search(&p).is_ok();
+                let roots: Vec<u32> = ids
+                    .iter()
+                    .copied()
+                    .filter(|&id| !self.parent(id).is_some_and(listed))
+                    .collect();
+                roots
+                    .into_iter()
+                    .try_for_each(|id| self.flip(id, axis, about, &mut run))
+            }
             Command::Composite { commands } => commands
                 .into_iter()
                 .try_for_each(|c| self.execute(c, inverse, created)),
         }
+    }
+
+    /// `editSeats`: finds every seat first (one sorted list of runs, so the
+    /// work is linear in the node's runs and the seats named), checks the
+    /// value, then changes only what differs.
+    fn edit_seats(
+        &mut self,
+        id: u32,
+        oids: Vec<u32>,
+        edit: &SeatEdit,
+        run: &mut impl FnMut(&mut Self, Op) -> Result<()>,
+    ) -> Result<()> {
+        let node = self.node(id).ok_or(CommandError::MissingNode(id))?;
+        // Each line (a block's row, or the row node) as (seats, removed).
+        let mut lines: Vec<(u32, &[u32])> = Vec::new();
+        let mut runs: Vec<(u32, u32, usize, u32)> = Vec::new();
+        let (overrides, own) = match node {
+            Node::RowBlock(b) => {
+                for r in &b.rows {
+                    lines.push((r.seats, &r.removed));
+                    push_runs(&mut runs, &r.oids, lines.len() - 1);
+                }
+                (&b.seat_overrides, &b.category)
+            }
+            Node::Row(r) => {
+                lines.push((r.seats, &r.removed));
+                push_runs(&mut runs, &r.oids, 0);
+                (&r.seat_overrides, &r.category)
+            }
+            _ => return Err(CommandError::NotARowBlock(id)),
+        };
+        runs.sort_unstable();
+        let wanted: BTreeSet<u32> = oids.into_iter().collect();
+        let mut found = Vec::with_capacity(wanted.len());
+        for &oid in &wanted {
+            let k = runs.partition_point(|r| r.0 <= oid);
+            let hit = k.checked_sub(1).and_then(|k| runs.get(k)).and_then(|r| {
+                let pos = r.3.checked_add(oid - r.0)?;
+                let seats = lines.get(r.2)?.0;
+                (oid - r.0 < r.1 && pos < seats).then_some((oid, r.2, pos))
+            });
+            found.push(hit.ok_or(CommandError::MissingSeat { id, oid })?);
+        }
+        if let SeatEdit::Remove | SeatEdit::Restore = edit {
+            let remove = matches!(edit, SeatEdit::Remove);
+            let mut changed: BTreeMap<usize, BTreeSet<u32>> = BTreeMap::new();
+            for &(_, line, pos) in &found {
+                let Some(&(_, removed)) = lines.get(line) else {
+                    continue;
+                };
+                if removed.contains(&pos) != remove {
+                    let set = changed
+                        .entry(line)
+                        .or_insert_with(|| removed.iter().copied().collect());
+                    if remove {
+                        set.insert(pos);
+                    } else {
+                        set.remove(&pos);
+                    }
+                }
+            }
+            let ops: Vec<Op> = match node {
+                Node::RowBlock(b) => changed
+                    .into_iter()
+                    .filter_map(|(line, set)| {
+                        let row = b.rows.get(line)?;
+                        let removed = set.into_iter().collect();
+                        Some(Op::SetRow {
+                            id,
+                            row: BlockRow {
+                                removed,
+                                ..row.clone()
+                            },
+                        })
+                    })
+                    .collect(),
+                _ => changed
+                    .into_values()
+                    .map(|set| Op::Removed {
+                        id,
+                        removed: set.into_iter().collect(),
+                    })
+                    .collect(),
+            };
+            return ops.into_iter().try_for_each(|op| run(self, op));
+        }
+        match edit {
+            SeatEdit::Category {
+                category: Some(key),
+            } if !self.categories.iter().any(|c| &c.key == key) => {
+                return Err(CommandError::MissingCategory(key.clone()));
+            }
+            SeatEdit::Label { label } => check_label(label.as_deref())?,
+            SeatEdit::Nudge { by } if !by.iter().all(|v| v.is_finite()) => {
+                return Err(CommandError::InvalidValue("nudge"));
+            }
+            _ => {}
+        }
+        // A seat's category is its override's, else its node's, else its
+        // section's (03 §3.2 E002): an override equal to that is dropped.
+        let section = self.parent(id).and_then(|p| self.node(p));
+        let inherited = own
+            .as_deref()
+            .or_else(|| section.and_then(category).and_then(|c| c.as_deref()));
+        let mut ops = Vec::new();
+        for (oid, _, _) in found {
+            let old = overrides.get(&oid);
+            let value = edited(old, edit, inherited)?;
+            if value.as_ref() != old {
+                ops.push(Op::Override { id, oid, value });
+            }
+        }
+        ops.into_iter().try_for_each(|op| run(self, op))
+    }
+
+    /// Mirrors a node (07 §5.1): see [`crate::flip::mirror`]. A section's
+    /// children are mirrored in its space, about its own axis.
+    fn flip(
+        &mut self,
+        id: u32,
+        axis: Axis,
+        about: f64,
+        run: &mut impl FnMut(&mut Self, Op) -> Result<()>,
+    ) -> Result<()> {
+        let node = self.node(id).ok_or(CommandError::MissingNode(id))?;
+        let node = crate::flip::mirror(node.clone(), axis, about)?;
+        run(
+            self,
+            Op::Replace {
+                id,
+                node: Box::new(node),
+            },
+        )?;
+        for child in self.children(Some(id)).to_vec() {
+            self.flip(child, axis, 0.0, run)?;
+        }
+        Ok(())
     }
 
     /// Bookable objects in the chart (02 §14).
@@ -1024,7 +1317,7 @@ fn label_mut(node: &mut Node) -> Option<&mut Option<String>> {
     }
 }
 
-fn category_mut(node: &mut Node) -> Option<&mut Option<String>> {
+pub(crate) fn category_mut(node: &mut Node) -> Option<&mut Option<String>> {
     match node {
         Node::Section(n) => Some(&mut n.category),
         Node::RowBlock(n) => Some(&mut n.category),
@@ -1036,7 +1329,7 @@ fn category_mut(node: &mut Node) -> Option<&mut Option<String>> {
     }
 }
 
-fn category(node: &Node) -> Option<&Option<String>> {
+pub(crate) fn category(node: &Node) -> Option<&Option<String>> {
     match node {
         Node::Section(n) => Some(&n.category),
         Node::RowBlock(n) => Some(&n.category),
@@ -1046,6 +1339,74 @@ fn category(node: &Node) -> Option<&Option<String>> {
         Node::Area(n) => Some(&n.category),
         _ => None,
     }
+}
+
+/// A label override is at most 64 bytes (02 §14): one value may be copied
+/// to many seats, so a longer one is refused rather than reported.
+fn check_label(label: Option<&str>) -> Result<()> {
+    match label {
+        Some(l) if l.len() > MAX_LABEL_LEN => Err(CommandError::Limit("label bytes")),
+        _ => Ok(()),
+    }
+}
+
+fn push_runs(out: &mut Vec<(u32, u32, usize, u32)>, runs: &[[u32; 2]], line: usize) {
+    let mut pos = 0u32;
+    for &[first, count] in runs {
+        out.push((first, count, line, pos));
+        pos = pos.saturating_add(count);
+    }
+}
+
+/// Flags in the schema's order, which a changed seat's flags are kept in.
+const FLAGS: [SeatFlag; 5] = [
+    SeatFlag::Accessible,
+    SeatFlag::Companion,
+    SeatFlag::RestrictedView,
+    SeatFlag::Aisle,
+    SeatFlag::Removable,
+];
+
+/// A seat's override after `edit`: `None` when nothing differs from the
+/// default (no flags, the inherited category, no label, no nudge).
+fn edited(
+    old: Option<&SeatOverride>,
+    edit: &SeatEdit,
+    inherited: Option<&str>,
+) -> Result<Option<SeatOverride>> {
+    let mut o = old.cloned().unwrap_or(SeatOverride {
+        flags: Vec::new(),
+        category: None,
+        label: None,
+        nudge: None,
+    });
+    match edit {
+        SeatEdit::Flag { flag, on } => {
+            if o.flags.contains(flag) == *on {
+                return Ok(old.cloned());
+            }
+            o.flags.retain(|f| f != flag);
+            if *on {
+                o.flags.push(*flag);
+            }
+            o.flags = FLAGS.into_iter().filter(|f| o.flags.contains(f)).collect();
+        }
+        SeatEdit::Category { category } => {
+            o.category = category.clone().filter(|c| Some(c.as_str()) != inherited);
+        }
+        SeatEdit::Label { label } => o.label = label.clone(),
+        SeatEdit::Nudge { by } => {
+            let n = o.nudge.unwrap_or_default();
+            let n = [n[0] + by[0], n[1] + by[1]];
+            if !n.iter().all(|v| v.is_finite()) {
+                return Err(CommandError::InvalidValue("nudge"));
+            }
+            o.nudge = (n != [0.0, 0.0]).then_some(n);
+        }
+        SeatEdit::Remove | SeatEdit::Restore => return Ok(old.cloned()),
+    }
+    let empty = o.flags.is_empty() && o.category.is_none() && o.label.is_none();
+    Ok((!empty || o.nudge.is_some()).then_some(o))
 }
 
 fn check_floor(floor: &Floor) -> Result<()> {
@@ -1103,7 +1464,7 @@ fn census(node: &Node, ids: &mut u64, objects: &mut u64) -> Result<()> {
 /// Bookable objects a node holds itself, children aside, as 02 §14 counts
 /// them: seat positions (removed ones included), a table booked whole,
 /// booths and areas.
-fn own_objects(node: &Node) -> u64 {
+pub(crate) fn own_objects(node: &Node) -> u64 {
     match node {
         Node::RowBlock(b) => b.rows.iter().map(|r| u64::from(r.seats)).sum(),
         Node::Row(r) => r.seats.into(),
@@ -1182,7 +1543,7 @@ fn remap(
 }
 
 /// The row's oids, one per position; the runs must cover its seats exactly.
-fn expand_runs(row: &BlockRow, id: u32) -> Result<Vec<u32>> {
+pub(crate) fn expand_runs(row: &BlockRow, id: u32) -> Result<Vec<u32>> {
     let total: u64 = row.oids.iter().map(|r| u64::from(r[1])).sum();
     if row.seats > MAX_SEATS_PER_ROW || total != u64::from(row.seats) {
         return Err(CommandError::InvalidRow { id, rid: row.rid });
@@ -1198,7 +1559,7 @@ fn expand_runs(row: &BlockRow, id: u32) -> Result<Vec<u32>> {
 }
 
 /// Oids back into `[first, count]` runs.
-fn compress(oids: &[u32]) -> Vec<[u32; 2]> {
+pub(crate) fn compress(oids: &[u32]) -> Vec<[u32; 2]> {
     let mut runs: Vec<[u32; 2]> = Vec::new();
     for &oid in oids {
         match runs.last_mut() {

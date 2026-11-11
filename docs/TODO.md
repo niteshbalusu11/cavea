@@ -277,23 +277,23 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **DSN-018** Shape tools: rectangle, ellipse, polygon, line (07 §4)
 - [x] **DSN-019** Text tool (07 §4)
 - [ ] **DSN-020** Image tool: upload, reference or background role, opacity, lock (07 §4)
-- [ ] **DSN-021** Focal point tool (07 §4)
-- [ ] **DSN-022** Category brush (07 §4)
+- [x] **DSN-021** Focal point tool (07 §4)
+- [x] **DSN-022** Category brush (07 §4)
 
 ### Panels and editing
 
 - [ ] **DSN-023** Inspector for row blocks with the curve handle (07 §5.3)
 - [ ] **DSN-024** Inspector for sections, shapes, text, images and chart settings (07 §5.5)
-- [ ] **DSN-025** Row-level editing: add or remove seats, shift, insert aisle, override label, delete row (07 §5.3)
-- [ ] **DSN-026** Seat-edit mode: remove, restore, flags, category, label, nudge (07 §5.3)
+- [x] **DSN-025** Row-level editing: add or remove seats, shift, insert aisle, override label, delete row (07 §5.3)
+- [x] **DSN-026** Seat-edit mode: remove, restore, flags, category, label, nudge (07 §5.3)
 - [ ] **DSN-027** Numbering panel for rows and seats with canvas preview (07 §6)
 - [ ] **DSN-028** Categories panel: add, rename, recolour, merge, delete with reassignment; contrast warning (07 §7)
 - [ ] **DSN-029** Layers panel: virtualised tree, drag to reparent, lock, hide (07 §3)
 - [x] **DSN-030** Snapping: grid, edges and centres, equal spacing, row alignment, angles (07 §5.2)
 - [ ] **DSN-031** Rulers and user guides (07 §5.2)
-- [ ] **DSN-032** Align, distribute, flip, duplicate, array duplicate (07 §5.1)
-- [ ] **DSN-033** Copy and paste, including between charts (07 §5.1)
-- [ ] **DSN-034** Group, ungroup, order for decoration nodes (07 §5.1)
+- [x] **DSN-032** Align, distribute, flip, duplicate, array duplicate (07 §5.1)
+- [x] **DSN-033** Copy and paste, including between charts (07 §5.1)
+- [ ] **DSN-034** Group, ungroup, order for decoration nodes (07 §5.1). Order, lock and hide are built; grouping needs a schema change (07 §5.1, group and ungroup)
 
 ### Saving, validation, publishing
 

@@ -4,6 +4,8 @@
 //! a row block the top side is the front (row 0) and the left side holds
 //! each row's first position.
 
+use std::collections::BTreeSet;
+
 use cavea_compiler::document::{Align, BlockRow, Curve, Node, RowBlock, Shape, ShapeKind};
 use cavea_core::limits::MAX_SEATS_PER_ROW;
 
@@ -86,6 +88,9 @@ pub(crate) fn centre(q: &Quad) -> P {
 
 /// The handles for the selection; `pivot` is a pivot the user moved.
 pub(crate) fn handles(view: &View<'_>, sel: &Selection, pivot: Option<P>) -> Vec<Handle> {
+    if let Level::Rows(id) = sel.level() {
+        return row_handles(view, sel, id);
+    }
     let Some((ids, _)) = targets(view, sel) else {
         return Vec::new();
     };
@@ -156,6 +161,46 @@ pub(crate) fn handles(view: &View<'_>, sel: &Selection, pivot: Option<P>) -> Vec
     out
 }
 
+/// At the rows level: a handle on the left and right ends of the selected
+/// rows' box, in the block's space, adding or removing seats at that end of
+/// each selected row (07 §5.3).
+fn row_handles(view: &View<'_>, sel: &Selection, id: u32) -> Vec<Handle> {
+    let Some(Node::RowBlock(b)) = view.doc.node(id) else {
+        return Vec::new();
+    };
+    if !view.pickable(sel.level(), id) {
+        return Vec::new();
+    }
+    let rows = picked_rows(b, sel.items());
+    let seats = view.index.seats(id).iter();
+    let present = seats.filter(|s| !s.removed && rows.contains(&s.row));
+    let Some(r) = Rect::around(present.map(|s| s.pos)) else {
+        return Vec::new();
+    };
+    let q = r
+        .grow(view.index.seat_pad(id))
+        .corners()
+        .map(|p| view.index.to_world(id, p).unwrap_or(p));
+    let handle = |side, at| Handle {
+        kind: HandleKind::Side(side),
+        at,
+        offset: [0.0, 0.0],
+    };
+    vec![
+        handle(Side::Right, mid(q[1], q[2])),
+        handle(Side::Left, mid(q[3], q[0])),
+    ]
+}
+
+/// The indices of the block's rows whose rids are in `rids`.
+fn picked_rows(b: &RowBlock, rids: &BTreeSet<u32>) -> BTreeSet<u32> {
+    (0u32..)
+        .zip(&b.rows)
+        .filter(|(_, r)| rids.contains(&r.rid))
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// The handle under the pointer, if any: the first within reach.
 pub(crate) fn hit(handles: &[Handle], p: &Pointer) -> Option<Handle> {
     let reach = match p.kind {
@@ -204,7 +249,8 @@ pub(crate) enum Step {
 
 /// A resize of the node as it was at the start (`base`) by the handle's
 /// travel `d` in the node's own space, the pointer being at `q` there.
-/// `room` is how many seats may be added.
+/// `room` is how many seats may be added; `rows`, at the rows level, the
+/// rows whose ends the left and right handles move.
 pub(crate) fn resize(
     base: &Node,
     id: u32,
@@ -212,11 +258,17 @@ pub(crate) fn resize(
     d: P,
     q: P,
     mods: Modifiers,
-    room: u64,
+    (room, rows): (u64, Option<&BTreeSet<u32>>),
 ) -> Step {
     match (base, kind) {
+        (Node::RowBlock(_), HandleKind::Side(Side::Top | Side::Bottom)) if rows.is_some() => {
+            Step::Keep
+        }
+        (Node::RowBlock(b), HandleKind::Side(side)) if rows.is_some() => {
+            counts(b, id, side, d, room, rows)
+        }
         (Node::RowBlock(b), HandleKind::Side(side)) if mods.ctrl => pitch(b, id, side, d),
-        (Node::RowBlock(b), HandleKind::Side(side)) => counts(b, id, side, d, room),
+        (Node::RowBlock(b), HandleKind::Side(side)) => counts(b, id, side, d, room, None),
         (Node::Shape(s), _) => scale(s, id, kind, d, q, mods.shift),
         _ => Step::Keep,
     }
@@ -277,8 +329,8 @@ fn arc_ok(b: &RowBlock) -> bool {
 /// The block with `n` rows added (removed, if negative) at `side`, or `n`
 /// seats at each row's end: what the structural commands make of it, to
 /// check the arc. Kept seats stay put: the offset takes up the shift
-/// (07 §2.2 `addSeats`).
-fn changed(b: &RowBlock, side: Side, n: i64) -> RowBlock {
+/// (07 §2.2 `addSeats`). With `rows`, seats change in those rows only.
+fn changed(b: &RowBlock, side: Side, n: i64, rows: Option<&BTreeSet<u32>>) -> RowBlock {
     let mut c = b.clone();
     let k = n.unsigned_abs() as usize;
     let row = |seats| BlockRow {
@@ -309,7 +361,11 @@ fn changed(b: &RowBlock, side: Side, n: i64) -> RowBlock {
         Side::Left | Side::Right => {
             let length = n as f64 * b.seat_pitch;
             let front = if side == Side::Left { length } else { 0.0 };
-            for r in &mut c.rows {
+            for r in c
+                .rows
+                .iter_mut()
+                .filter(|r| rows.is_none_or(|s| s.contains(&r.rid)))
+            {
                 r.seats = (i64::from(r.seats) + n).clamp(1, i64::from(u32::MAX)) as u32;
                 r.offset += align(b) * length - front;
             }
@@ -318,11 +374,21 @@ fn changed(b: &RowBlock, side: Side, n: i64) -> RowBlock {
     c
 }
 
-/// Rows or seats added or removed at a side, in whole rows or seats.
-fn counts(b: &RowBlock, id: u32, side: Side, d: P, room: u64) -> Step {
+/// Rows or seats added or removed at a side, in whole rows or seats; with
+/// `picked`, seats at the left or right end of those rows only.
+fn counts(
+    b: &RowBlock,
+    id: u32,
+    side: Side,
+    d: P,
+    room: u64,
+    picked: Option<&BTreeSet<u32>>,
+) -> Step {
+    let on = |r: &&BlockRow| picked.is_none_or(|s| s.contains(&r.rid));
     let rows = b.rows.len() as i64;
-    let widest = i64::from(b.rows.iter().map(|r| r.seats).max().unwrap_or(1));
-    let narrowest = i64::from(b.rows.iter().map(|r| r.seats).min().unwrap_or(1));
+    let lines = b.rows.iter().filter(on).count() as i64;
+    let widest = i64::from(b.rows.iter().filter(on).map(|r| r.seats).max().unwrap_or(1));
+    let narrowest = i64::from(b.rows.iter().filter(on).map(|r| r.seats).min().unwrap_or(1));
     let room = room.min(u64::from(tuning::LIVE_SEATS)) as i64;
     let steps = |v: f64, pitch: f64| {
         let n = (v / pitch).round();
@@ -344,17 +410,17 @@ fn counts(b: &RowBlock, id: u32, side: Side, d: P, room: u64) -> Step {
         }
         Side::Left | Side::Right => {
             let v = if side == Side::Left { -d[0] } else { d[0] };
-            let fit = (i64::from(MAX_SEATS_PER_ROW) - widest).min(room / rows.max(1));
+            let fit = (i64::from(MAX_SEATS_PER_ROW) - widest).min(room / lines.max(1));
             (steps(v, b.seat_pitch), 1 - narrowest, fit)
         }
     };
     n = n.clamp(low.min(0), high.max(0));
     // The most rows or seats the arc allows, towards zero.
-    if !arc_ok(&changed(b, side, n)) {
+    if !arc_ok(&changed(b, side, n, picked)) {
         let (mut ok, mut bad) = (0i64, n);
         while (bad - ok).abs() > 1 {
             let m = ok + (bad - ok) / 2;
-            if arc_ok(&changed(b, side, m)) {
+            if arc_ok(&changed(b, side, m, picked)) {
                 ok = m;
             } else {
                 bad = m;
@@ -426,11 +492,32 @@ fn counts(b: &RowBlock, id: u32, side: Side, d: P, room: u64) -> Step {
             } else {
                 End::End
             };
-            let count = i32::try_from(n).unwrap_or(0);
-            commands.push(Command::ResizeRows { id, end, count });
+            match picked {
+                None => {
+                    let count = i32::try_from(n).unwrap_or(0);
+                    commands.push(Command::ResizeRows { id, end, count });
+                }
+                Some(_) => commands.extend(b.rows.iter().filter(on).map(|r| {
+                    let rid = r.rid;
+                    match n > 0 {
+                        true => Command::AddSeats {
+                            id,
+                            rid,
+                            end,
+                            count: k,
+                        },
+                        false => Command::RemoveSeats {
+                            id,
+                            rid,
+                            end,
+                            count: k,
+                        },
+                    }
+                })),
+            }
         }
     }
-    let shown = readout(&changed(b, side, n));
+    let shown = readout(&changed(b, side, n, picked));
     Step::Show(Command::Composite { commands }, shown)
 }
 
