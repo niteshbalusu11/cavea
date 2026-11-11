@@ -221,6 +221,20 @@ fn row_level_editing() {
     let cols: Vec<f64> = gone.iter().map(|o| t.seats(10)[o][0]).collect();
     assert!(cols.iter().all(|x| (x - cols[0]).abs() <= 25.0), "{cols:?}");
 
+    // A row of one position is never cut.
+    let mut lone = T::new(chart());
+    lone.s
+        .apply(Command::RemoveSeats {
+            id: 10,
+            rid: 13,
+            end: End::End,
+            count: 5,
+        })
+        .expect("short");
+    lone.s.select(Level::Rows(10), [13]);
+    lone.s.cut_aisle([10_000.0, 200.0]).expect("cut");
+    assert!(lone.removed(10).is_empty());
+
     // On a skewed arc block the aisle is radial: the same position of
     // every row of equal length.
     let mut arc = T::new(chart());

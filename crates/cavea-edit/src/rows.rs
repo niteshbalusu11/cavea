@@ -117,7 +117,8 @@ fn across<'a>(view: &View<'a>, sel: &Selection, at: P) -> Option<(u32, Vec<Line<
 
 /// Cuts an aisle at the world point `at` through the selected rows: in each
 /// row the position whose column is nearest, if the point is within half
-/// the gap to its neighbour, is marked removed (it keeps its oid and its
+/// the smaller gap to its neighbours (a row of one position is skipped), is
+/// marked removed (it keeps its oid and its
 /// number, so no other seat is renamed).
 pub(crate) fn cut_aisle(view: &View<'_>, sel: &Selection, at: P) -> Option<Command> {
     let (id, lines, c0) = across(view, sel, at)?;
@@ -132,8 +133,10 @@ pub(crate) fn cut_aisle(view: &View<'_>, sel: &Selection, at: P) -> Option<Comma
             .chain(gap(Some(k + 1)))
             .fold(f64::INFINITY, f64::min)
             / 2.0;
+        // A lone position has no gap to measure: it is never cut.
         if let Some(s) = row.get(k)
             && !s.removed
+            && half.is_finite()
             && d(k) <= half
         {
             oids.push(s.oid);
