@@ -142,7 +142,8 @@ export function ValidationPanel(props: { editor: Editor }) {
           <ul aria-label={msg("validation.label")}>
             <For each={shown()}>
               {(f) => {
-                const title = msgOf("validation", f.code) ?? f.code;
+                // Reactive: the store reuses a row's finding object for whatever lands at its place.
+                const title = () => msgOf("validation", f.code) ?? f.code;
                 return (
                   <li
                     class="absolute inset-x-0"
@@ -162,7 +163,7 @@ export function ValidationPanel(props: { editor: Editor }) {
                       />
                       <span class="min-w-0 flex-1">
                         <span class="flex items-baseline gap-1.5">
-                          <span class="truncate font-medium text-fg">{title}</span>
+                          <span class="truncate font-medium text-fg">{title()}</span>
                           <span class="font-mono text-2xs text-faint">{f.code}</span>
                           <Show when={f.stale}>
                             <span class="ml-auto shrink-0 text-xs text-faint italic">
