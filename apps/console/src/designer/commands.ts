@@ -10,7 +10,7 @@ import type { Editor } from "./editor.ts";
 import type { PanelTab } from "./layout.ts";
 import { display, isMac, SHORTCUTS, type Group } from "./shortcuts.ts";
 
-export type CommandGroup = Group | "panels" | "file" | "theme";
+export type CommandGroup = Group | "insert" | "panels" | "file" | "theme";
 
 export interface Command {
   id: string;
@@ -26,6 +26,7 @@ export interface Command {
 /** What the shell does for the palette beyond the session. */
 export interface Hooks {
   help: () => void;
+  insert: () => void;
   numbering: () => void;
   tab: (tab: PanelTab) => void;
   inspector: () => void;
@@ -108,6 +109,7 @@ export function commands(editor: Editor, act: Record<string, () => void>, hooks:
     keys: string | null = null,
   ) => out.push({ id, label, group, run, reason, keys });
 
+  add("insertRowBlock", msg("command.insertRowBlock"), "insert", hooks.insert);
   add("numbering", msg("command.numbering"), "edit", hooks.numbering, () =>
     numberable(editor) ? null : msg("reason.selectBlocks"),
   );

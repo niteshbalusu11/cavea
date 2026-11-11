@@ -304,8 +304,8 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [ ] **DSN-039** Preview with the buyer renderer, device widths and sample states (07 §11)
 - [ ] **DSN-040** Publish flow: compile, diff, thumbnail upload (07 §11)
 - [x] **DSN-041** Export and import of chart document JSON (07 §12). The edit core is built: `Session::export`, `Session::import` with typed `ImportError`s (07 §12); the shell's menu items, file picker and drop, download, and the confirmation before replacing a chart are built (07 §12, in the shell)
-- [ ] **DSN-042** New-chart screen, three templates, first-run tour (07 §16). The new-chart screen and the three templates are on the unreviewed branch `slice/designer-shell-2-insert-new`; the five-step tour is about canvas gestures and waits for the canvas (DSN-004)
-- [ ] **DSN-043** "Insert row block" form as the non-pointer path (07 §15). The form is on the unreviewed branch `slice/designer-shell-2-insert-new`
+- [ ] **DSN-042** New-chart screen, three templates, first-run tour (07 §16). The new-chart screen and the three templates are built (`NewChart.tsx`, `templates/`, 07 §16 "In the shell"); the five-step tour is about canvas gestures and waits for the canvas (DSN-004), and placing a reference image waits for the image tool (DSN-020)
+- [x] **DSN-043** "Insert row block" form as the non-pointer path (07 §15). Built in the shell (`InsertForm.tsx`, `insert.ts`, 07 §15)
 - [ ] **DSN-044** Performance pass on the 100,000-seat chart (07 §14)
 
 ### Testing

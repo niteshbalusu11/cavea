@@ -29,7 +29,10 @@ export function rove(e: KeyboardEvent, vertical: boolean): void {
   target.focus();
 }
 
-export function ToolRail(props: { editor: Editor }) {
+/** The tool rail. The row-block tool chosen with the keyboard (Enter or
+ * Space on its button) also opens "Insert row block…" (07 §15): drawing
+ * needs a pointer, the form does not. */
+export function ToolRail(props: { editor: Editor; onInsert: () => void }) {
   const active = () => props.editor.views.tool.tool;
   return (
     <nav
@@ -54,7 +57,11 @@ export function ToolRail(props: { editor: Editor }) {
                   placement="right"
                   pressed={active() === tool}
                   tabIndex={active() === tool ? 0 : -1}
-                  onClick={() => props.editor.setTool(tool)}
+                  onClick={(e) => {
+                    props.editor.setTool(tool);
+                    // A click from the keyboard has no pointer position (detail 0).
+                    if (tool === "rowBlock" && e.detail === 0) props.onInsert();
+                  }}
                 />
               )}
             </For>

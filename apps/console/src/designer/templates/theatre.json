@@ -1,0 +1,226 @@
+{
+  "schema": 1,
+  "name": "Theatre",
+  "settings": {
+    "seatSize": 44.0,
+    "seatShape": "circle",
+    "labelTemplate": "{section}-{row}-{seat}",
+    "tableLabelTemplate": "{section}-{table}-{seat}",
+    "rowLabelDisplay": "both",
+    "alphaOverflow": "double"
+  },
+  "nextOid": 2087,
+  "categories": [
+    { "key": "premium", "label": "Premium", "color": "#2563EB", "accessible": false },
+    { "key": "standard", "label": "Standard", "color": "#B45309", "accessible": false },
+    { "key": "value", "label": "Value", "color": "#047857", "accessible": false },
+    { "key": "access", "label": "Wheelchair space", "color": "#C026D3", "accessible": true }
+  ],
+  "floors": [{ "id": 1, "name": "Stalls", "level": 0, "focalPoint": [0.0, 0.0] }],
+  "nodes": [
+    {
+      "type": "section",
+      "id": 1,
+      "floor": 1,
+      "origin": [0.0, -1200.0],
+      "rotation": 30.0,
+      "label": "Stalls Left",
+      "outline": "auto",
+      "category": "standard",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 2,
+          "origin": [0.0, 1700.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1700.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "even", "step": 1, "direction": "rtl" },
+          "rows": [
+            { "rid": 3, "seats": 15, "offset": 0.0, "oids": [[4, 15]] },
+            { "rid": 19, "seats": 16, "offset": 0.0, "oids": [[20, 16]] },
+            { "rid": 36, "seats": 16, "offset": 0.0, "oids": [[37, 16]] },
+            { "rid": 53, "seats": 17, "offset": 0.0, "oids": [[54, 17]] },
+            { "rid": 71, "seats": 18, "offset": 0.0, "oids": [[72, 18]] },
+            { "rid": 90, "seats": 19, "offset": 0.0, "oids": [[91, 19]] },
+            { "rid": 110, "seats": 20, "offset": 0.0, "oids": [[111, 20]] },
+            { "rid": 131, "seats": 21, "offset": 0.0, "oids": [[132, 21]] },
+            { "rid": 153, "seats": 22, "offset": 0.0, "oids": [[154, 22]] },
+            { "rid": 176, "seats": 23, "offset": 0.0, "oids": [[177, 23]] }
+          ],
+          "seatOverrides": {
+            "4": { "flags": ["accessible"], "category": "access" },
+            "5": { "flags": ["accessible"], "category": "access" },
+            "6": { "flags": ["companion"] },
+            "16": { "flags": ["companion"] },
+            "17": { "flags": ["accessible"], "category": "access" },
+            "18": { "flags": ["accessible"], "category": "access" }
+          }
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 492,
+      "floor": 1,
+      "origin": [0.0, -1200.0],
+      "rotation": 0.0,
+      "label": "Stalls Centre",
+      "outline": "auto",
+      "category": "premium",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 493,
+          "origin": [0.0, 1700.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1700.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "numeric", "start": 101, "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 494, "seats": 15, "offset": 0.0, "oids": [[495, 15]] },
+            { "rid": 510, "seats": 16, "offset": 0.0, "oids": [[511, 16]] },
+            { "rid": 527, "seats": 16, "offset": 0.0, "oids": [[528, 16]] },
+            { "rid": 544, "seats": 17, "offset": 0.0, "oids": [[545, 17]] },
+            { "rid": 562, "seats": 18, "offset": 0.0, "oids": [[563, 18]] },
+            { "rid": 581, "seats": 19, "offset": 0.0, "oids": [[582, 19]] },
+            { "rid": 601, "seats": 20, "offset": 0.0, "oids": [[602, 20]] },
+            { "rid": 622, "seats": 21, "offset": 0.0, "oids": [[623, 21]] },
+            { "rid": 644, "seats": 22, "offset": 0.0, "oids": [[645, 22]] },
+            { "rid": 667, "seats": 23, "offset": 0.0, "oids": [[668, 23]] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "id": 982,
+      "floor": 1,
+      "origin": [0.0, -1200.0],
+      "rotation": -30.0,
+      "label": "Stalls Right",
+      "outline": "auto",
+      "category": "value",
+      "priority": 1.0,
+      "children": [
+        {
+          "type": "rowBlock",
+          "id": 983,
+          "origin": [0.0, 1700.0],
+          "rotation": 0.0,
+          "seatPitch": 55.0,
+          "rowPitch": 95.0,
+          "curve": { "kind": "arc", "radius": 1700.0 },
+          "align": "center",
+          "stagger": 0.0,
+          "skew": 0.0,
+          "rowLabels": {
+            "scheme": "alpha",
+            "step": 1,
+            "skip": ["I", "O"],
+            "direction": "front-to-back"
+          },
+          "seatLabels": { "scheme": "odd", "step": 1, "direction": "ltr" },
+          "rows": [
+            { "rid": 984, "seats": 15, "offset": 0.0, "oids": [[985, 15]] },
+            { "rid": 1000, "seats": 16, "offset": 0.0, "oids": [[1001, 16]] },
+            { "rid": 1017, "seats": 16, "offset": 0.0, "oids": [[1018, 16]] },
+            { "rid": 1034, "seats": 17, "offset": 0.0, "oids": [[1035, 17]] },
+            { "rid": 1052, "seats": 18, "offset": 0.0, "oids": [[1053, 18]] },
+            { "rid": 1071, "seats": 19, "offset": 0.0, "oids": [[1072, 19]] },
+            { "rid": 1091, "seats": 20, "offset": 0.0, "oids": [[1092, 20]] },
+            { "rid": 1112, "seats": 21, "offset": 0.0, "oids": [[1113, 21]] },
+            { "rid": 1134, "seats": 22, "offset": 0.0, "oids": [[1135, 22]] },
+            { "rid": 1157, "seats": 23, "offset": 0.0, "oids": [[1158, 23]] }
+          ],
+          "seatOverrides": {
+            "985": { "flags": ["accessible"], "category": "access" },
+            "986": { "flags": ["accessible"], "category": "access" },
+            "987": { "flags": ["companion"] },
+            "997": { "flags": ["companion"] },
+            "998": { "flags": ["accessible"], "category": "access" },
+            "999": { "flags": ["accessible"], "category": "access" }
+          }
+        }
+      ]
+    },
+    {
+      "type": "shape",
+      "id": 2078,
+      "floor": 1,
+      "origin": [0.0, -450.0],
+      "rotation": 0.0,
+      "kind": "rect",
+      "size": [2400.0, 900.0],
+      "style": { "fill": "#44403C", "strokeWidth": 0.0, "opacity": 1.0 },
+      "layer": "below"
+    },
+    {
+      "type": "text",
+      "id": 2079,
+      "floor": 1,
+      "origin": [0.0, -450.0],
+      "rotation": 0.0,
+      "text": "STAGE",
+      "size": 200.0,
+      "weight": 600,
+      "color": "#FAFAF9",
+      "align": "center",
+      "minZoom": 0.0
+    },
+    {
+      "type": "shape",
+      "id": 2080,
+      "floor": 1,
+      "origin": [0.0, 0.0],
+      "rotation": 0.0,
+      "kind": "line",
+      "points": [
+        [-1200.0, 0.0],
+        [1200.0, 0.0]
+      ],
+      "style": { "stroke": "#A8A29E", "strokeWidth": 20.0, "opacity": 1.0 },
+      "layer": "below"
+    },
+    {
+      "type": "icon",
+      "id": 2084,
+      "floor": 1,
+      "origin": [-2700.0, 2300.0],
+      "rotation": 0.0,
+      "icon": "exit",
+      "size": 140.0
+    },
+    {
+      "type": "icon",
+      "id": 2085,
+      "floor": 1,
+      "origin": [2700.0, 2300.0],
+      "rotation": 0.0,
+      "icon": "exit",
+      "size": 140.0
+    }
+  ]
+}

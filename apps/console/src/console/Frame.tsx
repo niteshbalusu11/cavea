@@ -7,6 +7,9 @@ import { msg, type MessageId } from "../i18n/messages.ts";
 import { setThemeChoice, themeChoice, type ThemeChoice } from "../theme.ts";
 import { Button } from "../ui/controls.tsx";
 import { Icon, type IconName } from "../ui/Icon.tsx";
+import { notify } from "../ui/overlays.tsx";
+import { NewChart } from "../designer/NewChart.tsx";
+import { emptyChart, handOff } from "../designer/source.ts";
 
 export const SECTIONS: { path: string; label: MessageId; icon: IconName }[] = [
   { path: "/charts", label: "nav.charts", icon: "chart" },
@@ -81,17 +84,48 @@ export function Frame(props: ParentProps) {
   );
 }
 
+/** The charts screen. Its list needs the server; until then it is the
+ * list's empty state (09 §3.1): the three starting points of 07 §16, each
+ * handed to the designer. */
 export function Charts() {
   const navigate = useNavigate();
+  let picker: HTMLInputElement | undefined;
+  const start = (text: Promise<string>) =>
+    void text.then(
+      (t) => {
+        handOff(t);
+        navigate("/designer/local");
+      },
+      () => notify(msg("new.loadFailed"), "error"),
+    );
   return (
     <>
-      <h1 class="text-xl font-semibold text-fg">{msg("charts.title")}</h1>
-      <p class="mt-2 max-w-xl text-base text-muted">{msg("charts.body")}</p>
-      <div class="mt-4">
-        <Button variant="primary" icon="file" onClick={() => navigate("/designer/local")}>
-          {msg("charts.openDesigner")}
+      <div class="flex items-center justify-between">
+        <h1 class="text-xl font-semibold text-fg">{msg("charts.title")}</h1>
+        <Button variant="primary" icon="plus" onClick={() => navigate("/designer/local")}>
+          {msg("charts.new")}
         </Button>
       </div>
+      <p class="mt-2 max-w-xl text-base text-muted">{msg("charts.body")}</p>
+      <h2 class="mt-8 mb-3 text-lg font-semibold text-fg">{msg("charts.first")}</h2>
+      <input
+        ref={(e) => (picker = e)}
+        type="file"
+        accept=".json,application/json"
+        class="hidden"
+        onChange={(e) => {
+          const file = e.currentTarget.files?.[0];
+          e.currentTarget.value = "";
+          if (file !== undefined) start(file.text());
+        }}
+      />
+      <NewChart
+        choices={{
+          empty: () => start(Promise.resolve(emptyChart(msg("designer.untitled")))),
+          template: (t) => start(t.load()),
+          open: () => picker?.click(),
+        }}
+      />
     </>
   );
 }

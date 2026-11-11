@@ -17,6 +17,7 @@ export function TopBar(props: {
   onNew: () => void;
   onOpen: () => void;
   onSave: () => void;
+  onInsert: () => void;
   onPalette: () => void;
   onHelp: () => void;
 }) {
@@ -57,6 +58,10 @@ export function TopBar(props: {
               <span class={menuKeys}>{keyOf("save")}</span>
             </DropdownMenu.Item>
             <DropdownMenu.Separator class={menuSeparator} />
+            <DropdownMenu.Item class={menuItem} onSelect={afterMenu(props.onInsert)}>
+              <Icon name="rowBlock" />
+              {msg("command.insertRowBlock")}
+            </DropdownMenu.Item>
             <DropdownMenu.Item class={menuItem} onSelect={afterMenu(props.onPalette)}>
               <Icon name="search" />
               {msg("shortcut.palette")}
