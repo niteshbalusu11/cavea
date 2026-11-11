@@ -19,6 +19,7 @@ export {
   type StateAdapter,
 } from "./adapter.ts";
 export { CaveaError, type CaveaErrorCode } from "./errors.ts";
+export { caveaServer, type CaveaServerOptions } from "./server.ts";
 export type { GestureHandling } from "./host.ts";
 export type {
   Bounds,

@@ -22,11 +22,16 @@
 // as many every `ms` ms; `snipe=1` also takes a selected seat the buyer does
 // not hold yet, so it is knocked out.
 //
+// Real server instead of the fake host: `server=<baseUrl>&key=<pk_…>&event=<key>`,
+// with `transport=auto|ws|sse|poll` and `session=start|manual|none` (05 §4);
+// the chart is the event's. Needs no `--demo` build.
+//
 // `window.caveaDemo` has the map (`map.select([...])`, `map.zoomTo(...)`,
 // `map.destroy()` from the console), the seat `labels`, the callback log in `events`, and
 // `take(label)`, `crowd(on)`, `resnapshot()` and `second(hidden)` (a second map
 // on the same page, sharing the WASM).
 import {
+  caveaServer,
   createSeatMap,
   customState,
   loadRenderer,
@@ -90,6 +95,7 @@ const stateDelay = num("stateDelay", 0);
 const crowdMs = num("crowd", 0);
 const crowdSize = num("crowdSize", 20);
 const snipe = params.get("snipe") === "1";
+const server = params.get("server");
 document.body.dataset["theme"] = theme as string;
 if (gestures === "cooperative") {
   document.body.classList.add("scrolling");
@@ -240,7 +246,7 @@ function showSelection(): void {
   const expires = at === null ? "none" : new Date(at).toLocaleTimeString();
   selectionLine.textContent =
     `selected ${selection?.objects.length ?? 0}/${max}: ${selection?.objects.map((o) => o.label).join(" ") ?? ""}\n` +
-    `held: ${held.size}, expire ${expires}; checkout ${selection?.valid === false ? "not ready" : "ready"}; ` +
+    `held: ${server === null ? held.size : selection?.holdToken ? "by token" : "none"}, expire ${expires}; checkout ${selection?.valid === false ? "not ready" : "ready"}; ` +
     `hover: ${hover || "none"}\n${lastNote}`;
 }
 
@@ -255,9 +261,12 @@ const options: SeatMapOptions = {
     crowd(true);
   },
   onSelectionChange(selection) {
+    // Whether there is a hold token, never the token.
     log("selectionChange")(
       selection.objects.map((o) => o.label),
       selection.valid,
+      selection.holdToken !== null,
+      selection.expiresAt,
     );
     note(`selection: ${selection.objects.map((o) => o.label).join(", ") || "empty"}`);
   },
@@ -278,6 +287,14 @@ const options: SeatMapOptions = {
     note(`hold failed: ${failed.map((f) => `${f.object.label} (${f.reason})`).join(", ")}`);
   },
   onHoldLost: (objects) => note(`hold lost: ${objects.map((o) => o.label).join(", ")}`),
+  onHoldExpiring(seconds) {
+    log("holdExpiring")(seconds);
+    note(`hold expires in ${seconds} s`);
+  },
+  onHoldExpired() {
+    log("holdExpired")();
+    note("hold expired");
+  },
   onObjectUnavailable(object) {
     log("objectUnavailable")(object.label);
     note(`${object.label} was taken`);
@@ -311,7 +328,19 @@ async function second(hidden = false): Promise<SeatMap> {
 }
 
 try {
-  if (chartUrl === null) {
+  if (server !== null) {
+    const pick = <T extends string>(name: string, values: T[]): T | undefined =>
+      values.find((v) => v === params.get(name));
+    const transport = pick("transport", ["auto", "ws", "sse", "poll"]);
+    const session = pick("session", ["start", "manual", "none"]);
+    options.state = caveaServer({
+      baseUrl: server,
+      publishableKey: params.get("key") ?? "",
+      event: params.get("event") ?? "",
+      ...(transport === undefined ? {} : { transport }),
+      ...(session === undefined ? {} : { session }),
+    });
+  } else if (chartUrl === null) {
     const chart = await generated();
     labels = chart.labels;
     options.chart = { bytes: chart.ccf };

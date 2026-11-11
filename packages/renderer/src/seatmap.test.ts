@@ -1,7 +1,13 @@
 // The SDK against a recording fake of the WASM view and a fake platform: no
 // browser, no WebGL. What is tested is the SDK's logic, not the fake.
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { customState, staticState, type HoldResult, type StateAdapter } from "./adapter.ts";
+import {
+  customState,
+  staticState,
+  type AdapterContext,
+  type HoldResult,
+  type StateAdapter,
+} from "./adapter.ts";
 import { CaveaError, warner } from "./errors.ts";
 import type { ObjectInfo, RendererEvent } from "./events.ts";
 import type { AttachOptions } from "./host.ts";
@@ -625,6 +631,58 @@ describe("callbacks", () => {
     drain({ type: "selectionChanged", expiresAt: null, selected: [] }, { type: "selectionValid" });
     ctx?.reportError(new Error("late"));
     expect(got).toEqual(["change"]);
+  });
+});
+
+describe("hold expiry", () => {
+  test("onHoldExpiring 60 s before and onHoldExpired with the holds lost, on the server's clock", async () => {
+    let ctx: AdapterContext | undefined;
+    const calls: unknown[] = [];
+    const { map, drain } = await loaded({
+      state: customState({
+        connect(c) {
+          ctx = c;
+          return Promise.resolve({ kind: "map", unavailable: [] });
+        },
+        disconnect() {},
+      }),
+      onHoldExpiring: (seconds) => calls.push(`expiring ${seconds}`),
+      onHoldExpired: () => calls.push("expired"),
+      onHoldLost: () => calls.push("lost"),
+    });
+    // This page's clock is ten minutes ahead of the server's.
+    const offset = -600_000;
+    ctx?.setClockOffset(offset);
+    const expiry = Date.now() + offset + 60_040;
+    drain({ type: "selectionChanged", expiresAt: expiry, selected: [seat("A-1-1")] });
+    expect(map.getSelection().expiresAt).toBe(expiry - offset);
+    await sleep(20);
+    expect(calls).toEqual([]);
+    await sleep(40);
+    // Lost a minute before the expiry (released elsewhere): not an expiry.
+    drain({ type: "holdLost", labels: ["A-1-1"] });
+    expect(calls).toEqual(["expiring 60", "lost"]);
+
+    drain({
+      type: "selectionChanged",
+      expiresAt: Date.now() + offset + 2_000,
+      selected: [seat("A-1-2")],
+    });
+    drain(
+      { type: "holdLost", labels: ["A-1-2"] },
+      { type: "selectionChanged", expiresAt: 0, selected: [] },
+    );
+    expect(calls).toEqual(["expiring 60", "lost", "expiring 2", "lost", "expired"]);
+    expect(map.getSelection().expiresAt).toBeNull();
+  });
+
+  test("destroy stops the expiry timer", async () => {
+    const calls: unknown[] = [];
+    const { map, drain } = await loaded({ onHoldExpiring: () => calls.push("expiring") });
+    drain({ type: "selectionChanged", expiresAt: Date.now() + 60_020, selected: [seat("A-1-1")] });
+    map.destroy();
+    await sleep(40);
+    expect(calls).toEqual([]);
   });
 });
 

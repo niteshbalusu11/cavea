@@ -40,7 +40,7 @@ export interface Selection {
   holdToken: string | null;
   /** The selection meets `selection.min`. */
   valid: boolean;
-  /** When the buyer's holds expire, Unix ms, if known. */
+  /** When the buyer's holds expire, if known: Unix ms on this page's clock (`Date.now()`), corrected for the server's. */
   expiresAt: number | null;
 }
 
@@ -92,6 +92,10 @@ export interface SeatMapOptions {
   onHoldFailed?: (failed: Array<{ object: SeatObject; reason: string }>) => void;
   /** The buyer's hold on these selected objects is gone (expired, released elsewhere). */
   onHoldLost?: (objects: SeatObject[]) => void;
+  /** 60 s before the buyer's holds expire (or at once, if nearer), with the seconds left. */
+  onHoldExpiring?: (secondsLeft: number) => void;
+  /** The buyer's holds expired; they have left the selection (after `onHoldLost`). */
+  onHoldExpired?: () => void;
   onObjectUnavailable?: (object: SeatObject) => void;
   /** `at`: the object's centre in CSS pixels on the map. */
   onObjectHover?: (object: SeatObject | null, at: [number, number] | null) => void;
@@ -104,13 +108,14 @@ export interface SeatMapOptions {
 const LATER = new Set(
   (
     "pricing formatPrice floor spotlight zoomToSelect sectionDrillDown ui colorblind locale " +
-    "messages dir fallback worker onSectionEnter onFloorChange onHoldExpiring onHoldExpired onMetrics"
+    "messages dir fallback worker onSectionEnter onFloorChange onMetrics"
   ).split(" "),
 );
 const SELECTION_LATER = new Set("groupSize validators categories selectable restore".split(" "));
 const CALLBACKS =
   "onReady onSelectionChange onObjectSelect onObjectDeselect onSelectionInvalid onSelectionValid " +
-  "onHoldPending onHoldSettled onHoldFailed onHoldLost onObjectUnavailable onObjectHover onObjectFocus " +
+  "onHoldPending onHoldSettled onHoldFailed onHoldLost onHoldExpiring onHoldExpired " +
+  "onObjectUnavailable onObjectHover onObjectFocus " +
   "onCameraChange onError";
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;

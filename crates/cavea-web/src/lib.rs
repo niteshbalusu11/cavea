@@ -9,6 +9,8 @@ use wasm_bindgen::prelude::wasm_bindgen;
 mod events;
 #[cfg(target_arch = "wasm32")]
 mod view;
+#[cfg(test)]
+mod wire_fixture;
 
 /// The version of this crate, so the host page can tell which build it loaded.
 #[wasm_bindgen]

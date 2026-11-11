@@ -98,6 +98,11 @@ const fatal = <T>(promise: Promise<T>, code: CaveaErrorCode): Promise<T> =>
     throw new CaveaError(code, String(error), true, error);
   });
 
+/** `onHoldExpiring` fires this long before the buyer's holds expire (05 §5). */
+const EXPIRING_MS = 60_000;
+/** Holds lost this close to their expiry, or after it, expired (`onHoldExpired`). */
+const EXPIRED_SLACK_MS = 5_000;
+
 const bytesOf = (b: ArrayBuffer | Uint8Array): Uint8Array =>
   b instanceof Uint8Array ? b : new Uint8Array(b);
 
@@ -131,7 +136,14 @@ export async function createMap(
   let seq = 0;
   let holdToken: string | null = null;
   let selected = new Map<string, SeatObject>();
+  /** When the buyer's holds expire, on the server's clock (Unix ms). */
   let expiresAt: number | null = null;
+  /** The server's clock minus this page's, from the adapter. */
+  let offset = 0;
+  /** The expiry `onHoldExpiring` and `onHoldExpired` watch (server ms), and whether the first fired for it. */
+  let deadline: number | null = null;
+  let warned = false;
+  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
   let camera: { centre: [number, number]; zoom: number } | undefined;
   let unwatchTheme: (() => void) | undefined;
   let outstanding = 0;
@@ -237,6 +249,12 @@ export async function createMap(
     setHoldToken: (token) => {
       holdToken = token;
     },
+    setClockOffset: (ms) => {
+      if (Number.isFinite(ms)) {
+        offset = ms;
+        watchExpiry();
+      }
+    },
     reportError: (error) => report(failure("state_failed", error)),
   };
 
@@ -285,8 +303,31 @@ export async function createMap(
     objects: [...selected.values()],
     holdToken,
     valid: selected.size >= min,
-    expiresAt,
+    expiresAt: expiresAt === null ? null : expiresAt - offset,
   });
+
+  const serverNow = (): number => Date.now() + offset;
+
+  /**
+   * Fires `onHoldExpiring` once per expiry, `EXPIRING_MS` before it (at once,
+   * with the seconds left, if it is nearer). One timer, recomputed when it
+   * fires and when the page is shown again, as hidden pages run timers late.
+   */
+  function watchExpiry(): void {
+    clearTimeout(expiryTimer);
+    timers.delete(expiryTimer as ReturnType<typeof setTimeout>);
+    const left = deadline === null ? 0 : deadline - serverNow();
+    if (warned || destroyed || left <= 0) {
+      return;
+    }
+    if (left <= EXPIRING_MS) {
+      warned = true;
+      call("onHoldExpiring", Math.ceil(left / 1000));
+      return;
+    }
+    expiryTimer = setTimeout(watchExpiry, left - EXPIRING_MS);
+    timers.add(expiryTimer);
+  }
 
   /** Runs adapter calls one at a time, in order; each fails after `holdTimeoutMs`. */
   function enqueue(task: () => Promise<void>): void {
@@ -398,6 +439,14 @@ export async function createMap(
         selected = new Map(event.selected.map((o) => [o.label, toSeat(o)]));
         // A set of own holds without an expiry reports 0.
         expiresAt = event.expiresAt || null;
+        if (expiresAt !== null && expiresAt !== deadline) {
+          deadline = expiresAt;
+          warned = false;
+        } else if (expiresAt === null && serverNow() < (deadline ?? 0) - EXPIRED_SLACK_MS) {
+          // Given up before the expiry: nothing is left to expire.
+          deadline = null;
+        }
+        watchExpiry();
         for (const [label, object] of before) {
           if (!selected.has(label)) {
             call("onObjectDeselect", object);
@@ -440,6 +489,10 @@ export async function createMap(
         break;
       case "holdLost":
         call("onHoldLost", event.labels.map(lookup));
+        if (deadline !== null && serverNow() >= deadline - EXPIRED_SLACK_MS) {
+          deadline = null;
+          call("onHoldExpired");
+        }
         break;
       case "resync":
         if (adapter.resync === undefined) {
@@ -570,8 +623,12 @@ export async function createMap(
           mark("first_frame");
         }
       },
-      onVisibility: (visible) =>
-        engine(() => (visible ? adapter.resume?.() : adapter.pause?.()), "state_failed"),
+      onVisibility: (visible) => {
+        engine(() => (visible ? adapter.resume?.() : adapter.pause?.()), "state_failed");
+        if (visible) {
+          watchExpiry();
+        }
+      },
     };
     if (options.maxDpr !== undefined) {
       attachOptions.maxDpr = options.maxDpr;

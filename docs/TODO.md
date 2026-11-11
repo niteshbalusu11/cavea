@@ -226,12 +226,12 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 ### Web SDK
 
-- [ ] **WEB-020** `caveaServer` adapter: binary snapshot, transport auto-selection, resync (05 §4)
-- [ ] **WEB-021** Hold-on-select: ordered single-flight requests with coalescing (04 §16)
-- [ ] **WEB-022** Session modes: start, continue, manual, none (05 §4)
-- [ ] **WEB-023** Hold token persistence and restore after reload (05 §4)
-- [ ] **WEB-024** Expiry callbacks and the optional hold timer (05 §5, §7)
-- [ ] **WEB-025** Pause when hidden and resync on return (05 §4)
+- [x] **WEB-020** `caveaServer` adapter: binary snapshot, transport auto-selection, resync (05 §4). Reloading the chart in place after CLOSE 2 waits for event upgrades (ENG-029)
+- [x] **WEB-021** Hold-on-select: ordered single-flight requests with coalescing (04 §16)
+- [x] **WEB-022** Session modes: start, continue, manual, none (05 §4). `none` selects without holding, as `manual`, until `mode: 'static'` exists
+- [x] **WEB-023** Hold token persistence and restore after reload (05 §4)
+- [x] **WEB-024** Expiry callbacks and the optional hold timer (05 §5, §7). The callbacks and the timer's data (`expiresAt` on the page's clock); the countdown control waits for the built-in interface (WEB-006)
+- [x] **WEB-025** Pause when hidden and resync on return (05 §4)
 - [ ] **WEB-026** `@cavea/server-sdk` for Node, generated from OpenAPI with an ergonomic wrapper (05 §1)
 
 ### Testing
