@@ -363,7 +363,10 @@ impl LiveSync {
                     // Images are not moved by a transform: a piece holding
                     // one is compiled again at every step (an image alone
                     // is cheap), so it follows the pointer.
-                    let image = e.piece.as_ref().is_some_and(|p| !p.chart().images.is_empty());
+                    let image = e
+                        .piece
+                        .as_ref()
+                        .is_some_and(|p| !p.chart().images.is_empty());
                     if still {
                         false
                     } else if !placed || image {

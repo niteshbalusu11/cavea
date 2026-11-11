@@ -379,7 +379,9 @@ impl<B: GpuBackend> Painter<B> {
         for event in self.engine.drain_events() {
             match event {
                 Event::NeedFrame => again = true,
-                e @ (Event::TextRequest { .. } | Event::ImageRequest { .. } | Event::Error { .. }) => {
+                e @ (Event::TextRequest { .. }
+                | Event::ImageRequest { .. }
+                | Event::Error { .. }) => {
                     self.events.push(e);
                 }
                 _ => {}

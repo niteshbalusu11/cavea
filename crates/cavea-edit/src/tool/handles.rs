@@ -910,7 +910,8 @@ fn resized([x0, y0, x1, y1]: [f64; 4], kind: HandleKind, d: P, shift: bool) -> O
 /// a new `size`, and its centre moved to the new box's.
 fn scale_image(i: &Image, id: u32, kind: HandleKind, d: P, shift: bool) -> Step {
     let [w, h] = i.size;
-    let Some([nx0, ny0, nx1, ny1]) = resized([-w / 2.0, -h / 2.0, w / 2.0, h / 2.0], kind, d, shift)
+    let Some([nx0, ny0, nx1, ny1]) =
+        resized([-w / 2.0, -h / 2.0, w / 2.0, h / 2.0], kind, d, shift)
     else {
         return Step::Keep;
     };

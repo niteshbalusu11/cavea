@@ -1079,3 +1079,88 @@ fn dynamic_seat_labels_move_with_their_piece() {
     assert!(asked.iter().any(|t| t.starts_with("Sitz ")), "{asked:?}");
     assert!(asked.iter().all(|t| t.starts_with("Sitz ")), "{asked:?}");
 }
+
+/// 03 §2.7, 07 §4: a reference image is the designer's only. The canvas
+/// draws it (the live scene's `IMGS`, behind everything) and asks the host
+/// for its picture, and a drag moves it with the pointer, not only once
+/// baked; the chart the preview shows and the server would compile has no
+/// image at all. Made a background image, the compiled chart has it.
+#[test]
+fn reference_images_are_drawn_but_never_compiled() {
+    use cavea_compiler::document::ImageRole;
+    use cavea_edit::{Draft, Field};
+    use cavea_format::Artefact;
+    use cavea_render::protocol::Event;
+
+    let hash = "00112233445566778899aabbccddeeff";
+    let mut s = Session::load(preset("theatre")).expect("load");
+    s.set_snap(cavea_edit::SnapSettings {
+        grid: false,
+        step: 5.0,
+        objects: false,
+        spacing: false,
+        rows: false,
+        angles: false,
+        guides: false,
+    });
+    let draft = Draft::Image {
+        center: [0.0, 0.0],
+        size: [4000.0, 3000.0],
+        asset: hash.into(),
+        role: ImageRole::Reference,
+    };
+    s.insert(None, &draft).expect("insert");
+    let mut p = painter(VIEW);
+    settle(&mut p, &s);
+    let shown = |p: &Painter<Recorder>| -> Vec<(String, [i32; 4])> {
+        let scene = p.engine().scene().expect("scene");
+        let c = &scene.chart;
+        (c.images.iter())
+            .map(|i| {
+                let asset = c.strings.get(i.asset).unwrap_or_default().to_owned();
+                (asset, i.bounds)
+            })
+            .collect()
+    };
+    // Bounds in quarter units, centred on the image's position.
+    assert_eq!(
+        shown(&p),
+        vec![(hash.to_owned(), [-8000, -6000, 8000, 6000])]
+    );
+    let asked = p
+        .take_events()
+        .into_iter()
+        .any(|e| matches!(e, Event::ImageRequest { ref asset, .. } if asset == hash));
+    assert!(asked, "the picture is asked for");
+
+    let compiled = |s: &Session| {
+        let bytes = crate::preview::chart(s).expect("compiles");
+        cavea_format::decode(&bytes, Artefact::Public)
+            .expect("decode")
+            .images
+            .len()
+    };
+    assert_eq!(compiled(&s), 0, "a reference image is never compiled");
+
+    // A drag moves it at every step: the picture follows the pointer.
+    let mut t = 0.0;
+    t += 1000.0;
+    s.input(Input::PointerDown(pointer([1500.0, 1000.0], t)));
+    for k in 1..=3 {
+        t += 16.0;
+        let at = [1500.0 + 400.0 * f64::from(k), 1000.0];
+        s.input(Input::PointerMove(pointer(at, t)));
+        p.draw(&s, t);
+        let dx = 1600 * k;
+        assert_eq!(shown(&p)[0].1, [-8000 + dx, -6000, 8000 + dx, 6000]);
+    }
+    t += 16.0;
+    s.input(Input::PointerUp(pointer([2700.0, 1000.0], t)));
+    settle(&mut p, &s);
+
+    s.set_field(&Field::ImageRole(ImageRole::Background))
+        .expect("role");
+    assert_eq!(compiled(&s), 1);
+    settle(&mut p, &s);
+    assert_eq!(shown(&p).len(), 1);
+}

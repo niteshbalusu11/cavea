@@ -53,7 +53,8 @@ impl Canvas {
         }
         // `web` keeps the context to upload images from the browser's
         // decoded bitmaps (04 §25).
-        let backend = GlowBackend::web(context.clone()).map_err(|e| JsError::new(&e.to_string()))?;
+        let backend =
+            GlowBackend::web(context.clone()).map_err(|e| JsError::new(&e.to_string()))?;
         let mut painter = Painter::new(backend);
         painter.set_theme(false);
         Ok(Canvas {

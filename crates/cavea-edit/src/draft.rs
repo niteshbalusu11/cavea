@@ -110,7 +110,10 @@ pub enum Draft {
 
 /// The form of an asset hash (03 §2.7): 32 lowercase hex digits.
 pub fn valid_asset(asset: &str) -> bool {
-    asset.len() == 32 && asset.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    asset.len() == 32
+        && asset
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 type Result<T> = std::result::Result<T, CommandError>;

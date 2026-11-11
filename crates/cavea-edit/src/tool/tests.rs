@@ -567,3 +567,84 @@ fn measure_tools() {
          add a row to a 5,000-seat block {add:.3} ms, undo {undo:.3} ms"
     );
 }
+
+/// The image tool's node (07 §4, DSN-020): placed from a draft as one undo
+/// entry and selected, refused before anything is created for a hash of
+/// another form or an empty size, scaled by its corner handle about the
+/// opposite corner, and once locked out of reach of a stray click, a drag
+/// and a marquee, while the layers panel still selects and unlocks it.
+#[test]
+fn image_place_scale_and_lock() {
+    use cavea_compiler::document::ImageRole;
+    let mut t = Trace::new();
+    let hash = "0123456789abcdef0123456789abcdef";
+    let draft = |asset: &str, size: [f64; 2]| Draft::Image {
+        center: [2000.0, 2000.0],
+        size,
+        asset: asset.into(),
+        role: ImageRole::Reference,
+    };
+    let before = t.state();
+    for (bad, field) in [
+        (
+            draft("0123456789ABCDEF0123456789ABCDEF", [400.0, 200.0]),
+            "asset",
+        ),
+        (draft(&hash[1..], [400.0, 200.0]), "asset"),
+        (draft(hash, [0.0, 200.0]), "size"),
+        (draft(hash, [f64::INFINITY, 200.0]), "size"),
+    ] {
+        assert_eq!(
+            t.s.insert(None, &bad),
+            Err(CommandError::InvalidValue(field))
+        );
+        assert_eq!(t.state(), before);
+    }
+    let id =
+        t.s.insert(None, &draft(hash, [400.0, 200.0]))
+            .expect("insert");
+    let image = |t: &Trace| match t.s.document().node(id) {
+        Some(Node::Image(i)) => i.clone(),
+        other => panic!("not an image: {other:?}"),
+    };
+    let placed = image(&t);
+    assert_eq!(
+        (placed.origin, placed.size),
+        ([2000.0, 2000.0], [400.0, 200.0])
+    );
+    assert_eq!(
+        (placed.rotation, placed.opacity, placed.role),
+        (0.0, 1.0, ImageRole::Reference)
+    );
+    assert_eq!(placed.asset, hash);
+    assert_eq!(t.sel(), (Level::Top, vec![id]));
+    assert_eq!(t.s.undo(), Ok(true));
+    assert_eq!(t.state(), before);
+    assert_eq!(t.s.redo(), Ok(true));
+    t.s.click_layer(id, LayerClick::Replace);
+
+    // The bottom-right corner, dragged by (100, 50): the top-left stays.
+    t.drag([2200.0, 2100.0], [2300.0, 2150.0], NONE);
+    let scaled = image(&t);
+    assert_eq!(
+        (scaled.origin, scaled.size),
+        ([2050.0, 2025.0], [500.0, 250.0])
+    );
+
+    t.s.set_locked(true).expect("lock");
+    let locked = t.state();
+    t.click(2050.0, 2025.0, NONE);
+    assert_eq!(t.sel(), (Level::Top, vec![]));
+    t.drag([2050.0, 2025.0], [2500.0, 2500.0], NONE);
+    t.drag([1500.0, 1500.0], [2600.0, 2600.0], NONE);
+    t.drag([2050.0, 2025.0], [2100.0, 2100.0], ALT);
+    assert_eq!(t.sel(), (Level::Top, vec![]));
+    assert_eq!(t.state(), locked);
+
+    // The layers panel reaches it, and unlocks it.
+    assert!(t.s.click_layer(id, LayerClick::Replace));
+    assert_eq!(t.sel(), (Level::Top, vec![id]));
+    t.s.lock_layer(id, false).expect("unlock");
+    t.click(2050.0, 2025.0, NONE);
+    assert_eq!(t.sel(), (Level::Top, vec![id]));
+}
