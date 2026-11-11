@@ -34,8 +34,9 @@
 //! the store; no reply before its commit), INV-8 and INV-9 (every subscriber
 //! holds the public reduction of the committed state at its `seq`, never past
 //! the store's), INV-10 (replay refuses a second booking), INV-11 (each batch
-//! from the node that acquired its epoch, epochs never going back), and that no
-//! command is logged twice or after its batch failed. At the end of a run: a
+//! from the node that acquired its epoch, epochs never going back), that no
+//! command is logged twice or after its batch failed, and that the callers of
+//! a batch that failed or lost its reply get `unavailable`. At the end of a run: a
 //! serial replay of the log through the model reproduces every reply clients
 //! received, and no hold was used at or after its expiry.
 
