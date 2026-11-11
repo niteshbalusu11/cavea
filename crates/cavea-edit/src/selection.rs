@@ -48,6 +48,8 @@ pub struct Selection {
     /// Node ids, `rid`s or `oid`s by level; sorted, so every order derived
     /// from the selection is deterministic.
     items: BTreeSet<u32>,
+    /// The document revision the items were last checked against.
+    checked: Option<u64>,
 }
 
 impl Default for Selection {
@@ -55,6 +57,7 @@ impl Default for Selection {
         Self {
             level: Level::Top,
             items: BTreeSet::new(),
+            checked: None,
         }
     }
 }
@@ -68,6 +71,7 @@ impl Selection {
         &self.items
     }
 
+    /// For items found at this level in the current document.
     pub(crate) fn items_mut(&mut self) -> &mut BTreeSet<u32> {
         &mut self.items
     }
@@ -81,24 +85,23 @@ impl Selection {
         level: Level,
         items: impl IntoIterator<Item = u32>,
     ) {
-        self.level = if level_valid(doc, level) {
-            level
-        } else {
-            Level::Top
-        };
-        self.items = items
-            .into_iter()
-            .filter(|&i| item_valid(doc, self.level, i))
-            .collect();
+        self.level = level;
+        self.items = items.into_iter().collect();
+        self.checked = None;
+        self.reconcile(doc);
     }
 
-    /// Drops what the document no longer holds at this level.
+    /// Drops what the document no longer holds at this level. Nothing to do
+    /// if the document has not changed since the last check.
     pub(crate) fn reconcile(&mut self, doc: &Document) {
+        if self.checked == Some(doc.revision()) {
+            return;
+        }
         if !level_valid(doc, self.level) {
             *self = Self::default();
         }
-        let level = self.level;
-        self.items.retain(|&i| item_valid(doc, level, i));
+        retain_valid(doc, self.level, &mut self.items);
+        self.checked = Some(doc.revision());
     }
 }
 
@@ -113,25 +116,43 @@ fn level_valid(doc: &Document, level: Level) -> bool {
     }
 }
 
-fn item_valid(doc: &Document, level: Level, item: u32) -> bool {
-    match level {
-        Level::Top => doc.node(item).is_some() && doc.parent(item).is_none(),
-        Level::Section(s) => doc.parent(item) == Some(s),
-        Level::Rows(b) => match doc.node(b) {
-            Some(Node::RowBlock(b)) => b.rows.iter().any(|r| r.rid == item),
-            _ => false,
-        },
-        Level::Seats(n) => {
-            let runs = |runs: &[[u32; 2]]| {
-                runs.iter()
-                    .any(|r| item >= r[0] && u64::from(item) < u64::from(r[0]) + u64::from(r[1]))
-            };
-            match doc.node(n) {
-                Some(Node::RowBlock(b)) => b.rows.iter().any(|r| runs(&r.oids)),
-                Some(Node::Row(r)) => runs(&r.oids),
-                _ => false,
-            }
+/// Keeps the items the level holds, looking each up in what the level's node
+/// holds, gathered once: no work per item proportional to the node's size.
+fn retain_valid(doc: &Document, level: Level, items: &mut BTreeSet<u32>) {
+    match (level, level.holder().and_then(|h| doc.node(h))) {
+        (Level::Top, _) => items.retain(|&i| doc.node(i).is_some() && doc.parent(i).is_none()),
+        (Level::Section(s), _) => items.retain(|&i| doc.parent(i) == Some(s)),
+        (Level::Rows(_), Some(Node::RowBlock(b))) => {
+            let rids: BTreeSet<u32> = b.rows.iter().map(|r| r.rid).collect();
+            items.retain(|i| rids.contains(i));
         }
+        (Level::Seats(_), Some(node)) => {
+            let runs: Vec<&[u32; 2]> = match node {
+                Node::RowBlock(b) => b.rows.iter().flat_map(|r| &r.oids).collect(),
+                Node::Row(r) => r.oids.iter().collect(),
+                _ => Vec::new(),
+            };
+            // Runs as half-open ranges, by start: an item is in the last one
+            // starting at or below it, or in none.
+            let mut ranges: Vec<(u64, u64)> = runs
+                .into_iter()
+                .map(|r| (u64::from(r[0]), u64::from(r[0]) + u64::from(r[1])))
+                .collect();
+            ranges.sort_unstable();
+            let mut reach = 0;
+            for r in &mut ranges {
+                reach = r.1.max(reach);
+                r.1 = reach;
+            }
+            items.retain(|&i| {
+                let i = u64::from(i);
+                let at = ranges.partition_point(|r| r.0 <= i);
+                at.checked_sub(1)
+                    .and_then(|k| ranges.get(k))
+                    .is_some_and(|r| i < r.1)
+            });
+        }
+        _ => items.clear(),
     }
 }
 

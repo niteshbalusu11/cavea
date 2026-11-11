@@ -11,7 +11,8 @@ use std::collections::BTreeMap;
 
 use cavea_compiler::Expansion;
 use cavea_compiler::document::{
-    Align, AlphaOverflow, Node, Outline, RowLabels, SeatLabels, Settings, ShapeKind, TableShape,
+    Align, AlphaOverflow, LabelScheme, Node, Outline, RowLabels, SeatLabels, Settings, ShapeKind,
+    TableShape,
 };
 
 use crate::document::{Document, each_node};
@@ -704,7 +705,8 @@ impl PathTokens<'_> {
 }
 
 /// A row block's or row's seats. If its labels do not expand (a user may be
-/// halfway through fixing them), the seats are placed without them.
+/// halfway through fixing them, or a block has more rows than letters can
+/// label in 64 bytes), the seats are placed with plain numbers instead.
 fn expand(node: &Node, overflow: AlphaOverflow) -> Vec<CachedSeat> {
     if let Some(seats) = try_expand(node, overflow) {
         return seats;
@@ -712,7 +714,10 @@ fn expand(node: &Node, overflow: AlphaOverflow) -> Vec<CachedSeat> {
     let mut plain = node.clone();
     match &mut plain {
         Node::RowBlock(b) => {
-            b.row_labels = RowLabels::default();
+            b.row_labels = RowLabels {
+                scheme: LabelScheme::Numeric,
+                ..RowLabels::default()
+            };
             b.seat_labels = SeatLabels::default();
             b.rows.iter_mut().for_each(|r| r.label = None);
             b.seat_overrides.values_mut().for_each(|o| o.label = None);

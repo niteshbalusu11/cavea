@@ -427,6 +427,40 @@ fn hostile_input() {
     assert!(!t.s.editor().gesture_open());
 }
 
+/// Selecting every row or seat of a block of 100,000 rows, then moving the
+/// pointer, costs time in proportion to the block, not its square; the
+/// block's seats are found although its letters run past 64 bytes.
+#[test]
+fn large_block_selection() {
+    let rows: Vec<_> = (0..100_000u32)
+        .map(|i| serde_json::json!({ "rid": 1 + 2 * i, "seats": 1, "oids": [[2 + 2 * i, 1]] }))
+        .collect();
+    let doc = serde_json::from_value(serde_json::json!({
+        "schema": 1, "name": "big", "nextOid": 300_000,
+        "nodes": [{ "id": 0, "type": "rowBlock", "rows": rows }]
+    }))
+    .expect("doc");
+    let mut t = Trace {
+        s: Session::load(doc).expect("load"),
+        time: 0.0,
+    };
+    for level in [Level::Rows(0), Level::Seats(0)] {
+        t.s.select(level, []);
+        t.key(Key::Char('a'), CTRL);
+        assert_eq!(t.s.selection().items().len(), 100_000);
+        for i in 0..50 {
+            t.to(f64::from(i), 0.0, NONE);
+        }
+        t.s.apply(Command::RemoveRows {
+            id: 0,
+            rids: vec![1, 3],
+        })
+        .expect("remove");
+        assert_eq!(t.s.selection().items().len(), 99_998);
+        t.s.undo().expect("undo");
+    }
+}
+
 fn ms(t: std::time::Instant, n: u32) -> f64 {
     t.elapsed().as_secs_f64() * 1000.0 / f64::from(n)
 }

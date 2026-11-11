@@ -199,7 +199,7 @@ The index (`SpatialIndex`) caches each node's bounds in world space and in its o
 - `anchors`: bounds corners, centres and row ends of nodes touching a region, for snapping.
 - `seat_at`: the seat position nearest a point, for rows and seat-edit mode.
 
-An SVG `path` shape's box is that of its end and control points, reflected ones included: a Bézier curve lies in the hull of its control points, so the box holds what the compiler draws. Data that does not parse keeps the points before the error, so the shape can still be selected and fixed.
+A row block or row whose labels do not expand (halfway through an edit, or with more rows than letters label in 64 bytes) is placed with plain numbers, so it can still be picked. An SVG `path` shape's box is that of its end and control points, reflected ones included: a Bézier curve lies in the hull of its control points, so the box holds what the compiler draws. Data that does not parse keeps the points before the error, so the shape can still be selected and fixed.
 
 ### 5.3 Row blocks
 
