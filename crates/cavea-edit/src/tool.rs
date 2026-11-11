@@ -10,10 +10,18 @@ use crate::editor::Editor;
 use crate::index::{P, Quad, Rect, SpatialIndex};
 use crate::selection::{Selection, View};
 
+mod block;
+mod draw;
+mod handles;
 mod select;
 
+pub(crate) use block::{ArcTool, BlockTool};
+pub(crate) use draw::Spot;
+pub use handles::{Corner, Handle, HandleKind, Side};
 pub(crate) use select::{SelectTool, select_all, step_in};
 
+#[cfg(test)]
+mod draw_tests;
 #[cfg(test)]
 mod tests;
 
@@ -33,6 +41,16 @@ pub mod tuning {
     pub const DOUBLE_CLICK_MS: f64 = 300.0;
     /// …if it is also within this distance of it.
     pub const DOUBLE_CLICK_PX: f64 = 24.0;
+    /// How far from a handle's centre a mouse press still takes it…
+    pub const HANDLE_MOUSE: f64 = 6.0;
+    /// …and a touch or pen press.
+    pub const HANDLE_TOUCH: f64 = 14.0;
+    /// How far the rotate handle sits outside the selection frame.
+    pub const ROTATE_OFFSET: f64 = 24.0;
+    /// The most seats a drag may preview in one block (a count, not a
+    /// size): it bounds the work of one pointer move. Typed numbers are
+    /// limited only by `02-domain-model.md` §14.
+    pub const LIVE_SEATS: u32 = 20_000;
 }
 
 /// Held modifier keys. `ctrl` is Cmd on macOS.
@@ -110,6 +128,8 @@ pub enum Key {
     ArrowRight,
     ArrowUp,
     ArrowDown,
+    /// Deletes the last character of a numeric entry.
+    Backspace,
     /// A printable key, lower case: `a` for select all with Ctrl.
     Char(char),
 }
@@ -142,6 +162,8 @@ pub enum Cursor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolId {
     Select,
+    RowBlock,
+    ArcBlock,
 }
 
 /// What the canvas draws over the chart, in chart coordinates; sizes in
@@ -155,6 +177,45 @@ pub struct Overlay {
     pub frame: Option<Quad>,
     /// The selection box being dragged.
     pub marquee: Option<Rect>,
+    /// The select tool's handles on the frame.
+    pub handles: Vec<Handle>,
+    /// The live readout of the gesture in progress, for the status bar.
+    pub readout: Option<Readout>,
+    /// The numbers typed so far during a drag (07 §4, numeric entry).
+    pub entry: String,
+}
+
+/// The numbers a gesture shows while it runs (07 §4). Lengths in chart
+/// units, angles in degrees, clockwise.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Readout {
+    /// A row block: rows, seats in its widest row, and pitches.
+    Block {
+        rows: u32,
+        seats: u32,
+        seat_pitch: f64,
+        row_pitch: f64,
+    },
+    /// An arc block: the front row's radius, the angle its seats span, rows,
+    /// and seats in the front row.
+    Arc {
+        radius: f64,
+        span: f64,
+        rows: u32,
+        seats: u32,
+    },
+    Size {
+        width: f64,
+        height: f64,
+    },
+    Line {
+        length: f64,
+        angle: f64,
+    },
+    /// The angle a rotation has turned the selection by.
+    Rotate {
+        angle: f64,
+    },
 }
 
 /// What a tool works on.
@@ -164,6 +225,8 @@ pub(crate) struct Context<'a> {
     pub(crate) selection: &'a mut Selection,
     /// The floor shown: only its nodes are picked.
     pub(crate) floor: Option<u32>,
+    /// The active category, which new seats take (07 §7).
+    pub(crate) category: Option<&'a str>,
 }
 
 impl Context<'_> {
@@ -193,6 +256,7 @@ pub(crate) trait Tool: std::fmt::Debug {
 
     fn cursor(&self) -> Cursor;
 
-    /// Adds the tool's own overlay (a selection box being dragged).
-    fn overlay(&self, out: &mut Overlay);
+    /// Adds the tool's own overlay (a selection box being dragged, handles,
+    /// a readout) to the selection's.
+    fn overlay(&self, view: &View<'_>, selection: &Selection, out: &mut Overlay);
 }

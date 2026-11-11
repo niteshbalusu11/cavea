@@ -7,10 +7,13 @@ use cavea_compiler::ChartDocument;
 
 use crate::command::{Command, CommandError};
 use crate::document::{Document, LoadError};
+use crate::draft::Draft;
 use crate::editor::{Applied, Editor};
 use crate::index::{Rect, SpatialIndex};
 use crate::selection::{self, Level, Selection};
-use crate::tool::{self, Context, Cursor, Input, Overlay, SelectTool, Tool, ToolId};
+use crate::tool::{
+    self, ArcTool, BlockTool, Context, Cursor, Input, Overlay, SelectTool, Tool, ToolId,
+};
 
 #[derive(Debug)]
 pub struct Session {
@@ -18,6 +21,8 @@ pub struct Session {
     index: SpatialIndex,
     selection: Selection,
     floor: Option<u32>,
+    /// The active category: new seats take it (07 §7).
+    category: Option<String>,
     tool: Box<dyn Tool>,
     tool_id: ToolId,
 }
@@ -26,11 +31,17 @@ impl Session {
     pub fn load(document: ChartDocument) -> Result<Self, LoadError> {
         let editor = Editor::load(document)?;
         let floor = editor.document().floors().first().map(|f| f.id);
+        let category = editor
+            .document()
+            .categories()
+            .first()
+            .map(|c| c.key.clone());
         let mut session = Self {
             editor,
             index: SpatialIndex::new(),
             selection: Selection::default(),
             floor,
+            category,
             tool: Box::new(SelectTool::default()),
             tool_id: ToolId::Select,
         };
@@ -69,8 +80,41 @@ impl Session {
         self.with_tool(|tool, cx| tool.reset(cx));
         self.tool = match id {
             ToolId::Select => Box::new(SelectTool::default()),
+            ToolId::RowBlock => Box::new(BlockTool::default()),
+            ToolId::ArcBlock => Box::new(ArcTool::default()),
         };
         self.tool_id = id;
+    }
+
+    /// The category new seats take; at load, the chart's first.
+    pub fn category(&self) -> Option<&str> {
+        self.category.as_deref()
+    }
+
+    pub fn set_category(&mut self, key: Option<String>) {
+        self.category = key;
+    }
+
+    /// Creates the node a drawing tool would make from these numbers, at the
+    /// end of `parent`'s children (positions in its space), as one undo
+    /// entry, and selects it (07 §15: every tool's result without a
+    /// pointer). At the top level it goes on the floor shown.
+    pub fn insert(&mut self, parent: Option<u32>, draft: &Draft) -> Result<u32, CommandError> {
+        self.reset_tool();
+        let spot = tool::Spot::new(self.editor.document(), parent, self.floor);
+        let node = draft.node(self.category.as_deref(), spot.floor)?;
+        let result = self.editor.apply(Command::CreateNode {
+            parent,
+            index: spot.index,
+            node: Box::new(node),
+        });
+        let id = result.and_then(|a| a.created.first().copied().ok_or(CommandError::Internal));
+        self.settle();
+        if let Ok(id) = id {
+            self.selection
+                .set(self.editor.document(), spot.level(), [id]);
+        }
+        id
     }
 
     /// Passes input to the active tool. A pointer event that is not finite,
@@ -168,9 +212,9 @@ impl Session {
         let mut out = Overlay {
             outlines,
             frame,
-            marquee: None,
+            ..Overlay::default()
         };
-        self.tool.overlay(&mut out);
+        self.tool.overlay(&view, &self.selection, &mut out);
         out
     }
 
@@ -184,6 +228,7 @@ impl Session {
             index: &self.index,
             selection: &mut self.selection,
             floor: self.floor,
+            category: self.category.as_deref(),
         };
         f(self.tool.as_mut(), &mut cx);
         self.settle();

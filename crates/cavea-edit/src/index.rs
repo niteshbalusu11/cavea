@@ -139,7 +139,7 @@ impl Place {
         t: [0.0, 0.0],
     };
 
-    fn of(origin: P, rotation: f64) -> Self {
+    pub(crate) fn of(origin: P, rotation: f64) -> Self {
         let (sin, cos) = (rotation % 360.0).to_radians().sin_cos();
         Self {
             cos,
@@ -155,7 +155,7 @@ impl Place {
     }
 
     /// The rotation alone, for vectors.
-    fn turn(&self, [x, y]: P) -> P {
+    pub(crate) fn turn(&self, [x, y]: P) -> P {
         [x * self.cos - y * self.sin, x * self.sin + y * self.cos]
     }
 
@@ -331,6 +331,20 @@ impl SpatialIndex {
     /// A point in the node's own space, in the world.
     pub fn to_world(&self, id: u32, p: P) -> Option<P> {
         self.items.get(&id).map(|i| i.world.apply(p))
+    }
+
+    /// The node's own space as placed in the world now.
+    pub(crate) fn place(&self, id: u32) -> Option<Place> {
+        self.items.get(&id).map(|i| i.world)
+    }
+
+    /// A world point in the space of `parent`'s children (the world for
+    /// `None`).
+    pub(crate) fn to_local(&self, parent: Option<u32>, p: P) -> P {
+        match parent.and_then(|s| self.items.get(&s)) {
+            Some(item) => item.world.invert(p),
+            None => p,
+        }
     }
 
     /// A world vector in the space of `parent`'s children (the world for

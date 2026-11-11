@@ -13,7 +13,9 @@
 //! property, a row or a seat override is kept and later ones are dropped,
 //! since the first alone restores the state at the start; so a drag of any
 //! length holds one old transform per node. [`Editor::cancel_gesture`]
-//! restores the start and leaves no entry.
+//! restores the start and leaves no entry; the ids the gesture took stay
+//! taken. A tool showing a drawing restarts its own gesture instead
+//! (`rewind_gesture`), which keeps the same ids for the node being drawn.
 
 use std::collections::{HashSet, VecDeque};
 
@@ -40,6 +42,8 @@ struct Gesture {
     inverse: Vec<Op>,
     /// Membership only; never iterated.
     keys: HashSet<Key>,
+    /// The id counter and high-water mark at the start.
+    ids: (u64, u32),
 }
 
 /// What an applied command did that its sender cannot know in advance.
@@ -92,7 +96,10 @@ impl Editor {
         if self.gesture.is_some() {
             return Err(CommandError::GestureOpen);
         }
-        self.gesture = Some(Gesture::default());
+        self.gesture = Some(Gesture {
+            ids: (self.doc.fresh, self.doc.high_water),
+            ..Gesture::default()
+        });
         Ok(())
     }
 
@@ -104,10 +111,24 @@ impl Editor {
     }
 
     /// Restores the state at the start of the gesture; leaves no entry, and
-    /// redo as it was.
+    /// redo as it was. Ids it took are not handed out again.
     pub fn cancel_gesture(&mut self) -> Result<(), CommandError> {
         let g = self.gesture.take().ok_or(CommandError::NoGesture)?;
         self.doc.unwind(g.inverse);
+        Ok(())
+    }
+
+    /// Restores the state at the start of the open gesture, the id counter
+    /// included, and keeps it open: what a tool's preview is replaced with
+    /// gets the ids the old preview had. Only for the tools, whose previews
+    /// no one else holds an id of; outside, only `cancel_gesture`.
+    pub(crate) fn rewind_gesture(&mut self) -> Result<(), CommandError> {
+        let g = self.gesture.as_mut().ok_or(CommandError::NoGesture)?;
+        let inverse = std::mem::take(&mut g.inverse);
+        g.keys.clear();
+        let ids = g.ids;
+        self.doc.unwind(inverse);
+        (self.doc.fresh, self.doc.high_water) = ids;
         Ok(())
     }
 

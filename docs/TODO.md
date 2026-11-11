@@ -268,10 +268,10 @@ Do not start a milestone until the previous one's exit criteria are met.
 ### Tools
 
 - [x] **DSN-011** Select tool: click, shift-click, box, enter and exit nested levels (07 §5.1)
-- [ ] **DSN-012** Move, nudge, rotate with pivot, resize semantics for blocks and shapes (07 §5.1)
+- [x] **DSN-012** Move, nudge, rotate with pivot, resize semantics for blocks and shapes (07 §5.1)
 - [ ] **DSN-013** Hand tool, zoom shortcuts, zoom to selection (07 §4)
-- [ ] **DSN-014** Row block tool with live counts and numeric entry (07 §4)
-- [ ] **DSN-015** Arc block tool (07 §4)
+- [x] **DSN-014** Row block tool with live counts and numeric entry (07 §4)
+- [x] **DSN-015** Arc block tool (07 §4)
 - [ ] **DSN-016** Single row tool with optional bend (07 §4)
 - [ ] **DSN-017** Section tool and automatic outline; convert to polygon (07 §5.5)
 - [ ] **DSN-018** Shape tools: rectangle, ellipse, polygon, line (07 §4)

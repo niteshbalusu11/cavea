@@ -12,6 +12,7 @@
 
 mod command;
 mod document;
+mod draft;
 mod editor;
 mod index;
 mod op;
@@ -21,12 +22,14 @@ mod tool;
 
 pub use command::{ChartProperty, Command, CommandError, End, NodeTransform, Property};
 pub use document::{Changes, Document, LoadError};
+pub use draft::Draft;
 pub use editor::{Applied, Editor, MAX_UNDO};
 pub use index::{Anchor, AnchorKind, CachedSeat, Quad, Rect, Select, SpatialIndex};
 pub use selection::{Level, Selection};
 pub use session::Session;
 pub use tool::{
-    Button, Cursor, Input, Key, Modifiers, Overlay, Pointer, PointerKind, ToolId, tuning,
+    Button, Corner, Cursor, Handle, HandleKind, Input, Key, Modifiers, Overlay, Pointer,
+    PointerKind, Readout, Side, ToolId, tuning,
 };
 
 #[cfg(test)]

@@ -314,7 +314,8 @@ fn drag_move_and_nudge() {
     .expect("turn");
     t.s.select(Level::Section(20), [21]);
     let before = t.s.index().bounds(21).expect("bounds");
-    t.drag([1_000.0, 0.0], [1_010.0, 0.0], NONE);
+    // (Off its centre, where a drag takes the pivot.)
+    t.drag([1_000.0, 20.0], [1_010.0, 20.0], NONE);
     let after = t.s.index().bounds(21).expect("bounds");
     assert!((after.min[0] - before.min[0] - 10.0).abs() < 1e-9);
     assert!((after.min[1] - before.min[1]).abs() < 1e-9);
