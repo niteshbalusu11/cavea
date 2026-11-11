@@ -175,7 +175,7 @@ async fn state(
     Ok(response)
 }
 
-fn frame_body(frame: Frame) -> Response {
+pub(super) fn frame_body(frame: Frame) -> Response {
     let mut response = Body::from(Bytes::from_owner(frame)).into_response();
     response
         .headers_mut()

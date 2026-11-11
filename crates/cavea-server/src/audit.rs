@@ -26,7 +26,7 @@ use tracing::Instrument as _;
 use crate::http::Auth;
 
 /// Every action recorded (`audit_log.action`).
-pub const ACTIONS: [&str; 18] = [
+pub const ACTIONS: [&str; 19] = [
     "console.setup",
     "console.sign_in",
     "console.sign_in_failed",
@@ -41,6 +41,7 @@ pub const ACTIONS: [&str; 18] = [
     "workspace.renamed",
     "api_key.created",
     "api_key.revoked",
+    "api_key.origins_changed",
     "chart.published",
     "chart.archived",
     "event.created",

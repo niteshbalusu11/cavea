@@ -273,6 +273,7 @@ impl Tenant {
             .replace("{workspace}", &self.id)
             .replace("{key}", &self.spare_id)
             .replace("{chart}", &self.chart)
+            .replace("{number}", "1")
             .replace("{hash}", &self.hash)
             .replace("{event}", &self.event)
             .replace("{token}", &self.token)
@@ -743,6 +744,12 @@ const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
         201,
         Some(r#"{"kind":"secret","name":"n"}"#),
     ),
+    (
+        Method::PATCH,
+        "/v1/keys/{key}",
+        200,
+        Some(r#"{"allowed_origins":["https://tickets.example.com"]}"#),
+    ),
     (Method::DELETE, "/v1/keys/{key}", 200, None),
     (Method::GET, "/v1/charts", 200, None),
     (
@@ -768,6 +775,23 @@ const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
     // uploads into its own workspace.
     (Method::POST, "/v1/assets", 201, Some("{png}")),
     (Method::GET, "/v1/public/assets/{asset}", 200, None),
+    // `{asset}` is the image the secret key's cell uploaded above.
+    (
+        Method::PUT,
+        "/v1/charts/{chart}/versions/{number}/thumbnail",
+        200,
+        Some(r#"{"asset":"{asset}"}"#),
+    ),
+    (Method::GET, "/v1/charts/{chart}/lock", 200, None),
+    // Each cell takes the lock over from the one before; the last to hold it
+    // releases it in the next row.
+    (
+        Method::POST,
+        "/v1/charts/{chart}/lock",
+        200,
+        Some(r#"{"take_over":true}"#),
+    ),
+    (Method::DELETE, "/v1/charts/{chart}/lock", 204, None),
     (Method::GET, "/v1/events", 200, None),
     (Method::GET, "/v1/events?chart={chart}&limit=5", 200, None),
     (
@@ -777,6 +801,7 @@ const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
         Some(r#"{"key":"new-event-{n}","chart":"{chart}"}"#),
     ),
     (Method::GET, "/v1/events/{event}", 200, None),
+    (Method::GET, "/v1/events/{event}/state", 200, None),
     (
         Method::PATCH,
         "/v1/events/{event}",
@@ -953,6 +978,7 @@ const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
 const PERMISSIONS: &[(Method, &str, &str)] = &[
     (Method::GET, "/v1/keys", "developers"),
     (Method::POST, "/v1/keys", "developers"),
+    (Method::PATCH, "/v1/keys/{id}", "developers"),
     (Method::DELETE, "/v1/keys/{id}", "developers"),
     (Method::GET, "/v1/charts", "charts.read"),
     (Method::POST, "/v1/charts", "charts.write"),
@@ -963,10 +989,19 @@ const PERMISSIONS: &[(Method, &str, &str)] = &[
     (Method::POST, "/v1/charts/{chart}/validate", "charts.write"),
     (Method::POST, "/v1/charts/{chart}/publish", "charts.write"),
     (Method::GET, "/v1/charts/{chart}/versions", "charts.read"),
+    (
+        Method::PUT,
+        "/v1/charts/{chart}/versions/{number}/thumbnail",
+        "charts.write",
+    ),
+    (Method::GET, "/v1/charts/{chart}/lock", "charts.read"),
+    (Method::POST, "/v1/charts/{chart}/lock", "charts.write"),
+    (Method::DELETE, "/v1/charts/{chart}/lock", "charts.write"),
     (Method::POST, "/v1/assets", "charts.write"),
     (Method::GET, "/v1/events", "events.read"),
     (Method::POST, "/v1/events", "events.write"),
     (Method::GET, "/v1/events/{event}", "events.read"),
+    (Method::GET, "/v1/events/{event}/state", "events.read"),
     (Method::PATCH, "/v1/events/{event}", "events.write"),
     (Method::DELETE, "/v1/events/{event}", "events.write"),
     (Method::POST, "/v1/hold-tokens", "seats.hold"),
@@ -1456,7 +1491,7 @@ async fn authorisation_matrix() {
                             .replace("{p}", &(n + 300).to_string());
                         request
                             .header(header::CONTENT_TYPE, "application/json")
-                            .body(Body::from(a.path(&body)))
+                            .body(Body::from(a.path(&body).replace("{asset}", &asset)))
                     }
                     None => request.body(Body::empty()),
                 };

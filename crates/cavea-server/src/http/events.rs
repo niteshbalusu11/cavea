@@ -3,7 +3,8 @@
 //! is the customer's event key. Seat operations are in `http::seats`.
 
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tracing::Instrument as _;
@@ -11,11 +12,11 @@ use tracing::Instrument as _;
 use super::charts::Version;
 use super::extract::{Json, Page, Path, Query, check_text, invalid, invalid_field};
 use super::openapi::{Needs, Op, Routes};
+use super::seats::{Find, target};
 use super::staff::Staff;
 use super::{ApiError, AppState, Code, List};
 use crate::audit::{self, Entry};
 use crate::console::Permission;
-use crate::seats::event_id;
 
 pub(super) fn routes() -> Routes {
     let reading = |op: Op| op.needs(Needs::Staff(Permission::EventsRead));
@@ -24,14 +25,31 @@ pub(super) fn routes() -> Routes {
         .add(
             reading(Op::get("/v1/events", "listEvents", "List events"))
                 .about(
-                    "Archived events included, oldest first. The cursor is an event key. \
-`chart` keeps one chart's events; a chart the workspace does not have is `404`.",
+                    "Archived events included unless `archived` says, oldest first unless \
+`order=newest`. The cursor is an event key. `chart` keeps one chart's events; a chart the \
+workspace does not have is `404`. Each event has its `counts` and committed `seq`.",
                 )
                 .page()
                 .query(
                     "chart",
                     serde_json::json!({ "type": "string" }),
                     "A chart's key: only events on one of its versions.",
+                )
+                .query(
+                    "q",
+                    serde_json::json!({ "type": "string", "maxLength": MAX_SEARCH }),
+                    "Events whose key or name contains this text, ignoring case; every \
+character matches itself (no wildcards).",
+                )
+                .query(
+                    "archived",
+                    serde_json::json!({ "type": "boolean" }),
+                    "`true`: archived events only; `false`: unarchived only.",
+                )
+                .query(
+                    "order",
+                    serde_json::json!({ "enum": ["oldest", "newest"] }),
+                    "By creation: `oldest` first (the default) or `newest` first.",
                 )
                 .reply(200, "EventList", "A page of events")
                 .errors(&[404]),
@@ -53,6 +71,32 @@ pub(super) fn routes() -> Routes {
             ))
             .reply(200, "Event", "The event, with `counts`"),
             read,
+        )
+        .add(
+            reading(Op::get(
+                "/v1/events/{event}/state",
+                "eventState",
+                "The event's seat state for staff",
+            ))
+            .about(
+                "08 §8.3, §8.4 for staff: the realtime frames in domain statuses (0 to 15, \
+02 §4.1). Without `after_seq`, or with 0: the manager SNAPSHOT. With it: one manager DELTA from \
+it, the SNAPSHOT when the deltas from it are no longer kept (about 60 s), or `204` when nothing \
+was published after it. Encoding 0 or 1, never 2. `Cache-Control: no-store`.",
+            )
+            .query(
+                "after_seq",
+                serde_json::json!({ "type": "integer", "minimum": 0 }),
+                "The last `seq` the caller has.",
+            )
+            .response(
+                200,
+                "A frame (08 §8.6)",
+                Some(serde_json::json!({ super::realtime::FRAME_TYPE: {} })),
+            )
+            .response(204, "Nothing published after `after_seq`", None)
+            .errors(&[503]),
+            staff_state,
         )
         .add(
             writing(Op::patch(
@@ -166,11 +210,11 @@ impl Settings {
 macro_rules! event_columns {
     () => {
         concat!(
-            "replace(e.id::text, '-', ''), e.key, e.name, c.key, e.settings::text, ",
+            "e.key, e.name, c.key, e.settings::text, ",
             rfc3339!("e", ".archived_at"),
             ", ",
             rfc3339!("e", ".created_at"),
-            ", ",
+            ", e.seq, e.counts, ",
             version_columns!(),
             " FROM ",
         )
@@ -179,17 +223,20 @@ macro_rules! event_columns {
 
 type EventRow = (
     String,
-    String,
     Option<String>,
     String,
     String,
     Option<String>,
     String,
+    i64,
+    Vec<i32>,
     String,
     i32,
     String,
     String,
     String,
+    Option<String>,
+    Option<String>,
 );
 
 /// An event as the API shows it.
@@ -204,31 +251,51 @@ struct Event {
     settings: Value,
     archived_at: Option<String>,
     created_at: String,
-    /// Objects per status: only in `GET /v1/events/{event}`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    counts: Option<Value>,
-    #[serde(skip)]
-    id: String,
+    /// The committed `seq`: it changes exactly when the seat state does.
+    seq: i64,
+    /// Objects per status, committed.
+    counts: Value,
     #[serde(skip)]
     version_id: String,
 }
 
 impl Event {
     fn new(row: EventRow) -> Result<Self, ApiError> {
-        let (id, key, name, chart, settings, archived_at, created_at, v0, v1, v2, v3, v4) = row;
+        let (key, name, chart, settings, archived_at, created_at, seq, counts) =
+            (row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7);
+        let version = Version::new((row.8, row.9, row.10, row.11, row.12, row.13, row.14))?;
         Ok(Self {
             key,
             name,
             chart,
-            version_id: v0.clone(),
-            version: Version::new((v0, v1, v2, v3, v4))?,
+            version_id: version.uuid().to_owned(),
+            counts: counts_json(version.objects()?, &counts),
+            version,
             settings: Settings::parse(&settings)?.effective(),
             archived_at,
             created_at,
-            counts: None,
-            id,
+            seq,
         })
     }
+}
+
+/// `{free, held, booked, blocked, custom}` from `events.counts` (statuses 1
+/// to 15) and the version's object count; a custom status is listed only
+/// when some object has it.
+fn counts_json(objects: i64, counts: &[i32]) -> Value {
+    let n = |code: usize| i64::from(counts.get(code - 1).copied().unwrap_or(0));
+    let taken: i64 = (1..=15).map(n).sum();
+    let custom: Map<String, Value> = (4..=15)
+        .filter(|&code| n(code) != 0)
+        .map(|code| (code.to_string(), n(code).into()))
+        .collect();
+    json!({
+        "free": objects - taken,
+        "held": n(1),
+        "booked": n(2),
+        "blocked": n(3),
+        "custom": custom,
+    })
 }
 
 fn not_found() -> ApiError {
@@ -242,31 +309,63 @@ pub(super) fn archived() -> ApiError {
     )
 }
 
-/// Oldest first; archived events included. `after` is an event key; `$4`,
-/// when not null, a chart key.
-const LIST: &str = concat!(
-    "SELECT ",
-    event_columns!(),
-    "events",
-    " e JOIN chart_versions v ON v.id = e.chart_version_id JOIN charts c ON c.id = v.chart_id
+/// A page of events in creation order (`$cmp` `>` and `$dir` `ASC` for
+/// oldest first). `after` ($2) is an event key; when not null, `$4` a chart
+/// key, `$5` text the key or name contains (ignoring case, no wildcards:
+/// `strpos`, not `LIKE`), `$6` whether archived.
+macro_rules! list_events {
+    ($cmp:literal, $dir:literal) => {
+        concat!(
+            "SELECT ",
+            event_columns!(),
+            "events",
+            " e JOIN chart_versions v ON v.id = e.chart_version_id JOIN charts c ON c.id = v.chart_id
  WHERE e.workspace_id = $1::uuid
-   AND ($2::text IS NULL OR (e.created_at, e.id) >
+   AND ($2::text IS NULL OR (e.created_at, e.id) ",
+            $cmp,
+            "
         (SELECT created_at, id FROM events WHERE workspace_id = $1::uuid AND key = $2))
    AND ($4::text IS NULL OR c.key = $4)
- ORDER BY e.created_at, e.id
+   AND ($5::text IS NULL OR strpos(lower(e.key), lower($5)) > 0
+        OR strpos(lower(coalesce(e.name, '')), lower($5)) > 0)
+   AND ($6::bool IS NULL OR (e.archived_at IS NOT NULL) = $6)
+ ORDER BY e.created_at ",
+            $dir,
+            ", e.id ",
+            $dir,
+            "
  LIMIT $3"
-);
+        )
+    };
+}
+
+const LIST_OLDEST: &str = list_events!(">", "ASC");
+const LIST_NEWEST: &str = list_events!("<", "DESC");
+
+/// The longest search text, in characters: a key or a name is at most 128.
+const MAX_SEARCH: usize = 128;
 
 const CHART_EXISTS: &str =
     "SELECT EXISTS (SELECT FROM charts WHERE workspace_id = $1::uuid AND key = $2)";
 
-/// `?limit=&after=&chart=`.
+/// `?limit=&after=&chart=&q=&archived=&order=`.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ListQuery {
     limit: Option<u32>,
     after: Option<String>,
     chart: Option<String>,
+    q: Option<String>,
+    archived: Option<bool>,
+    order: Option<Order>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Order {
+    #[default]
+    Oldest,
+    Newest,
 }
 
 async fn list(
@@ -275,11 +374,21 @@ async fn list(
     State(state): State<AppState>,
 ) -> Result<axum::Json<List<Event>>, ApiError> {
     let limit = Page::new(query.limit, None).limit()?;
-    let rows: Vec<EventRow> = sqlx::query_as(LIST)
+    let search = query.q.as_deref().filter(|q| !q.is_empty());
+    if search.is_some_and(|q| q.chars().count() > MAX_SEARCH) {
+        return Err(invalid("query", "`q` is longer than 128 characters."));
+    }
+    let sql = match query.order.unwrap_or_default() {
+        Order::Oldest => LIST_OLDEST,
+        Order::Newest => LIST_NEWEST,
+    };
+    let rows: Vec<EventRow> = sqlx::query_as(sql)
         .bind(auth.workspace().uuid())
         .bind(query.after.as_deref())
         .bind(i64::from(limit) + 1)
         .bind(query.chart.as_deref())
+        .bind(search)
+        .bind(query.archived)
         .fetch_all(&state.db)
         .instrument(cavea_telemetry::db_span("list_events"))
         .await?;
@@ -423,13 +532,11 @@ const READ: &str = concat!(
  WHERE e.workspace_id = $1::uuid AND e.key = $2"
 );
 
-const COUNTS: &str = "SELECT status, count(*) FROM object_state
- WHERE event_id = $1::uuid GROUP BY status";
-
-/// The event with its objects counted by status. Counts are the committed
-/// state in PostgreSQL, which is exactly what has been acknowledged: reading
-/// them does not load the event's actor. A hold past its expiry counts as held
-/// until its expiry commits, which a loaded event does at once.
+/// The event with its objects counted by status and its committed `seq`.
+/// Counts are kept by each commit with the rows (`events.counts`), so they
+/// are exactly what has been acknowledged, read without a scan and without
+/// loading the event's actor. A hold past its expiry counts as held until
+/// its expiry commits, which a loaded event does at once.
 async fn read(
     Staff(auth): Staff,
     Path(key): Path<String>,
@@ -442,36 +549,45 @@ async fn read(
         .fetch_optional(&state.db)
         .instrument(cavea_telemetry::db_span("read_event"))
         .await?;
-    let mut event = Event::new(row.ok_or_else(not_found)?)?;
-    let counts: Vec<(i16, i64)> = sqlx::query_as(COUNTS)
-        .bind(&event.id)
-        .fetch_all(&state.db)
-        .instrument(cavea_telemetry::db_span("count_objects"))
-        .await?;
-    let version = event_id(&event.version_id)
-        .ok_or_else(|| ApiError::internal("unreadable chart version id"))?;
-    let chart = super::seats::chart(&state, cavea_engine::ChartVersionId(version.0)).await?;
-    let mut by_name = Map::new();
-    let mut custom = Map::new();
-    let mut taken = 0;
-    // A free object may have a row (for its channel): it is not taken.
-    for (status, count) in counts.into_iter().filter(|(status, _)| *status != 0) {
-        taken += count;
-        match status {
-            1 => by_name.insert("held".into(), count.into()),
-            2 => by_name.insert("booked".into(), count.into()),
-            3 => by_name.insert("blocked".into(), count.into()),
-            code => custom.insert(code.to_string(), count.into()),
-        };
-    }
-    let total = i64::try_from(chart.view.len()).map_err(ApiError::internal)?;
-    let mut counts = json!({ "free": total - taken, "held": 0, "booked": 0, "blocked": 0 });
-    if let Some(counts) = counts.as_object_mut() {
-        counts.extend(by_name);
-        counts.insert("custom".into(), custom.into());
-    }
-    event.counts = Some(counts);
-    Ok(axum::Json(event))
+    Ok(axum::Json(Event::new(row.ok_or_else(not_found)?)?))
+}
+
+/// `?after_seq=`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StateQuery {
+    #[serde(default)]
+    after_seq: Option<u64>,
+}
+
+/// The staff counterpart of the public snapshot and polling (08 §8.3,
+/// §8.4): manager frames, in domain statuses, read from the engine's
+/// published state without a message to the actor (loading the event if it
+/// is not loaded). Never cached: it is the staff's view.
+async fn staff_state(
+    Staff(auth): Staff,
+    Path(key): Path<String>,
+    Query(query): Query<StateQuery>,
+    State(state): State<AppState>,
+) -> Result<Response, ApiError> {
+    let target = target(&state, &auth, Find::Key(&key)).await?;
+    let frame = state
+        .seats
+        .registry
+        .manager_after(target.id, query.after_seq.unwrap_or(0))
+        .await
+        .map_err(|_| {
+            ApiError::new(Code::Unavailable)
+                .with_message("The event's state is unavailable; retry shortly.")
+        })?;
+    let mut response = match frame {
+        Some(frame) => super::realtime::frame_body(frame),
+        None => StatusCode::NO_CONTENT.into_response(),
+    };
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
 }
 
 #[derive(Debug, Deserialize)]

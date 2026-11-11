@@ -140,6 +140,15 @@
           "type": "integer"
         }
       },
+      "NumberPath": {
+        "description": "A chart version's number, from 1.",
+        "in": "path",
+        "name": "number",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
       "TokenPath": {
         "description": "A hold token: `ht_` and 64 lowercase hex digits.",
         "in": "path",
@@ -201,7 +210,7 @@
             }
           }
         },
-        "description": "`already_exists`, `object_not_free`, `object_not_held_by_token`, `object_status_conflict`, `version_conflict`, `upgrade_conflict`, `idempotency_mismatch`",
+        "description": "`already_exists`, `object_not_free`, `object_not_held_by_token`, `object_status_conflict`, `version_conflict`, `chart_locked`, `upgrade_conflict`, `idempotency_mismatch`",
         "headers": {
           "Cavea-Request-Id": {
             "$ref": "#/components/headers/RequestId"
@@ -398,6 +407,7 @@
               "workspace.renamed",
               "api_key.created",
               "api_key.revoked",
+              "api_key.origins_changed",
               "chart.published",
               "chart.archived",
               "event.created",
@@ -622,6 +632,57 @@
         "required": [
           "data",
           "next"
+        ],
+        "type": "object"
+      },
+      "ChartLock": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "description": "The holder's email, for a console member who may edit charts; otherwise `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "description": "The lock ends then unless renewed.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "holder": {
+            "description": "`usr_…`, or `key_…` for an API key.",
+            "type": "string"
+          },
+          "since": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "holder",
+          "email",
+          "since",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "ChartLockState": {
+        "additionalProperties": false,
+        "properties": {
+          "lock": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChartLock"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "lock"
         ],
         "type": "object"
       },
@@ -1014,6 +1075,10 @@
               "null"
             ]
           },
+          "seq": {
+            "description": "The committed `seq`: it changes exactly when the seat state does.",
+            "type": "integer"
+          },
           "settings": {
             "$ref": "#/components/schemas/EventSettings"
           },
@@ -1028,7 +1093,9 @@
           "version",
           "settings",
           "archived_at",
-          "created_at"
+          "created_at",
+          "seq",
+          "counts"
         ],
         "type": "object"
       },
@@ -1597,6 +1664,16 @@
         ],
         "type": "object"
       },
+      "LockChart": {
+        "additionalProperties": false,
+        "properties": {
+          "take_over": {
+            "description": "Take the lock from another who holds a live one. Default false.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "MemberList": {
         "additionalProperties": false,
         "properties": {
@@ -1744,6 +1821,7 @@
               "object_not_held_by_token",
               "object_status_conflict",
               "version_conflict",
+              "chart_locked",
               "upgrade_conflict",
               "idempotency_mismatch",
               "hold_token_expired",
@@ -1902,6 +1980,19 @@
         ],
         "type": "object"
       },
+      "SetThumbnail": {
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "description": "An uploaded image's hash (`POST /v1/assets`): 32 hex digits.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "type": "object"
+      },
       "Stats": {
         "additionalProperties": false,
         "properties": {
@@ -1960,6 +2051,27 @@
         },
         "type": "object"
       },
+      "UpdateKey": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed_origins": {
+            "description": "Origins such as `https://tickets.example.com`; `null` allows every origin.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "allowed_origins"
+        ],
+        "type": "object"
+      },
       "Validation": {
         "additionalProperties": false,
         "properties": {
@@ -2001,6 +2113,20 @@
             "format": "date-time",
             "type": "string"
           },
+          "created_by": {
+            "description": "Who published it: `usr_…` or `key_…`; `null` if not recorded (published with a key before this was).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_by_email": {
+            "description": "In the versions list only: the publisher's email, for a console member whose role may see members, while the publisher is one; otherwise `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "hash": {
             "description": "The public artefact's content hash: 32 hex digits.",
             "type": "string"
@@ -2015,6 +2141,28 @@
           "stats": {
             "$ref": "#/components/schemas/Stats"
           },
+          "thumbnail": {
+            "additionalProperties": false,
+            "description": "An image the publisher attached, or `null`.",
+            "properties": {
+              "hash": {
+                "description": "The asset's hash: 32 hex digits.",
+                "type": "string"
+              },
+              "url": {
+                "description": "`/v1/public/assets/{hash}`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "hash",
+              "url"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "url": {
             "description": "Where the compiled chart is served, relative to the server.",
             "type": "string"
@@ -2026,7 +2174,9 @@
           "hash",
           "url",
           "stats",
-          "created_at"
+          "created_at",
+          "thumbnail",
+          "created_by"
         ],
         "type": "object"
       },
@@ -3719,6 +3869,217 @@
         ]
       }
     },
+    "/v1/charts/{chart}/lock": {
+      "delete": {
+        "description": "Releases the caller's lock; another's is left as it is. Idempotent.",
+        "operationId": "unlockChart",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChartPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Released, or not the caller's",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "secretKey": []
+          },
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Release the editing lock",
+        "tags": [
+          "charts"
+        ],
+        "x-cavea-permission": "charts.write",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "editor"
+        ]
+      },
+      "get": {
+        "description": "07 §9: the designer's editing lock, or `null` when nobody holds a live one.",
+        "operationId": "getChartLock",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChartPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChartLockState"
+                }
+              }
+            },
+            "description": "The lock",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "secretKey": []
+          },
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Who is editing the chart",
+        "tags": [
+          "charts"
+        ],
+        "x-cavea-permission": "charts.read",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "editor",
+          "operator",
+          "viewer"
+        ]
+      },
+      "post": {
+        "description": "07 §9. Takes the lock, or renews it for its holder, for 60 seconds by the database's clock; renew every 20. Held by another and live: `409 chart_locked` with the lock in `details.lock`, unless `take_over` is true. While another holds a live lock, saving the draft and publishing are `409 chart_locked`.",
+        "operationId": "lockChart",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChartPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LockChart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChartLock"
+                }
+              }
+            },
+            "description": "The lock, now the caller's",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "secretKey": []
+          },
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Take, renew or take over the editing lock",
+        "tags": [
+          "charts"
+        ],
+        "x-cavea-permission": "charts.write",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "editor"
+        ]
+      }
+    },
     "/v1/charts/{chart}/publish": {
       "post": {
         "operationId": "publishChart",
@@ -3883,6 +4244,7 @@
     },
     "/v1/charts/{chart}/versions": {
       "get": {
+        "description": "Each version names who published it (`created_by`) and, for a console member whose role may see the workspace's members, their email (`created_by_email`).",
         "operationId": "listVersions",
         "parameters": [
           {
@@ -3955,9 +4317,92 @@
         ]
       }
     },
+    "/v1/charts/{chart}/versions/{number}/thumbnail": {
+      "put": {
+        "description": "`asset` is the hash of an image this workspace uploaded (`POST /v1/assets`). Replaces any thumbnail the version had.",
+        "operationId": "setVersionThumbnail",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChartPath"
+          },
+          {
+            "$ref": "#/components/parameters/NumberPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetThumbnail"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Version"
+                }
+              }
+            },
+            "description": "The version, with its thumbnail",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "secretKey": []
+          },
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Attach a thumbnail to a version",
+        "tags": [
+          "charts"
+        ],
+        "x-cavea-permission": "charts.write",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "editor"
+        ]
+      }
+    },
     "/v1/events": {
       "get": {
-        "description": "Archived events included, oldest first. The cursor is an event key. `chart` keeps one chart's events; a chart the workspace does not have is `404`.",
+        "description": "Archived events included unless `archived` says, oldest first unless `order=newest`. The cursor is an event key. `chart` keeps one chart's events; a chart the workspace does not have is `404`. Each event has its `counts` and committed `seq`.",
         "operationId": "listEvents",
         "parameters": [
           {
@@ -3976,6 +4421,37 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Events whose key or name contains this text, ignoring case; every character matches itself (no wildcards).",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          },
+          {
+            "description": "`true`: archived events only; `false`: unarchived only.",
+            "in": "query",
+            "name": "archived",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "By creation: `oldest` first (the default) or `newest` first.",
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "enum": [
+                "oldest",
+                "newest"
+              ]
             }
           }
         ],
@@ -4782,6 +5258,89 @@
         ]
       }
     },
+    "/v1/events/{event}/state": {
+      "get": {
+        "description": "08 §8.3, §8.4 for staff: the realtime frames in domain statuses (0 to 15, 02 §4.1). Without `after_seq`, or with 0: the manager SNAPSHOT. With it: one manager DELTA from it, the SNAPSHOT when the deltas from it are no longer kept (about 60 s), or `204` when nothing was published after it. Encoding 0 or 1, never 2. `Cache-Control: no-store`.",
+        "operationId": "eventState",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/EventPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "description": "The last `seq` the caller has.",
+            "in": "query",
+            "name": "after_seq",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/vnd.cavea.frame": {}
+            },
+            "description": "A frame (08 §8.6)",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "204": {
+            "description": "Nothing published after `after_seq`",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "secretKey": []
+          },
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "The event's seat state for staff",
+        "tags": [
+          "events"
+        ],
+        "x-cavea-permission": "events.read",
+        "x-cavea-roles": [
+          "owner",
+          "admin",
+          "editor",
+          "operator",
+          "viewer"
+        ]
+      }
+    },
     "/v1/hold-tokens": {
       "post": {
         "description": "Not idempotent: an `Idempotency-Key` is ignored. The token is shown only here.",
@@ -5279,6 +5838,83 @@
           }
         ],
         "summary": "Revoke an API key",
+        "tags": [
+          "keys"
+        ],
+        "x-cavea-permission": "developers",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
+        ]
+      },
+      "patch": {
+        "description": "Replaces the origin allow-list of an unrevoked publishable key; `null` allows every origin. It applies to the key's next request.",
+        "operationId": "updateKeyOrigins",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Key"
+                }
+              }
+            },
+            "description": "The key",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "secretKey": []
+          },
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Change a publishable key's origins",
         "tags": [
           "keys"
         ],
