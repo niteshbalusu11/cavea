@@ -6,7 +6,7 @@
 
 use cavea_core::label::{AlphaOverflow, Scheme, SeatDirection};
 use cavea_core::limits::{
-    MAX_CATEGORIES, MAX_FLOORS, MAX_OBJECTS, MAX_SEATS_PER_ROW, MAX_SECTIONS,
+    MAX_CATEGORIES, MAX_FLOORS, MAX_LABEL_LEN, MAX_OBJECTS, MAX_SEATS_PER_ROW, MAX_SECTIONS,
 };
 
 use crate::codec::{codes, records};
@@ -429,6 +429,9 @@ impl Chart {
         }
         let str_ok = |i: u32| (i as usize) < self.strings.len();
         let opt_str = |i: u32| opt(i, self.strings.len());
+        // Labels stored whole, and label parts, fit `MAX_LABEL_LEN` bytes.
+        let short =
+            |i: u32| i == NONE || self.strings.get(i).is_none_or(|s| s.len() <= MAX_LABEL_LEN);
         let seats = self.seat_pos.len();
         let cats = self.categories.len();
         let indices = self.mesh.indices.len();
@@ -507,7 +510,21 @@ impl Chart {
                 u32::from(r.positions) <= MAX_SEATS_PER_ROW,
                 OverLimit
             );
+            ensure!(tags::ROWS, short(r.label), OverLimit);
             ensure!(tags::ROWS, r.seat_count <= r.positions, BadRange);
+            // Seat ordinals run up to `ordinal_base + positions - 1`: they fit
+            // a u32, and a custom list covers them (§2.5).
+            let end = u64::from(r.ordinal_base) + u64::from(r.positions);
+            let custom = self
+                .label_rules
+                .get(r.label_rule as usize)
+                .filter(|l| l.scheme == Scheme::Custom);
+            ensure!(
+                tags::ROWS,
+                end <= u64::from(u32::MAX)
+                    && custom.is_none_or(|l| end <= u64::from(l.custom_count)),
+                BadRange
+            );
         }
         let row_ranges = self
             .rows
@@ -548,10 +565,12 @@ impl Chart {
                     && within(l.custom_first, l.custom_count, self.strings.len()),
                 BadReference
             );
+            ensure!(tags::LBLR, short(l.prefix) && short(l.suffix), OverLimit);
         }
         let mut next = 0u64;
         for x in &self.label_exceptions {
             ensure!(tags::LBLX, str_ok(x.label), BadReference);
+            ensure!(tags::LBLX, short(x.label), OverLimit);
             ensure!(
                 tags::LBLX,
                 u64::from(x.idx) >= next && (x.idx as usize) < seats,
@@ -574,6 +593,7 @@ impl Chart {
                     && opt(o.section, self.sections.len()),
                 BadReference
             );
+            ensure!(tags::OBJS, short(o.label), OverLimit);
             ensure!(
                 tags::OBJS,
                 within(o.mesh_first, o.mesh_count, indices),
@@ -581,6 +601,12 @@ impl Chart {
             );
         }
         for t in &self.tables {
+            // Exactly one booking target: the seats or the whole-table object.
+            ensure!(
+                tags::TBLS,
+                (t.seat_first == NONE) != (t.object == NONE),
+                BadValue
+            );
             ensure!(tags::TBLS, opt(t.object, self.objects.len()), BadReference);
             ensure!(
                 tags::TBLS,

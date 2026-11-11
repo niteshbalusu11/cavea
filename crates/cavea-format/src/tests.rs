@@ -76,7 +76,7 @@ fn gen_chart(seed: u64, rows: u32, max_row: u16) -> Chart {
         Scheme::Roman,
         Scheme::Custom,
     ];
-    let label_rules = (0..nrules)
+    let label_rules: Vec<SeatLabelRule> = (0..nrules)
         .map(|_| SeatLabelRule {
             scheme: schemes[r.below(5) as usize],
             overflow: if r.chance(50) {
@@ -130,18 +130,27 @@ fn gen_chart(seed: u64, rows: u32, max_row: u16) -> Chart {
                 pt(&mut r)
             };
         }
+        let positions = position + r.below(3) as u16;
+        let ordinal_base = if r.chance(50) { 0 } else { r.below(1000) };
+        // A custom list must cover every position.
+        let pick = r.below(nrules + 1);
+        let label_rule = match label_rules.get(pick as usize) {
+            Some(l)
+                if l.scheme != Scheme::Custom
+                    || ordinal_base + u32::from(positions) <= l.custom_count =>
+            {
+                pick
+            }
+            _ => NONE,
+        };
         row_list.push(Row {
             section: NONE,
             label: s(&mut r),
             seat_first: first,
             seat_count: count,
-            positions: position + r.below(3) as u16,
-            label_rule: if nrules == 0 || r.chance(20) {
-                NONE
-            } else {
-                r.below(nrules)
-            },
-            ordinal_base: r.below(1000),
+            positions,
+            label_rule,
+            ordinal_base,
             direction: directions[r.below(3) as usize],
             shape: SeatShape::Rounded,
             seat_size: 176,
@@ -760,6 +769,46 @@ fn hostile_inputs_give_typed_errors() {
             "segment off its row",
             bad_chart(&|c| c.segments[0].row = 5),
             Some(RSEG),
+            BadRange,
+        ),
+        (
+            "table with no booking target",
+            bad_chart(&|c| {
+                c.tables.push(Table {
+                    seat_first: NONE,
+                    object: NONE,
+                    ..chart.tables[0]
+                })
+            }),
+            Some(TBLS),
+            BadValue,
+        ),
+        (
+            "row label over 64 bytes",
+            bad_chart(&|c| c.rows[0].label = c.strings.push(&"x".repeat(65)).unwrap()),
+            Some(ROWS),
+            OverLimit,
+        ),
+        (
+            "ordinals overflow",
+            bad_chart(&|c| c.rows[0].ordinal_base = u32::MAX - 1),
+            Some(ROWS),
+            BadRange,
+        ),
+        (
+            "custom labels shorter than the row",
+            bad_chart(&|c| {
+                // Covers the row's positions but not with a base of 1.
+                let rule = SeatLabelRule {
+                    scheme: Scheme::Custom,
+                    custom_count: u32::from(c.rows[0].positions),
+                    ..c.label_rules[0]
+                };
+                c.label_rules.push(rule);
+                c.rows[0].label_rule = c.label_rules.len() as u32 - 1;
+                c.rows[0].ordinal_base = 1;
+            }),
+            Some(ROWS),
             BadRange,
         ),
         (
