@@ -698,11 +698,6 @@ impl GpuBackend for GlowBackend {
             ] {
                 gl.tex_parameter_i32(glow::TEXTURE_2D, parameter, value as i32);
             }
-            // Premultiplied, as every program blends (04 §7).
-            web.pixel_storei(
-                web_sys::WebGl2RenderingContext::UNPACK_PREMULTIPLY_ALPHA_WEBGL,
-                i32::from(true),
-            );
             let uploaded = web.tex_image_2d_with_u32_and_u32_and_image_bitmap(
                 glow::TEXTURE_2D,
                 0,
@@ -710,10 +705,6 @@ impl GpuBackend for GlowBackend {
                 glow::RGBA,
                 glow::UNSIGNED_BYTE,
                 image,
-            );
-            web.pixel_storei(
-                web_sys::WebGl2RenderingContext::UNPACK_PREMULTIPLY_ALPHA_WEBGL,
-                i32::from(false),
             );
             gl.bind_texture(glow::TEXTURE_2D, None);
             if uploaded.is_err() || gl.get_error() != glow::NO_ERROR {

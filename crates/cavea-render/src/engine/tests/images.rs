@@ -262,6 +262,32 @@ fn only_the_floor_shown_is_drawn_and_images_no_longer_shown_are_freed() {
 }
 
 #[test]
+fn a_chart_with_more_images_shares_the_budget_again() {
+    // A alone may take the whole budget...
+    let mut alone = decode(&chart(), Artefact::Public).unwrap();
+    alone.images.truncate(1);
+    let (mut e, events) = first_frame(encode(&alone, Artefact::Public).unwrap());
+    let asked = requests(&events);
+    assert_eq!(asked.len(), 1);
+    assert_eq!(u64::from(asked[0].3), BUDGET_PX);
+    e.set_image(asked[0].0, Some(&([2048, 2048], 1)));
+    assert_eq!(e.image_bytes(), BUDGET_PX * 4);
+    // ...so with B beside it, A is asked for again at half, its texture
+    // freed, and both fit.
+    load_again(&mut e);
+    assert_eq!(e.image_bytes(), 0);
+    let again = requests(&tick(&mut e, 16.0));
+    let half = u32::try_from(BUDGET_PX / 2).unwrap();
+    let assets: Vec<_> = again.iter().map(|r| (r.1.as_str(), r.3)).collect();
+    assert_eq!(assets, [(A, half), (B, half)]);
+    for (id, ..) in &again {
+        e.set_image(*id, Some(&([2048, 1024], 2)));
+    }
+    assert!(errors(&mut e).is_empty());
+    assert_eq!(e.image_bytes(), BUDGET_PX * 4);
+}
+
+#[test]
 fn hostile_imgs_values_neither_panic_nor_ask_without_bound() {
     let mut chart = decode(&chart(), Artefact::Public).unwrap();
     let template = chart.images[0];

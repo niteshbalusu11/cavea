@@ -33,6 +33,8 @@ const browser: ImagePlatform = {
   createImageBitmap: (source, options) => createImageBitmap(source, options),
 };
 
+const PREMULTIPLY: ImageBitmapOptions = { premultiplyAlpha: "premultiply" };
+
 /** Images loading at once, at most. */
 const PARALLEL = 2;
 const HASH = /^[0-9a-f]{32}$/;
@@ -69,7 +71,9 @@ export function createImageLoader(
       }
       blob = await response.blob();
     }
-    const bitmap = await platform.createImageBitmap(blob);
+    // Premultiplied, as the engine blends: WebGL ignores its own unpack
+    // settings for a bitmap, so the bitmap must hold it.
+    const bitmap = await platform.createImageBitmap(blob, PREMULTIPLY);
     const { width, height } = bitmap;
     const scale = Math.min(
       request.maxSide / Math.max(width, height),
@@ -80,6 +84,7 @@ export function createImageLoader(
     }
     try {
       return await platform.createImageBitmap(bitmap, {
+        ...PREMULTIPLY,
         resizeWidth: Math.max(1, Math.floor(width * scale)),
         resizeHeight: Math.max(1, Math.floor(height * scale)),
         resizeQuality: "high",

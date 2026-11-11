@@ -79,6 +79,7 @@ impl Images {
     /// for again (a new chart), otherwise not (the designer's live scene).
     pub fn sync(&mut self, chart: &Chart, floor: u32, backend: &mut impl GpuBackend, retry: bool) {
         let mut old = std::mem::take(&mut self.entries);
+        let before = old.len();
         let mut quads = Vec::new();
         let mut bytes = Vec::new();
         let images = chart.images.iter().filter(|i| i.floor == floor);
@@ -115,6 +116,22 @@ impl Images {
         for entry in old {
             if let State::Loaded { texture, .. } = entry.state {
                 backend.destroy(ResourceId::Texture(texture));
+            }
+        }
+        // More images share the budget: what was loaded or asked for under a
+        // larger share is asked for again under the new one (an answer to the
+        // old request is then stale), so the budget always holds them all.
+        if self.entries.len() > before {
+            let share = BUDGET_PX / self.entries.len() as u64;
+            for entry in &mut self.entries {
+                match entry.state {
+                    State::Requested(_) => entry.state = State::Wanted,
+                    State::Loaded { texture, px } if px > share => {
+                        backend.destroy(ResourceId::Texture(texture));
+                        entry.state = State::Wanted;
+                    }
+                    _ => {}
+                }
             }
         }
         self.quads = quads;

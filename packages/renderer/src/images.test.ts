@@ -34,6 +34,7 @@ function fakePlatform(size: [number, number] = [100, 50]) {
   const fetched: string[] = [];
   const signals: AbortSignal[] = [];
   const bitmaps: FakeBitmap[] = [];
+  const options: Array<ImageBitmapOptions | undefined> = [];
   const platform: ImagePlatform = {
     fetch(url, init) {
       fetched.push(String(url));
@@ -42,11 +43,9 @@ function fakePlatform(size: [number, number] = [100, 50]) {
       }
       return new Promise((resolve) => pending.set(String(url), resolve));
     },
-    createImageBitmap(_source, options) {
-      const bitmap = new FakeBitmap(
-        options?.resizeWidth ?? size[0],
-        options?.resizeHeight ?? size[1],
-      );
+    createImageBitmap(_source, given) {
+      options.push(given);
+      const bitmap = new FakeBitmap(given?.resizeWidth ?? size[0], given?.resizeHeight ?? size[1]);
       bitmaps.push(bitmap);
       return Promise.resolve(bitmap as unknown as ImageBitmap);
     },
@@ -56,7 +55,7 @@ function fakePlatform(size: [number, number] = [100, 50]) {
     pending.delete(url);
     await settle();
   };
-  return { platform, fetched, signals, bitmaps, finish };
+  return { platform, fetched, signals, bitmaps, options, finish };
 }
 
 function loader(platform: ImagePlatform) {
@@ -117,6 +116,8 @@ describe("image loader", () => {
     ]);
     // The full-size decodes are closed too.
     expect(fake.bitmaps.every((b) => b.closed)).toBe(true);
+    // Premultiplied, decoded and resized: WebGL ignores its unpack settings for a bitmap.
+    expect(fake.options.map((o) => o?.premultiplyAlpha)).toEqual(Array(4).fill("premultiply"));
   });
 
   test("destroy during a load aborts it and answers nothing", async () => {

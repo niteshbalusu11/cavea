@@ -1,5 +1,5 @@
 // The `image` program (docs/04-renderer.md §7 pass 2): background images,
-// one quad each, the texture (premultiplied when uploaded) times the image's
+// one quad each, the texture (decoded premultiplied by the host) times the image's
 // opacity. Translated to GLSL ES 3.00 by build.rs; the instance layout is
 // src/image.rs.
 

@@ -247,7 +247,9 @@ pub trait GpuBackend {
     type Image;
     /// Its size in pixels.
     fn image_size(image: &Self::Image) -> [u32; 2];
-    /// An RGBA8 texture with linear sampling from `image`, premultiplied.
+    /// An RGBA8 texture with linear sampling from `image`, as it is: the
+    /// host decodes it premultiplied (WebGL ignores its unpack settings for
+    /// an `ImageBitmap`).
     fn create_image_texture(&mut self, image: &Self::Image) -> Result<TextureId, BackendError>;
     fn caps(&self) -> Caps;
     fn create_buffer(&mut self, desc: BufferDesc, data: &[u8]) -> Result<BufferId, BackendError>;

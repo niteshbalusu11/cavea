@@ -60,7 +60,9 @@ const bitmaps = new Map<string, Promise<ImageBitmap | undefined>>();
 
 async function bitmap(hash: string): Promise<ImageBitmap | undefined> {
   const response = await fetch(`assets/${hash}`);
-  return response.ok ? createImageBitmap(await response.blob()) : undefined;
+  return response.ok
+    ? createImageBitmap(await response.blob(), { premultiplyAlpha: "premultiply" })
+    : undefined;
 }
 
 async function bytes(url: string): Promise<Uint8Array> {
