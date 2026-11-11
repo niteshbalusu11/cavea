@@ -961,7 +961,9 @@ fn selection_view_lists_ids() {
     s.select_all();
     let v = s.selection_view();
     assert_eq!(v.count, 1_500);
-    let first: Vec<u32> = (0..views::SELECTION_IDS as u32).map(|i| 2 + 2 * i).collect();
+    let first: Vec<u32> = (0..views::SELECTION_IDS as u32)
+        .map(|i| 2 + 2 * i)
+        .collect();
     assert_eq!(v.ids, first);
     s.select(Level::Top, vec![600, 8, 42]);
     assert_eq!(s.selection_view().ids, vec![8, 42, 600]);

@@ -76,13 +76,15 @@ export function NumberingPanel(props: { editor: Editor; onClose: () => void }) {
 
   const nodes = () => view()?.nodes ?? [];
   const blocks = () => nodes().filter((n) => n.block).length;
-  // The selection changed: start again from the new targets.
+  /** The selection as a key: any change of it, a step into a block's rows
+   * included, starts the panel again (the edit core ends the preview). */
+  const selection = () => {
+    const sel = editor.views.selection;
+    return `${JSON.stringify(sel.level)} ${sel.count} ${sel.ids.join()}`;
+  };
   createEffect(
     on(
-      () =>
-        nodes()
-          .map((n) => n.id)
-          .join(),
+      selection,
       () => {
         setDraft(EMPTY);
         setError(null);
@@ -100,6 +102,7 @@ export function NumberingPanel(props: { editor: Editor; onClose: () => void }) {
     const d = draft();
     const targets = nodes().length;
     void editor.views.status.revision;
+    void selection();
     clearTimeout(timer);
     if (targets === 0) {
       setPreview(null);

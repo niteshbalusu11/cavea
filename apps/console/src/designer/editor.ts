@@ -106,7 +106,8 @@ export function createEditor(session: Session, onPanic: (message: string) => voi
     {
       set(view, value) {
         if (set === null) first[view] = value;
-        else set(view, reconcile(value, { key: "id" }) as never);
+        // Categories are known by their key; everything else by its id.
+        else set(view, reconcile(value, { key: view === "categories" ? "key" : "id" }) as never);
       },
     },
     browserScheduler,

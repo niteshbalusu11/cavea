@@ -349,7 +349,9 @@ export function ColorField(props: {
     setText(null);
     if (value !== null && !HEX.test(value)) return setError(msg("field.badHex"));
     const v = value === null ? null : value.toUpperCase();
-    setError(v === (props.value?.toUpperCase() ?? null) ? null : props.onCommit(v));
+    // A mixed selection takes any value, "None" included.
+    const same = props.mixed !== true && v === (props.value?.toUpperCase() ?? null);
+    setError(same ? null : props.onCommit(v));
   };
   const none = () => props.mixed !== true && props.value === null;
   return (
