@@ -140,8 +140,11 @@ impl LabelRule<'_> {
             .ok_or(LabelError::Overflow)
     }
 
-    /// Writes prefix, the label at `ordinal`, and suffix.
+    /// Writes prefix, the label at `ordinal`, and suffix: at most
+    /// [`MAX_LABEL_LEN`] bytes, whatever `out` is. On error `out` may hold part
+    /// of the label.
     pub fn write<W: Write>(&self, ordinal: u32, out: &mut W) -> Result<(), LabelError> {
+        let out = &mut Limited { out, len: 0 };
         out.write_str(self.prefix)
             .map_err(|_| LabelError::TooLong)?;
         if self.scheme == Scheme::Custom {
@@ -253,13 +256,29 @@ pub fn write_value<W: Write>(
 /// Letters are case-insensitive. Returns `None` for text the scheme cannot produce.
 pub fn parse_value(scheme: Scheme, overflow: AlphaOverflow, text: &str) -> Option<u32> {
     match scheme {
-        Scheme::Numeric | Scheme::Odd | Scheme::Even => text
-            .bytes()
-            .all(|b| b.is_ascii_digit())
-            .then(|| text.parse().ok())?,
+        // Canonical spellings only, as written: `"01"` is not the label `"1"`.
+        Scheme::Numeric | Scheme::Odd | Scheme::Even => (text.bytes().all(|b| b.is_ascii_digit())
+            && (text == "0" || !text.starts_with('0')))
+        .then(|| text.parse().ok())?,
         Scheme::Alpha | Scheme::AlphaLower => parse_alpha(text, overflow),
         Scheme::Roman => parse_roman(text),
         Scheme::Custom => None,
+    }
+}
+
+/// Fails once more than [`MAX_LABEL_LEN`] bytes have been written through it.
+struct Limited<'w, W> {
+    out: &'w mut W,
+    len: usize,
+}
+
+impl<W: Write> Write for Limited<'_, W> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.len = self.len.saturating_add(s.len());
+        if self.len > MAX_LABEL_LEN {
+            return Err(fmt::Error);
+        }
+        self.out.write_str(s)
     }
 }
 
@@ -493,6 +512,8 @@ mod tests {
         );
         assert_eq!(parse_value(Roman, Double, "IIII"), None);
         assert_eq!(parse_value(Alpha, Double, "AB"), None);
+        assert_eq!(parse_value(Scheme::Numeric, Double, "01"), None);
+        assert_eq!(parse_value(Scheme::Numeric, Double, "0"), Some(0));
     }
 
     #[test]
@@ -700,6 +721,13 @@ mod tests {
         r.write(41, &mut buf).unwrap();
         assert_eq!(buf.as_str(), "Row-42");
         assert!(LabelBuf::try_from("x".repeat(65).as_str()).is_err());
+        // The limit holds for any writer, prefix and suffix included.
+        let long_prefix = "p".repeat(64);
+        let r = LabelRule {
+            prefix: &long_prefix,
+            ..rule(Scheme::Numeric, 1, 1)
+        };
+        assert_eq!(r.write(0, &mut String::new()), Err(LabelError::TooLong));
         assert_eq!(
             LabelBuf::try_from("é".repeat(32).as_str())
                 .unwrap()
