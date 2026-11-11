@@ -12,9 +12,9 @@
 //!   nothing and may not be framed, and same-origin resource policy.
 //! - [`Family::Console`]: everything else, the console's pages and files from
 //!   `web`: the console's Content Security Policy, which allows only this
-//!   origin's scripts, styles, images and connections, WebAssembly
-//!   compilation (`'wasm-unsafe-eval'`), and no inline script or style, no
-//!   `eval`, no plugin, no framing, no `<base>`.
+//!   origin's scripts, stylesheets, images and connections, WebAssembly
+//!   compilation (`'wasm-unsafe-eval'`) and `style` attributes, and no
+//!   inline script, `<style>` element, `eval`, plugin, framing or `<base>`.
 //!
 //! Every family: `X-Content-Type-Options: nosniff`, `Referrer-Policy:
 //! no-referrer`, and `Strict-Transport-Security` when `CAVEA_PUBLIC_URL` is
@@ -57,11 +57,15 @@ pub fn family(path: &str) -> Family {
     }
 }
 
-/// The console's policy. `img-src` allows `blob:` and `data:` for images the
-/// designer makes from a user's own file; `connect-src 'self'` covers the
-/// API, the WebAssembly and atlas fetches, and same-origin WebSockets.
+/// The console's policy. Scripts: this origin's files and WebAssembly
+/// compilation only. Styles: this origin's stylesheets, and `style`
+/// attributes (`style-src-attr 'unsafe-inline'`, D-66), which Solid writes
+/// into its compiled templates for a constant `style={{…}}`; no `<style>`
+/// element. `connect-src 'self'` covers the API, the WebAssembly and atlas
+/// fetches (the atlas is decoded from a fetched blob, which `img-src` does
+/// not govern), and same-origin WebSockets.
 pub const CONSOLE_CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; \
-style-src 'self'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self'; \
+style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self'; \
 worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; \
 frame-ancestors 'none'";
 
