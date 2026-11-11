@@ -92,6 +92,8 @@ const VERTEX: usize = 12;
 /// Ids of the overlay's strings in the dynamic atlas: far above any chart
 /// string's index, so the two never share a key.
 const STRING_BASE: u32 = 0xF000_0000;
+/// Overlay strings remembered at most.
+const MAX_STRINGS: usize = 1024;
 
 /// What the triangles were made for.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -113,8 +115,11 @@ pub struct Batch {
     text_buf: Option<(BufferId, usize)>,
     /// Indices and text instances in the buffers.
     counts: [u32; 2],
-    /// The overlay's strings and their atlas ids.
+    /// The overlay's recent strings and their atlas ids, and the next id:
+    /// ids are never reused for another string, and the map is forgotten
+    /// past `MAX_STRINGS` (readouts change on every drag step).
     strings: BTreeMap<String, u32>,
+    next: u32,
     /// Builds, for tests.
     pub builds: u32,
 }
@@ -185,6 +190,7 @@ impl Batch {
             indices: &mut self.indices,
             // One device pixel in CSS pixels: the fringe.
             fringe: 1.0 / ratio.max(0.25),
+            view: [0.0, 0.0, size.width as f32, size.height as f32],
         };
         let screen = |p: [f64; 2]| {
             let [x, y] = camera.to_screen(p, size);
@@ -293,8 +299,18 @@ impl Batch {
                     size: em,
                     color,
                 } => {
-                    let next = STRING_BASE + self.strings.len() as u32;
-                    let id = *self.strings.entry(text.clone()).or_insert(next);
+                    if self.strings.len() >= MAX_STRINGS {
+                        self.strings.clear();
+                    }
+                    let id = match self.strings.get(text) {
+                        Some(&id) => id,
+                        None => {
+                            let id = STRING_BASE | (self.next & !STRING_BASE);
+                            self.next = self.next.wrapping_add(1);
+                            self.strings.insert(text.clone(), id);
+                            id
+                        }
+                    };
                     let key = Key {
                         source: Source::String(id),
                         weight: LABEL_WEIGHT,
@@ -457,6 +473,8 @@ struct Tess<'a> {
     vertices: &'a mut Vec<u8>,
     indices: &'a mut Vec<u32>,
     fringe: f32,
+    /// The canvas: segments wholly outside it are left out.
+    view: [f32; 4],
 }
 
 impl Tess<'_> {
@@ -549,8 +567,12 @@ impl Tess<'_> {
     }
 
     /// Segments `width` CSS pixels wide, each with square ends half the
-    /// width long (they cover the joins), and a fringe on every side.
+    /// width long (they cover the joins), and a fringe on both sides. Points
+    /// closer than a device pixel to the last one kept are dropped first: an
+    /// automatic section outline has hundreds of points a pixel apart at
+    /// overview.
     fn polyline(&mut self, pts: &[[f32; 2]], width: f32, color: Rgba) {
+        let pts = self.thin(pts);
         for w in pts.windows(2) {
             if let [a, b] = *w {
                 self.segment(a, b, width, color);
@@ -558,11 +580,64 @@ impl Tess<'_> {
         }
     }
 
+    /// `pts` simplified: points nearer than a device pixel to the point
+    /// kept before them dropped (the last always kept), then those within
+    /// half a device pixel of the line through their neighbours kept
+    /// (Douglas–Peucker), so what is drawn moves by at most half a pixel.
+    fn thin(&self, pts: &[[f32; 2]]) -> Vec<[f32; 2]> {
+        let mut near: Vec<[f32; 2]> = Vec::with_capacity(pts.len());
+        let last = pts.len().saturating_sub(1);
+        for (i, &p) in pts.iter().enumerate() {
+            let far = near
+                .last()
+                .is_none_or(|q| (p[0] - q[0]).hypot(p[1] - q[1]) >= self.fringe);
+            if far {
+                near.push(p);
+            } else if i == last
+                && near.len() > 1
+                && let Some(q) = near.last_mut()
+            {
+                *q = p;
+            }
+        }
+        if near.len() < 3 {
+            return near;
+        }
+        let tolerance = self.fringe / 2.0;
+        let mut keep = vec![false; near.len()];
+        keep[0] = true;
+        keep[near.len() - 1] = true;
+        let mut stack = vec![(0, near.len() - 1)];
+        while let Some((i, j)) = stack.pop() {
+            let (a, b) = (near[i], near[j]);
+            let d = |p: [f32; 2]| match normal(a, b) {
+                Some([dx, dy]) => ((p[0] - a[0]) * dy - (p[1] - a[1]) * dx).abs(),
+                None => (p[0] - a[0]).hypot(p[1] - a[1]),
+            };
+            let far = (i + 1..j)
+                .map(|k| (k, d(near[k])))
+                .max_by(|x, y| x.1.total_cmp(&y.1));
+            if let Some((k, dist)) = far
+                && dist > tolerance
+            {
+                keep[k] = true;
+                stack.push((i, k));
+                stack.push((k, j));
+            }
+        }
+        near.into_iter()
+            .zip(keep)
+            .filter_map(|(p, k)| k.then_some(p))
+            .collect()
+    }
+
     fn dashed(&mut self, pts: &[[f32; 2]], width: f32, [dash, gap]: [f32; 2], color: Rgba) {
         let period = dash + gap;
         if !(dash > 0.0 && period.is_finite() && gap >= 0.0) {
             return self.polyline(pts, width, color);
         }
+        let pts = self.thin(pts);
+        // Dashes run on along the polyline: the phase carries over joins.
         let mut phase = 0.0f32;
         for w in pts.windows(2) {
             let [a, b] = [w[0], w[1]];
@@ -570,18 +645,19 @@ impl Tess<'_> {
             if len <= 0.0 || !len.is_finite() {
                 continue;
             }
+            let at = |t: f32| {
+                [
+                    a[0] + (b[0] - a[0]) * t / len,
+                    a[1] + (b[1] - a[1]) * t / len,
+                ]
+            };
             // At most 4,096 dashes a segment.
             let step = period.max(len / 4096.0);
+            let on = dash * step / period;
             let mut s = -phase;
             while s < len {
-                let (s0, s1) = (s.max(0.0), (s + dash * step / period).min(len));
+                let (s0, s1) = (s.max(0.0), (s + on).min(len));
                 if s1 > s0 {
-                    let at = |t: f32| {
-                        [
-                            a[0] + (b[0] - a[0]) * t / len,
-                            a[1] + (b[1] - a[1]) * t / len,
-                        ]
-                    };
                     self.segment(at(s0), at(s1), width, color);
                 }
                 s += step;
@@ -590,10 +666,20 @@ impl Tess<'_> {
         }
     }
 
+    /// One segment: a core quad and a fringe quad on each side, 8 vertices.
     fn segment(&mut self, a: [f32; 2], b: [f32; 2], width: f32, color: Rgba) {
         let Some([dx, dy]) = normal(a, b) else {
             return;
         };
+        let reach = width / 2.0 + self.fringe;
+        let [x0, y0, x1, y1] = self.view;
+        if a[0].max(b[0]) + reach < x0
+            || a[0].min(b[0]) - reach > x1
+            || a[1].max(b[1]) + reach < y0
+            || a[1].min(b[1]) - reach > y1
+        {
+            return;
+        }
         let f = self.fringe;
         // The solid core is narrower by the fringe, so the line's coverage
         // is its width; a line thinner than a device pixel fades instead.
@@ -610,23 +696,14 @@ impl Tess<'_> {
         let ext = core.max(f / 2.0);
         let a = [a[0] - dx * ext, a[1] - dy * ext];
         let b = [b[0] + dx * ext, b[1] + dy * ext];
-        let at = |p: [f32; 2], s: f32, e: f32| [p[0] + nx * s + dx * e, p[1] + ny * s + dy * e];
-        let (o, i) = (core + f, core);
-        // Outer ring (clear) and core (solid), as a 4 × 4 grid: corners
-        // clear, so the ends fade too.
-        let rows = [-o, -i, i, o];
-        let cols = [(a, -f), (a, 0.0), (b, 0.0), (b, f)];
-        let mut ids = [[0u32; 4]; 4];
-        for (r, &s) in rows.iter().enumerate() {
-            for (c, &(p, e)) in cols.iter().enumerate() {
-                let inner = (1..3).contains(&r) && (1..3).contains(&c);
-                ids[r][c] = self.vertex(at(p, s, e), if inner { color } else { clear });
-            }
+        let at = |p: [f32; 2], s: f32| [p[0] + nx * s, p[1] + ny * s];
+        let mut ids = [[0u32; 2]; 4];
+        for (r, s) in [-(core + f), -core, core, core + f].into_iter().enumerate() {
+            let c = if r == 1 || r == 2 { color } else { clear };
+            ids[r] = [self.vertex(at(a, s), c), self.vertex(at(b, s), c)];
         }
         for r in 0..3 {
-            for c in 0..3 {
-                self.quad([ids[r][c], ids[r][c + 1], ids[r + 1][c + 1], ids[r + 1][c]]);
-            }
+            self.quad([ids[r][0], ids[r][1], ids[r + 1][1], ids[r + 1][0]]);
         }
     }
 }
@@ -693,12 +770,13 @@ mod tests {
         }
     }
 
-    /// Each kind's triangles: a segment is a 4 × 4 grid (16 vertices, 9
-    /// quads) whose core is the width less a device pixel and whose fringe
-    /// is one device pixel, so its box is the width plus a device pixel
-    /// across, at any pixel ratio; a closed line adds its closing segment; a
-    /// dashed one is a segment per dash; a fill is a fan with a fringe quad
-    /// per edge; a circle a disc and a ring; a guide spans the view.
+    /// Each kind's triangles: a segment is 8 vertices and 3 quads (a core
+    /// the width less a device pixel, a fringe one device pixel wide each
+    /// side), so its box is the width plus a device pixel across at any
+    /// pixel ratio; a closed line adds its closing segment; a dashed one is
+    /// a segment per dash; a fill is a fan with a fringe quad per edge; a
+    /// circle a disc and a ring; a guide spans the view; points closer than
+    /// a device pixel are dropped.
     #[test]
     fn geometry_per_kind() {
         let (
@@ -710,14 +788,15 @@ mod tests {
             },
             _,
         ) = build(vec![line(vec![[0.0, 0.0], [50.0, 0.0]], false, None)], 1.0);
-        assert_eq!((i, v, t), (54, 16, 0));
-        near(b, [98.5, 48.5, 151.5, 51.5]);
+        assert_eq!((i, v, t), (18, 8, 0));
+        near(b, [99.5, 48.5, 150.5, 51.5]);
         // At a ratio of 3 the fringe is a third of a CSS pixel.
         let (BatchStats { bounds: b, .. }, _) =
             build(vec![line(vec![[0.0, 0.0], [50.0, 0.0]], false, None)], 3.0);
-        // Core (2 − ⅓) / 2 = ⅚, fringe ⅓: 1 + ⅙ from the line every way.
-        let e = 1.0 + 1.0 / 6.0;
-        near(b, [100.0 - e, 50.0 - e, 150.0 + e, 50.0 + e]);
+        // Core (2 − ⅓) / 2 = ⅚, fringe ⅓: 1 + ⅙ from the line across, the
+        // core's ⅚ beyond its ends.
+        let (e, c) = (1.0 + 1.0 / 6.0, 5.0 / 6.0);
+        near(b, [100.0 - c, 50.0 - e, 150.0 + c, 50.0 + e]);
         let triangle = vec![[0.0, 0.0], [40.0, 0.0], [0.0, 30.0]];
         let (
             BatchStats {
@@ -727,7 +806,15 @@ mod tests {
             },
             _,
         ) = build(vec![line(triangle.clone(), true, None)], 1.0);
-        assert_eq!((i, v), (3 * 54, 3 * 16));
+        assert_eq!((i, v), (3 * 18, 3 * 8));
+        // A point nearer than a device pixel to the last is dropped, then
+        // one within half a pixel of the line through its neighbours.
+        let close = vec![[0.0, 0.0], [20.0, 0.0], [20.4, 0.3], [40.0, 0.2]];
+        let (BatchStats { indices: i, .. }, _) = build(vec![line(close, false, None)], 1.0);
+        assert_eq!(i, 18);
+        let bent = vec![[0.0, 0.0], [20.0, 2.0], [40.0, 0.0]];
+        let (BatchStats { indices: i, .. }, _) = build(vec![line(bent, false, None)], 1.0);
+        assert_eq!(i, 2 * 18);
         let (BatchStats { indices: i, .. }, _) = build(
             vec![line(
                 vec![[0.0, 0.0], [100.0, 0.0]],
@@ -736,7 +823,7 @@ mod tests {
             )],
             1.0,
         );
-        assert_eq!(i, 13 * 54, "a dash every 8 px over 100 px");
+        assert_eq!(i, 13 * 18, "a dash every 8 px over 100 px");
         let square = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
         let (
             BatchStats {
@@ -780,7 +867,7 @@ mod tests {
                 },
                 _,
             ) = build(vec![circle(mark)], 1.0);
-            assert_eq!(i, 30 + 4 * 54, "{mark:?}: fan and four sides");
+            assert_eq!(i, 30 + 4 * 18, "{mark:?}: fan and four sides");
             let b = b.expect("box");
             assert!(
                 b[0] >= 103.0 && b[2] <= 117.0 && b[1] >= 38.0 && b[3] <= 52.0,
@@ -801,8 +888,8 @@ mod tests {
             },
             _,
         ) = build(vec![guide], 1.0);
-        assert_eq!(i, 54);
-        near(b, [119.0, -9.5, 121.0, 109.5]);
+        assert_eq!(i, 18);
+        near(b, [119.0, -8.5, 121.0, 108.5]);
         let arc = Shape::Arc {
             centre: [0.0, 0.0],
             radius: 40.0,
@@ -819,7 +906,7 @@ mod tests {
             },
             _,
         ) = build(vec![arc], 1.0);
-        assert!(i >= 2 * 54);
+        assert!(i >= 2 * 18);
         let b = b.expect("box");
         assert!(
             b[0] > 98.0 && b[1] > 48.0 && b[2] < 142.0 && b[3] < 92.0,
