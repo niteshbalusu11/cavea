@@ -167,6 +167,8 @@ With the web SDK (WEB-001 to WEB-005) and `caveaServer` (WEB-020 to WEB-025), me
 | Loading an event with 100,000 seats into memory | ≤ 300 ms |
 | Best-available over 100,000 seats | ≤ 1 ms |
 
+Server budgets measured locally, 2026-11-11 (TST-024, TST-025), not on the reference hardware: the server pinned to 4 vCPU of an AMD Ryzen 9 7900X shared with other builds, PostgreSQL 18 in Docker on the same machine and SSD, loopback (`13-testing-benchmarks.md` §7.4). Hold request p99 at 2,000 holds a second: **23.0 ms** against a private database, 30.7 ms against the shared one, the server at 1.4 of its 4 cores (the tail follows commit latency on this storage); in L1's stampede, with 55,000 subscribers, **1.25 to 1.31 s**, the server out of CPU fanning out deltas. Snapshot p99: 1.2 to 2.4 ms at L1's scale, 25.6 ms in a fresh process's first connection burst (the kernel's descriptor table growing), 3.3 ms warm at 2,000 new connections a second. Commit to delta delivered p95: 96 ms sustained, 344 to 401 ms in L1. Subscribers: 55,000 held at 1.2 GB of server memory. Commands per event: over 6,000 a second sustained at about 1.4 cores; the actor alone against PostgreSQL measured 45,700 a second earlier.
+
 ### Designer
 
 | Metric | Target |
