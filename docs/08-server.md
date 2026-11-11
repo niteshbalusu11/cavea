@@ -443,11 +443,12 @@ The `SeatStore` trait hides all of this from the engine: `acquire`, `load_event`
 ### 6.1 Conventions
 
 - Base path `/v1`. JSON bodies, `snake_case` fields. Times are RFC 3339 UTC.
-- Authentication: `Authorization: Bearer sk_…` or `Bearer pk_…`. The workspace is implied by the key.
+- Authentication: `Authorization: Bearer sk_…` or `Bearer pk_…` (§11). The workspace is implied by the key.
 - Mutating requests accept `Idempotency-Key` (1 to 255 characters, none of them U+0000; kept 24 hours). Replaying a key with a different body returns `409 idempotency_mismatch`.
 - For seat commands the engine does this atomically with the command. The handler computes a 32-byte fingerprint of the request (method, path, body), looks the key up in `idempotency` first and, if found, replays or mismatches without reaching the actor; otherwise it submits the command with the key, the fingerprint and the time of that lookup. The actor keeps an in-memory window of its event's records: every keyed command it applies gets a record, refusals included (a refused request replayed later must not succeed), holding the engine's reply exactly as returned, `seq` and per-object failures included. A key in the window replays that reply or fails with `idempotency_mismatch`, changing nothing; a key not in it is applied. The window is the authority for records not yet visible to the handler's lookup (uncommitted, or committed after it) and the store for everything older. Records are written in the commit (§4.4 statement 8) and loaded with the event (§4.7 step 3), so a retry after a lost reply and a reload returns the original reply. A record matches for 24 hours from when its command was applied. The window holds at most 50,000 records. To make room it drops the oldest only if they were already a minute old at the command's store lookup, never by the time the command is processed: a record the lookup could not see was committed after it (commits time out well within a minute), so it is still in the window however long the command waited in the mailbox. When no record qualifies, the new key is refused `503 overloaded` and the caller looks it up again. `overloaded`, `unavailable`, an invalid key and a mismatch write no record. A key is per workspace, but the engine checks it per event: two events given the same new key at the same moment both apply, and the store keeps the first record.
 - Objects are addressed by label. A request may instead send `{"version": "<hash>", "idx": [..]}`.
-- Lists use cursor pagination: `?limit=100&after=<cursor>`; responses carry `next`.
+- Lists use cursor pagination: `?limit=100&after=<cursor>` (`limit` 1 to 100, default 100). A list response is `{"data": [..], "next": "<cursor>"}`, oldest first; `next` is the id of the last item when another page may follow, else `null`, and is passed back as `after`. Server-generated ids are `ws_` or `key_` and 32 hex digits.
+- Request limits (`12-security-licensing.md` T19): a body is at most 256 KiB unless its route sets a larger limit; JSON arrays and objects nest at most 32 deep, checked by a scan of the raw bytes before parsing; a command names at most 1,000 objects (`02-domain-model.md` §14). Name and customer key fields are 1 to 128 characters without U+0000.
 - Every response, errors and 404s included, carries `Cavea-Request-Id`. The server generates `req_` and 32 lowercase hex digits. A caller may send its own `Cavea-Request-Id` to correlate with its logs: the server adopts it only if it is 1 to 64 characters from `A-Z a-z 0-9 . _ -`, and otherwise ignores it and generates one. An adopted id is not guaranteed unique.
 - The OpenAPI 3.1 document is served at `/v1/openapi.json`.
 
@@ -513,10 +514,13 @@ Secret key unless marked.
 
 | Method and path | Purpose |
 |---|---|
-| `GET/POST/DELETE /v1/keys` | API keys |
+| `GET /v1/keys` | List the workspace's API keys, revoked ones included; never the key or its hash |
+| `POST /v1/keys` | Create (`kind`: `secret` or `publishable`, `name`, optional `allowed_origins` for publishable keys); `201` with the key, shown only here |
+| `DELETE /v1/keys/{id}` | Revoke; returns the key. Idempotent. A key may not revoke itself |
 | `GET/POST/PATCH/DELETE /v1/webhooks` | Endpoints |
 | `GET /v1/webhooks/{id}/deliveries`, `POST …/deliveries/{id}/replay` | Delivery log |
-| `GET/POST /v1/workspaces` | Requires an admin key |
+| `GET /v1/workspaces` | List workspaces. Admin key |
+| `POST /v1/workspaces` | Create (`key`, `name`); `201` with the workspace and its first secret key, shown only here. Admin key |
 | `POST /v1/embed-tokens` | Short-lived token for the embedded designer or manager |
 
 **Public (publishable key, CORS enabled)**
@@ -576,6 +580,33 @@ Idempotency-Key: order-77120
   "ticket_types": { "Orchestra-C-12": "adult", "Orchestra-C-13": "child" } }
 ```
 
+Keys and workspaces (the full key below is a fake):
+
+```http
+POST /v1/workspaces
+Authorization: Bearer <CAVEA_ADMIN_KEY>
+
+{ "key": "acme", "name": "Acme Tickets" }
+```
+
+```json
+{ "id": "ws_4f0c1d9e8b7a4e2f9c3d5a6b7c8d9e0f", "key": "acme", "name": "Acme Tickets",
+  "created_at": "2027-01-10T09:00:00Z",
+  "secret_key": { "id": "key_0a1b2c3d4e5f40718293a4b5c6d7e8f9", "kind": "secret",
+    "name": "Initial secret key", "prefix": "sk_00000000", "allowed_origins": null,
+    "created_at": "2027-01-10T09:00:00Z", "last_used_at": null, "revoked_at": null,
+    "key": "sk_0000000000000000000000000000000000000000000000000000000000000000" } }
+```
+
+```http
+POST /v1/keys
+Authorization: Bearer sk_…
+
+{ "kind": "publishable", "name": "Box office web", "allowed_origins": ["https://tickets.acme.example"] }
+```
+
+`201` with a key object as in `secret_key` above. `GET /v1/keys` returns key objects without `key`; `DELETE /v1/keys/{id}` returns the key object with `revoked_at` set.
+
 ### 6.4 Error codes
 
 | HTTP | `code` | Meaning |
@@ -583,7 +614,8 @@ Idempotency-Key: order-77120
 | 400 | `invalid_request` | Malformed body or parameter |
 | 401 | `unauthorized` | Missing or invalid key |
 | 403 | `forbidden` | Key lacks permission, or origin not allowed |
-| 404 | `not_found` | Unknown chart, event, object or token |
+| 404 | `not_found` | Unknown chart, event, object, token, key or workspace |
+| 409 | `already_exists` | A workspace (later: chart, event) with this key already exists |
 | 409 | `object_not_free` | At least one object is not free |
 | 409 | `object_not_held_by_token` | Book or release named an object the token does not hold |
 | 409 | `object_status_conflict` | An object's status does not allow the change: release without a token of an object that is not booked, or change-status to free of a held or booked object |
@@ -616,7 +648,8 @@ Every error is `application/problem+json` with exactly these members:
 - `code` and `status` always pair as in the table. `message` is for humans and may change; match on `code`.
 - `details` is always an object, empty when there is nothing to add. Engine refusals fill it: `invalid_request` has `reason`; `not_found` has `missing` (`hold_token` or `objects`, with `objects` listing the unresolved references as `{"label"}` or `{"idx"}`); the three object conflicts list `{"idx", "reason"}` per object (`not_free`, `not_held_by_token`, `not_booked`, `not_blocked`); `forbidden` from the engine means the key's kind may not issue the command (`02-domain-model.md` §4.3); `hold_limit_exceeded` has `limit` and `requested`.
 - `request_id` equals the `Cavea-Request-Id` header.
-- An unknown path, and a known path with the wrong method, are `404 not_found`. A body that is not JSON, lacks `Content-Type: application/json`, does not match the expected shape or is over the size limit is `400 invalid_request` with `details.reason` one of `json_syntax`, `content_type`, `json_data`, `body_too_large`, `body_unreadable`.
+- An unknown path, and a known path with the wrong method, are `404 not_found`. A body that is not JSON, lacks `Content-Type: application/json`, does not match the expected shape, is over the size limit or nests too deeply is `400 invalid_request` with `details.reason` one of `json_syntax`, `content_type`, `json_data`, `body_too_large`, `json_depth` (with `limit`), `body_unreadable`. A malformed path parameter is `reason: "path"`, a malformed query parameter or cursor `reason: "query"`, an invalid body field `reason: "invalid_field"` with `field`, and too many objects `reason: "too_many_objects"`. An identifier in the path that cannot exist, or belongs to another workspace, is `404`.
+- `401 unauthorized` has `details.reason`: `missing` (no `Authorization`), `malformed` (not `Bearer <token>`), `invalid` (unknown or revoked key, or not the admin key). `403 forbidden` from authentication has `reason`: `key_kind` (the wrong kind of credential for the route), `origin` (§11), or `self_revocation`.
 - `503 overloaded` carries `Retry-After: 1`.
 
 ## 7. Algorithms
@@ -762,7 +795,21 @@ Live reports read the actor. CSV exports stream from PostgreSQL.
 | Embed token | Embedded designer or manager | Short-lived, scoped to one workspace and one chart or event, with a permission list |
 
 - Session tokens are optional. An event can require them (`require_session: true`), which is the strongest defence against anonymous seat hoarding.
-- Every query is scoped by workspace id taken from the credential, never from the request.
+- Every query is scoped by workspace id taken from the credential, never from the request. In the server the workspace id is obtainable only from an authenticated key (`http::Auth`).
+
+API keys:
+
+- A key is `sk_` or `pk_` and 64 lowercase hex digits: 256 bits from the operating system's secure random source. It is returned once, at creation. Only its SHA-256 (`api_keys.hash`) and its first 11 characters (`prefix`, for display) are stored. A key's id (`key_…`) is not the key.
+- A presented key is found by its SHA-256, so no stored secret is compared byte by byte (12 T16). Unknown and revoked keys are both `401`; a valid key of the wrong kind for the route is `403`. Secret keys are refused on public endpoints and publishable keys everywhere else.
+- `last_used_at` is updated by the lookup itself when it is unset or more than an hour old: accurate to an hour, and at most one write per key per hour.
+- Rotation: create a second key, move the backend to it, revoke the first with it. Both are valid in between.
+- A key may not revoke itself (`403`, `reason: "self_revocation"`). Every revocation is made by another unrevoked secret key, serialised per workspace, so a workspace always keeps at least one secret key.
+- Origin allow-list (publishable keys, 12 T3): up to 50 origins such as `https://tickets.example.com`, compared without regard to case. A request whose `Origin` is not on the list, `null` included, is `403` (`reason: "origin"`). A request without `Origin` is accepted: native apps send none, and a non-browser client can send any `Origin` it likes, so refusing it would stop no attacker. A key without a list accepts every origin.
+
+Admin key and workspaces:
+
+- `CAVEA_ADMIN_KEY` has no default. Set, it must be 32 to 512 printable ASCII characters or the server will not start; unset, the server starts with a warning and the admin endpoints refuse every request (`401`, or `403` for a valid API key, as on any admin route) (`DECISIONS.md` D-24). The presented token is hashed and the digests are compared in constant time. The admin key is checked before API keys; it is never logged.
+- `POST /v1/workspaces` creates the workspace and its first secret key in one statement and returns the key once. From there the workspace manages its own keys.
 
 ## 12. Rate limiting and overload
 
@@ -783,7 +830,7 @@ Live reports read the actor. CSV exports stream from PostgreSQL.
 | `CAVEA_LOG_FORMAT` | `json` | `json` (one object per line, for production) or `text` (readable, for development) |
 | `CAVEA_PUBLIC_URL` | — | External base URL, used in chart URLs and webhooks |
 | `CAVEA_LICENCE` | — | Licence file path or contents |
-| `CAVEA_ADMIN_KEY` | — | Bootstrap admin key |
+| `CAVEA_ADMIN_KEY` | none | The operator's key for `/v1/workspaces`: 32 to 512 printable ASCII characters. Unset, those endpoints refuse every request (§11) |
 | `CAVEA_DB_POOL` | 16 | Connection pool size |
 | `CAVEA_HOLD_TTL` | 900 | Default hold lifetime in seconds |
 | `CAVEA_DELTA_INTERVAL_MS` | 100 | |

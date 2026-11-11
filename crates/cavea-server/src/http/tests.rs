@@ -48,6 +48,7 @@ fn state() -> AppState {
             node_id: "test".to_owned(),
             lease_secs: std::num::NonZeroU32::MIN.saturating_add(14),
             heartbeat_secs: std::num::NonZeroU32::MIN.saturating_add(4),
+            admin_key: None,
         }),
         // Never connects: no route under test reaches the database.
         db: sqlx::postgres::PgPoolOptions::new().connect_lazy_with(Default::default()),
@@ -496,3 +497,58 @@ async fn actor_work_is_tied_to_its_request_in_logs() {
     assert_eq!(record["spans"][0]["request_id"], refused_id);
     assert_eq!(record["spans"][1]["name"], span::APPLY);
 }
+
+/// Bodies over the route's limit, and JSON nested deeper than the depth
+/// limit, are refused before anything is parsed. A megabyte of `[` under a
+/// route whose limit admits it is refused by the depth scan, which allocates
+/// nothing.
+#[tokio::test]
+async fn body_size_and_json_depth_limits() {
+    use super::extract::{DEFAULT_BODY_LIMIT, MAX_JSON_DEPTH};
+    let _serial = serial();
+    let echo = |Json(v): Json<Value>| async move { axum::Json(v) };
+    let app = app(Router::new()
+        .route("/default", post(echo))
+        .route("/large", post(echo).layer(DefaultBodyLimit::max(2 << 20))));
+    let post_json = |uri: &str, body: String| {
+        Request::post(uri)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let string_of = |len: usize| format!("\"{}\"", "x".repeat(len - 2));
+    let nested = |depth: usize| format!("{}{}", "[".repeat(depth), "]".repeat(depth));
+
+    let cases = [
+        (
+            "/default",
+            string_of(DEFAULT_BODY_LIMIT + 1),
+            Some("body_too_large"),
+        ),
+        ("/default", string_of(DEFAULT_BODY_LIMIT), None),
+        ("/large", string_of(2 * DEFAULT_BODY_LIMIT), None),
+        ("/default", nested(MAX_JSON_DEPTH), None),
+        ("/default", nested(MAX_JSON_DEPTH + 1), Some("json_depth")),
+        (
+            "/default",
+            format!("{{\"a\":{}}}", nested(MAX_JSON_DEPTH)),
+            Some("json_depth"),
+        ),
+        // Brackets in strings, escaped quotes included, are not nesting.
+        ("/default", format!("[\"\\\"{}\"]", "[".repeat(100)), None),
+        ("/large", "[".repeat(1 << 20), Some("json_depth")),
+    ];
+    for (uri, body, refused) in cases {
+        let len = body.len();
+        let (response, json) = send(app.clone(), post_json(uri, body)).await;
+        match refused {
+            Some(reason) => {
+                assert_problem(&response, &json, Code::InvalidRequest);
+                assert_eq!(json["details"]["reason"], reason, "{uri} {len}");
+            }
+            None => assert_eq!(response.status(), 200, "{uri} {len}: {json}"),
+        }
+    }
+}
+
+mod api;

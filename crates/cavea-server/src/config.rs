@@ -8,6 +8,8 @@ use std::num::NonZeroU32;
 use std::str::FromStr;
 
 use cavea_telemetry::LogFormat;
+
+use crate::http::AdminKey;
 use sqlx::ConnectOptions as _;
 use sqlx::postgres::PgConnectOptions;
 
@@ -32,6 +34,10 @@ pub struct Config {
     /// `CAVEA_HEARTBEAT_SECS`: how long an idle actor waits before renewing its
     /// lease. Less than the lease.
     pub heartbeat_secs: NonZeroU32,
+    /// `CAVEA_ADMIN_KEY`: the operator's key for the workspace endpoints, 32
+    /// to 512 printable ASCII characters. There is no default: unset, those
+    /// endpoints refuse every request.
+    pub admin_key: Option<AdminKey>,
 }
 
 impl Config {
@@ -57,6 +63,7 @@ impl Config {
             },
             lease_secs: setting("CAVEA_LEASE_SECS", || NonZeroU32::MIN.saturating_add(14))?,
             heartbeat_secs: setting("CAVEA_HEARTBEAT_SECS", || NonZeroU32::MIN.saturating_add(4))?,
+            admin_key: optional("CAVEA_ADMIN_KEY")?,
         }
         .checked()
     }

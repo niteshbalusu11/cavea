@@ -25,6 +25,9 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("cannot bind {}", config.listen))?;
     tracing::info!(addr = %listener.local_addr()?, version = env!("CARGO_PKG_VERSION"), "listening");
+    if config.admin_key.is_none() {
+        tracing::warn!("CAVEA_ADMIN_KEY is not set: the workspace endpoints refuse every request");
+    }
     let state = AppState {
         config: Arc::new(config),
         db,
