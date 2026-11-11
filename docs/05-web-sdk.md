@@ -15,7 +15,7 @@ The public JavaScript surface of the renderer. Everything here is semver-stable 
 | `@cavea/manager-embed` | Helper for embedding the event manager |
 | `@cavea/server-sdk` | Node client for the server's REST API (never used in the browser) |
 
-**What a customer installs** (D-55). `@cavea/renderer` is built by `bun run build` in `packages/renderer` into `dist/`, which is the package (`bun pm pack` in it; publishing is OPS-001). Every file is at the top of the package:
+**What a customer installs** (D-58). `@cavea/renderer` is built by `bun run build` in `packages/renderer` into `dist/`, which is the package (`bun pm pack` in it; publishing is OPS-001). Every file is at the top of the package:
 
 | File | What |
 |---|---|
@@ -521,7 +521,7 @@ Rules for every wrapper:
 - Changing `state` or `chart` identity recreates the map; wrappers warn in development if that happens on every render.
 - Unmounting calls `destroy()`.
 
-**`@cavea/react`** (D-56). `<SeatMap>` takes every option of §3 and callback of §5 as a prop, except `signal` (the mount is the map's lifetime), plus `id`, `className` and `style` for the container `<div>`. React 18 and 19 are peer dependencies.
+**`@cavea/react`** (D-59). `<SeatMap>` takes every option of §3 and callback of §5 as a prop, except `signal` (the mount is the map's lifetime), plus `id`, `className` and `style` for the container `<div>`. React 18 and 19 are peer dependencies.
 
 - **Rendering** returns the empty `<div>` and nothing else, on the server too: the map is created in an effect, a microtask after mount, so React's Strict Mode (mount, unmount, mount in one go) cancels its first mount before anything is fetched or connected, and one map is made.
 - **Setters.** After each render, `pricing`, `theme` and `locale` that changed in value (compared as data, so a new object or array with the same content is no change) go to `setPricing`, `setTheme` and `setLocale`; taken away, they go back to the default (`[]`, `'auto'`, the browser's language). Other options have no setter: a change is ignored with a development warning, and applies when the map is next created. `initialView` is read at creation only, without a warning.
