@@ -272,6 +272,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cavea-loadgen"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "cavea-format",
+ "cavea-testkit",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+]
+
+[[package]]
 name = "cavea-render"
 version = "0.0.0"
 dependencies = [
