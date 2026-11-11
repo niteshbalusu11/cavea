@@ -2,11 +2,9 @@
 //! draft, publish versions (08 §6.2). Secret key; every query is scoped by the
 //! workspace of the key. `{chart}` is the customer's chart key.
 
-use axum::Router;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
 use cavea_compiler::{Finding, Severity};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json, value::RawValue};
@@ -14,25 +12,115 @@ use tracing::Instrument as _;
 
 use super::auth::SecretKey;
 use super::extract::{Json, Page, Path, Query, RawJson, check_text, invalid};
+use super::openapi::{Needs, Op, Routes};
 use super::{ApiError, AppState, Code, List};
 use crate::charts::{self, ChartError, MAX_DRAFT_BYTES};
 
-pub(super) fn routes() -> Router<AppState> {
+pub(super) fn routes() -> Routes {
     // A create body is a draft plus a key and a name of at most 128
     // characters each, however they are escaped.
     let create_limit = DefaultBodyLimit::max(MAX_DRAFT_BYTES + 4096);
-    Router::new()
-        .route("/v1/charts", get(list).post(create).layer(create_limit))
-        .route("/v1/charts/{chart}", get(read).delete(archive))
-        .route(
-            "/v1/charts/{chart}/draft",
-            get(read_draft)
-                .put(save_draft)
-                .layer(DefaultBodyLimit::max(MAX_DRAFT_BYTES)),
+    let secret = |op: Op| op.needs(Needs::Secret);
+    let draft = || {
+        Some(serde_json::json!({
+            "application/json": { "schema": { "$ref": "#/components/schemas/ChartDocument" } },
+        }))
+    };
+    Routes::new()
+        .add(
+            secret(Op::get("/v1/charts", "listCharts", "List charts"))
+                .about("Archived charts included; never drafts. The cursor is a chart key.")
+                .page()
+                .reply(200, "ChartList", "A page of charts"),
+            list,
         )
-        .route("/v1/charts/{chart}/validate", post(validate))
-        .route("/v1/charts/{chart}/publish", post(publish))
-        .route("/v1/charts/{chart}/versions", get(versions))
+        .layered(
+            secret(Op::post("/v1/charts", "createChart", "Create a chart"))
+                .body("CreateChart")
+                .reply(201, "Chart", "The chart")
+                .errors(&[409]),
+            create,
+            |route| route.layer(create_limit),
+        )
+        .add(
+            secret(Op::get("/v1/charts/{chart}", "getChart", "A chart")).reply(
+                200,
+                "Chart",
+                "The chart: metadata, draft etag, published version",
+            ),
+            read,
+        )
+        .add(
+            secret(Op::delete(
+                "/v1/charts/{chart}",
+                "archiveChart",
+                "Archive a chart",
+            ))
+            .about("Idempotent. Versions stay served.")
+            .reply(200, "Chart", "The chart, archived"),
+            archive,
+        )
+        .add(
+            secret(Op::get(
+                "/v1/charts/{chart}/draft",
+                "getDraft",
+                "The draft document",
+            ))
+            .response(200, "The draft, with its etag in `ETag`", draft())
+            .etag(),
+            read_draft,
+        )
+        .layered(
+            secret(Op::put(
+                "/v1/charts/{chart}/draft",
+                "saveDraft",
+                "Replace the draft",
+            ))
+            .about("At most 16 MiB. It must parse as a chart document; it need not validate.")
+            .if_match(true)
+            .raw_body(serde_json::json!({ "required": true, "content": draft() }))
+            .reply(200, "Chart", "The chart, with the new etag also in `ETag`")
+            .etag()
+            .errors(&[409]),
+            save_draft,
+            |route| route.layer(DefaultBodyLimit::max(MAX_DRAFT_BYTES)),
+        )
+        .add(
+            secret(Op::post(
+                "/v1/charts/{chart}/validate",
+                "validateDraft",
+                "Validate the draft",
+            ))
+            .reply(200, "Validation", "The compiler's findings")
+            .errors(&[503]),
+            validate,
+        )
+        .add(
+            secret(Op::post(
+                "/v1/charts/{chart}/publish",
+                "publishChart",
+                "Publish the draft",
+            ))
+            .if_match(false)
+            .reply(201, "Version", "A new version")
+            .reply(
+                200,
+                "Version",
+                "The existing version this draft compiles to",
+            )
+            .errors(&[409, 422, 503]),
+            publish,
+        )
+        .add(
+            secret(Op::get(
+                "/v1/charts/{chart}/versions",
+                "listVersions",
+                "List versions",
+            ))
+            .page()
+            .reply(200, "VersionList", "A page of versions, oldest first"),
+            versions,
+        )
 }
 
 /// `chart_versions` columns in [`VersionRow`] order, for a table aliased `v`.

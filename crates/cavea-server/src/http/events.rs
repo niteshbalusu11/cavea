@@ -2,10 +2,8 @@
 //! Secret key; every query is scoped by the workspace of the key. `{event}`
 //! is the customer's event key. Seat operations are in `http::seats`.
 
-use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::routing::get;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tracing::Instrument as _;
@@ -13,15 +11,56 @@ use tracing::Instrument as _;
 use super::auth::SecretKey;
 use super::charts::Version;
 use super::extract::{Json, Page, Path, Query, check_text, invalid, invalid_field};
+use super::openapi::{Needs, Op, Routes};
 use super::{ApiError, AppState, Code, List};
 use crate::seats::event_id;
 
-pub(super) fn routes() -> Router<AppState> {
-    Router::new()
-        .route("/v1/events", get(list).post(create))
-        .route(
-            "/v1/events/{event}",
-            get(read).patch(update).delete(archive),
+pub(super) fn routes() -> Routes {
+    let secret = |op: Op| op.needs(Needs::Secret);
+    Routes::new()
+        .add(
+            secret(Op::get("/v1/events", "listEvents", "List events"))
+                .about("Archived events included. The cursor is an event key.")
+                .page()
+                .reply(200, "EventList", "A page of events"),
+            list,
+        )
+        .add(
+            secret(Op::post("/v1/events", "createEvent", "Create an event"))
+                .about("Pins the chart's published version, or `version`.")
+                .body("CreateEvent")
+                .reply(201, "Event", "The event")
+                .errors(&[404, 409]),
+            create,
+        )
+        .add(
+            secret(Op::get(
+                "/v1/events/{event}",
+                "getEvent",
+                "An event, with its counts",
+            ))
+            .reply(200, "Event", "The event, with `counts`"),
+            read,
+        )
+        .add(
+            secret(Op::patch(
+                "/v1/events/{event}",
+                "updateEvent",
+                "Change an event's name or settings",
+            ))
+            .body("UpdateEvent")
+            .reply(200, "Event", "The event"),
+            update,
+        )
+        .add(
+            secret(Op::delete(
+                "/v1/events/{event}",
+                "archiveEvent",
+                "Archive an event",
+            ))
+            .about("Idempotent. The event becomes read-only.")
+            .reply(200, "Event", "The event, archived"),
+            archive,
         )
 }
 

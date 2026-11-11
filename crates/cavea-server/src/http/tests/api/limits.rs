@@ -23,7 +23,7 @@ fn limited(pool: &PgPool, clock: &ManualClock, holds: u32, proxies: &str) -> Rou
         None,
     );
     state.limiter = Arc::new(Limiter::new(holds, 3_000));
-    finish(routes(), state)
+    finish(routes().into_router(), state)
 }
 
 const XFF: header::HeaderName = header::HeaderName::from_static("x-forwarded-for");

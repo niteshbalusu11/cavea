@@ -11,7 +11,7 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderValue, Request, Response, StatusCode, header};
 use axum::routing::{get, post};
@@ -79,20 +79,56 @@ fn app(routes: Router<AppState>) -> Router {
     finish(routes, state())
 }
 
+/// Send `request` and read the response, checking both against the OpenAPI
+/// document (`openapi::check`): the response against its route and status,
+/// and a JSON body the server accepted against the route's request schema.
 async fn send(app: Router, request: Request<Body>) -> (Response<Body>, Value) {
+    send_raw(app, request).await.0
+}
+
+/// [`send`], also returning the response body's bytes.
+async fn send_raw(app: Router, request: Request<Body>) -> ((Response<Body>, Value), Bytes) {
+    let method = request.method().to_string();
+    let path = request.uri().path().to_owned();
+    let json_body = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .is_some_and(|t| t.as_bytes().starts_with(b"application/json"));
+    let (request, sent) = if json_body {
+        let (parts, body) = request.into_parts();
+        let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+        (
+            Request::from_parts(parts, Body::from(bytes.clone())),
+            Some(bytes),
+        )
+    } else {
+        (request, None)
+    };
     let response = app.oneshot(request).await.unwrap();
     let (parts, body) = response.into_parts();
-    // A stream does not end: stop at its head.
-    if parts
+    let content_type = parts
         .headers
         .get(header::CONTENT_TYPE)
-        .is_some_and(|t| t == "text/event-stream")
-    {
-        return (Response::from_parts(parts, Body::empty()), Value::Null);
+        .map(|t| t.to_str().unwrap().to_owned());
+    // A stream does not end: stop at its head.
+    let bytes = if content_type.as_deref() == Some("text/event-stream") {
+        Bytes::new()
+    } else {
+        axum::body::to_bytes(body, 1 << 26).await.unwrap()
+    };
+    let checked = super::openapi::check::exchange(
+        &method,
+        &path,
+        sent.as_deref(),
+        parts.status.as_u16(),
+        content_type.as_deref(),
+        &bytes,
+    );
+    if let Err(e) = checked {
+        panic!("the OpenAPI document disagrees: {e}");
     }
-    let bytes = axum::body::to_bytes(body, 1 << 20).await.unwrap();
     let json = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-    (Response::from_parts(parts, Body::empty()), json)
+    ((Response::from_parts(parts, Body::empty()), json), bytes)
 }
 
 fn get_req(uri: &str) -> Request<Body> {
@@ -326,16 +362,17 @@ async fn request_span_logs_id_and_route_template_not_path() {
     let _serial = serial();
     let logs = Captured::default();
     let _guard = logs.install();
-    let app = app(Router::new().route("/v1/events/{event_key}", get(|| async { "ok" })));
+    // Not a documented path, so that `send` does not hold it to the document.
+    let app = app(Router::new().route("/test/events/{event_key}", get(|| async { "ok" })));
 
-    let (response, _) = send(app.clone(), get_req("/v1/events/customer-key-1")).await;
+    let (response, _) = send(app.clone(), get_req("/test/events/customer-key-1")).await;
     assert_eq!(response.status(), 200);
     let id = request_id(&response);
     assert!(id.starts_with("req_") && id.len() == 36, "{id}");
     let span = logs.completed(id);
     assert_eq!(span["name"], span::REQUEST);
     assert_eq!(span["method"], "GET");
-    assert_eq!(span["route"], "/v1/events/{event_key}");
+    assert_eq!(span["route"], "/test/events/{event_key}");
     assert_eq!(span["status"], 200);
     assert!(span["duration_ms"].is_f64());
 
@@ -759,7 +796,7 @@ async fn cors_on_public_routes_only() {
     ] {
         let mut state = state();
         Arc::make_mut(&mut state.config).cors_origins = policy.clone();
-        let app = finish(super::routes(), state);
+        let app = finish(super::routes().into_router(), state);
         let listed = policy != CorsOrigins::Any;
         let expected_allow = if listed { allowed } else { "*" };
         for (method, uri) in public {
@@ -836,6 +873,217 @@ async fn cors_on_public_routes_only() {
         assert_eq!(response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
         assert!(response.headers().get(header::VARY).is_none());
     }
+}
+
+/// The document is whole: unique operation ids, every `$ref` resolves, every
+/// component is used, every error code is listed (08 §6.4), every operation
+/// has a success response and, with a credential, its refusals; and the
+/// schemas use only what `openapi::check` validates.
+#[test]
+fn openapi_document_is_complete() {
+    use super::openapi::check::{doc, validate};
+    let doc = doc();
+    let text = doc.to_string();
+    let mut refs = std::collections::BTreeSet::new();
+    let mut rest = text.as_str();
+    while let Some(at) = rest.find("\"$ref\":\"#") {
+        rest = &rest[at + 9..];
+        let end = rest.find('"').unwrap();
+        let pointer = &rest[..end];
+        assert!(doc.pointer(pointer).is_some(), "{pointer} does not resolve");
+        refs.insert(pointer.to_owned());
+    }
+    for (kind, entries) in doc["components"].as_object().unwrap() {
+        if kind == "securitySchemes" {
+            continue;
+        }
+        for name in entries.as_object().unwrap().keys() {
+            let pointer = format!("/components/{kind}/{name}");
+            assert!(refs.contains(&pointer), "{pointer} is never used");
+        }
+    }
+    let problem = &doc["components"]["schemas"]["Problem"]["properties"]["code"]["enum"];
+    let codes: Vec<&str> = Code::ALL.iter().map(|c| c.as_str()).collect();
+    assert_eq!(problem, &json!(codes));
+    let mut ids = std::collections::HashSet::new();
+    for (path, item) in doc["paths"].as_object().unwrap() {
+        for (method, op) in item.as_object().unwrap() {
+            let id = op["operationId"].as_str().unwrap();
+            assert!(ids.insert(id), "operationId {id} twice");
+            assert!(!op["summary"].as_str().unwrap().is_empty(), "{id}");
+            let statuses: Vec<&String> = op["responses"].as_object().unwrap().keys().collect();
+            assert!(
+                statuses
+                    .iter()
+                    .any(|s| s.starts_with('1') || s.starts_with('2')),
+                "{id}"
+            );
+            if op["security"] != json!([]) {
+                assert!(statuses.contains(&&"401".to_owned()), "{method} {path}");
+                assert!(statuses.contains(&&"403".to_owned()), "{method} {path}");
+            }
+        }
+    }
+    // Every schema is one `check` understands: validating anything against
+    // it reports a refusal or a pass, never an unchecked keyword.
+    for (name, _) in doc["components"]["schemas"].as_object().unwrap() {
+        let schema = json!({ "$ref": format!("#/components/schemas/{name}") });
+        for value in [json!(null), json!({}), json!([]), json!("x"), json!(1)] {
+            if let Err(e) = validate(&schema, &value, name) {
+                assert!(!e.contains("is not checked"), "{e}");
+            }
+        }
+    }
+}
+
+/// The committed `openapi.json` is the document the code builds. When this
+/// fails, run `cargo run -p cavea-server -- openapi > crates/cavea-server/openapi.json`.
+#[test]
+fn openapi_file_is_current() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/openapi.json");
+    let committed = std::fs::read_to_string(path).unwrap_or_default();
+    assert!(
+        committed == super::openapi::text(),
+        "{path} is stale: run `cargo run -p cavea-server -- openapi > crates/cavea-server/openapi.json`"
+    );
+}
+
+/// `GET /v1/openapi.json` serves the document without a credential, cacheable,
+/// with an etag that a revalidation matches.
+#[tokio::test]
+async fn openapi_is_served() {
+    let _serial = serial();
+    let app = router(state());
+    let ((response, json), bytes) = send_raw(app.clone(), get_req("/v1/openapi.json")).await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(&bytes[..], super::openapi::text().as_bytes());
+    assert_eq!(json["openapi"], "3.1.0");
+    assert_eq!(
+        response.headers()[header::CACHE_CONTROL],
+        "public, max-age=300"
+    );
+    let etag = response.headers()[header::ETAG].clone();
+    let request = Request::get("/v1/openapi.json")
+        .header(header::IF_NONE_MATCH, etag)
+        .body(Body::empty())
+        .unwrap();
+    let (response, _) = send(app, request).await;
+    assert_eq!(response.status(), 304);
+}
+
+/// A panic in a handler answers `500 internal_error` with the request id, is
+/// logged once as an error in the request's span without the request's data,
+/// is counted under its route, and leaves the connection and the server
+/// serving: a second request on the same keep-alive connection is answered.
+#[tokio::test]
+async fn a_panicking_handler_answers_500() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let _serial = serial();
+    install_panic_log();
+    let logs = Captured::default();
+    let _guard = logs.install();
+    // With one capturing subscriber alive, `tracing` decides a callsite's
+    // interest from the thread that reaches it first, or rebuilds it: a
+    // failing test's thread, without a subscriber, would cache "never" for
+    // the hook's record. Reach it here (a caught panic), then decide again
+    // from this thread; no other thread rebuilds while `serial` is held.
+    let _ = std::panic::catch_unwind(|| std::panic::panic_any("priming the panic log"));
+    tracing::callsite::rebuild_interest_cache();
+    const MARKER: &str = "request-data-1f0c";
+    let mut state = state();
+    const ADMIN: &str = "test-admin-key-not-a-real-secret-000";
+    Arc::make_mut(&mut state.config).admin_key = Some(ADMIN.parse().unwrap());
+    let routes = super::routes().into_router().route(
+        "/test/panic",
+        post(|body: String| async move {
+            assert!(body.is_empty(), "handler failed on {body}");
+        }),
+    );
+    let app = finish(routes, state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await });
+    let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let mut answers = Vec::new();
+    for request in [
+        format!(
+            "POST /test/panic HTTP/1.1\r\nhost: x\r\ncontent-length: {}\r\n\r\n{MARKER}",
+            MARKER.len()
+        ),
+        "GET /healthz HTTP/1.1\r\nhost: x\r\n\r\n".to_owned(),
+    ] {
+        socket.write_all(request.as_bytes()).await.unwrap();
+        let mut buffer = Vec::new();
+        // Read one response: its head, then `content-length` bytes.
+        loop {
+            let mut chunk = [0; 4096];
+            let n = socket.read(&mut chunk).await.unwrap();
+            assert!(n > 0, "the connection closed");
+            buffer.extend_from_slice(&chunk[..n]);
+            let text = String::from_utf8_lossy(&buffer).to_string();
+            if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                let length: usize = head
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length: ")
+                            .map(str::to_owned)
+                    })
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                if body.len() >= length {
+                    answers.push((head.to_owned(), body.to_owned()));
+                    break;
+                }
+            }
+        }
+    }
+    let (head, body) = &answers[0];
+    assert!(head.starts_with("HTTP/1.1 500"), "{head}");
+    assert!(
+        head.contains("content-type: application/problem+json"),
+        "{head}"
+    );
+    let problem: Value = serde_json::from_str(body).unwrap();
+    assert_eq!(problem["code"], "internal_error");
+    let id = problem["request_id"].as_str().unwrap();
+    assert!(head.contains(&format!("cavea-request-id: {id}")), "{head}");
+    assert!(answers[1].0.starts_with("HTTP/1.1 200"), "{}", answers[1].0);
+    assert_eq!(answers[1].1, "ok");
+
+    let errors: Vec<Value> = logs
+        .records()
+        .into_iter()
+        .filter(|r| r["level"] == "ERROR" && r["payload"] != "priming the panic log")
+        .collect();
+    assert_eq!(errors.len(), 1, "{}", logs.text());
+    assert_eq!(errors[0]["message"], "panic");
+    assert_eq!(errors[0]["spans"][0]["request_id"], id);
+    assert_eq!(errors[0]["spans"][0]["route"], "/test/panic");
+    assert!(errors[0]["location"].as_str().unwrap().contains("tests.rs"));
+    assert!(!logs.text().contains(MARKER), "request data logged");
+    assert_eq!(logs.completed(id)["status"], 500);
+    let metrics = crate::metrics::render(&state);
+    assert!(
+        metrics.contains(r#"cavea_http_requests_total{route="/test/panic",status="500"} 1"#),
+        "{metrics}"
+    );
+    server.abort();
+}
+
+/// The production panic hook (`cavea_telemetry::log_panic`), chained before
+/// the default one so that a failing test still prints its message. Once per
+/// test binary.
+pub(crate) fn install_panic_log() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let default = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            cavea_telemetry::log_panic(info);
+            default(info);
+        }));
+    });
 }
 
 mod api;

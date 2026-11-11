@@ -50,6 +50,8 @@ subtle = { version = "2.6.1", default-features = false }
 # `time` for the commit and compile timeouts; `sync` (already built for
 # cavea-engine) for the compile permits.
 tokio = { workspace = true, features = ["time", "sync"] }
+# `Layer` and `Service` for the panic layer; already built for axum.
+tower.workspace = true
 tracing.workspace = true
 # The WebSocket's error type, to tell an oversized message from a broken
 # connection; the version axum's `ws` already builds.

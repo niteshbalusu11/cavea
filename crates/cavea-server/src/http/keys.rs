@@ -1,20 +1,39 @@
 //! `/v1/keys`: list, create and revoke the API keys of the caller's
 //! workspace (08 §6.2, §11).
 
-use axum::Router;
 use axum::http::StatusCode;
-use axum::routing::{delete, get};
 use serde::{Deserialize, Serialize};
 use tracing::Instrument as _;
 
 use super::auth::{KeyId, KeyKind, NewKey, SecretKey, normalise_origin};
 use super::extract::{Json, Page, Path, Query, check_text, invalid_field};
+use super::openapi::{Needs, Op, Routes};
 use super::{ApiError, AppState, Code, List};
 
-pub(super) fn routes() -> Router<AppState> {
-    Router::new()
-        .route("/v1/keys", get(list).post(create))
-        .route("/v1/keys/{id}", delete(revoke))
+pub(super) fn routes() -> Routes {
+    Routes::new()
+        .add(
+            Op::get("/v1/keys", "listKeys", "List the workspace's API keys")
+                .about("Revoked keys included; never a key or its hash.")
+                .needs(Needs::Secret)
+                .page()
+                .reply(200, "KeyList", "A page of keys"),
+            list,
+        )
+        .add(
+            Op::post("/v1/keys", "createKey", "Create an API key")
+                .needs(Needs::Secret)
+                .body("CreateKey")
+                .reply(201, "KeyCreated", "The key, shown only here"),
+            create,
+        )
+        .add(
+            Op::delete("/v1/keys/{id}", "revokeKey", "Revoke an API key")
+                .about("Idempotent. A key may not revoke itself (`403`, `reason: \"self_revocation\"`).")
+                .needs(Needs::Secret)
+                .reply(200, "Key", "The key, revoked"),
+            revoke,
+        )
 }
 
 /// The most entries in a publishable key's origin allow-list.

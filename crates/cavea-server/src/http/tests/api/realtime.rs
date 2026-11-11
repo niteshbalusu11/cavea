@@ -56,7 +56,7 @@ async fn start(pool: &PgPool, timing: Timing, per_ip: u32, cors: CorsOrigins) ->
     state.seats = Seats::new(pool.clone(), &state.config, ServerClock::System, None);
     state.realtime = Realtime::new(100, per_ip, timing);
     let (seats, realtime) = (state.seats.clone(), state.realtime.clone());
-    let app = finish(routes(), state.clone());
+    let app = finish(routes().into_router(), state.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (stop, stopped) = oneshot::channel();

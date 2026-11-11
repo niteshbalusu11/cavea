@@ -1,22 +1,49 @@
 //! `/v1/workspaces`: list and create workspaces with the admin key (08 §6.2,
 //! §11).
 
-use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 use tracing::Instrument as _;
 
 use super::auth::{AdminKeyAuth, KeyKind, NewKey};
 use super::extract::{Json, Page, Path, Query, check_text};
 use super::keys::{KeyRow, KeyView, key_columns};
+use super::openapi::{Needs, Op, Routes};
 use super::{ApiError, AppState, Code, List};
 
-pub(super) fn routes() -> Router<AppState> {
-    Router::new()
-        .route("/v1/workspaces", get(list).post(create))
-        .route("/v1/workspaces/{workspace}/keys", post(create_key))
+pub(super) fn routes() -> Routes {
+    Routes::new()
+        .add(
+            Op::get("/v1/workspaces", "listWorkspaces", "List workspaces")
+                .needs(Needs::Admin)
+                .page()
+                .reply(200, "WorkspaceList", "A page of workspaces"),
+            list,
+        )
+        .add(
+            Op::post("/v1/workspaces", "createWorkspace", "Create a workspace")
+                .needs(Needs::Admin)
+                .body("CreateWorkspace")
+                .reply(
+                    201,
+                    "WorkspaceCreated",
+                    "The workspace and its first secret key, shown only here",
+                )
+                .errors(&[409]),
+            create,
+        )
+        .add(
+            Op::post(
+                "/v1/workspaces/{workspace}/keys",
+                "mintWorkspaceKey",
+                "Mint a secret key for a workspace",
+            )
+            .needs(Needs::Admin)
+            .body("MintKey")
+            .reply(201, "KeyCreated", "The key, shown only here"),
+            create_key,
+        )
 }
 
 #[derive(Debug, Serialize)]

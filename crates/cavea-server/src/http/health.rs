@@ -12,14 +12,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use axum::Router;
 use axum::extract::State;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
 use sqlx::PgPool;
 use tracing::{Instrument as _, info, warn};
 
+use super::openapi::{Needs, Op, Routes};
 use super::{AdminKeyAuth, AppState};
 
 /// How often the database is probed for readiness.
@@ -27,11 +26,37 @@ pub const PROBE_EVERY: Duration = Duration::from_secs(1);
 /// A probe that takes longer than this fails.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
-pub(super) fn routes() -> Router<AppState> {
-    Router::new()
-        .route("/healthz", get(healthz))
-        .route("/readyz", get(readyz))
-        .route("/metrics", get(metrics))
+pub(super) fn routes() -> Routes {
+    let text = || Some(serde_json::json!({ "text/plain": { "schema": { "type": "string" } } }));
+    Routes::new()
+        .add(
+            Op::get("/healthz", "healthz", "Liveness").response(200, "`ok`", text()),
+            healthz,
+        )
+        .add(
+            Op::get("/readyz", "readyz", "Readiness")
+                .response(200, "`ready`", text())
+                .response(503, "`database unreachable` or `shutting down`", text()),
+            readyz,
+        )
+        .add(
+            Op::get("/metrics", "metrics", "Prometheus metrics")
+                .needs(Needs::Admin)
+                .response(200, "Prometheus text format 0.0.4", text()),
+            metrics,
+        )
+        .add(
+            Op::get("/v1/openapi.json", "openapi", "This document")
+                .response(
+                    200,
+                    "The OpenAPI 3.1 document",
+                    Some(serde_json::json!({ "application/json": { "schema": { "type": "object" } } })),
+                )
+                .etag()
+                .response(304, "Not modified", None)
+                .etag(),
+            super::openapi::serve,
+        )
 }
 
 async fn healthz() -> &'static str {

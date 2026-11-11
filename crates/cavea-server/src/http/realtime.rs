@@ -13,7 +13,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use axum::Router;
 use axum::body::{Body, Bytes, HttpBody};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{FromRequestParts, State};
@@ -21,7 +20,6 @@ use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::map_response;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
 use base64::Engine as _;
 use cavea_engine::{EventId, Frame, Subscription, TokenHash};
 use cavea_format::wire::{self, ClientFrame, CloseReason, WireError};
@@ -32,6 +30,7 @@ use tracing::{Instrument as _, Span, field, info, info_span};
 
 use super::auth::{Auth, ClientIp, QueryKey, has_hex_tail};
 use super::extract::{Path, Query, invalid};
+use super::openapi::{Needs, Op, Routes};
 use super::public::none_match;
 use super::seats::{Find, Target, target, token_hash};
 use super::{ApiError, AppState, Code};
@@ -41,17 +40,59 @@ use crate::realtime::{
     Slot, Stats, Transport, close, run,
 };
 
-pub(super) fn routes() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/v1/public/events/{event}/state",
-            get(state).layer(map_response(no_store_errors)),
+pub(super) fn routes() -> Routes {
+    let binary = |media: &str| Some(serde_json::json!({ media: {} }));
+    Routes::new()
+        .layered(
+            Op::get(
+                "/v1/public/events/{event}/state",
+                "publicState",
+                "Snapshot, or a delta (polling)",
+            )
+            .about(
+                "08 §8.4, §8.5. Without `after_seq`: the public SNAPSHOT frame with \
+`ETag: \"<seq>\"`. With it: one DELTA from it, the SNAPSHOT, or `204` when nothing was published \
+after it. Cacheable for `CAVEA_SNAPSHOT_MAX_AGE` seconds.",
+            )
+            .needs(Needs::QueryKey)
+            .query(
+                "after_seq",
+                serde_json::json!({ "type": "integer", "minimum": 0 }),
+                "The last `seq` the caller has.",
+            )
+            .response(200, "A frame (08 §8.6)", binary(FRAME_TYPE))
+            .etag()
+            .response(204, "Nothing published after `after_seq`", None)
+            .response(304, "Not modified", None)
+            .etag()
+            .errors(&[503]),
+            state,
+            |route| route.layer(map_response(no_store_errors)),
         )
-        .route(
-            "/v1/public/events/{event}/stream",
-            get(stream).layer(map_response(no_store_errors)),
+        .layered(
+            Op::get(
+                "/v1/public/events/{event}/stream",
+                "publicStream",
+                "Server-sent events",
+            )
+            .about("08 §8.4: each `data:` line is a base64 frame (08 §8.6).")
+            .needs(Needs::QueryKey)
+            .response(200, "An event stream", binary("text/event-stream"))
+            .errors(&[503]),
+            stream,
+            |route| route.layer(map_response(no_store_errors)),
         )
-        .route("/v1/public/rt", get(websocket))
+        .add(
+            Op::get("/v1/public/rt", "publicRealtime", "WebSocket")
+                .about(
+                    "Upgrades to a WebSocket speaking the binary protocol of 08 §8, which \
+OpenAPI cannot describe: frames are in 08 §8.1 to §8.6. Without an upgrade request it is `400`.",
+                )
+                .needs(Needs::QueryKey)
+                .response(101, "Switching to the WebSocket protocol", None)
+                .errors(&[400, 503]),
+            websocket,
+        )
 }
 
 /// One frame of 08 §8 as an HTTP body.

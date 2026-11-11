@@ -1,7 +1,8 @@
 //! `cavea-server`: read configuration, start logging, migrate the database,
 //! serve until Ctrl-C or SIGTERM, then stop within 20 seconds (08 §14,
 //! `cavea_server::serve`). `cavea-server verify …` runs the reconciler
-//! instead (13 §3.3, `cavea_server::verify`).
+//! instead (13 §3.3, `cavea_server::verify`); `cavea-server openapi` prints
+//! the OpenAPI document (08 §6.1).
 
 use std::sync::Arc;
 
@@ -30,6 +31,11 @@ fn main() -> anyhow::Result<()> {
         ));
         let _ = std::io::Write::flush(&mut out);
         std::process::exit(i32::from(code));
+    }
+    if args.first().map(String::as_str) == Some("openapi") {
+        let text = cavea_server::http::openapi::text();
+        std::io::Write::write_all(&mut std::io::stdout(), text.as_bytes())?;
+        return Ok(());
     }
     hold_standard_descriptors();
     let config = Config::from_env()?;

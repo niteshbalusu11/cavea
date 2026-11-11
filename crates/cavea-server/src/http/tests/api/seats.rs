@@ -2,6 +2,8 @@
 //! real registry, `PgStore` and chart provider (08 §4.7, §6, §7, §14).
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use cavea_compiler::document::{LabelScheme, Node, SeatDirection, SeatLabels};
@@ -1053,6 +1055,31 @@ async fn chart_provider() {
         assert_problem(&response, &p, Code::Unavailable);
         assert!(logs.text().contains("stored chart version is unreadable"));
         seats.shutdown().await;
+    })
+    .await;
+}
+
+/// A panic inside an event actor fails the request it was applying with
+/// `503 unavailable` (08 §16); the next request reloads the event and is
+/// answered, and the server keeps serving.
+#[tokio::test]
+#[ignore = "needs CAVEA_TEST_DATABASE_URL"]
+async fn a_panic_in_the_actor_fails_its_request_and_the_event_reloads() {
+    let _serial = serial();
+    super::super::install_panic_log();
+    with_db(async move |pool| {
+        let fault = Arc::new(AtomicBool::new(false));
+        let (app, _) = api_with(&pool, Some(ADMIN), ServerClock::Faulty(fault.clone()), "test");
+        let a = Tenant::create(&app, "a").await;
+        let uri = format!("/v1/events/{}/hold", a.event);
+        let hold = |idx: u32| json!({ "hold_token": a.token, "objects": { "version": a.hash, "idx": [idx] } });
+        fault.store(true, std::sync::atomic::Ordering::Relaxed);
+        let (response, problem) = call(&app, Method::POST, &uri, Some(&a.secret), Some(hold(0))).await;
+        fault.store(false, std::sync::atomic::Ordering::Relaxed);
+        assert_problem(&response, &problem, Code::Unavailable);
+        let (response, held) = call(&app, Method::POST, &uri, Some(&a.secret), Some(hold(0))).await;
+        assert_eq!(response.status(), 200, "{held}");
+        assert_eq!(held["objects"].as_array().unwrap().len(), 1);
     })
     .await;
 }
