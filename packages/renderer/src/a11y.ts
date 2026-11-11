@@ -77,8 +77,11 @@ export function createA11y(canvas: HTMLElement, root: HTMLElement, host: A11yHos
   const proxies = [make(canvas, "p0"), make(canvas, "p1")];
   for (const proxy of proxies) {
     proxy.setAttribute("role", "button");
+    proxy.hidden = true;
   }
+  // Read through `aria-describedby`, which reaches hidden elements.
   const help = make(canvas, "h");
+  help.hidden = true;
   const live = make(root, "");
   live.className = "vh";
   live.setAttribute("role", "status");
@@ -94,6 +97,9 @@ export function createA11y(canvas: HTMLElement, root: HTMLElement, host: A11yHos
     const object = focused === null ? null : host.describe(focused);
     if (object === null) {
       canvas.removeAttribute("aria-activedescendant");
+      for (const proxy of proxies) {
+        proxy.hidden = true;
+      }
       return;
     }
     const text = proxyName(object, t, host.prices);
@@ -104,9 +110,12 @@ export function createA11y(canvas: HTMLElement, root: HTMLElement, host: A11yHos
     ) {
       return;
     }
-    const proxy = proxies[next] as HTMLElement;
+    // Only the active proxy is in the tree: a stale name is never found.
+    const [proxy, other] = [proxies[next], proxies[1 - next]] as [HTMLElement, HTMLElement];
     proxy.textContent = text;
+    proxy.hidden = false;
     canvas.setAttribute("aria-activedescendant", proxy.id);
+    other.hidden = true;
     next = 1 - next;
   }
 

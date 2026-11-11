@@ -27,6 +27,8 @@ export const MESSAGES = {
   unavailable: "Unavailable",
   loading: "Loading the seat map…",
   loadFailed: "The seat map could not be loaded.",
+  offline: "You are offline. The seat map will load when you are back online.",
+  contextLost: "The seat map cannot be drawn right now.",
   retry: "Try again",
   soldOut: "Sold out",
   row: "Row {row}",

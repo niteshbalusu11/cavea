@@ -3,6 +3,8 @@
 // in ../assets. The browser decodes it, so the WASM carries no image decoder;
 // the view gets the pixels once, as bytes.
 
+import { httpError } from "./errors.ts";
+
 /** Where to fetch the atlas from: by default the file next to this package. */
 export type GlyphAtlasSource = string | URL;
 
@@ -16,7 +18,7 @@ export async function loadGlyphAtlas(
 ): Promise<Uint8Array> {
   const response = await fetch(source);
   if (!response.ok) {
-    throw new Error(`glyph atlas: HTTP ${response.status}`);
+    throw httpError("glyph atlas", response.status);
   }
   const bitmap = await createImageBitmap(await response.blob(), {
     colorSpaceConversion: "none",

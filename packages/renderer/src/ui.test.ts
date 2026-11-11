@@ -5,7 +5,7 @@ import { customState, type AdapterContext } from "./adapter.ts";
 import { CaveaError, warner } from "./errors.ts";
 import type { RendererEvent } from "./events.ts";
 import type { FakeNode } from "./fakedom.ts";
-import { fakeEnv, flush, loaded, READY, seat } from "./fakes.ts";
+import { fakeEnv, loaded, READY, seat, sleep } from "./fakes.ts";
 import { localeDirection, translator } from "./messages.ts";
 import { validateOptions, type SeatMapOptions, type ThemeName } from "./options.ts";
 import { checkPricing, prices, type CategoryPricing } from "./pricing.ts";
@@ -678,9 +678,10 @@ describe("loading and error states", () => {
     const f = fakeEnv();
     const errors: CaveaError[] = [];
     let attempts = 0;
+    // The first try and three retries fail (05 §9).
     f.env.fetchBytes = () =>
-      attempts++ === 0
-        ? Promise.reject(new Error("HTTP 503"))
+      attempts++ < 4
+        ? Promise.reject(Object.assign(new Error("HTTP 503"), { status: 503 }))
         : Promise.resolve(new Uint8Array([1]));
     let done = false;
     const promise = createMap(f.env, {} as HTMLElement, {
@@ -690,7 +691,7 @@ describe("loading and error states", () => {
     void promise.then(() => (done = true));
     expect(visible(one(f.root, "loading"))).toBe(true);
     f.wasm.resolve(() => f.view.engine);
-    await flush();
+    await sleep(50);
     expect([visible(one(f.root, "loading")), visible(one(f.root, "error")), done]).toEqual([
       false,
       true,
@@ -701,7 +702,7 @@ describe("loading and error states", () => {
     one(f.root, "retry")?.click();
     const map = await promise;
     expect([attempts, visible(one(f.root, "error")), visible(one(f.root, "loading"))]).toEqual([
-      2,
+      5,
       false,
       true,
     ]);

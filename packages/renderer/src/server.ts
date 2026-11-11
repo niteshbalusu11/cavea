@@ -371,15 +371,23 @@ export function serverAdapter(input: CaveaServerOptions, platform: () => Platfor
   }
 
   function eventInfo(): Promise<EventInfo> {
-    info ??= request(eventUrl).then(async (res) => {
+    if (info !== undefined) {
+      return info;
+    }
+    info = request(eventUrl).then(async (res) => {
       if (!res.ok) {
-        throw new Error(`event "${event}": ${said(res, await problem(res))}`);
+        const error = new Error(`event "${event}": ${said(res, await problem(res))}`);
+        throw Object.assign(error, { status: res.status });
       }
       const body = (await res.json()) as EventInfo;
       if (typeof body.chart?.url !== "string") {
         throw new Error(`event "${event}": no chart`);
       }
       return body;
+    });
+    // A failure is not kept: the map tries again (05 §9).
+    info.catch(() => {
+      info = undefined;
     });
     return info;
   }
@@ -813,7 +821,8 @@ export function serverAdapter(input: CaveaServerOptions, platform: () => Platfor
   async function snapshot(): Promise<Uint8Array> {
     const res = await request(`${eventUrl}/state?${keyParam}`, {}, false);
     if (!res.ok) {
-      throw new Error(`snapshot of "${event}": ${said(res, await problem(res))}`);
+      const error = new Error(`snapshot of "${event}": ${said(res, await problem(res))}`);
+      throw Object.assign(error, { status: res.status });
     }
     const bytes = new Uint8Array(await res.arrayBuffer());
     if (bytes[0] !== SNAPSHOT) {

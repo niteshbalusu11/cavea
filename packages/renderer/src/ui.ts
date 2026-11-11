@@ -42,8 +42,11 @@ export interface Ui {
   /** Strings or prices changed: everything shown is rendered again. */
   refresh(): void;
   loading(on: boolean): void;
-  /** Shows the error state; resolves when the buyer asks to retry. */
-  failed(): Promise<void>;
+  /**
+   * Shows the error state with message `id`, and Retry unless `retry` is
+   * false; resolves when the buyer asks to retry (every caller waiting).
+   */
+  failed(id: "loadFailed" | "offline" | "contextLost", retry?: boolean): Promise<void>;
   legend(categories: Array<{ key: string; label: string; color: string; objects: number }>): void;
   camera(zoom: number, range: [number, number]): void;
   /** The hovered or focused object, with its centre in CSS pixels. */
@@ -298,7 +301,11 @@ export function createUi(root: HTMLElement, canvas: HTMLElement, host: UiHost): 
   // Loading and error states.
   let status: HTMLElement | undefined;
   let error: HTMLElement | undefined;
+  let again: HTMLButtonElement | undefined;
+  let message: HTMLElement | undefined;
   let retry: (() => void) | undefined;
+  let retried: Promise<void> | undefined;
+  let failure: "loadFailed" | "offline" | "contextLost" = "loadFailed";
   if (options.loading !== false) {
     // While loading or failed, the controls over the map are hidden.
     root.setAttribute("data-l", "");
@@ -309,12 +316,13 @@ export function createUi(root: HTMLElement, canvas: HTMLElement, host: UiHost): 
     error = make("div", "e", "error", root);
     error.setAttribute("role", "alert");
     error.hidden = true;
-    const message = make("p", "", "", error);
-    const again = button(error, "retry", () => t("retry"), undefined, true);
+    const said = make("p", "", "", error);
+    message = said;
+    again = button(error, "retry", () => t("retry"), undefined, true);
     on(again, "click", () => retry?.());
     const render = (): void => {
       text.textContent = t("loading");
-      message.textContent = t("loadFailed");
+      said.textContent = t(failure);
     };
     render();
     renders.push(render);
@@ -536,19 +544,26 @@ export function createUi(root: HTMLElement, canvas: HTMLElement, host: UiHost): 
         root.toggleAttribute("data-l", shown);
       }
     },
-    failed() {
-      if (status === undefined || error === undefined) {
+    failed(id, offer = true) {
+      if (status === undefined || error === undefined || again === undefined) {
         return Promise.reject(new Error("the error state is disabled"));
       }
+      failure = id;
       status.hidden = true;
       error.hidden = false;
+      again.hidden = !offer;
       root.setAttribute("data-l", "");
-      return new Promise((resolve) => {
+      if (message !== undefined) {
+        message.textContent = t(id);
+      }
+      retried ??= new Promise((resolve) => {
         retry = () => {
           retry = undefined;
+          retried = undefined;
           resolve();
         };
       });
+      return retried;
     },
     legend: (categories) => legend?.(categories),
     camera(zoom, [min, max]) {

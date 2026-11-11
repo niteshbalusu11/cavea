@@ -5,12 +5,11 @@
 import {
   staticState,
   type AdapterContext,
-  type ChartSource,
   type HoldResult,
   type Snapshot,
 } from "./adapter.ts";
 import { createA11y, type A11y } from "./a11y.ts";
-import { CaveaError, isDevelopment, warner, type CaveaErrorCode } from "./errors.ts";
+import { CaveaError, isDevelopment, permanent, warner, type CaveaErrorCode } from "./errors.ts";
 import type { ChartInfo, ObjectInfo, RendererEvent } from "./events.ts";
 import type { AttachOptions, Attached } from "./host.ts";
 import { localeDirection, translator } from "./messages.ts";
@@ -46,6 +45,12 @@ export interface Env {
   darkScheme(listener: (dark: boolean) => void): () => void;
   /** After this long without an answer, a hold or release counts as failed. */
   holdTimeoutMs: number;
+  /** Whether the browser says it is online. */
+  online(): boolean;
+  /** Resolves when the page is shown and online: at once if it is; never after `signal` aborts. */
+  usable(signal: AbortSignal): Promise<void>;
+  /** The first retry's delay before jitter; each next doubles (05 §9: 1 s). */
+  retryMs: number;
   /** A lost context not restored within this long is reported (05 §9: 5 s). */
   contextLostMs: number;
   /** `onMetrics` fires at most once in this long (04 §24: 1 s). */
@@ -126,11 +131,10 @@ function attempt<T>(start: () => T | Promise<T>): Promise<T> {
 const failure = (code: CaveaErrorCode, error: unknown, fatal = false): CaveaError =>
   error instanceof CaveaError ? error : new CaveaError(code, String(error), fatal, error);
 
-/** `promise`, rejecting with a fatal `CaveaError` of `code` whose cause is the original error. */
-const fatal = <T>(promise: Promise<T>, code: CaveaErrorCode): Promise<T> =>
-  promise.catch((error: unknown) => {
-    throw new CaveaError(code, String(error), true, error);
-  });
+/** Failures of the start that may succeed later are tried again this many times (05 §9). */
+const RETRIES = 3;
+/** The longest wait between tries, before jitter. */
+const RETRY_CAP_MS = 30_000;
 
 /** `onHoldExpiring` fires this long before the buyer's holds expire (05 §5). */
 const EXPIRING_MS = 60_000;
@@ -548,7 +552,13 @@ export async function createMap(
   function clearControls([x, y]: [number, number]): void {
     const box = ui?.covered([x, y]);
     const size = mounted?.size();
-    if (box === null || box === undefined || camera === undefined || size === undefined || nudged === focusLabel) {
+    if (
+      box === null ||
+      box === undefined ||
+      camera === undefined ||
+      size === undefined ||
+      nudged === focusLabel
+    ) {
       return;
     }
     nudged = focusLabel;
@@ -837,17 +847,15 @@ export async function createMap(
     clearTimeout(lostTimer);
     timers.delete(lostTimer as ReturnType<typeof setTimeout>);
     if (!restored) {
-      lostTimer = setTimeout(
-        () =>
-          report(
-            new CaveaError(
-              "context_lost",
-              `the WebGL context was lost for ${env.contextLostMs} ms`,
-            ),
-          ),
-        env.contextLostMs,
-      );
+      lostTimer = setTimeout(() => {
+        report(
+          new CaveaError("context_lost", `the WebGL context was lost for ${env.contextLostMs} ms`),
+        );
+        void ui?.failed("contextLost", false);
+      }, env.contextLostMs);
       timers.add(lostTimer);
+    } else if (marks["first_frame"] !== undefined) {
+      ui?.loading(false);
     }
   }
 
@@ -910,40 +918,111 @@ export async function createMap(
     mounted?.remove();
   }
 
+  /**
+   * Waits `ms`, then while the page is hidden or offline (05 §9); with
+   * `show`, before the first frame, offline shows as the error state.
+   */
+  async function pause(ms: number, show: boolean): Promise<void> {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        resolve();
+      }, ms);
+      timers.add(timer);
+    });
+    const shown = show && !env.online() && marks["first_frame"] === undefined && ui !== undefined;
+    if (shown) {
+      void ui?.failed("offline", false);
+    }
+    await env.usable(abort.signal);
+    if (shown) {
+      ui?.loading(true);
+    }
+  }
+
+  /**
+   * Runs `run` until it succeeds (05 §9): a failure that cannot succeed
+   * (`permanent`) is thrown at once, others are tried again `RETRIES` times
+   * after a capped, jittered backoff, never while the page is hidden or
+   * offline.
+   */
+  async function retrying<T>(run: () => T | Promise<T>, show = true): Promise<T> {
+    for (let tries = 0; ; tries += 1) {
+      try {
+        return await attempt(run);
+      } catch (error) {
+        if (destroyed || permanent(error) || tries >= RETRIES) {
+          throw error;
+        }
+        const ms = Math.min(RETRY_CAP_MS, env.retryMs * 2 ** tries) * (0.5 + Math.random());
+        await pause(ms, show);
+      }
+    }
+  }
+
+  /**
+   * As `retrying`; then, with the error state, a failure that may yet
+   * succeed is reported and offered again (D-48); otherwise it is fatal.
+   */
+  async function load<T>(code: CaveaErrorCode, run: () => T | Promise<T>): Promise<T> {
+    for (;;) {
+      try {
+        return await retrying(run);
+      } catch (error) {
+        if (ui === undefined || options.ui?.loading === false || destroyed || permanent(error)) {
+          throw new CaveaError(code, String(error), true, error);
+        }
+        report(new CaveaError(code, String(error), false, error));
+        await ui.failed(env.online() ? "loadFailed" : "offline");
+        ui.loading(true);
+      }
+    }
+  }
+
   // The four fetches start here, together (04 §4).
-  const wasm = attempt(() => env.wasm(options.assets));
-  const load = (source: ChartSource): Promise<Uint8Array> =>
-    "bytes" in source
-      ? Promise.resolve(bytesOf(source.bytes))
-      : env.fetchBytes(source.url, abort.signal);
-  const source = attempt((): ChartSource | Promise<ChartSource> => {
-    if (options.chart !== undefined) {
-      return options.chart;
+  const wasm = load("wasm_unavailable", () => env.wasm(options.assets));
+  const given = options.chart ?? adapter.chart;
+  const chartBytes =
+    given === undefined
+      ? Promise.reject(
+          new CaveaError(
+            "chart_fetch_failed",
+            "no chart: pass options.chart or an adapter with chart()",
+            true,
+          ),
+        )
+      : load("chart_fetch_failed", async () => {
+          const source = options.chart ?? (await adapter.chart?.(abort.signal));
+          return source === undefined || "bytes" in source
+            ? bytesOf(source?.bytes ?? new Uint8Array())
+            : env.fetchBytes(source.url, abort.signal);
+        });
+  const state = load("state_connect_failed", () => adapter.connect(ctx));
+  const atlas = retrying(() => env.atlas(options.assets), false);
+  // A fatal failure of any, or the host's abort, ends the start at once.
+  let ready = false;
+  const failed = new Promise<never>((_, reject) => {
+    for (const promise of [wasm, chartBytes, state]) {
+      promise.catch(reject);
     }
-    if (adapter.chart === undefined) {
-      throw new Error("no chart: pass options.chart or an adapter with chart()");
+    const signal = options.signal;
+    const stop = (): void => {
+      if (ready) {
+        map.destroy();
+      } else {
+        reject(new CaveaError("aborted", "options.signal was aborted", true, signal?.reason));
+      }
+    };
+    if (signal?.aborted) {
+      stop();
     }
-    return adapter.chart(abort.signal);
+    signal?.addEventListener("abort", stop);
+    unwatch.push(() => signal?.removeEventListener("abort", stop));
   });
-  const given = options.chart;
-  // A chart in the options is fetched at once, with the rest.
-  const fetchChart = (): Promise<Uint8Array> =>
-    given === undefined ? source.then(load) : attempt(() => load(given));
-  let chartBytes = fetchChart();
-  const state = attempt(() => adapter.connect(ctx));
-  const atlas = attempt(() => env.atlas(options.assets));
   // Each is awaited or handed over below; none is an unhandled rejection meanwhile.
-  for (const promise of [wasm, source, chartBytes, state, atlas]) {
+  for (const promise of [wasm, chartBytes, state, atlas, failed]) {
     promise.catch(() => undefined);
   }
-  /** With the built-in error state, a chart that cannot be fetched is offered again (05 §9). */
-  const retries = options.ui?.loading !== false;
-  // A failed chart or connect ends the start at once, whatever is still loading.
-  const failed = new Promise<never>((_, reject) => {
-    fatal<unknown>(retries ? source : chartBytes, "chart_fetch_failed").catch(reject);
-    fatal(state, "state_connect_failed").catch(reject);
-  });
-  failed.catch(() => undefined);
   const step = <T>(promise: Promise<T>): Promise<T> => Promise.race([promise, failed]);
   let mounted: ReturnType<Env["mount"]> | undefined;
   try {
@@ -1005,12 +1084,14 @@ export async function createMap(
       }),
       mounted.watch(pushTheme),
     );
-    const makeView = await step(fatal(wasm, "wasm_unavailable"));
+    const makeView = await step(wasm);
     mark("wasm_ready");
-    const v = await fatal(
-      attempt(() => makeView(canvas)),
-      "webgl_unavailable",
-    );
+    let v: EngineView;
+    try {
+      v = makeView(canvas);
+    } catch (error) {
+      throw new CaveaError("webgl_unavailable", String(error), true, error);
+    }
     mark("gpu_ready");
     view = v;
     v.setRules(max, min);
@@ -1053,21 +1134,7 @@ export async function createMap(
     applyTheme(options.theme ?? "auto");
     localise();
 
-    let bytes: Uint8Array | undefined;
-    while (bytes === undefined) {
-      try {
-        bytes = await step(fatal(chartBytes, "chart_fetch_failed"));
-      } catch (error) {
-        if (!retries || !(error instanceof CaveaError) || error.code !== "chart_fetch_failed") {
-          throw error;
-        }
-        // The source is known (`failed` rejects otherwise): show the error and fetch again on retry.
-        report(new CaveaError("chart_fetch_failed", error.message, false, error.cause));
-        await step(shell.failed());
-        shell.loading(true);
-        chartBytes = fetchChart();
-      }
-    }
+    const bytes = await step(chartBytes);
     mark("chart_fetched");
     try {
       v.loadChart(bytes);
@@ -1083,7 +1150,7 @@ export async function createMap(
       flyToLabel(initial, false);
     }
 
-    const first = await step(fatal(state, "state_connect_failed"));
+    const first = await step(state);
     applySnapshot(v, first, true);
     for (const apply of pending ?? []) {
       apply(v);
@@ -1229,6 +1296,7 @@ export async function createMap(
       warn(`${name}() is not supported yet`);
   }
 
+  ready = true;
   call("onReady", {
     chart: { name: chart?.name ?? "", seats: chart?.seats ?? 0, objects: chart?.objects ?? 0 },
     backend: "webgl2",
