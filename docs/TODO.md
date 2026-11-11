@@ -122,7 +122,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **REN-042** Overlay pass: hover ring and focus ring (04 §7)
 - [x] **REN-043** Pulse on change, and reduced-motion handling (04 §17, §13)
 - [x] **REN-044** Timing marks and frame statistics (04 §24)
-- [ ] **REN-045** Headless render to a pixel buffer for golden tests (04 §26)
+- [x] **REN-045** Headless render to a pixel buffer for golden tests (04 §26)
 
 ### Web SDK
 
@@ -152,12 +152,12 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 ### Testing
 
-- [ ] **TST-010** Golden-image harness with tolerance and stored baselines (13 §6.1)
+- [x] **TST-010** Golden-image harness with tolerance and stored baselines (13 §6.1)
 - [x] **TST-011** Micro-benchmarks: decode, hit test, delta apply, label build (13 §6.3)
-- [ ] **TST-012** Benchmark page with the scripted gesture trace and result collector (13 §6.2)
+- [x] **TST-012** Benchmark page with the scripted gesture trace and result collector (13 §6.2)
 - [x] **TST-013** Fuzz targets `ccf_decode` and `document_parse` with seed corpora (13 §5)
 - [x] **TST-014** Compiler round-trip and determinism tests across platforms (13 §4)
-- [ ] **TST-015** Scripted interaction tests producing expected engine events (13 §6.1)
+- [x] **TST-015** Scripted interaction tests producing expected engine events (13 §6.1)
 - [ ] **TST-016** Run S1–S5 on the reference devices; commit results (13 §6.2)
 
 ---
