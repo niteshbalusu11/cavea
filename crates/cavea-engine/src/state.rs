@@ -301,11 +301,12 @@ impl EventState {
     ) -> Result<Reply, InvariantViolation> {
         self.expire_due(now)?;
         if let Some(key) = &request.idempotency {
-            let chars = key.key.chars().count();
-            if chars == 0 || chars > limits::MAX_IDEMPOTENCY_KEY_CHARS {
-                return Ok(Err(Failure::InvalidRequest(
-                    InvalidReason::IdempotencyKeyLength,
-                )));
+            if let Err(refused) = check_text(
+                &key.key,
+                limits::MAX_IDEMPOTENCY_KEY_CHARS,
+                InvalidReason::IdempotencyKeyLength,
+            ) {
+                return Ok(Err(refused));
             }
             match self.window.check(key, now) {
                 Lookup::Replay(reply) => return Ok(reply),
@@ -968,9 +969,12 @@ fn check_ttl(ttl_secs: u32) -> Result<(), Failure> {
     }
 }
 
+/// 1 to `max_chars` characters, none of them U+0000: the store writes text
+/// to PostgreSQL `text` columns, which cannot hold it, and a rejected value
+/// would fail the whole batch it is committed in.
 fn check_text(text: &str, max_chars: usize, reason: InvalidReason) -> Result<(), Failure> {
     let chars = text.chars().count();
-    if chars == 0 || chars > max_chars {
+    if chars == 0 || chars > max_chars || text.contains('\0') {
         Err(Failure::InvalidRequest(reason))
     } else {
         Ok(())

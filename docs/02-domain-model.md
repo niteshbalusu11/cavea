@@ -129,7 +129,7 @@ The engine enforces the "Who may issue it" column itself: each command carries t
 
 ## 6. Bookings
 
-- A booking sets objects to `booked` and stores `order_ref` (the customer's order identifier, 1 to 128 characters), an optional `ticket_type` key per object (1 to 128 characters) and an optional `extra` JSON object (up to 2 KB per object).
+- A booking sets objects to `booked` and stores `order_ref` (the customer's order identifier, 1 to 128 characters), an optional `ticket_type` key per object (1 to 128 characters; neither may contain U+0000, which PostgreSQL text cannot hold) and an optional `extra` JSON object (up to 2 KB per object).
 - With a hold token, the booking takes the named objects, or all the token's objects if none are named; per-object details may name only objects being booked, each at most once.
 - The recommended sequence is the one the incumbents document: hold, take payment, book with the hold token. If booking fails, refund or retry; never charge first and hold second.
 - Booking is idempotent under an `Idempotency-Key` header. Replaying the same request returns the original result.

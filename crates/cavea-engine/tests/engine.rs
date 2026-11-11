@@ -443,6 +443,34 @@ fn book_with_a_token_and_directly() {
     check_invariants(&s, T0);
 }
 
+/// U+0000 cannot be stored in PostgreSQL text: such values are refused when
+/// applied, before they can reach a batch and fail its commit.
+#[test]
+fn text_with_a_nul_is_refused_before_it_reaches_a_batch() {
+    let mut s = empty_state(4);
+    let invalid = |r| Err(Failure::InvalidRequest(r));
+    assert_eq!(
+        run(&mut s, book(None, &[0], "A\0B"), T0),
+        invalid(InvalidReason::OrderRefLength)
+    );
+    let nul_ticket = Command::Book {
+        token: None,
+        objects: labels(&[0]),
+        order_ref: "77120".into(),
+        details: vec![detail(0, "adult\0")],
+    };
+    assert_eq!(
+        run(&mut s, nul_ticket, T0),
+        invalid(InvalidReason::TicketTypeLength)
+    );
+    let keyed_nul = keyed(book(None, &[0], "77120"), "k\0", 1);
+    assert_eq!(
+        s.apply(&keyed_nul, T0).unwrap(),
+        invalid(InvalidReason::IdempotencyKeyLength)
+    );
+    assert_eq!(s.take_batch().unwrap(), None);
+}
+
 #[test]
 fn release_booked_and_change_status() {
     let mut s = empty_state(8);
