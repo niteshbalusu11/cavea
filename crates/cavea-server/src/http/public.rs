@@ -60,7 +60,8 @@ async fn chart(
         format!("\"{hex}\"")
     };
     let etag = HeaderValue::try_from(etag).map_err(ApiError::internal)?;
-    let mut response = if none_match(&headers, &etag) {
+    let (listed, any) = none_match(&headers, &etag);
+    let response = if listed {
         // The content behind a hash never changes: the caller's copy is current.
         StatusCode::NOT_MODIFIED.into_response()
     } else {
@@ -71,6 +72,13 @@ async fn chart(
             .await?;
         let bytes =
             bytes.ok_or_else(|| ApiError::new(Code::NotFound).with_message("No such chart."))?;
+        if any {
+            // `If-None-Match: *` and the file exists.
+            return Ok(cache_headers(
+                StatusCode::NOT_MODIFIED.into_response(),
+                etag,
+            ));
+        }
         let mut response = bytes.into_response();
         let headers = response.headers_mut();
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(CCF_TYPE));
@@ -79,11 +87,16 @@ async fn chart(
         }
         response
     };
+    Ok(cache_headers(response, etag))
+}
+
+/// The caching headers of every successful answer, `304` included.
+fn cache_headers(mut response: Response, etag: HeaderValue) -> Response {
     let headers = response.headers_mut();
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(IMMUTABLE));
     headers.insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
     headers.insert(header::ETAG, etag);
-    Ok(response)
+    response
 }
 
 /// 32 lowercase hex digits as 16 bytes.
@@ -132,16 +145,22 @@ fn accepts_brotli(headers: &HeaderMap) -> bool {
     star.unwrap_or(false)
 }
 
-/// Whether `If-None-Match` lists `etag`, compared weakly (RFC 9110 §13.1.2).
-fn none_match(headers: &HeaderMap, etag: &HeaderValue) -> bool {
+/// Whether `If-None-Match` lists `etag`, compared weakly (RFC 9110 §13.1.2),
+/// and whether it is `*`, which matches if the file exists.
+fn none_match(headers: &HeaderMap, etag: &HeaderValue) -> (bool, bool) {
     let etag = etag.as_bytes();
-    headers
+    let (mut listed, mut any) = (false, false);
+    for tag in headers
         .get_all(header::IF_NONE_MATCH)
         .iter()
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(','))
-        .map(|t| t.trim())
-        .any(|t| t.strip_prefix("W/").unwrap_or(t).as_bytes() == etag)
+        .map(str::trim)
+    {
+        listed |= tag.strip_prefix("W/").unwrap_or(tag).as_bytes() == etag;
+        any |= tag == "*";
+    }
+    (listed, any)
 }
 
 #[cfg(test)]

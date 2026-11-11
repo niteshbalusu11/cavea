@@ -565,7 +565,8 @@ fn stats_json(output: &charts::Output) -> Value {
     })
 }
 
-const LOCK_CHART: &str = "SELECT draft_etag FROM charts WHERE id = $1::uuid FOR UPDATE";
+const LOCK_CHART: &str =
+    "SELECT draft_etag, archived_at IS NOT NULL FROM charts WHERE id = $1::uuid FOR UPDATE";
 
 /// A version of this chart compiled from the same document: the same full
 /// artefact.
@@ -619,10 +620,14 @@ async fn publish(
     let started = std::time::Instant::now();
     let store = async {
         let mut tx = state.db.begin().await?;
-        let current: i64 = sqlx::query_scalar(LOCK_CHART)
+        let (current, is_archived): (i64, bool) = sqlx::query_as(LOCK_CHART)
             .bind(&chart_id)
             .fetch_one(&mut *tx)
             .await?;
+        if is_archived {
+            // Archived while compiling.
+            return Err(archived());
+        }
         if current != etag {
             // Saved while compiling: what was compiled is no longer the draft.
             return Err(version_conflict(current)

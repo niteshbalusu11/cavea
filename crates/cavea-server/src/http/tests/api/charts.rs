@@ -422,6 +422,14 @@ async fn public_chart_route() {
             );
         }
 
+        // `If-None-Match: *`: 304 when the file exists, 404 when not.
+        let star = [(header::IF_NONE_MATCH, "*")];
+        let (response, _) = fetch(&app, &url, &star).await;
+        assert_eq!(response.status(), 304);
+        let unknown = format!("/v1/public/charts/{}.ccf", "0".repeat(32));
+        let (response, _) = fetch(&app, &unknown, &star).await;
+        assert_eq!(response.status(), 404);
+
         // HEAD: the headers of GET, no body.
         let (response, body) = fetch_with(&app, Method::HEAD, &url, &[]).await;
         assert_eq!(response.status(), 200);
