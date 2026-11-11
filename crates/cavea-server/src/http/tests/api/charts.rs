@@ -130,18 +130,39 @@ async fn chart_lifecycle() {
         assert_eq!(response.status(), 200, "{validation}");
         assert_eq!(validation["valid"], false);
         assert_eq!(validation["draft_etag"], "\"2\"");
-        let unknown = json!({ "code": "E007", "severity": "error", "node": section_id });
-        let has_unknown = |findings: &Value| {
-            findings.as_array().unwrap().iter().any(|f| {
-                f["code"] == unknown["code"]
-                    && f["node"] == unknown["node"]
-                    && f["severity"] == unknown["severity"]
-            })
+        // In the compiler's documented form (03 §3.2), on both routes.
+        let unknown = |findings: &Value| {
+            let found = findings
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|f| f["code"] == "E007");
+            found
+                .cloned()
+                .unwrap_or_else(|| panic!("no E007 in {findings}"))
         };
-        assert!(has_unknown(&validation["findings"]), "{validation}");
+        let finding = unknown(&validation["findings"]);
+        let keys: Vec<&str> = finding
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["code", "message", "node", "related", "severity"]);
+        assert_eq!(
+            (&finding["severity"], &finding["node"], &finding["related"]),
+            (&json!("error"), &json!(section_id), &Value::Null)
+        );
+        assert!(
+            finding["message"]
+                .as_str()
+                .unwrap()
+                .contains("unknown category"),
+            "{finding}"
+        );
         let (response, problem) = post(&app, sk, "/v1/charts/royal/publish", None).await;
         assert_problem(&response, &problem, Code::ChartInvalid);
-        assert!(has_unknown(&problem["details"]["findings"]), "{problem}");
+        assert_eq!(unknown(&problem["details"]["findings"]), finding);
         let (_, versions) = call(
             &app,
             Method::GET,

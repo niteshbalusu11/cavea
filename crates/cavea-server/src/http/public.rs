@@ -39,7 +39,8 @@ pub(super) fn routes() -> Router<AppState> {
 /// Browsers may cache a preflight this long (Chromium's cap).
 const PREFLIGHT_MAX_AGE: &str = "7200";
 const ALLOW_METHODS: &str = "GET, POST";
-const ALLOW_HEADERS: &str = "Authorization, Content-Type, Cavea-Hold-Token, Cavea-Request-Id";
+const ALLOW_HEADERS: &str =
+    "Authorization, Content-Type, Cavea-Hold-Token, Cavea-Request-Id, Cavea-Session";
 const EXPOSE_HEADERS: &str = "Cavea-Request-Id, Retry-After";
 
 /// CORS for the publishable-key routes, as a layer on the whole router (08
@@ -98,7 +99,8 @@ pub(super) async fn cors(State(state): State<AppState>, request: Request, next: 
 }
 
 /// What the renderer needs to start (05 §4): the compiled chart of the pinned
-/// version, the hold lifetime and the selection limit of a buyer's token.
+/// version, the hold lifetime and the selection limit of a buyer's token, and
+/// whether holding needs a session token from the host page (08 §11).
 /// Browsers may keep it briefly, per credential; shared caches may not, since
 /// the answer depends on the credential.
 async fn event(
@@ -115,6 +117,7 @@ async fn event(
         },
         "hold_ttl_seconds": target.settings.hold_ttl(),
         "max_objects": target.settings.max_objects(),
+        "require_session": target.settings.require_session(),
     });
     let mut response = axum::Json(body).into_response();
     let headers = response.headers_mut();

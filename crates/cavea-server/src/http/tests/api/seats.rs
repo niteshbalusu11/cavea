@@ -71,7 +71,7 @@ async fn until_zero(pool: &PgPool, sql: &'static str) {
     panic!("still not zero: {sql}");
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(super) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -547,7 +547,7 @@ async fn public_flow() {
         assert_eq!(response.status(), 200, "{info}");
         let url = format!("/v1/public/charts/{}.ccf", t.hash);
         assert_eq!(info, json!({ "event": t.event, "chart": { "hash": t.hash, "url": url },
-            "hold_ttl_seconds": 600, "max_objects": 2 }));
+            "hold_ttl_seconds": 600, "max_objects": 2, "require_session": false }));
         assert_eq!(response.headers()[header::CACHE_CONTROL], "private, max-age=30");
         assert!(response.headers().get_all(header::VARY).iter().any(|v| v == "Authorization"));
         assert_eq!(response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
@@ -677,7 +677,7 @@ async fn event_rules() {
         let (response, e2) = create(json!({ "key": "e2", "chart": t.chart, "name": "Two" })).await;
         assert_eq!(response.status(), 201, "{e2}");
         assert_eq!((&e2["version"]["number"], &e2["version"]["url"]), (&json!(2), &v2["url"]));
-        assert_eq!(e2["settings"], json!({ "hold_ttl_seconds": 900, "max_objects": 10 }));
+        assert_eq!(e2["settings"], json!({ "hold_ttl_seconds": 900, "max_objects": 10, "require_session": false, "max_tokens_per_sub": 2 }));
         assert_eq!((&e2["name"], &e2["chart"]), (&json!("Two"), &json!(t.chart)));
         let (_, e1) = create(json!({ "key": "e1", "chart": t.chart, "version": 1 })).await;
         assert_eq!(e1["version"]["number"], 1);
@@ -725,7 +725,7 @@ async fn event_rules() {
         let body = json!({ "key": "e3", "chart": t.chart, "settings": { "hold_ttl_seconds": 120 } });
         let (response, e3) = create(body).await;
         assert_eq!(response.status(), 201, "{e3}");
-        assert_eq!(e3["settings"], json!({ "hold_ttl_seconds": 120, "max_objects": 10 }));
+        assert_eq!(e3["settings"], json!({ "hold_ttl_seconds": 120, "max_objects": 10, "require_session": false, "max_tokens_per_sub": 2 }));
         let body = json!({ "event": "e3" });
         let (response, _) = post(&app, sk, "/v1/hold-tokens", body).await;
         assert_eq!(response.status(), 201);
@@ -734,7 +734,7 @@ async fn event_rules() {
         let body = json!({ "name": "Three", "settings": { "max_objects": 5 } });
         let (response, patched) = call(&app, Method::PATCH, "/v1/events/e3", Some(sk), Some(body)).await;
         assert_eq!(response.status(), 200, "{patched}");
-        assert_eq!(patched["settings"], json!({ "hold_ttl_seconds": 900, "max_objects": 5 }));
+        assert_eq!(patched["settings"], json!({ "hold_ttl_seconds": 900, "max_objects": 5, "require_session": false, "max_tokens_per_sub": 2 }));
         assert_eq!(patched["name"], "Three");
         let body = json!({ "settings": {} });
         let (_, kept) = call(&app, Method::PATCH, "/v1/events/e3", Some(sk), Some(body)).await;

@@ -23,8 +23,10 @@ pub const PROTOCOL_VERSION: u8 = 1;
 pub const MAX_KEY_CHARS: usize = 128;
 /// ...and so in bytes of UTF-8.
 pub const MAX_KEY_BYTES: usize = 4 * MAX_KEY_CHARS;
-/// Longest hold or session token in a SUBSCRIBE.
+/// Longest hold token in a SUBSCRIBE.
 pub const MAX_TOKEN_BYTES: usize = 256;
+/// Longest session token in a SUBSCRIBE: a signed JWT (08 §11).
+pub const MAX_SESSION_TOKEN_BYTES: usize = 1024;
 /// Highest domain status code (02 §4.1).
 pub const MAX_STATUS: u8 = 15;
 
@@ -382,8 +384,8 @@ pub fn decode_client(frame: &[u8]) -> Result<ClientFrame<'_>, WireError> {
                 core::str::from_utf8(r.bytes(MAX_KEY_BYTES)?).map_err(|_| WireError::BadValue)?;
             check_key(event_key)?;
             let last_seq = r.varint()?;
-            let hold_token = r.token()?;
-            let session_token = r.token()?;
+            let hold_token = r.token(MAX_TOKEN_BYTES)?;
+            let session_token = r.token(MAX_SESSION_TOKEN_BYTES)?;
             // A newer client may append fields this version does not know.
             if version > PROTOCOL_VERSION {
                 r.0 = &[];
@@ -541,11 +543,11 @@ impl<'a> Reader<'a> {
         self.take(len)
     }
 
-    /// A presence byte, then a token if it is 1.
-    fn token(&mut self) -> Result<Option<&'a [u8]>, WireError> {
+    /// A presence byte, then a token of at most `max` bytes if it is 1.
+    fn token(&mut self, max: usize) -> Result<Option<&'a [u8]>, WireError> {
         match self.u8()? {
             0 => Ok(None),
-            1 => self.bytes(MAX_TOKEN_BYTES).map(Some),
+            1 => self.bytes(max).map(Some),
             _ => Err(WireError::BadValue),
         }
     }
@@ -951,12 +953,15 @@ pub fn encode_subscribe(s: &Subscribe<'_>) -> Result<Vec<u8>, WireError> {
     check_key(s.event_key)?;
     put_bytes(&mut out, s.event_key.as_bytes(), MAX_KEY_BYTES)?;
     put_varint(&mut out, s.last_seq);
-    for token in [s.hold_token, s.session_token] {
+    for (token, max) in [
+        (s.hold_token, MAX_TOKEN_BYTES),
+        (s.session_token, MAX_SESSION_TOKEN_BYTES),
+    ] {
         match token {
             None => out.push(0),
             Some(t) => {
                 out.push(1);
-                put_bytes(&mut out, t, MAX_TOKEN_BYTES)?;
+                put_bytes(&mut out, t, max)?;
             }
         }
     }

@@ -26,6 +26,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "chart_versions_full_hash",
         include_str!("../../migrations/0002_chart_versions_full_hash.sql"),
     ),
+    (
+        3,
+        "holds_session_sub",
+        include_str!("../../migrations/0003_holds_session_sub.sql"),
+    ),
 ];
 
 /// Where applied migrations are recorded, with each one's SHA-384.

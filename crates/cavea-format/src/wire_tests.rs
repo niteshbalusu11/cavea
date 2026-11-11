@@ -368,7 +368,9 @@ fn frames(r: &mut Rng) -> Vec<(Vec<u8>, View)> {
 fn client_frames(r: &mut Rng) -> Vec<Vec<u8>> {
     let key = "Ü".repeat(MAX_KEY_CHARS);
     let long = vec![0xAB; MAX_TOKEN_BYTES];
+    let session = vec![0xCD; MAX_SESSION_TOKEN_BYTES];
     let tokens: [Option<&[u8]>; 4] = [None, Some(&[]), Some(b"ht_abc"), Some(&long)];
+    let sessions: [Option<&[u8]>; 4] = [None, Some(&[]), Some(b"e.y.s"), Some(&session)];
     let mut out = Vec::new();
     for i in 0..40 {
         let s = Subscribe {
@@ -376,7 +378,7 @@ fn client_frames(r: &mut Rng) -> Vec<Vec<u8>> {
             event_key: [&key[..], "", "concert-2026"][i % 3],
             last_seq: seqs()[r.below(5) as usize],
             hold_token: tokens[r.below(4) as usize],
-            session_token: tokens[r.below(4) as usize],
+            session_token: sessions[r.below(4) as usize],
         };
         let f = encode_subscribe(&s).unwrap();
         assert_eq!(decode_client(&f), Ok(ClientFrame::Subscribe(s)));
@@ -557,7 +559,7 @@ fn hostile_frames_give_typed_errors() {
         ("token over the limit", sub(&cat(&[&key(b"e"), &[0, 1], &key(&[1; MAX_TOKEN_BYTES + 1])])), OverLimit),
         ("no session presence", sub(&cat(&[&key(b"e"), &[0, 0]])), Truncated),
         ("session presence 2", sub(&cat(&[&key(b"e"), &[0, 0, 2]])), BadValue),
-        ("session token over the limit", sub(&cat(&[&key(b"e"), &[0, 0, 1], &key(&[1; MAX_TOKEN_BYTES + 1])])), OverLimit),
+        ("session token over the limit", sub(&cat(&[&key(b"e"), &[0, 0, 1], &key(&[1; MAX_SESSION_TOKEN_BYTES + 1])])), OverLimit),
         ("subscribe trailing", sub(&cat(&[&key(b"e"), &[0, 0, 0, 0]])), TrailingBytes),
         ("pong no nonce", vec![0x11], Truncated),
         ("pong trailing", vec![0x11, 1, 1], TrailingBytes),
@@ -619,6 +621,13 @@ fn hostile_frames_give_typed_errors() {
         session_token: None,
     };
     assert_eq!(encode_subscribe(&too_long), Err(OverLimit));
+    let session = vec![0; MAX_SESSION_TOKEN_BYTES + 1];
+    let long_session = Subscribe {
+        hold_token: None,
+        session_token: Some(&session),
+        ..too_long
+    };
+    assert_eq!(encode_subscribe(&long_session), Err(OverLimit));
     let key = "a".repeat(MAX_KEY_CHARS + 1);
     let long_key = Subscribe {
         event_key: &key,
