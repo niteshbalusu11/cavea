@@ -7,7 +7,9 @@ use cavea_render::{
     Engine,
     backend::glow::GlowBackend,
     backing_size,
-    protocol::{Command, Event, GestureHandling, Modifiers, PointerKind, PointerType},
+    protocol::{
+        BuiltinTheme, Command, Event, GestureHandling, Modifiers, PointerKind, PointerType,
+    },
     tuning::{MAX_DPR_OTHER, MAX_DPR_TOUCH},
 };
 use wasm_bindgen::{JsCast as _, JsError, JsValue, prelude::wasm_bindgen};
@@ -187,6 +189,21 @@ impl View {
         self.send(Command::LoadChart { ccf })
     }
 
+    /// A built-in theme: `light`, `dark` or `high-contrast` (04 §19).
+    #[wasm_bindgen(js_name = setTheme)]
+    pub fn set_theme(&mut self, name: &str) -> Result<(), JsError> {
+        let base = match name {
+            "light" => BuiltinTheme::Light,
+            "dark" => BuiltinTheme::Dark,
+            "high-contrast" => BuiltinTheme::HighContrast,
+            _ => return Err(JsError::new("unknown theme")),
+        };
+        self.send(Command::SetTheme {
+            base,
+            tokens: Vec::new(),
+        })
+    }
+
     /// Whether a frame is wanted, after a call other than `frame`.
     #[wasm_bindgen(getter, js_name = needFrame)]
     pub fn need_frame(&self) -> bool {
@@ -236,6 +253,7 @@ impl View {
             .map_err(|e| JsError::new(&format!("{e:?}")))
     }
 }
+
 
 impl View {
     fn send(&mut self, command: Command) -> Result<(), JsError> {

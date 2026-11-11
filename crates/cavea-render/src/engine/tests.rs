@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::{
-    backend::{Caps, Rect as TexRect},
+    backend::Caps,
     protocol::{GestureHandling, Modifiers},
 };
 
@@ -29,10 +29,12 @@ struct Fake {
     textures: BTreeMap<u32, (TextureDesc, Vec<u8>)>,
     /// `update_buffer` calls: buffer, byte offset, length.
     buffer_writes: Vec<(u32, u32, usize)>,
+    texture_writes: Vec<(u32, TexRect)>,
     destroyed: Vec<ResourceId>,
-    /// Instance range of each `draw`.
-    draws: Vec<Range<u32>>,
+    /// Instance ranges of each `draw`.
+    draws: Vec<Vec<Range<u32>>>,
     targets: Vec<Target>,
+    clears: Vec<[f32; 4]>,
 }
 
 type E = Engine<Fake>;
@@ -75,14 +77,30 @@ impl GpuBackend for Fake {
         self.textures.insert(self.next, (desc, data));
         Ok(TextureId(self.next))
     }
-    fn update_texture(&mut self, _: TextureId, _: TexRect, _: &[u8]) -> Result<(), BackendError> {
+    fn update_texture(
+        &mut self,
+        id: TextureId,
+        region: TexRect,
+        data: &[u8],
+    ) -> Result<(), BackendError> {
+        let (desc, bytes) = self
+            .textures
+            .get_mut(&id.0)
+            .ok_or(BackendError::UnknownResource)?;
+        // Whole-texture writes are all the engine makes.
+        if (region.x, region.y, region.width, region.height) != (0, 0, desc.width, desc.height) {
+            return Err(BackendError::InvalidData);
+        }
+        *bytes = data.to_vec();
+        self.texture_writes.push((id.0, region));
         Ok(())
     }
-    fn begin_frame(&mut self, target: Target, _: [f32; 4]) {
+    fn begin_frame(&mut self, target: Target, clear: [f32; 4]) {
         self.targets.push(target);
+        self.clears.push(clear);
     }
-    fn draw(&mut self, call: &DrawCall) -> Result<(), BackendError> {
-        self.draws.push(call.instances.clone());
+    fn draw(&mut self, call: &DrawCall<'_>) -> Result<(), BackendError> {
+        self.draws.push(call.ranges.to_vec());
         Ok(())
     }
     fn end_frame(&mut self) {}

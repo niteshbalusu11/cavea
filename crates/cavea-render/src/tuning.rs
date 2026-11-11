@@ -69,3 +69,7 @@ pub const MAX_BACKING_PX: f32 = 4096.0;
 
 /// Seats at least this large on screen are drawn at the detail level.
 pub const LOD_DETAIL_SEAT_PX: f64 = 14.0;
+
+/// Most seat draw calls in one frame (04 §11); more visible ranges are merged
+/// across the smallest gaps.
+pub const MAX_SEAT_DRAW_CALLS: usize = 64;
