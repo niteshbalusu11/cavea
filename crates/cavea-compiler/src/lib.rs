@@ -12,10 +12,12 @@ pub mod document;
 pub mod expand;
 pub mod finding;
 mod geometry;
+mod migrate;
 mod shape;
 mod tessellate;
 
-pub use compile::{CompileError, Compiled, RANK_ALGO, SCHEMA, Stats, compile, write_full_label};
-pub use document::ChartDocument;
+pub use compile::{CompileError, Compiled, RANK_ALGO, Stats, compile, write_full_label};
+pub use document::{ChartDocument, DocumentError};
 pub use expand::{ExpandError, ExpandErrorKind, ExpandedRow, Expansion, Seat};
-pub use finding::{Code, Detail, Finding, Severity};
+pub use finding::{Code, Detail, Finding, MAX_FINDINGS, Severity};
+pub use migrate::SCHEMA;

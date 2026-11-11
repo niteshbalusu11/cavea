@@ -7,8 +7,8 @@
 //! `idx` order and render chunks (9–10), section outlines, label anchors and
 //! outline tessellation (11–12, in [`crate::geometry`] and
 //! [`crate::tessellate`]), decoration shapes ([`decoration`]), quantisation
-//! (13), and encoding with the content hash (14–15). Text, icon and image
-//! nodes are not compiled yet.
+//! (13), and encoding with the content hash (14–15). A chart without errors
+//! is then checked for the warnings of 03 §3.2 ([`warnings`]).
 //!
 //! Everything here is deterministic: no platform maths beyond `+ − × ÷ √`,
 //! no hash-map iteration, and every sort has a total order.
@@ -22,6 +22,7 @@ use cavea_core::limits::{MAX_CATEGORIES, MAX_FLOORS, MAX_SECTIONS};
 use cavea_format::{self as ccf, Artefact, Bounds, CHUNK_MAX_SEATS, NONE, Point};
 use lyon_tessellation::FillRule;
 
+use crate::SCHEMA;
 use crate::detmath;
 use crate::document::{self as doc, ChartDocument, Node};
 use crate::expand::{ExpandedRow, Expansion, Seat};
@@ -30,11 +31,10 @@ use crate::geometry::{self, OutlineError, P};
 use crate::tessellate::{self, TessError};
 
 mod decoration;
+mod warnings;
 
 use decoration::{Decorated, Decoration};
 
-/// The document schema this compiler reads.
-pub const SCHEMA: u32 = 1;
 /// The seat rank formula of 03 §3.3, stored in `META`.
 pub const RANK_ALGO: u8 = 1;
 
@@ -46,6 +46,9 @@ pub struct Compiled {
     pub public_hash: [u8; 16],
     pub full_hash: [u8; 16],
     pub stats: Stats,
+    /// The warnings (03 §3.2), in the order of 03 §3.2. Errors stop the
+    /// compile and come back in [`CompileError::Invalid`] instead.
+    pub findings: Vec<Finding>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -65,7 +68,8 @@ pub struct Stats {
 #[derive(Debug)]
 pub enum CompileError {
     /// The document has errors; nothing was compiled. At most
-    /// [`crate::finding::MAX_FINDINGS`] are listed.
+    /// [`crate::finding::MAX_FINDINGS`] are listed, all errors: warnings are
+    /// checked only on a chart without errors.
     Invalid(Vec<Finding>),
     /// The chart could not be encoded: more than 4 GiB of output, or a
     /// compiler bug (the chart failed `cavea_format::Chart::check`).
@@ -115,9 +119,15 @@ pub fn write_full_label<W: Write>(
     out.write_str(rest)
 }
 
-/// Compiles a chart document to its two artefacts. The same document always
-/// gives the same bytes.
+/// Compiles a chart document to its two artefacts and its warnings. The same
+/// document always gives the same bytes and the same findings.
 pub fn compile(document: &ChartDocument) -> Result<Compiled, CompileError> {
+    let (chart, findings) = check(document)?;
+    emit(&chart, findings)
+}
+
+/// Steps 1–13 and the warnings: everything but encoding.
+fn check(document: &ChartDocument) -> Result<(ccf::Chart, Vec<Finding>), CompileError> {
     let mut f = Findings::default();
     if document.schema != SCHEMA {
         f.push(
@@ -146,11 +156,11 @@ pub fn compile(document: &ChartDocument) -> Result<Compiled, CompileError> {
         kind: ccf::ErrorKind::TooLarge,
     };
     let chart = chart.ok_or(CompileError::Encode(too_large))?;
-    emit(&chart)
+    Ok((chart, f.0))
 }
 
 /// Encodes both artefacts and writes their content hashes (03 §4.1).
-fn emit(chart: &ccf::Chart) -> Result<Compiled, CompileError> {
+fn emit(chart: &ccf::Chart, findings: Vec<Finding>) -> Result<Compiled, CompileError> {
     let artefact = |which| -> Result<(Vec<u8>, [u8; 16]), CompileError> {
         let mut bytes = ccf::encode(chart, which).map_err(CompileError::Encode)?;
         let digest = blake3::hash(bytes.get(ccf::HEADER_LEN..).unwrap_or_default());
@@ -180,6 +190,7 @@ fn emit(chart: &ccf::Chart) -> Result<Compiled, CompileError> {
         public_hash,
         full_hash,
         stats,
+        findings,
     })
 }
 
@@ -364,6 +375,8 @@ struct Compiler<'d> {
     ids: Vec<(u32, u32)>,
     /// Visible decoration nodes in document order.
     decorations: Vec<Decoration<'d>>,
+    /// Decoration nodes met so far, by kind (shape, text, icon, image).
+    deco_counts: [usize; 4],
 }
 
 impl<'d> Compiler<'d> {
@@ -377,6 +390,7 @@ impl<'d> Compiler<'d> {
             floor_index: BTreeMap::new(),
             ids: Vec::new(),
             decorations: Vec::new(),
+            deco_counts: [0; 4],
         }
     }
 
@@ -398,8 +412,8 @@ impl<'d> Compiler<'d> {
                 continue;
             }
             let color = parse_color(&c.color).unwrap_or_else(|| {
-                let detail = Detail::InvalidValue { field: "color" };
-                f.push(Code::E005, None, detail);
+                let key = c.key.clone();
+                f.push(Code::E005, None, Detail::CategoryColor { key });
                 [0; 4]
             });
             self.categories.push(ccf::Category {
@@ -427,10 +441,7 @@ impl<'d> Compiler<'d> {
             }
             let focal = fl.focal_point.map(|p| {
                 quantise_point(p).unwrap_or_else(|| {
-                    let detail = Detail::InvalidValue {
-                        field: "focalPoint",
-                    };
-                    f.push(Code::E005, None, detail);
+                    f.push(Code::E005, None, Detail::FocalPoint { floor: fl.id });
                     [0, 0]
                 })
             });
@@ -481,6 +492,9 @@ impl<'d> Compiler<'d> {
                 continue;
             }
             self.ids.push((id, id));
+            if is_reference(node) {
+                continue;
+            }
             match node {
                 Node::Section(s) => {
                     sections += 1;
@@ -501,9 +515,9 @@ impl<'d> Compiler<'d> {
                         });
                     }
                 }
-                Node::Shape(_) => {
+                Node::Shape(_) | Node::Text(_) | Node::Icon(_) | Node::Image(_) => {
                     if let Some(floor) = self.floor(node_floor(node), id, f) {
-                        self.decoration(node, Place::IDENTITY, floor, f);
+                        self.decoration(node, (Place::IDENTITY, 0.0), floor, f);
                     }
                 }
                 other => unsupported(other, f),
@@ -535,6 +549,9 @@ impl<'d> Compiler<'d> {
         for child in s.children.iter().filter(|c| !is_hidden(c)) {
             let id = node_id(child);
             self.ids.push((id, id));
+            if is_reference(child) {
+                continue;
+            }
             // A child is on its section's floor; naming another is an error.
             if let Some(own) = node_floor(child)
                 && let Some(mine) = self.floor(Some(own), id, f)
@@ -548,9 +565,9 @@ impl<'d> Compiler<'d> {
                 f.push(Code::E007, Some(id), detail);
             }
             match child {
-                Node::Shape(_) => {
+                Node::Shape(_) | Node::Text(_) | Node::Icon(_) | Node::Image(_) => {
                     if let (Some(place), Some(floor)) = (place, floor) {
-                        self.decoration(child, place, floor, f);
+                        self.decoration(child, (place, s.rotation), floor, f);
                     }
                 }
                 Node::RowBlock(_) | Node::Row(_) => {
@@ -700,7 +717,7 @@ impl<'d> Compiler<'d> {
         // Decoration, after the section outlines in `MESH`.
         let mut d = Decorated::new(self.floors.len(), b.outline_indices.len());
         for deco in std::mem::take(&mut self.decorations) {
-            if let Err((code, detail)) = d.node(&deco, &mut b.vertices) {
+            if let Err((code, detail)) = d.node(&deco, &mut b.vertices, &mut self.strings) {
                 f.push(code, Some(node_id(deco.node)), detail);
             }
         }
@@ -763,7 +780,7 @@ impl<'d> Compiler<'d> {
         if self.strings.overflow {
             return None;
         }
-        Some(ccf::Chart {
+        let chart = ccf::Chart {
             meta,
             strings: std::mem::take(&mut self.strings.strings),
             categories: std::mem::take(&mut self.categories),
@@ -784,15 +801,28 @@ impl<'d> Compiler<'d> {
                 indices: b.outline_indices,
                 draws,
             },
-            texts: Vec::new(),
-            icons: Vec::new(),
-            images: Vec::new(),
+            texts: d.texts,
+            icons: d.icons,
+            images: d.images,
             full: Some(ccf::Full {
                 oids: b.oids,
                 ranks,
                 priorities: b.priorities,
             }),
-        })
+        };
+        if !f.has_errors() {
+            let scene = warnings::Scene {
+                doc: self.doc,
+                units,
+                expansion: e,
+                seat_of: &b.seat_of,
+                explicit: &b.explicit,
+                text_nodes: &d.text_nodes,
+                chart: &chart,
+            };
+            scene.check(f);
+        }
+        Some(chart)
     }
 }
 
@@ -841,6 +871,9 @@ struct Builder<'d> {
     outline_indices: Vec<u32>,
     /// Points of explicit outlines so far.
     outline_points: usize,
+    /// Per section with an explicit outline: its `SECT` index, node and
+    /// world outline, for W104.
+    explicit: Vec<(u32, u32, Vec<P>)>,
 }
 
 impl<'d> Builder<'d> {
@@ -884,7 +917,7 @@ impl<'d> Builder<'d> {
                     place: m.place,
                     expanded: r,
                 };
-                if let Some(row_bounds) = self.row(c, &ctx, e, f, &mut problems) {
+                if let Some(row_bounds) = self.row(c, &ctx, e, &mut problems) {
                     grow(&mut bounds, row_bounds);
                 }
             }
@@ -898,6 +931,9 @@ impl<'d> Builder<'d> {
             }
             if problems.too_long {
                 f.push(Code::E006, node, Detail::LabelTooLong);
+            }
+            if let Some((rid, position)) = problems.empty {
+                f.push(Code::E003, node, Detail::EmptyLabel { rid, position });
             }
         }
         if let Some((index, _)) = section
@@ -988,6 +1024,9 @@ impl<'d> Builder<'d> {
         let chars = s.label.as_deref().map_or(0, |l| l.chars().count());
         let at = [f64::from(anchor[0]) / 4.0, f64::from(anchor[1]) / 4.0];
         let size = geometry::label_size(&world, at, chars);
+        if matches!(s.outline, doc::Outline::Points(_)) {
+            self.explicit.push((index, s.id, world));
+        }
         if let Some(rec) = self.sections.get_mut(index as usize) {
             rec.mesh_first = first as u32; // ≤ 3 × MAX_VERTICES
             rec.mesh_count = (self.outline_indices.len() - first) as u32;
@@ -1011,7 +1050,6 @@ impl<'d> Builder<'d> {
         c: &mut Compiler<'d>,
         ctx: &RowCtx<'_, 'd>,
         e: &Expansion<'d>,
-        f: &mut Findings,
         problems: &mut Problems,
     ) -> Option<Bounds> {
         let row = e.rows.get(ctx.expanded)?;
@@ -1020,11 +1058,7 @@ impl<'d> Builder<'d> {
             *slot = section_label;
         }
         if row.label.as_str().is_empty() {
-            let detail = Detail::EmptyLabel {
-                rid: row.rid,
-                position: None,
-            };
-            f.push(Code::E003, Some(row.node), detail);
+            problems.empty.get_or_insert((row.rid, None));
         }
         let first = row.first_seat as usize;
         let seats = e.seats.get(first..first + usize::from(row.seat_count))?;
@@ -1098,11 +1132,7 @@ impl<'d> Builder<'d> {
             }
             let (text, full) = self.labels(row, seat, section_label);
             if text.as_str().is_empty() {
-                let detail = Detail::EmptyLabel {
-                    rid: row.rid,
-                    position: Some(seat.index),
-                };
-                f.push(Code::E003, Some(row.node), detail);
+                problems.empty.get_or_insert((row.rid, Some(seat.index)));
             }
             match full {
                 Some(full) => self.label_hash.push((fnv1a(full.as_str()), idx)),
@@ -1361,12 +1391,14 @@ fn tess_detail(e: TessError) -> Detail {
     }
 }
 
-/// Problems found per seat but reported once per node.
+/// Problems found per row or seat but reported once per node.
 #[derive(Default)]
 struct Problems {
     no_category: bool,
     out_of_range: bool,
     too_long: bool,
+    /// The first empty row label (no position) or seat label.
+    empty: Option<(u32, Option<u16>)>,
 }
 
 struct RowCtx<'u, 'd> {
@@ -1423,6 +1455,9 @@ fn node_floor(node: &Node) -> Option<u32> {
         Node::RowBlock(n) => n.floor,
         Node::Row(n) => n.floor,
         Node::Shape(n) => n.floor,
+        Node::Text(n) => n.floor,
+        Node::Icon(n) => n.floor,
+        Node::Image(n) => n.floor,
         _ => None,
     }
 }
@@ -1442,8 +1477,13 @@ fn is_hidden(node: &Node) -> bool {
     }
 }
 
-/// Bookable non-seat objects are not compiled yet and block the compile;
-/// text, icon and image nodes are left for a later slice (FMT-019).
+/// A reference image: the designer's only, neither checked nor compiled; its
+/// `id` still counts for E009.
+fn is_reference(node: &Node) -> bool {
+    matches!(node, Node::Image(i) if i.role == doc::ImageRole::Reference)
+}
+
+/// Bookable non-seat objects are not compiled yet and block the compile.
 fn unsupported(node: &Node, f: &mut Findings) {
     let kind = match node {
         Node::Table(_) => "table",

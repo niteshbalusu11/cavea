@@ -19,8 +19,8 @@ pub(crate) const MAX_POINTS: usize = 4_096;
 /// Points of all explicit outlines in one chart.
 pub(crate) const MAX_OUTLINE_POINTS: usize = 262_144;
 /// Character advance and line height of the label text model, in ems (§3.1.1).
-const ADVANCE: f64 = 0.6;
-const LINE_HEIGHT: f64 = 1.2;
+pub(crate) const ADVANCE: f64 = 0.6;
+pub(crate) const LINE_HEIGHT: f64 = 1.2;
 /// Cells the pole-of-inaccessibility search may evaluate.
 const POLE_CELLS: usize = 1_024;
 
@@ -604,6 +604,102 @@ fn contains(poly: &[P], p: P) -> bool {
         }
     }
     inside
+}
+
+/// Vertices whose `y` falls strictly inside one band of [`Bands`], at most.
+const BAND_VERTICES: usize = 32;
+
+/// The crossing-rule test of [`contains`] for many points against one simple
+/// polygon of `n` points, in O(log n + 64) per point after O(n² / 32) set-up.
+/// Horizontal bands start at every 32nd vertex `y` in sorted order. An edge
+/// that crosses a band whole is listed in it by `x`, which is one order
+/// across the band since edges of a simple polygon do not cross; an edge
+/// ending inside a band is listed apart, and a band holds at most 62 such.
+pub(crate) struct Bands<'a> {
+    poly: &'a [P],
+    /// Band `k` is `limits[k] ≤ y < limits[k + 1]`.
+    limits: Vec<f64>,
+    /// Per band: the edges crossing it whole, by `x`; the other edges in it.
+    whole: Vec<Vec<usize>>,
+    part: Vec<Vec<usize>>,
+}
+
+impl<'a> Bands<'a> {
+    pub fn new(poly: &'a [P]) -> Self {
+        let mut ys: Vec<f64> = poly.iter().map(|p| p[1]).collect();
+        ys.sort_by(f64::total_cmp);
+        let mut limits: Vec<f64> = ys.iter().step_by(BAND_VERTICES).copied().collect();
+        limits.extend(ys.last());
+        limits.dedup();
+        let bands = limits.len().saturating_sub(1);
+        let (mut whole, mut part) = (vec![Vec::new(); bands], vec![Vec::new(); bands]);
+        let mut b = Self {
+            poly,
+            limits,
+            whole: Vec::new(),
+            part: Vec::new(),
+        };
+        for i in 0..poly.len() {
+            let (a, c) = b.edge(i);
+            let (lo, hi) = (a[1].min(c[1]), a[1].max(c[1]));
+            let first = b.limits.partition_point(|&y| y <= lo).saturating_sub(1);
+            for (k, pair) in b.limits.windows(2).enumerate().skip(first) {
+                let &[y0, y1] = pair else { break };
+                if y0 >= hi {
+                    break;
+                }
+                let list = if lo <= y0 && hi >= y1 {
+                    &mut whole
+                } else {
+                    &mut part
+                };
+                if let Some(list) = list.get_mut(k) {
+                    list.push(i);
+                }
+            }
+        }
+        for (k, list) in whole.iter_mut().enumerate() {
+            let mid = match b.limits.get(k..k + 2) {
+                Some(&[y0, y1]) => (y0 + y1) / 2.0,
+                _ => continue,
+            };
+            list.sort_by(|&i, &j| b.x_at(i, mid).total_cmp(&b.x_at(j, mid)));
+        }
+        b.whole = whole;
+        b.part = part;
+        b
+    }
+
+    fn edge(&self, i: usize) -> (P, P) {
+        let n = self.poly.len();
+        let at = |k: usize| self.poly.get(k % n.max(1)).copied().unwrap_or_default();
+        (at(i), at(i + 1))
+    }
+
+    /// Where edge `i` meets the line at height `y`, as [`contains`] computes it.
+    fn x_at(&self, i: usize, y: f64) -> f64 {
+        let (a, b) = self.edge(i);
+        (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]
+    }
+
+    pub fn contains(&self, p: P) -> bool {
+        let k = self.limits.partition_point(|&y| y <= p[1]);
+        let (Some(whole), Some(part)) = (
+            self.whole.get(k.wrapping_sub(1)),
+            self.part.get(k.wrapping_sub(1)),
+        ) else {
+            return false;
+        };
+        let left = whole.partition_point(|&i| p[0] >= self.x_at(i, p[1]));
+        let mut inside = (whole.len() - left) % 2 == 1;
+        for &i in part {
+            let (a, b) = self.edge(i);
+            if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < self.x_at(i, p[1]) {
+                inside = !inside;
+            }
+        }
+        inside
+    }
 }
 
 /// Distance from `p` to the polygon's boundary, negative outside.

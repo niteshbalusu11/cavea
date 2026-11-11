@@ -223,13 +223,19 @@ Placement and fields:
 - A shape is placed like a row: in its own space, rotated by `rotation` about its `origin` and moved there, then by its section, if it has one, into the world. It is on its section's floor (naming another is E007), or else on its own `floor` or the first floor. `rect` and `ellipse` are centred on the origin; `points` and `d` are in the node's own space.
 - `style`: `fill` and `stroke` are `#RRGGBB` or `null` (none), `strokeWidth` is at least 0 (0 draws no stroke), `opacity` is 0 to 1 and applies to both. `layer` is `below` (under the seats, the default) or `above`. A `line` is never filled.
 - `path` data is the SVG subset `M L H V C S Q T Z` in absolute and relative form, with implicit repeats; elliptical arcs (`A`) are refused (E005), and the designer writes them as cubic curves. Every subpath is filled as if closed; a subpath of one point is dropped.
-- `text`, `icon` and `image` nodes are not compiled yet (FMT-019); the compiler skips them.
+- `text`, `icon` and `image` are placed at their `origin`, moved into the world by their section like shapes and on the same floor, and turned by their `rotation` plus their section's, each reduced exactly to a turn as in §3.1.1 and stored as a binary angle (nearest, ties to even; a whole turn is 0).
+- `text`: `text` is 1 to 256 bytes (empty is E005, longer E006). `size` is the em size in chart units, quantised, 0.25 to 16,383.75. `weight` is 1 to 1,000 (CSS), default 400. `color` is `#RRGGBB`. `align` is `left`, `center` (the default) or `right`. `minZoom` is at least 0: the zoom, in CSS pixels per chart unit (`04-renderer.md` §13), below which the renderer hides the text; 0 always shows it. Text has no measured width, so its box is the section-label model of §3.1.1: `0.6 × c × size` wide and `1.2 × size` tall for `c` Unicode scalar values, vertically centred on the position, and along its own x axis starting at (`left`), centred on (`center`) or ending at (`right`) the position, turned with the text.
+- `icon`: `icon` is one of `entrance`, `exit`, `stairs`, `toilets`, `bar`, `lift`; any other key parses (so the designer keeps it) and is E007. `size` is the side of its square, centred on its position, as for text.
+- `image`: `asset` is the asset's content hash as `POST /v1/assets` returns it, 32 lowercase hex digits; another form is E005. Whether the workspace holds the asset is the server's check (E007): the compiler holds no assets. `size` is `[w, h]`, both above 0; `opacity` is 0 to 1 (default 1), stored as the nearest byte, ties to even. A `background` image is compiled into `IMGS`: a box `w × h` centred on its position, unrotated, with the angle turning it about its centre. A `reference` image is the designer's only: the compiler neither checks nor compiles it, though its `id` counts for E009.
 
 ### 2.8 Migrations
 
-- `schema` is an integer. `cavea-compiler` holds a migration function for each step.
+- `schema` is an integer. `cavea-compiler` holds a migration function for each step: `STEPS[i]` in `src/migrate.rs` rewrites a document of schema *i* + 1 into *i* + 2 as a JSON object, and the current schema (`SCHEMA`) is 1 plus the number of steps.
+- Parsing (`ChartDocument::from_json`) reads `schema` first. The current schema parses directly; an older one is migrated step by step as JSON, then parsed; schema 0, or one newer than the compiler, is refused before the typed parse, so a newer document's new fields do not hide the reason. Both that and a failed step are E010 (`DocumentError::finding`).
 - The server stores the document as uploaded and migrates on read. The designer saves in the current schema.
-- A migration never changes an `oid`.
+- A migration never changes an `oid`, an `id` or a `rid`.
+- **Stored samples.** `crates/cavea-compiler/samples/schema-N/` holds documents written in schema *N*, listed in `SAMPLES` in `src/migrate/tests.rs`. They are never edited once stored, and the formatter skips them. Schema 1 has `small.json` and `full.json`, which uses every node type the compiler compiles and every option of each; tables, booths and areas get samples when they compile. The test migrates every sample to the current schema, compiles it without errors, and checks that the set of `id`, `rid` and `oid` values (node and row ids, `oids` runs, `oid`, `tableOid` and `seatOverrides` keys) is unchanged.
+- **Adding schema 2.** Write `fn v1_to_v2(&mut Map<String, Value>) -> Result<(), &'static str>`, which rewrites the document object (the caller then sets `schema`) and returns a short reason for a document it cannot migrate, and append it to `STEPS`, so `SCHEMA` becomes 2. Change the document types and §2 to schema 2. Leave `samples/schema-1/` untouched and add `samples/schema-2/small.json` and `full.json` written in schema 2, `full` using every node type and option including what schema 2 adds, to `SAMPLES`. If schema 2 renames a field that holds ids, teach the test's `ids` function the new name. The schema-1 samples then prove the step: they must migrate, compile and keep their ids.
 
 ## 3. Compiler
 
@@ -255,7 +261,7 @@ The compiler is deterministic: the same document always produces the same bytes.
 
 #### 3.1.1 Pipeline rules
 
-- **Schema and structure (1–2).** Only the current schema compiles (E010). Hidden nodes and their children are not compiled. `table`, `booth` and `area` nodes, and a section inside a section, are not compiled yet: each is reported as `Unsupported` and blocks the compile, so a bookable object is never left out.
+- **Schema and structure (1–2).** Only the current schema compiles (E010); parsing migrates older ones (§2.8). Hidden nodes and their children are not compiled. `table`, `booth` and `area` nodes, and a section inside a section, are not compiled yet: each is reported as `Unsupported` and blocks the compile, so a bookable object is never left out.
 - **Transform (4).** A node's points are rotated about its own origin by `rotation`, then moved by `origin`, into its parent's space; a section does the same into world space. Rotation is first reduced exactly to whole turns (the remainder of `rotation` divided by 360, as C's `fmod`), then uses the compiler's own sine and cosine, like expansion.
 - **Segments (5).** Within a row, a segment continues from one seat to the next while their positions are consecutive (no removed position between) and the distance between them, in node space after nudges, is at most 1.5 × the seat pitch; a larger gap starts a new segment. A row whose positions are all removed, or that has none, holds no seats and is not compiled; its seat rule is not stored.
 - **Labels (6–7).** A seat's label is its override or its row's rule. The full label is the chart's `labelTemplate` with `{section}`, `{row}` and `{seat}` replaced in one pass by the section label, the row label and the seat label; any other text, braces included, is copied as is. `{section}` is empty for a row outside any section or in a section without a label. Full labels of compiled seats (removed positions are not objects) are unique in the chart (E001) and at most 64 bytes (E006).
@@ -267,10 +273,11 @@ The compiler is deterministic: the same document always produces the same bytes.
 - **Fill (12).** The rings that are not flat, closed, are filled by `lyon` with the even-odd rule, so a ring inside another is a hole, at tolerance 0.001 cu. They must each be simple and must not meet each other (else E005, self-intersecting fill), and the triangles must cover what the rule fills: their areas add up to the sum of the rings' areas, a ring counted negative inside an odd number of others, within a millionth (else E005).
 - **Stroke (12).** Strokes do not go through `lyon`. The compiler builds convex pieces of width `strokeWidth`, centred on the path, with butt ends: one quadrilateral across each segment, and at each join with turn φ an outer corner, a miter, or a bevel when the miter is longer than 4 stroke widths (SVG's default limit) or adds no more than the flattening tolerance. The two segments of a join meet on its inner side at the inner miter point, `strokeWidth / 2 · tan(φ/2)` back along each, so the pieces tile the stroke; where that is more than half of either segment, the join keeps butt ends and the segments overlap on its inner side (a translucent stroke is darker there). Pieces are drawn as triangle fans sharing their common vertices; a piece that rounding makes flat is dropped.
 - **Decoration in `MESH` (12).** Shapes are taken in document order (section children at their section's place), each its fill then its stroke, with `fill` or `stroke` colour and alpha `opacity × 255` (nearest, ties to even) in every vertex. The decoration draw ranges follow the section outlines in the index buffer: one range per floor and layer that has triangles, ordered by floor, then layer below before above.
+- **Text, icons and images (12).** `TEXT`, `ICON` and `IMGS` list them in document order, section children at their section's place, as shapes are taken.
 - **Label anchor (11).** The pole of inaccessibility of the world outline, quantised: Mapbox's polylabel search over square cells, starting with cells of side `max(min(w, h), max(w, h) / 256)` covering the outline's `w × h` bounding box and with three candidates, the centroid, the box centre and the centroid of the largest outline triangle (the first in index order on a tie), which is inside, so the result is too; taking cells best potential first (the earlier cell on a tie), to a precision of `max(0.5, (w + h) / 512)` cu; no cell is split once 1,024 cells have been made.
 - **Label size (11).** The largest size `s`, in quarter units from 0 to 65,535, at which the section's label fits the outline under this text model: the label is a box centred on the quantised anchor, axis-aligned in world space, `0.6 × c × s` wide and `1.2 × s` tall for a label of `c` Unicode scalar values, and it fits when the anchor is inside the outline and no outline edge touches the box. A section without a label, or whose quantised anchor falls outside an outline thinner than a quarter unit, has size 0. A renderer draws the label at most this size, centred on the anchor, and may assume the same model.
 - **No outline.** A section without seats and with an automatic outline has none: an empty outline range, anchor (0, 0), label size 0 and bounds (0, 0, 0, 0).
-- **Quantise (13).** A coordinate *x* in chart units becomes the integer nearest 4*x*, ties to even. A position with |4*x*| above 2³¹ − 1 (about ±536,870,911 cu) is an error (E005). Bounds are taken over the quantised seat positions, and a section's also over its outline. A floor's bounds cover its seats, its sections' outlines and its shapes' vertices, rounded outward to quarter units. The chart's bounds cover its floors'. An empty floor or chart, and a section with neither seats nor outline, has the box (0, 0, 0, 0). A row's label anchors lie one step beyond its end seats: `2a − b` for end seat `a` and its neighbour `b` (the seat itself in a one-seat row).
+- **Quantise (13).** A coordinate *x* in chart units becomes the integer nearest 4*x*, ties to even. A position with |4*x*| above 2³¹ − 1 (about ±536,870,911 cu) is an error (E005). Bounds are taken over the quantised seat positions, and a section's also over its outline. A floor's bounds cover its seats, its sections' outlines, its shapes' vertices, and the turned boxes of its text, icons and background images (§2.7), rounded outward to quarter units, so fitting the camera to a floor shows a stage label far from the seats. The chart's bounds cover its floors'. An empty floor or chart, and a section with neither seats nor outline, has the box (0, 0, 0, 0). A row's label anchors lie one step beyond its end seats: `2a − b` for end seat `a` and its neighbour `b` (the seat itself in a one-seat row).
 - **Emit (14–15).** `META` names the compiler and its version. The content hash of each artefact is the first 16 bytes of BLAKE3 over the file after its 32-byte header.
 
 ### 3.2 Validation
@@ -285,7 +292,7 @@ Errors block publishing. Warnings do not, unless the workspace promotes them.
 | E004 | Error | Area without a capacity |
 | E005 | Error | Invalid geometry: self-intersecting outline, zero size, non-finite number |
 | E006 | Error | A limit in `02-domain-model.md` §14 exceeded |
-| E007 | Error | Reference to an unknown category, floor or asset |
+| E007 | Error | Reference to an unknown category, floor, icon or asset |
 | E008 | Error | Duplicate category key |
 | E009 | Error | Duplicate or reused `oid` |
 | E010 | Error | Unsupported schema or failed migration |
@@ -300,12 +307,43 @@ Errors block publishing. Warnings do not, unless the workspace promotes them.
 | W109 | Warning | Section without a label |
 | W110 | Warning | Chart extent above 200,000 cu (precision) |
 
-Each finding carries the node id, so the designer can select the offender. Findings about settings, categories and floors carry no node id.
+Each finding carries the node id, so the designer can select the offender. Findings about settings, categories and floors carry no node id. A finding names the most specific node: the row block or row of a seat, not its section.
 
-- E005 also covers an explicit outline that is flat or crosses itself (§2.3), and any other invalid value: a non-finite origin or rotation, a colour that is not `#RRGGBB`, a section priority that is not finite and positive, a seat size outside 0.25 to 16,383.75 cu, a world position outside the quantised range (§3.1.1), a shape field outside its range or missing for its kind (§2.7), path data that is not valid or holds an elliptical arc, and a filled shape whose rings cross or touch.
-- E007 also covers a floor id listed twice and a section child that names a floor other than its section's.
-- E009 covers `id`, `rid` and `oid` together, since one counter allocates them, over the nodes that are compiled, and `oids` runs that do not cover their row.
-- A finding the pipeline meets once per seat (no category, a full label too long, a position out of range) is reported once per node. A compile lists at most 1,000 findings.
+Errors:
+
+- E002: a seat's category is its override's, else its row block's or row's, else its section's. A seat with none is E002 on its row block or row.
+- E003: a row whose label is empty, or a seat whose label is (an empty override, custom entry or scheme label), on its row block or row, naming the first such row and position. A custom list too short for its row is E003 too.
+- E004 cannot occur yet: areas are not compiled (`unsupported`, §3.1.1). It will be checked with them.
+- E005 also covers an explicit outline that is flat or crosses itself (§2.3), and any other invalid value: a non-finite origin or rotation, a colour that is not `#RRGGBB`, a section priority that is not finite and positive, a seat size outside 0.25 to 16,383.75 cu, a world position outside the quantised range (§3.1.1), a shape field outside its range or missing for its kind (§2.7), path data that is not valid or holds an elliptical arc, a filled shape whose rings cross or touch, and a text, icon or image field outside its range (§2.7): empty text, a size, weight, minimum zoom or opacity out of range, an asset hash in another form.
+- E006 also covers a text longer than 256 bytes and the counts of 02 §14.
+- E007 also covers a floor id listed twice, a section child that names a floor other than its section's, and an icon key not in §2.7. An asset the workspace does not hold is E007 from the server, which holds the assets.
+- E009 covers `id`, `rid` and `oid` together, since one counter allocates them, over the nodes that are compiled (a reference image's `id` included), and `oids` runs that do not cover their row. The finding names the later node and `related` the other.
+- E010: a schema of 0 or newer than the compiler, or a failed migration (§2.8).
+- `unsupported` (not in the table): a `table`, `booth` or `area`, or a section inside a section, which this compiler does not compile yet (§3.1.1). It has error severity.
+- A finding the pipeline meets once per seat or row (no category, an empty label, a full label too long, a position out of range) is reported once per node.
+
+Warnings are checked only on a chart without errors, once it is built: they describe the compiled chart, with quantised positions, world outlines and bounds.
+
+- W101: two seats on one floor whose quantised centres are closer than 0.6 × `seatSize`, exactly `25 d² < 9 s²` in quarter units. Reported once per row block or row, at its first such seat in `idx` order, with `related` the node of a seat it overlaps (itself, within one node), and at most 100 times. The check is linear after one sort: seats go into square cells whose diagonal is below 0.6 seat sizes, so two seats in one cell overlap, and a seat alone in its cell is compared with the cells within reach.
+- W102: a floor holding seats that has no focal point; the implicit floor of a chart without floors has `null` for its floor.
+- W103: a compiled row with exactly one seat (removed positions do not count), once per row block or row.
+- W104: a seat whose quantised centre is not inside its section's explicit world outline (§3.1.1), once per row block or row, with `related` the section. Inside is decided by the crossing rule of the label anchor (a ray towards +x crosses the outline an odd number of times, an edge counting when one end is above the centre and the other not), so a centre exactly on the outline counts as inside on some edges and outside on others: deciding "on the line" exactly would need more precision than `f64` gives for `f32` outline points against quarter-unit seats. An automatic outline contains its seats by construction.
+- W105: a category no compiled seat uses.
+- W106: a chart with seats, none of them accessible by its own flag or its category's `accessible`.
+- W107: a category whose colour is too similar to an earlier category's, naming the first; and a category whose colour has low contrast against either built-in theme's background, naming the worse. *Too similar:* the "redmean" distance on 0–255 channels, `√((2 + r̄/256)·ΔR² + 4·ΔG² + (2 + (255 − r̄)/256)·ΔB²)` with `r̄` the mean red, is below 40. *Low contrast:* the WCAG 2 contrast ratio against `#FAFAF9` (light) or `#1C1917` (dark), the backgrounds of `04-renderer.md` §19, is below 3:1, the non-text minimum of `11-accessibility.md` §6. The theme is chosen at run time, so both are checked. Relative luminance uses the exact sRGB curve, as the renderer's themes do: `c / 12.92` up to 0.04045, else `t^2.4` with `t = (c + 0.055) / 1.055`, computed without `powf` as `t² · t^0.4`, `t^0.4` by six Newton steps on `y⁵ = t²` from `√t`.
+- W108: a text shown at its floor's fit zoom (`minZoom` at most that zoom) whose size there is below 10 CSS px. The fit zoom is that of `04-renderer.md` §13 on a reference viewport of 1280 × 720 CSS px with 24 px padding: `min(1232 / W, 672 / H)` for the floor's bounds `W × H` in cu. An axis of zero extent sets no limit; a floor of zero size, none.
+- W109: a section with no `label`, or an empty one.
+- W110: chart bounds (§3.1.1) wider or taller than 200,000 cu.
+
+Order and limit:
+
+- Findings come in a fixed order, identical on every platform: errors in pipeline order (§3.1), each step in the order it visits nodes (document order for the structure, `idx` order for seats); then warnings by code, each in the order its rule above gives, else `idx`, `SECT`, `TEXT` or document order. No hash-map order reaches them.
+- A compile lists at most 1,000 findings. Warnings are checked only when there is no error, so they never crowd out an error.
+
+Output:
+
+- `compile` returns the warnings of a chart that compiled in `Compiled::findings`, and the errors of one that did not in `CompileError::Invalid`. Validation is compiling: on 100,000 seats, stopping before encoding saves nothing measurable, so there is no separate path. A document whose compile reports no error always compiles.
+- A finding serialises as `{"code": "E009", "severity": "error", "node": 11, "related": 5, "message": "id 11 is also used in node 5"}`. `code` is as in the table, or `"unsupported"`; `severity` is `"error"` or `"warning"`; `node` is the node to select or `null`; `related` is the other node involved (the earlier of a duplicate label or id, the node a W101 seat overlaps, the section of W104) or `null`; `message` is a short English sentence. Messages quote labels and keys, at most 64 bytes of each with `…` beyond, and never text content or asset hashes.
 
 ### 3.3 Seat rank
 
@@ -465,8 +503,8 @@ Fields are listed in byte order. Record sizes are in brackets.
 - **`OBJS`** [53]: object kind, label `str`, category u32, capacity u32 (areas; 1 otherwise), floor u32, section `opt`, mesh `range` of `MESH` indices, bounds `box`, label anchor `point`.
 - **`TBLS`** [29]: table shape, rotation `angle`, chairs u16, first seat `opt` (booked by seat: the first of *chairs* consecutive seats; booked whole: `NONE`), object `opt` (booked whole: index into `OBJS`; booked by seat: `NONE`), centre `point`, width and height as two `q`. Exactly one of first seat and object is `NONE`.
 - **`MESH`** (Raw): vertex count, index count and draw count as three varints, then the vertices [12: x f32, y f32 in chart units, `rgba`], the indices [4: u32], and the draw ranges [13: floor u32, mesh layer, `range` of indices].
-- **`TEXT`** [31]: text `str`, floor u32, position `point`, size `size`, angle `angle`, colour `rgba`, text align, weight u16, minimum zoom `f32`.
-- **`ICON`** [20]: icon key `str` (`entrance`, `exit`, `stairs`, `toilets`, `bar`, `lift`), floor u32, position `point`, size `size`, angle `angle`.
+- **`TEXT`** [31]: text `str`, floor u32, position `point`, size `size`, angle `angle`, colour `rgba`, text align, weight u16, minimum zoom `f32`. Position, alignment and minimum zoom are as in §2.7.
+- **`ICON`** [20]: icon key `str` (`entrance`, `exit`, `stairs`, `toilets`, `bar`, `lift`), floor u32, position `point` (the square's centre), size `size` (its side), angle `angle`.
 - **`IMGS`** [27]: asset hash `str`, floor u32, bounds `box` (unrotated, centred on the image's position), angle `angle` (about the box's centre), opacity u8 (255 opaque).
 - **`SOID`** (Delta): one u32 `oid` per object, in `idx` order.
 - **`SRNK`** (Delta): one u16 rank per object, in `idx` order; values above 65,535 are an error.

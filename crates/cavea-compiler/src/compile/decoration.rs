@@ -1,47 +1,74 @@
-//! Decoration shapes (`docs/03-chart-format.md` §2.7, §3.1.1) into `MESH`
-//! draw ranges by floor and layer, with their colours baked in. Text, icon
-//! and image nodes are not compiled yet.
+//! Decoration (`docs/03-chart-format.md` §2.7, §3.1.1): shapes into `MESH`
+//! draw ranges by floor and layer, with their colours baked in; text, icons
+//! and background images into `TEXT`, `ICON` and `IMGS`. Each grows its
+//! floor's bounds.
 
 use cavea_format::{self as ccf, Bounds};
 use lyon_tessellation::FillRule;
 
-use super::{Compiler, Place, grow, outer_box, parse_color, quantise_point};
+use super::{Compiler, Interner, Place, grow, outer_box, parse_color, quantise, quantise_point};
 use crate::document::{self as doc, Node};
 use crate::finding::{Code, Detail, Findings};
-use crate::geometry::{self, MAX_POINTS, P, area2};
+use crate::geometry::{self, ADVANCE, LINE_HEIGHT, MAX_POINTS, P, area2};
 use crate::shape::{self, PathError, Subpath};
 use crate::tessellate::{self, TessError};
 
-/// Shapes per chart.
-const MAX_DECORATIONS: usize = 65_535;
+/// Per chart (02 §14): shapes, text objects, icons, background images.
+const LIMITS: [(usize, &str); 4] = [
+    (65_535, "shapes"),
+    (65_535, "text objects"),
+    (65_535, "icons"),
+    (64, "background images"),
+];
+/// Bytes of one text object's text.
+const MAX_TEXT_BYTES: usize = 256;
+/// The icon keys of 03 §2.2.
+const ICONS: [&str; 6] = ["entrance", "exit", "stairs", "toilets", "bar", "lift"];
 /// Points of all shapes of a chart, once flattened.
 const MAX_SHAPE_POINTS: usize = 262_144;
 /// Indices in the whole `MESH` table.
 const MAX_INDICES: usize = 1 << 21;
-/// A decoration node to compile, with its parent's placement and its floor.
+/// A decoration node to compile, with its parent's placement and rotation
+/// (degrees) and its floor.
 pub(super) struct Decoration<'d> {
     pub node: &'d Node,
     parent: Place,
+    turn: f64,
     floor: usize,
 }
 
 impl<'d> Compiler<'d> {
-    /// Queues a visible shape, up to [`MAX_DECORATIONS`].
+    /// Queues a visible decoration node, up to the limit of its kind. A
+    /// `reference` image is the designer's only and is not compiled.
     pub(super) fn decoration(
         &mut self,
         node: &'d Node,
-        parent: Place,
+        (parent, turn): (Place, f64),
         floor: usize,
         f: &mut Findings,
     ) {
-        if self.decorations.len() == MAX_DECORATIONS {
-            let (code, detail) = too_many("shapes", MAX_DECORATIONS);
-            f.push(code, None, detail);
+        let kind = match node {
+            Node::Shape(_) => 0,
+            Node::Text(_) => 1,
+            Node::Icon(_) => 2,
+            Node::Image(i) if i.role == doc::ImageRole::Background => 3,
+            _ => return,
+        };
+        let (Some(count), Some(&(limit, what))) =
+            (self.deco_counts.get_mut(kind), LIMITS.get(kind))
+        else {
+            return;
+        };
+        *count += 1;
+        if *count == limit + 1 {
+            let (code, detail) = too_many(what, limit);
+            f.push(code, Some(super::node_id(node)), detail);
         }
-        if self.decorations.len() < MAX_DECORATIONS {
+        if *count <= limit {
             self.decorations.push(Decoration {
                 node,
                 parent,
+                turn,
                 floor,
             });
         }
@@ -85,6 +112,11 @@ fn unit_byte(x: f64) -> Option<u8> {
 
 /// The compiled decoration.
 pub(super) struct Decorated {
+    pub texts: Vec<ccf::Text>,
+    /// The node of each text, for W108.
+    pub text_nodes: Vec<u32>,
+    pub icons: Vec<ccf::Icon>,
+    pub images: Vec<ccf::Image>,
     /// Per floor, below then above the seats: triangle indices.
     layers: Vec<Vec<u32>>,
     /// Per floor: the box of its decoration.
@@ -98,6 +130,10 @@ pub(super) struct Decorated {
 impl Decorated {
     pub fn new(floors: usize, indices: usize) -> Self {
         Self {
+            texts: Vec::new(),
+            text_nodes: Vec::new(),
+            icons: Vec::new(),
+            images: Vec::new(),
             layers: vec![Vec::new(); 2 * floors],
             bounds: vec![None; floors],
             points: 0,
@@ -128,14 +164,114 @@ impl Decorated {
         draws
     }
 
-    /// Compiles one shape; a refusal is a finding naming it.
+    /// Compiles one decoration node; a refusal is a finding naming it.
     pub fn node(
         &mut self,
         deco: &Decoration<'_>,
         vertices: &mut Vec<ccf::Vertex>,
+        strings: &mut Interner,
     ) -> Result<(), Failure> {
-        let Node::Shape(s) = deco.node else {
-            return Ok(());
+        let floor = deco.floor as u32; // < MAX_FLOORS
+        let s = match deco.node {
+            Node::Shape(s) => s,
+            Node::Text(t) => {
+                let (_, pos, angle) = placed(deco, t.origin, t.rotation)?;
+                if t.text.is_empty() {
+                    return Err((Code::E005, Detail::EmptyText));
+                }
+                if t.text.len() > MAX_TEXT_BYTES {
+                    return Err(too_many("bytes of text", MAX_TEXT_BYTES));
+                }
+                let size = length(t.size)?;
+                if !(1..=1000).contains(&t.weight) {
+                    return Err(invalid("weight"));
+                }
+                let color = parse_color(&t.color).ok_or(invalid("color"))?;
+                let min_zoom = t.min_zoom as f32;
+                if !(t.min_zoom >= 0.0 && min_zoom.is_finite()) {
+                    return Err(invalid("minZoom"));
+                }
+                // The section label model (§3.1.1): 0.6 em per character,
+                // 1.2 em tall, vertically centred on the position.
+                let em = f64::from(size) / 4.0;
+                let (w, h) = (
+                    ADVANCE * t.text.chars().count() as f64 * em,
+                    LINE_HEIGHT * em,
+                );
+                let (x0, align) = match t.align {
+                    doc::Align::Left => (0.0, ccf::TextAlign::Left),
+                    doc::Align::Center => (-w / 2.0, ccf::TextAlign::Center),
+                    doc::Align::Right => (-w, ccf::TextAlign::Right),
+                };
+                let at = quarters(pos);
+                self.cover(deco.floor, at, angle, [x0, -h / 2.0, x0 + w, h / 2.0])?;
+                self.texts.push(ccf::Text {
+                    text: strings.get(&t.text),
+                    floor,
+                    pos,
+                    size,
+                    angle,
+                    color,
+                    align,
+                    weight: t.weight,
+                    min_zoom,
+                });
+                self.text_nodes.push(t.id);
+                return Ok(());
+            }
+            Node::Icon(i) => {
+                let (_, pos, angle) = placed(deco, i.origin, i.rotation)?;
+                if !ICONS.contains(&i.icon.as_str()) {
+                    let key = i.icon.clone();
+                    return Err((Code::E007, Detail::UnknownIcon { key }));
+                }
+                let size = length(i.size)?;
+                let r = f64::from(size) / 8.0;
+                self.cover(deco.floor, quarters(pos), angle, [-r, -r, r, r])?;
+                self.icons.push(ccf::Icon {
+                    key: strings.get(&i.icon),
+                    floor,
+                    pos,
+                    size,
+                    angle,
+                });
+                return Ok(());
+            }
+            Node::Image(i) => {
+                let (centre, _, angle) = placed(deco, i.origin, i.rotation)?;
+                let hex = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b);
+                if !(i.asset.len() == 32 && i.asset.bytes().all(hex)) {
+                    return Err(invalid("asset"));
+                }
+                let opacity = unit_byte(i.opacity).ok_or(invalid("opacity"))?;
+                let [w, h] = i.size;
+                if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+                    return Err(invalid("size"));
+                }
+                // Unrotated, centred on the position; the angle turns it about
+                // its centre, and the floor's bounds cover the stored box
+                // turned by the stored angle.
+                let [cx, cy] = centre;
+                let q = |v: f64| quantise(v).ok_or((Code::E005, Detail::OutOfRange));
+                let (hw, hh) = (w / 2.0, h / 2.0);
+                let bounds = [q(cx - hw)?, q(cy - hh)?, q(cx + hw)?, q(cy + hh)?];
+                if bounds[2] <= bounds[0] || bounds[3] <= bounds[1] {
+                    return Err(geometry("zero size"));
+                }
+                let [x0, y0, x1, y1] = bounds.map(|v| f64::from(v) / 4.0);
+                let (hw, hh) = ((x1 - x0) / 2.0, (y1 - y0) / 2.0);
+                let at = [(x0 + x1) / 2.0, (y0 + y1) / 2.0];
+                self.cover(deco.floor, at, angle, [-hw, -hh, hw, hh])?;
+                self.images.push(ccf::Image {
+                    asset: strings.get(&i.asset),
+                    floor,
+                    bounds,
+                    angle,
+                    opacity,
+                });
+                return Ok(());
+            }
+            _ => return Ok(()),
         };
         let own = Place::new(s.origin, s.rotation).map_err(invalid)?;
         let parent = deco.parent;
@@ -162,6 +298,56 @@ impl Decorated {
         }
         Ok(())
     }
+}
+
+impl Decorated {
+    /// Grows the floor's bounds by the box `[x0, y0, x1, y1]` around `at`,
+    /// turned by the binary `angle`, rounded outward: what a renderer draws
+    /// from the stored record.
+    fn cover(&mut self, floor: usize, at: P, angle: u16, b: [f64; 4]) -> Result<(), Failure> {
+        let place = Place::new(at, f64::from(angle) * 360.0 / 65_536.0).map_err(invalid)?;
+        let [x0, y0, x1, y1] = b;
+        let corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|p| place.apply(p));
+        let b = outer_box(&corners).ok_or((Code::E005, Detail::OutOfRange))?;
+        if let Some(bounds) = self.bounds.get_mut(floor) {
+            grow(bounds, b);
+        }
+        Ok(())
+    }
+}
+
+/// A text, icon or image's position in the world (its origin, placed by its
+/// section), that position quantised, and its binary angle: its rotation plus
+/// its section's, reduced exactly to a turn.
+fn placed(
+    deco: &Decoration<'_>,
+    origin: P,
+    rotation: f64,
+) -> Result<(P, ccf::Point, u16), Failure> {
+    // Checks that the origin and rotation are finite.
+    Place::new(origin, rotation).map_err(invalid)?;
+    let centre = deco.parent.apply(origin);
+    let pos = quantise_point(centre).ok_or((Code::E005, Detail::OutOfRange))?;
+    let mut turn = (rotation % 360.0 + deco.turn % 360.0) % 360.0;
+    if turn < 0.0 {
+        turn += 360.0;
+    }
+    // 65,536 per turn; exactly 360° is 0.
+    let angle = (round_even(turn * 65_536.0 / 360.0) as u32 % 65_536) as u16;
+    Ok((centre, pos, angle))
+}
+
+/// A quantised point in chart units.
+fn quarters([x, y]: ccf::Point) -> P {
+    [f64::from(x) / 4.0, f64::from(y) / 4.0]
+}
+
+/// A size in chart units as a `size`: quarter units from 1 to 65,535.
+fn length(x: f64) -> Result<u16, Failure> {
+    quantise(x)
+        .and_then(|q| u16::try_from(q).ok())
+        .filter(|&q| q > 0)
+        .ok_or(invalid("size"))
 }
 
 /// A world point as `MESH` stores it, in `f32`, if it is within the

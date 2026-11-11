@@ -141,8 +141,13 @@ pub enum ExpandErrorKind {
 
 impl fmt::Display for ExpandError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "node {}: ", self.node)?;
-        match self.kind {
+        write!(f, "node {}: {}", self.node, self.kind)
+    }
+}
+
+impl fmt::Display for ExpandErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
             ExpandErrorKind::TooManySeatsInRow { rid, seats } => write!(
                 f,
                 "row {rid} has {seats} seats; the limit is {MAX_SEATS_PER_ROW}"

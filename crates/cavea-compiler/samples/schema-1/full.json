@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "name": "Every node and option",
+  "settings": {
+    "seatSize": 40,
+    "seatShape": "rounded",
+    "labelTemplate": "{section}/{row}/{seat}",
+    "tableLabelTemplate": "{section}/{table}/{seat}",
+    "rowLabelDisplay": "start",
+    "alphaOverflow": "spreadsheet"
+  },
+  "nextOid": 5000,
+  "categories": [
+    { "key": "vip", "label": "VIP", "color": "#B45309" },
+    { "key": "standard", "label": "Standard", "color": "#2563EB", "accessible": false },
+    { "key": "access", "label": "Accessible", "color": "#047857", "accessible": true }
+  ],
+  "floors": [
+    { "id": 1, "name": "Stalls", "level": 0, "focalPoint": [0, -800] },
+    { "id": 2, "name": "Circle", "level": 1, "focalPoint": [0, -600] }
+  ],
+  "nodes": [
+    { "id": 10, "type": "section", "name": "Orchestra", "floor": 1, "origin": [0, 0], "rotation": 0,
+      "locked": true, "label": "Orchestra", "outline": "auto", "category": "standard",
+      "priority": 1.5, "entrance": "Door 3",
+      "children": [
+        { "id": 11, "type": "rowBlock", "name": "Front", "origin": [0, 0], "rotation": 0,
+          "seatPitch": 55, "rowPitch": 95, "curve": { "kind": "arc", "radius": 2400 },
+          "align": "left", "stagger": 0.5, "skew": 5, "category": "standard",
+          "rowLabels": { "scheme": "alpha", "start": "A", "step": 1, "skip": ["I", "O"],
+            "direction": "back-to-front", "prefix": "R" },
+          "seatLabels": { "scheme": "numeric", "start": 1, "step": 1, "direction": "serpentine",
+            "continuous": true, "prefix": "s", "suffix": "x" },
+          "rows": [
+            { "rid": 12, "seats": 20, "offset": 10, "oids": [[100, 10], [150, 10]] },
+            { "rid": 13, "seats": 22, "oids": [[200, 22]], "label": "BB", "removed": [5, 6] }
+          ],
+          "seatOverrides": {
+            "100": { "flags": ["accessible", "aisle"], "category": "access" },
+            "101": { "flags": ["companion", "restrictedView", "removable"] },
+            "203": { "label": "W1", "nudge": [0, -10] }
+          } },
+        { "id": 14, "type": "rowBlock", "origin": [0, 400], "rotation": 3,
+          "curve": { "kind": "bulge", "amount": 30 }, "align": "right", "category": "vip",
+          "rowLabels": { "scheme": "custom", "custom": ["AA", "AB", "AC"] },
+          "seatLabels": { "scheme": "odd", "start": 1, "direction": "center-out" },
+          "rows": [
+            { "rid": 15, "seats": 15, "oids": [[300, 15]] },
+            { "rid": 16, "seats": 15, "oids": [[320, 15]] }
+          ] },
+        { "id": 17, "type": "rowBlock", "origin": [0, 700], "hidden": true,
+          "rows": [{ "rid": 18, "seats": 5, "oids": [[340, 5]] }] },
+        { "id": 19, "type": "row", "origin": [-600, 900], "rotation": -4,
+          "path": { "kind": "polyline", "points": [[0, 0], [400, 0], [700, 80]] },
+          "seatPitch": 50, "seats": 12, "oids": [[400, 12]], "label": "Z",
+          "seatLabels": { "scheme": "alpha", "direction": "rtl" }, "category": "standard",
+          "removed": [3], "seatOverrides": { "405": { "flags": ["aisle"] } } },
+        { "id": 20, "type": "shape", "kind": "rect", "origin": [500, -300], "size": [1200, 300],
+          "cornerRadius": 20, "style": { "fill": "#1F2937", "stroke": "#F9FAFB", "strokeWidth": 4,
+            "opacity": 0.9 }, "layer": "above" },
+        { "id": 21, "type": "text", "origin": [500, -300], "text": "STAGE", "size": 120,
+          "weight": 600, "color": "#F9FAFB", "align": "center", "minZoom": 0 }
+      ] },
+    { "id": 30, "type": "section", "floor": 2, "origin": [3000, 200], "rotation": 15,
+      "label": "Circle", "category": "vip",
+      "outline": { "points": [[-100, -100], [1500, -100], [1500, 400], [-100, 400]] },
+      "children": [
+        { "id": 31, "type": "rowBlock", "curve": { "kind": "none" }, "align": "left",
+          "rowLabels": { "scheme": "numeric", "start": 1 },
+          "seatLabels": { "scheme": "even", "start": 2, "direction": "rtl" },
+          "rows": [
+            { "rid": 32, "seats": 25, "oids": [[500, 25]] },
+            { "rid": 33, "seats": 25, "oids": [[530, 25]] }
+          ] },
+        { "id": 34, "type": "rowBlock", "origin": [0, 250],
+          "rowLabels": { "scheme": "roman", "start": "IV", "suffix": "." },
+          "seatLabels": { "scheme": "custom", "custom": ["a", "b", "c", "d"] },
+          "rows": [{ "rid": 35, "seats": 4, "oids": [[560, 4]] }] }
+      ] },
+    { "id": 40, "type": "row", "floor": 2, "origin": [3000, 1200],
+      "path": { "kind": "polyline", "points": [[0, 0], [600, 0]] },
+      "seats": 10, "oids": [[600, 10]], "label": "Box", "category": "access",
+      "seatLabels": { "scheme": "alpha-lower" } },
+    { "id": 41, "type": "shape", "kind": "ellipse", "floor": 1, "origin": [-1500, 0],
+      "size": [300, 200], "style": { "fill": "#10B981" } },
+    { "id": 42, "type": "shape", "kind": "polygon", "origin": [1500, 0], "rotation": 30,
+      "points": [[0, 0], [300, 10], [280, 200], [10, 180]],
+      "style": { "fill": "#B45309", "stroke": "#78350F", "strokeWidth": 8 } },
+    { "id": 43, "type": "shape", "kind": "line", "floor": 2, "points": [[2800, 0], [4800, 0]],
+      "style": { "stroke": "#111827", "strokeWidth": 12 }, "layer": "above" },
+    { "id": 44, "type": "shape", "kind": "path", "origin": [0, 1400],
+      "d": "M0 0 C 100 -80 300 -80 400 0 S 700 80 800 0 L 800 300 Q 400 500 0 300 Z m 300 100 h 200 v 60 h -200 z",
+      "style": { "fill": "#374151", "opacity": 0.6 } },
+    { "id": 45, "type": "text", "floor": 2, "origin": [3700, -200], "rotation": -10,
+      "text": "Circle", "size": 80, "color": "#111827", "align": "left", "minZoom": 0.05 },
+    { "id": 46, "type": "icon", "icon": "entrance", "origin": [-900, -600], "size": 80 },
+    { "id": 47, "type": "icon", "icon": "exit", "origin": [900, -600], "size": 80 },
+    { "id": 48, "type": "icon", "icon": "stairs", "floor": 2, "origin": [2900, 0], "size": 60 },
+    { "id": 49, "type": "icon", "icon": "toilets", "origin": [-900, 1200], "rotation": 90, "size": 60 },
+    { "id": 50, "type": "icon", "icon": "bar", "origin": [900, 1200], "size": 60 },
+    { "id": 51, "type": "icon", "icon": "lift", "floor": 2, "origin": [4700, 0], "size": 60 },
+    { "id": 52, "type": "image", "origin": [0, 0], "asset": "0123456789abcdef0123456789abcdef",
+      "size": [4000, 3000], "opacity": 0.4, "role": "background" },
+    { "id": 53, "type": "image", "floor": 2, "origin": [3500, 500], "rotation": 15,
+      "asset": "fedcba9876543210fedcba9876543210", "size": [2000, 1500], "role": "reference" }
+  ]
+}
