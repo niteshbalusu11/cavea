@@ -855,6 +855,13 @@ impl Replay {
                         format!("seq {seq}: book without order"),
                     ));
                 };
+                // 02 §6: details name only objects being booked, each once.
+                let detailed: BTreeSet<Oid> = r.details.iter().map(|d| d.0).collect();
+                ensure!(
+                    detailed.len() == r.details.len() && detailed.is_subset(&unique),
+                    "INV-6",
+                    "seq {seq}: booking details name {detailed:?}"
+                );
                 for o in &unique {
                     let s = status(&self.objects, o);
                     ensure!(

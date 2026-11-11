@@ -26,3 +26,38 @@ fn saved_cases_replay() {
         }
     }
 }
+
+/// The replay refuses a booking whose details name an object twice or one
+/// not being booked (02 §6): the reconciler must not accept such a log.
+#[test]
+fn replay_refuses_malformed_booking_details() {
+    use cavea_engine::{LogDetail, LogRecord, Op};
+    use cavea_sim::model::Replay;
+    let book = |details: Vec<LogDetail>| LogRecord {
+        seq: 1,
+        op: Op::Book,
+        actor: "a".into(),
+        hold_id: None,
+        oids: vec![cavea_sim::oid(0)],
+        expires_at: None,
+        order_ref: Some("o".into()),
+        status: None,
+        details,
+    };
+    let (o0, o1) = (cavea_sim::oid(0), cavea_sim::oid(1));
+    assert!(
+        Replay::default()
+            .apply(&book(vec![(o0, None, None)]))
+            .is_ok()
+    );
+    assert!(
+        Replay::default()
+            .apply(&book(vec![(o0, None, None), (o0, None, None)]))
+            .is_err()
+    );
+    assert!(
+        Replay::default()
+            .apply(&book(vec![(o1, None, None)]))
+            .is_err()
+    );
+}

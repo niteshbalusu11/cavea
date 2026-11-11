@@ -873,7 +873,7 @@ pub fn shrink(case: &Case, kind: &str) -> Case {
 /// Generate and run `count` cases from `first_seed`; on the first failure,
 /// shrink it and return it ready to save under `crates/cavea-sim/cases/`.
 pub fn explore(first_seed: u64, count: u64, len: usize, stats: &mut Stats) -> Result<(), String> {
-    for seed in first_seed..first_seed + count {
+    for seed in first_seed..first_seed.saturating_add(count) {
         let case = generate(seed, len);
         if let Err(f) = case.check(stats) {
             let small = shrink(&case, f.violation.kind);

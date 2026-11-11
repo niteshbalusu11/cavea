@@ -50,8 +50,8 @@ fn main() -> ExitCode {
             let (total, failure) = (total.clone(), failure.clone());
             std::thread::spawn(move || {
                 let mut stats = Stats::default();
-                let mut seed = first + job;
-                while seed < end {
+                let mut next = first.checked_add(job);
+                while let Some(seed) = next.filter(|&s| s < end) {
                     if failure.lock().map(|f| f.is_some()).unwrap_or(true) {
                         break;
                     }
@@ -61,7 +61,7 @@ fn main() -> ExitCode {
                         }
                         break;
                     }
-                    seed += jobs;
+                    next = seed.checked_add(jobs);
                 }
                 if let Ok(mut t) = total.lock() {
                     t.merge(&stats);
@@ -70,7 +70,12 @@ fn main() -> ExitCode {
         })
         .collect();
     for t in threads {
-        let _ = t.join();
+        // A worker that panicked outside a checked case did not finish.
+        if t.join().is_err()
+            && let Ok(mut f) = failure.lock()
+        {
+            f.get_or_insert_with(|| "a worker panicked".into());
+        }
     }
     let secs = started.elapsed().as_secs_f64();
     let stats = total.lock().map(|s| s.clone()).unwrap_or_default();
