@@ -8,7 +8,6 @@
     reason = "the serial lock is held across a whole test; each test has its own runtime"
 )]
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use axum::Router;
@@ -24,10 +23,7 @@ use cavea_engine::{
 use cavea_telemetry::{LogFormat, REQUEST_ID_HEADER, span};
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
-use tracing::span::{Attributes, Id, Record};
 use tracing::subscriber::DefaultGuard;
-use tracing_subscriber::layer::{Context, SubscriberExt as _};
-use tracing_subscriber::registry::LookupSpan;
 
 use super::{ApiError, AppState, Code, Json, finish, router};
 use crate::config::Config;
@@ -363,74 +359,15 @@ async fn axum_rejections_are_problem_json() {
     assert_eq!(body, json!({"a": 1}));
 }
 
-/// Every span with its fields, parent and `follows_from` links, keyed by a
-/// number that is never reused (span ids are).
-#[derive(Clone, Default)]
-struct SpanLog(Arc<Mutex<Vec<SpanRecord>>>);
-
-#[derive(Debug, Default)]
-struct SpanRecord {
-    name: &'static str,
-    parent: Option<usize>,
-    fields: HashMap<&'static str, String>,
-    follows: Vec<usize>,
-}
-
-struct Key(usize);
-
-#[derive(Default)]
-struct Fields(HashMap<&'static str, String>);
-
-impl tracing::field::Visit for Fields {
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        self.0.insert(field.name(), value.to_owned());
-    }
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        self.0.insert(field.name(), format!("{value:?}"));
-    }
-}
-
-impl<S: tracing::Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for SpanLog {
-    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
-        let span = ctx.span(id).unwrap();
-        let parent = span
-            .parent()
-            .and_then(|p| p.extensions().get::<Key>().map(|k| k.0));
-        let mut fields = Fields::default();
-        attrs.record(&mut fields);
-        let mut log = self.0.lock().unwrap();
-        log.push(SpanRecord {
-            name: attrs.metadata().name(),
-            parent,
-            fields: fields.0,
-            follows: Vec::new(),
-        });
-        span.extensions_mut().insert(Key(log.len() - 1));
-    }
-
-    fn on_record(&self, id: &Id, values: &Record<'_>, ctx: Context<'_, S>) {
-        let key = ctx.span(id).unwrap().extensions().get::<Key>().unwrap().0;
-        let mut fields = Fields::default();
-        values.record(&mut fields);
-        self.0.lock().unwrap()[key].fields.extend(fields.0);
-    }
-
-    fn on_follows_from(&self, id: &Id, follows: &Id, ctx: Context<'_, S>) {
-        let key = |id| ctx.span(id).unwrap().extensions().get::<Key>().unwrap().0;
-        let (key, follows) = (key(id), key(follows));
-        self.0.lock().unwrap()[key].follows.push(follows);
-    }
-}
-
 /// A command submitted in a request handler is applied and committed on the
-/// actor's task; its `apply` span and the batch's `commit` span lead back to
-/// the submitting request's id.
+/// actor's task. In the production JSON logs a record inside `apply` carries
+/// the submitting request's id, and the request's completion record names the
+/// commit that made its command durable.
 #[tokio::test]
-async fn actor_spans_lead_back_to_the_request() {
+async fn actor_work_is_tied_to_its_request_in_logs() {
     let _serial = serial();
-    let spans = SpanLog::default();
-    let _guard =
-        tracing::subscriber::set_default(tracing_subscriber::registry().with(spans.clone()));
+    let logs = Captured::default();
+    let _guard = logs.install();
 
     let event = EventId(1);
     let chart = Arc::new(ChartView::new([(100, "S-0")]).unwrap());
@@ -440,11 +377,11 @@ async fn actor_spans_lead_back_to_the_request() {
         holds: vec![],
         objects: vec![],
     };
-    let store = MemoryStore::new();
+    let store = Arc::new(MemoryStore::new());
     store.create_event(event, 1);
     let (handle, run) = cavea_engine::actor(
         EventState::restore(event, chart, loaded).unwrap(),
-        Arc::new(store),
+        Arc::clone(&store),
         ManualClock::new(Timestamp(1_000_000)),
         ActorConfig::default(),
     );
@@ -453,43 +390,47 @@ async fn actor_spans_lead_back_to_the_request() {
     let submit = handle.clone();
     let app = app(Router::new().route(
         "/hold",
-        post(move || async move {
-            let request = EngineRequest {
-                actor: "sk_test".into(),
-                command: Command::CreateHold {
-                    token: TokenHash([1; 32]),
-                    ttl_secs: 900,
-                    max_objects: None,
-                },
-            };
-            match submit.send(request).await {
-                Ok(Outcome::HoldCreated { .. }) => Ok(StatusCode::CREATED),
-                Ok(_) => Err(ApiError::internal("unexpected outcome")),
-                Err(failure) => Err(ApiError::from(failure)),
+        post(move || {
+            let submit = submit.clone();
+            async move {
+                let request = EngineRequest {
+                    actor: "sk_test".into(),
+                    command: Command::CreateHold {
+                        token: TokenHash([1; 32]),
+                        ttl_secs: 900,
+                        max_objects: None,
+                    },
+                };
+                match submit.send(request).await {
+                    Ok(Outcome::HoldCreated { .. }) => Ok(StatusCode::CREATED),
+                    Ok(_) => Err(ApiError::internal("unexpected outcome")),
+                    Err(failure) => Err(ApiError::from(failure)),
+                }
             }
         }),
     ));
-    let (response, _) = send(app, Request::post("/hold").body(Body::empty()).unwrap()).await;
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let id = request_id(&response).to_owned();
+    let hold = || Request::post("/hold").body(Body::empty()).unwrap();
+    let (created, _) = send(app.clone(), hold()).await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    // The same token again: refused in `apply`, so nothing to commit.
+    let (refused, _) = send(app, hold()).await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
     drop(handle);
     actor.await.unwrap().unwrap();
 
-    let log = spans.0.lock().unwrap();
-    let request_of = |key: usize| {
-        let mut at = &log[key];
-        while let Some(parent) = at.parent {
-            at = &log[parent];
-        }
-        (at.name == span::REQUEST).then(|| at.fields["request_id"].clone())
-    };
-    let named = |name| log.iter().enumerate().filter(move |(_, s)| s.name == name);
+    let committed = store.committed();
+    assert_eq!(committed.len(), 1);
+    let created = logs.completed(request_id(&created));
+    assert_eq!(created["commit_seq"], committed[0].seq);
 
-    let (wait, _) = named(span::MAILBOX_WAIT).next().expect("mailbox_wait span");
-    assert_eq!(request_of(wait), Some(id.clone()));
-    let (apply, _) = named(span::APPLY).next().expect("apply span");
-    assert_eq!(request_of(apply), Some(id.clone()));
-    let (_, commit) = named(span::COMMIT).next().expect("commit span");
-    assert_eq!(commit.follows, [apply]);
-    assert_eq!(request_of(commit.follows[0]), Some(id));
+    let refused_id = request_id(&refused);
+    assert!(logs.completed(refused_id).get("commit_seq").is_none());
+    let record = logs
+        .records()
+        .into_iter()
+        .find(|r| r["message"] == "command refused")
+        .unwrap();
+    assert_eq!(record["spans"][0]["name"], span::REQUEST);
+    assert_eq!(record["spans"][0]["request_id"], refused_id);
+    assert_eq!(record["spans"][1]["name"], span::APPLY);
 }

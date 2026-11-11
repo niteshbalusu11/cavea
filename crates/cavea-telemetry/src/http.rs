@@ -180,6 +180,7 @@ where
             route,
             status = Empty,
             duration_ms = Empty,
+            commit_seq = Empty,
             workspace = Empty,
             event = Empty,
         );
