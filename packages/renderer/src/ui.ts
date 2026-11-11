@@ -321,6 +321,8 @@ export function createUi(root: HTMLElement, canvas: HTMLElement, host: UiHost): 
   let dismissed: string | null = null;
   let press: { at: [number, number]; touch: boolean; time: number } | undefined;
   let onKey: ((event: Event) => void) | undefined;
+  /** The ticket-type buttons last rendered. */
+  let typeButtons: HTMLButtonElement[] = [];
   if (tip !== undefined) {
     tip.hidden = true;
     // A press on the map unpins; its point anchors a tooltip the tap pins.
@@ -395,17 +397,24 @@ export function createUi(root: HTMLElement, canvas: HTMLElement, host: UiHost): 
     const types = host.prices.types(object.category.key);
     if (pinned && object.status === "selected" && types.length > 1) {
       const group = make("div", "ty", "ticket-types");
+      const buttons: HTMLButtonElement[] = [];
       group.setAttribute("role", "group");
       group.setAttribute("aria-label", t("ticketType"));
-      for (const type of types) {
+      types.forEach((type, i) => {
         const b = button(group, "ticket-type", type.label ?? type.key, undefined, true);
         b.setAttribute("aria-pressed", String(type.key === object.ticketType));
         const typePrice = host.prices.text(object.category.key, type.key);
         if (typePrice !== undefined) {
           make("span", "pr", "", b).textContent = typePrice;
         }
-        b.addEventListener("click", () => host.chooseTicketType(object.label, type.key));
-      }
+        b.addEventListener("click", () => {
+          host.chooseTicketType(object.label, type.key);
+          // The choice renders the buttons again: focus stays on this one's successor.
+          (group.isConnected ? b : typeButtons[i])?.focus();
+        });
+        buttons.push(b);
+      });
+      typeButtons = buttons;
       lines.push(group);
     }
     return lines;

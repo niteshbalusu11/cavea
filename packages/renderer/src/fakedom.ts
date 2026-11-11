@@ -134,6 +134,17 @@ export class FakeNode extends EventTarget {
   parts(part: string): FakeNode[] {
     return [...this.walk()].filter((n) => (n.getAttribute("part") ?? "").split(" ").includes(part));
   }
+  get isConnected(): boolean {
+    const top = this.top();
+    return top === this.ownerDocument || top === this.ownerDocument.body;
+  }
+  /** The node at the top of this one's tree. */
+  top(): FakeNode {
+    return this.parentNode === null ? this : this.parentNode.top();
+  }
+  focus(): void {
+    this.ownerDocument.activeElement = this;
+  }
   click(): void {
     this.dispatchEvent(new Event("click"));
   }
@@ -156,6 +167,7 @@ export class FakeDocument extends FakeNode {
   readonly documentElement: FakeNode;
   readonly body: FakeNode;
   readonly created: FakeNode[] = [];
+  activeElement: FakeNode | null = null;
   constructor() {
     super(undefined as unknown as FakeDocument, "#document");
     (this as { ownerDocument: FakeDocument }).ownerDocument = this;

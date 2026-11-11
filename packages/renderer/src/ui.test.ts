@@ -394,7 +394,7 @@ describe("elements", () => {
 
   test("a tap that selects a seat with ticket types pins the choice; choosing reports it", async () => {
     const selections: Array<Array<[string, string | undefined, number | undefined]>> = [];
-    const { root, canvas, drain, view, map } = await loaded({
+    const { root, canvas, doc, drain, view, map } = await loaded({
       locale: "en-US",
       currency: "USD",
       pricing: [
@@ -423,7 +423,11 @@ describe("elements", () => {
     ]);
     // A pinned tooltip ignores hover elsewhere.
     drain(hover("A-1-2"));
+    types[1]?.focus();
     types[1]?.click();
+    // The buttons are rendered again; focus moves to the new "Child".
+    expect(doc.activeElement).toBe(root.parts("ticket-type")[1] ?? null);
+    expect(doc.activeElement === types[1]).toBe(false);
     expect(selections).toEqual([[["A-1-1", "adult", 9500]], [["A-1-1", "child", 6000]]]);
     expect(map.getSelection().objects[0]).toMatchObject({ ticketType: "child", price: 6000 });
     expect(root.parts("ticket-type").map((b) => b.getAttribute("aria-pressed"))).toEqual([

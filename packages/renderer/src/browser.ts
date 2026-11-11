@@ -73,8 +73,9 @@ function hex(value: string): string {
   if (probe === null) {
     return value;
   }
-  // Two sentinels: a value the context refuses leaves either one unchanged.
-  const parsed = ["#000", "#fff"].every((sentinel) => {
+  // Two sentinels: a value the context refuses leaves both unchanged; a
+  // valid one may equal one of them (black, white), never both.
+  const parsed = ["#000", "#fff"].some((sentinel) => {
     probe!.fillStyle = sentinel;
     probe!.fillStyle = value;
     return probe!.fillStyle !== (sentinel === "#000" ? "#000000" : "#ffffff");
