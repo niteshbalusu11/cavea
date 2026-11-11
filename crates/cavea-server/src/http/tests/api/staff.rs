@@ -720,3 +720,130 @@ async fn version_thumbnails_and_authors() {
     })
     .await;
 }
+
+/// p50 and p99 of `times`, in milliseconds.
+fn quantiles(mut times: Vec<f64>) -> (f64, f64) {
+    times.sort_by(f64::total_cmp);
+    let at = |q: f64| times[((times.len() - 1) as f64 * q) as usize];
+    (at(0.5), at(0.99))
+}
+
+/// Time `n` GETs of `uri` (after one to warm up): p50, p99 and the body's
+/// size.
+async fn timed(app: &Router, secret: &str, uri: &str, n: usize) -> (f64, f64, usize) {
+    let mut times = Vec::new();
+    let mut size = 0;
+    for i in 0..=n {
+        let req = request(Method::GET, uri, Some(secret), &[], None);
+        let started = std::time::Instant::now();
+        let response = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 24)
+            .await
+            .unwrap();
+        if i > 0 {
+            times.push(started.elapsed().as_secs_f64() * 1e3);
+        }
+        size = bytes.len();
+    }
+    let (p50, p99) = quantiles(times);
+    (p50, p99, size)
+}
+
+/// The staff state and the reads the console makes, at the sizes the spec
+/// names: `stadium-100k` with a quarter of its seats not free (held, booked,
+/// blocked, spread over the chart), and a workspace of 1,000 events. Through
+/// the router, no network. Run with `--release -- --ignored --nocapture
+/// measure_console_reads --test-threads=1`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "a measurement: needs CAVEA_TEST_DATABASE_URL and --release"]
+async fn measure_console_reads() {
+    let _serial = serial();
+    with_db(async move |pool| {
+        let app = api(&pool, Some(ADMIN));
+        let t = Tenant::create(&app, "a").await;
+        let sk = t.secret.as_str();
+        let mut document = cavea_testkit::synthetic::stadium(100_000, 1);
+        document.name = "big".to_owned();
+        let document: Value = serde_json::from_slice(&document.to_json().unwrap()).unwrap();
+        let body = json!({ "key": "big", "name": "big", "document": document });
+        let (response, _) = post(&app, sk, "/v1/charts", body).await;
+        assert_eq!(response.status(), 201);
+        let (response, version) = call(&app, Method::POST, "/v1/charts/big/publish", Some(sk), None).await;
+        assert_eq!(response.status(), 201, "{version}");
+        let hash = version["hash"].as_str().unwrap().to_owned();
+        let (response, _) = post(&app, sk, "/v1/events", json!({ "key": "big", "chart": "big" })).await;
+        assert_eq!(response.status(), 201);
+        // 25,000 of 100,000: every fourth seat, a third each held, booked
+        // and blocked, in commands of 1,000.
+        let seats: Vec<u32> = (0..100_000).step_by(4).collect();
+        for (n, chunk) in seats.chunks(1_000).enumerate() {
+            let objects = json!({ "version": hash, "idx": chunk });
+            let (uri, body) = match n % 3 {
+                0 => {
+                    let token = json!({ "event": "big" });
+                    let (_, token) = post(&app, sk, "/v1/hold-tokens", token).await;
+                    ("hold", json!({ "hold_token": token["hold_token"], "objects": objects }))
+                }
+                1 => ("book", json!({ "objects": objects, "order_ref": format!("o-{n}") })),
+                _ => ("change-status", json!({ "objects": objects, "status": "blocked" })),
+            };
+            let (response, reply) = post(&app, sk, &format!("/v1/events/big/{uri}"), body).await;
+            assert_eq!(response.status(), 200, "{reply}");
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let started = std::time::Instant::now();
+        let (response, _) = get(&app, sk, "/v1/events/big/state").await;
+        assert_eq!(response.status(), 200);
+        println!("staff snapshot, first (encoded): {:.2} ms", started.elapsed().as_secs_f64() * 1e3);
+        let (p50, p99, size) = timed(&app, sk, "/v1/events/big/state", 200).await;
+        println!("staff snapshot, cached: p50 {p50:.3} ms, p99 {p99:.3} ms, {size} bytes");
+        let public = format!("/v1/public/events/big/state?key={}", t.publishable);
+        let (p50, p99, size) = timed(&app, sk, &public, 200).await;
+        println!("public snapshot: p50 {p50:.3} ms, p99 {p99:.3} ms, {size} bytes");
+        let (_, event) = get(&app, sk, "/v1/events/big").await;
+        let seq = event["seq"].as_u64().unwrap();
+        let (p50, p99, _) = timed(&app, sk, &format!("/v1/events/big/state?after_seq={seq}"), 200).await;
+        println!("staff poll, nothing new (204): p50 {p50:.3} ms, p99 {p99:.3} ms");
+        let body = json!({ "objects": { "version": hash, "idx": [1, 5, 9] }, "status": "blocked" });
+        let (response, _) = post(&app, sk, "/v1/events/big/change-status", body).await;
+        assert_eq!(response.status(), 200);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let (p50, p99, size) = timed(&app, sk, &format!("/v1/events/big/state?after_seq={seq}"), 200).await;
+        println!("staff poll, a delta of 3 changes: p50 {p50:.3} ms, p99 {p99:.3} ms, {size} bytes");
+        let (p50, p99, _) = timed(&app, sk, "/v1/events/big", 200).await;
+        println!("event detail with counts: p50 {p50:.3} ms, p99 {p99:.3} ms");
+        // What the detail's counts cost before `events.counts`: a scan.
+        let mut times = Vec::new();
+        for _ in 0..200 {
+            let started = std::time::Instant::now();
+            let _: Vec<(i16, i64)> = sqlx::query_as(
+                "SELECT status, count(*) FROM object_state
+                  WHERE event_id = (SELECT id FROM events WHERE key = 'big') GROUP BY status",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+            times.push(started.elapsed().as_secs_f64() * 1e3);
+        }
+        let (p50, p99) = quantiles(times);
+        println!("the scan the counts replace (25,000 rows): p50 {p50:.3} ms, p99 {p99:.3} ms");
+
+        // 1,000 events: the list's first page, a search, newest first.
+        for i in 0..1_000 {
+            let body = json!({ "key": format!("ev-{i:04}"), "chart": t.chart, "name": format!("Night {i}") });
+            let (response, _) = post(&app, sk, "/v1/events", body).await;
+            assert_eq!(response.status(), 201);
+        }
+        for (label, uri) in [
+            ("list, 100 of 1,000", "/v1/events?limit=100"),
+            ("list, newest 100", "/v1/events?limit=100&order=newest"),
+            ("list, search 'night 99'", "/v1/events?limit=100&q=night%2099"),
+            ("list, last page by cursor", "/v1/events?limit=100&after=ev-0950"),
+        ] {
+            let (p50, p99, size) = timed(&app, sk, uri, 100).await;
+            println!("{label}: p50 {p50:.3} ms, p99 {p99:.3} ms, {size} bytes");
+        }
+    })
+    .await;
+}

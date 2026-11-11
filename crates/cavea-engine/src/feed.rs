@@ -978,4 +978,72 @@ mod tests {
         assert_eq!(seq_of(poll_next(&mut before)), Some(2));
         assert_eq!(seq_of(poll_next(&mut between)), Some(2));
     }
+
+    /// What a publication costs the actor at 100,000 objects, by the number
+    /// of objects changed since the last one: the encoding and the swap, as
+    /// the actor runs them between commands. Run with `--release --
+    /// --ignored --nocapture measure_publication`.
+    #[test]
+    #[ignore = "a measurement: run in release"]
+    fn measure_publication() {
+        const OBJECTS: u32 = 100_000;
+        let chart = ChartView::new((0..OBJECTS).map(|i| (i, format!("S-{i}")))).unwrap();
+        let loaded = LoadedEvent {
+            epoch: 1,
+            seq: 0,
+            holds: Vec::new(),
+            objects: Vec::new(),
+            idempotency: Vec::new(),
+        };
+        let mut state = EventState::restore(EventId(1), Arc::new(chart), loaded).unwrap();
+        let (_feed, publisher) = Publisher::new(&state, None);
+        let mut publisher = publisher.unwrap();
+        let apply = |state: &mut EventState,
+                     publisher: &mut Publisher,
+                     objects: Vec<ObjectRef>,
+                     status: Status| {
+            let request = Request {
+                actor: "sk".into(),
+                authority: Authority::Secret,
+                command: Command::ChangeStatus { objects, status },
+                idempotency: None,
+            };
+            state.apply(&request, Timestamp(0)).unwrap().unwrap();
+            let mut sealed = Sealed::default();
+            state.take_batch_into(&mut sealed).unwrap().unwrap();
+            publisher.commit(&sealed);
+        };
+        // A quarter of the objects not free, spread out: a snapshot as hard
+        // to encode as a busy event's.
+        let quarter: Vec<ObjectRef> = (0..OBJECTS).step_by(4).map(ObjectRef::Idx).collect();
+        for chunk in quarter.chunks(1_000) {
+            apply(&mut state, &mut publisher, chunk.to_vec(), Status::BLOCKED);
+        }
+        drop(publisher.stage(Timestamp(0)).unwrap());
+        for changes in [1u32, 100, 1_000] {
+            let mut times = Vec::new();
+            for round in 0..300u64 {
+                // Block `changes` free objects, then free them again.
+                let objects: Vec<ObjectRef> = (0..changes)
+                    .map(|i| ObjectRef::Idx((i * 4 + 1) % OBJECTS))
+                    .collect();
+                let status = if round % 2 == 0 {
+                    Status::BLOCKED
+                } else {
+                    Status::FREE
+                };
+                apply(&mut state, &mut publisher, objects, status);
+                let started = Instant::now();
+                drop(publisher.stage(Timestamp((round + 1) * 1_000)).unwrap());
+                times.push(started.elapsed().as_secs_f64() * 1e6);
+            }
+            times.sort_by(f64::total_cmp);
+            let at = |q: f64| times[((times.len() - 1) as f64 * q) as usize];
+            println!(
+                "publication, {changes} changes: p50 {:.0} µs, p99 {:.0} µs",
+                at(0.5),
+                at(0.99)
+            );
+        }
+    }
 }
