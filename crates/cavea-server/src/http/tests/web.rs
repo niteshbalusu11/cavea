@@ -58,6 +58,7 @@ fn header<'a>(headers: &'a axum::http::HeaderMap, name: &str) -> &'a str {
 
 #[tokio::test]
 async fn console_files_follow_the_serving_rules() {
+    let _serial = serial();
     let app = console(FIXTURE);
     let html = [("accept", "text/html,application/xhtml+xml,*/*;q=0.8")];
 
@@ -160,6 +161,7 @@ async fn console_files_follow_the_serving_rules() {
 
 #[tokio::test]
 async fn without_a_built_console_its_paths_say_so() {
+    let _serial = serial();
     let app = console(&[]);
     let (status, headers, body) =
         get(&app, "GET", "/console/setup", &[("accept", "text/html")]).await;
