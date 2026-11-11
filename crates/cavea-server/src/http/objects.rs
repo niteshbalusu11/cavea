@@ -37,7 +37,11 @@ pub(super) fn routes() -> Routes {
 (`status`, `limit`, `after`); not both. Read from committed state.",
         )
         .needs(Needs::Secret)
-        .query("label", string(), "An object's label; repeat for more.")
+        .query(
+            "label",
+            serde_json::json!({ "type": "array", "items": string(), "maxItems": 1_000 }),
+            "Objects' labels: `label=A&label=B`.",
+        )
         .query(
             "status",
             string(),

@@ -55,6 +55,8 @@ pub struct Op {
     session: bool,
     /// Takes the hold token in `Cavea-Hold-Token`.
     hold_token: bool,
+    /// Answers without the database, whatever the request.
+    no_storage: bool,
     idempotent: bool,
     /// `If-Match`, and whether it is required.
     if_match: Option<bool>,
@@ -75,6 +77,7 @@ impl Op {
             needs: Needs::Nothing,
             session: false,
             hold_token: false,
+            no_storage: false,
             idempotent: false,
             if_match: None,
             params: Vec::new(),
@@ -124,6 +127,12 @@ impl Op {
         self
     }
 
+    /// Never reaches the database, so never answers `503`.
+    pub(super) fn no_storage(mut self) -> Self {
+        self.no_storage = true;
+        self
+    }
+
     pub(super) fn idempotent(mut self) -> Self {
         self.idempotent = true;
         self
@@ -141,11 +150,17 @@ impl Op {
         self
     }
 
+    /// A query parameter; an array is repeated (`?label=A&label=B`).
     pub(super) fn query(mut self, name: &str, schema: Value, description: &str) -> Self {
-        self.params.push(json!({
+        let mut param = json!({
             "name": name, "in": "query", "required": false,
             "description": description, "schema": schema,
-        }));
+        });
+        if param["schema"]["type"] == "array" {
+            param["style"] = "form".into();
+            param["explode"] = true.into();
+        }
+        self.params.push(param);
         self
     }
 
@@ -211,11 +226,19 @@ impl Op {
             .filter_map(|s| s.strip_prefix('{').and_then(|s| s.strip_suffix('}')))
     }
 
-    /// The problem+json statuses: 500 always; 401 and 403 with a credential;
-    /// 400 with any input; 404 with a path parameter; 429 for publishable
-    /// keys (08 §12); and what the operation adds.
+    /// The problem+json statuses: 500 always; 503 unless the operation never
+    /// reaches the database (a credential is looked up there, 08 §12); 401
+    /// and 403 with a credential; 400 with any input; 404 with a path
+    /// parameter; 409 with `Idempotency-Key` (`idempotency_mismatch`); 429
+    /// for publishable keys (08 §12); and what the operation adds.
     fn error_statuses(&self) -> Vec<u16> {
         let mut statuses = vec![500];
+        if !self.no_storage {
+            statuses.push(503);
+        }
+        if self.idempotent {
+            statuses.push(409);
+        }
         if self.needs != Needs::Nothing {
             statuses.extend([401, 403]);
         }

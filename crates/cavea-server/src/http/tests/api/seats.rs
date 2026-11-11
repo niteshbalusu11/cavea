@@ -436,7 +436,7 @@ async fn idempotency() {
         let other_ref = compact.replace("R-1", "R-2");
         let reordered = compact.replace(r#"{"a":1,"b":[1,2]}"#, r#"{"b":[1,2],"a":1}"#);
         let status = format!(r#"{{"objects":["{seat}"],"status":"blocked"}}"#);
-        for (uri, body) in [(ev("book"), other_ref), (ev("book"), reordered), (ev("change-status"), status), ("/v1/events/e2/book".to_owned(), compact)] {
+        for (uri, body) in [(ev("book"), other_ref), (ev("book"), reordered), (ev("change-status"), status), ("/v1/events/e2/book".to_owned(), compact.clone()), (format!("/v1/hold-tokens/{}/extend", t.token), "{}".to_owned())] {
             let (response, p) = raw(&uri, "k-1", body).await;
             assert_problem(&response, &p, Code::IdempotencyMismatch);
         }

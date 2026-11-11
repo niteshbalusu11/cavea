@@ -30,7 +30,9 @@ pub(super) fn routes() -> Routes {
     let text = || Some(serde_json::json!({ "text/plain": { "schema": { "type": "string" } } }));
     Routes::new()
         .add(
-            Op::get("/healthz", "healthz", "Liveness").response(200, "`ok`", text()),
+            Op::get("/healthz", "healthz", "Liveness")
+                .no_storage()
+                .response(200, "`ok`", text()),
             healthz,
         )
         .add(
@@ -47,6 +49,7 @@ pub(super) fn routes() -> Routes {
         )
         .add(
             Op::get("/v1/openapi.json", "openapi", "This document")
+                .no_storage()
                 .response(
                     200,
                     "The OpenAPI 3.1 document",

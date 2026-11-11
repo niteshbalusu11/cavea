@@ -171,6 +171,13 @@ struct Tenant {
 
 impl Tenant {
     async fn create(app: &Router, key: &str) -> Self {
+        Self::create_as(app, key, key).await
+    }
+
+    /// A workspace `key` whose chart and event keys are `chart-{name}` and
+    /// `event-{name}`: two workspaces may share them. The chart's content,
+    /// and so its hash, is the workspace's own.
+    async fn create_as(app: &Router, key: &str, name: &str) -> Self {
         let (response, ws) = call(
             app,
             Method::POST,
@@ -197,7 +204,7 @@ impl Tenant {
         let uri = format!("/v1/keys/{revoked_id}");
         let (response, _) = call(app, Method::DELETE, &uri, Some(&secret), None).await;
         assert_eq!(response.status(), 200);
-        let chart = format!("chart-{key}");
+        let chart = format!("chart-{name}");
         let document = tiny_document(key);
         let body = json!({ "key": chart, "name": key, "document": serde_json::from_str::<Value>(&document).unwrap() });
         let (response, created) =
@@ -206,7 +213,7 @@ impl Tenant {
         let uri = format!("/v1/charts/{chart}/publish");
         let (response, version) = call(app, Method::POST, &uri, Some(&secret), None).await;
         assert_eq!(response.status(), 201, "{version}");
-        let event = format!("event-{key}");
+        let event = format!("event-{name}");
         let body = json!({ "key": event, "chart": chart });
         let (response, created) =
             call(app, Method::POST, "/v1/events", Some(&secret), Some(body)).await;
@@ -794,6 +801,90 @@ const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
     (Method::DELETE, "/v1/events/{event}", 200, None),
     (Method::DELETE, "/v1/charts/{chart}", 200, None),
 ];
+
+/// 13 §10 "tenant isolation": two workspaces with identical chart and event
+/// keys. Every read of a route naming only those keys answers each workspace
+/// with its own, revealing none of the other's identifiers; a hold in one is
+/// not in the other's counts or objects; archiving one's chart leaves the
+/// other's.
+#[tokio::test]
+#[ignore = "needs CAVEA_TEST_DATABASE_URL"]
+async fn identical_keys_never_cross() {
+    let _serial = serial();
+    with_db(async move |pool| {
+        let app = api(&pool, Some(ADMIN));
+        let a = Tenant::create_as(&app, "a", "same").await;
+        let b = Tenant::create_as(&app, "b", "same").await;
+        assert_eq!((&a.chart, &a.event), (&b.chart, &b.event));
+        assert_ne!(a.hash, b.hash);
+        // B holds a seat in its event of the same key.
+        let uri = format!("/v1/events/{}/hold", b.event);
+        let body = json!({ "hold_token": b.token, "objects": { "version": b.hash, "idx": [0] } });
+        let (response, held) = call(&app, Method::POST, &uri, Some(&b.secret), Some(body)).await;
+        assert_eq!(response.status(), 200, "{held}");
+
+        let reads = ROUTES.iter().filter(|(method, template, ..)| {
+            *method == Method::GET
+                && (template.contains("{chart}") || template.contains("{event}"))
+                && !["{key}", "{hash}", "{token}"]
+                    .iter()
+                    .any(|p| template.contains(p))
+        });
+        let mut checked = 0;
+        for (method, template, ..) in reads {
+            let (needs, _) = op_of(method, template);
+            let path = a.path(template);
+            for (mine, theirs) in [(&a, &b), (&b, &a)] {
+                let key = if needs == Needs::Secret {
+                    &mine.secret
+                } else {
+                    &mine.publishable
+                };
+                let (path, token) = match needs {
+                    Needs::QueryKey => (with_key(&path, key), None),
+                    _ => (path.clone(), Some(key.as_str())),
+                };
+                let (response, answer) = call(&app, method.clone(), &path, token, None).await;
+                // Polling after seq 1 is `204` for A, which published nothing
+                // since, and a delta for B, which held a seat.
+                assert!(response.status().is_success(), "{template}: {answer}");
+                let text = answer.to_string();
+                for id in theirs
+                    .identifiers()
+                    .into_iter()
+                    .filter(|id| *id != a.chart && *id != a.event)
+                {
+                    assert!(!text.contains(id), "{template} crossed to {id:.11}");
+                }
+                if text.contains("\"hash\"") {
+                    assert!(text.contains(&mine.hash), "{template}: {text}");
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked >= 10, "{checked}");
+
+        let held_in = async |t: &Tenant| {
+            let uri = format!("/v1/events/{}", t.event);
+            let (_, event) = call(&app, Method::GET, &uri, Some(&t.secret), None).await;
+            let uri = format!("/v1/events/{}/objects?status=held", t.event);
+            let (_, objects) = call(&app, Method::GET, &uri, Some(&t.secret), None).await;
+            (
+                event["counts"]["held"].clone(),
+                objects["data"].as_array().unwrap().len(),
+            )
+        };
+        assert_eq!(held_in(&a).await, (json!(0), 0));
+        assert_eq!(held_in(&b).await, (json!(1), 1));
+
+        let uri = format!("/v1/charts/{}", b.chart);
+        let (response, archived) = call(&app, Method::DELETE, &uri, Some(&b.secret), None).await;
+        assert!(response.status() == 200 && archived["archived_at"].is_string());
+        let (_, chart) = call(&app, Method::GET, &uri, Some(&a.secret), None).await;
+        assert_eq!(chart["archived_at"], Value::Null);
+    })
+    .await;
+}
 
 /// TST-026: a new route cannot be left out of the matrix, nor a row outlive
 /// its route.
