@@ -64,8 +64,16 @@ export function LayersPanel(props: { editor: Editor }) {
     editor.loop.setLayersWindow(w.start, height() > 0 ? w.count : 50);
   });
 
-  const rowAt = (index: number) => page().rows.find((r) => r.index === index);
-  const current = () => rowAt(cursor());
+  /** Row `index` of the tree: from the window shown, or read on its own
+   * for a move or a step that reaches past the window. */
+  const shownRow = (index: number) => page().rows.find((r) => r.index === index);
+  const rowAt = (index: number): LayerRow | undefined =>
+    shownRow(index) ??
+    (index >= 0 && index < page().total
+      ? editor.run((s) => s.layers(index, 1).rows[0])
+      : undefined);
+  /** The focused row as rendered: only from the window shown. */
+  const current = () => shownRow(cursor());
   const show = (index: number) => {
     const top = scrollToShow(index, scroller.scrollTop, scroller.clientHeight, ROW);
     if (top !== scroller.scrollTop) scroller.scrollTop = top;
@@ -132,7 +140,7 @@ export function LayersPanel(props: { editor: Editor }) {
   const key = (e: KeyboardEvent) => {
     // Navigate on the tree as it is, not as the last frame read it.
     editor.loop.flush();
-    const row = current();
+    const row = rowAt(cursor());
     const screen = Math.max(1, Math.floor(scroller.clientHeight / ROW) - 1);
     const go: Record<string, () => void> = {
       ArrowDown: () => (e.altKey && row ? step(row, 1) : moveCursor(cursor() + 1)),
@@ -150,7 +158,7 @@ export function LayersPanel(props: { editor: Editor }) {
         if (row !== undefined && row.depth > 0) {
           let i = row.index - 1;
           while (i > 0 && (rowAt(i)?.depth ?? 0) > 0) i--;
-          moveCursor(i);
+          moveCursor(Math.max(0, i));
         }
       },
       Enter: () => row && click(row, e),
@@ -160,7 +168,10 @@ export function LayersPanel(props: { editor: Editor }) {
       Escape: () => editor.run((s) => s.stepOut()),
     };
     const action = go[e.key];
-    if (action === undefined || e.ctrlKey || e.metaKey) return;
+    // Ctrl or Cmd with Enter or Space toggles a row's selection; with
+    // anything else the key is not the tree's.
+    const select = e.key === "Enter" || e.key === " ";
+    if (action === undefined || ((e.ctrlKey || e.metaKey) && !select)) return;
     e.preventDefault();
     setFocused(true);
     action();

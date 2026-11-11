@@ -45,7 +45,10 @@ export function DesignerPage(props: { source: ChartSource }) {
 
   const resize = () => setWidth(window.innerWidth);
   window.addEventListener("resize", resize);
+  /** The page is gone: an open still in flight must not install a session. */
+  let gone = false;
   onCleanup(() => {
+    gone = true;
     window.removeEventListener("resize", resize);
     editor()?.dispose();
     pending()?.dispose();
@@ -68,7 +71,7 @@ export function DesignerPage(props: { source: ChartSource }) {
    * waits for it. */
   const request = async (text: string, file: string) => {
     const d = await loading.catch(() => undefined);
-    if (d === undefined || panic() !== null) return;
+    if (d === undefined || gone || panic() !== null) return;
     let session: Session;
     try {
       session = d.open(text);
@@ -78,6 +81,7 @@ export function DesignerPage(props: { source: ChartSource }) {
       if (f === null) throw error;
       return setFailed({ file, message: failureMessage(f) });
     }
+    if (gone) return session.dispose();
     if (!dirty()) return install(session);
     pending()?.dispose();
     setPending(session);
