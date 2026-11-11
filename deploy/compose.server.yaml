@@ -1,6 +1,8 @@
 # A production-shaped Cavea: the server image (deploy/Dockerfile) and its own
 # PostgreSQL (08 §14). Separate from compose.yaml, the development database,
-# which it never touches. Required: POSTGRES_PASSWORD. Optional:
+# which it never touches. Required: POSTGRES_PASSWORD, of letters, digits and
+# `-._~` only, since it goes into the server's database URL unencoded
+# (`openssl rand -hex 32` makes one). Optional:
 # CAVEA_ADMIN_KEY (32 to 512 printable characters; unset, the workspace
 # endpoints refuse every request, D-24), CAVEA_PUBLIC_URL (the HTTPS address
 # people reach, which the console's setup link starts with), CAVEA_PORT

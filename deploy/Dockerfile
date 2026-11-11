@@ -24,13 +24,22 @@ ARG TARGETARCH
 ARG CARGO_BUILD_JOBS=8
 ENV CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS
 
-# A C cross compiler for arm64 (ring's assembly); nothing for a native build.
-RUN if [ "$TARGETARCH" != "$BUILDARCH" ] && [ "$TARGETARCH" = arm64 ]; then \
-      apt-get update && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
+# A C cross compiler for the target (ring's C and assembly, and the link);
+# nothing for a native build, where Debian's own GCC answers to both names.
+RUN set -eu; \
+    if [ "$TARGETARCH" != "$BUILDARCH" ]; then \
+      case "$TARGETARCH" in \
+        arm64) packages="gcc-aarch64-linux-gnu libc6-dev-arm64-cross" ;; \
+        amd64) packages="gcc-x86-64-linux-gnu libc6-dev-amd64-cross" ;; \
+        *) echo "unsupported target platform $TARGETARCH" >&2; exit 1 ;; \
+      esac; \
+      apt-get update && apt-get install -y --no-install-recommends $packages \
       && rm -rf /var/lib/apt/lists/*; \
     fi
 ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
-    CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+    CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc \
+    CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc
 
 # bun and wasm-opt, checked against their published SHA-256.
 RUN set -eu; \

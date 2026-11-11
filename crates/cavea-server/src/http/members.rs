@@ -724,11 +724,26 @@ async fn accept(
     signed_in(&state, StatusCode::OK, &id).await
 }
 
-/// Take the live invitation with this token's hash, inside `tx`.
+const INVITATION_WORKSPACE: &str =
+    "SELECT workspace_id::text FROM invitations WHERE token_hash = $1";
+
+/// Take the live invitation with this token's hash, inside `tx`. Its
+/// workspace is locked first, as by every other change to members and
+/// invitations, so that acceptance never waits for a workspace while holding
+/// an invitation that a new invitation of the same email waits for.
 async fn take(
     tx: &mut sqlx::PgConnection,
     hash: &[u8; 32],
 ) -> Result<(String, String, String, String), ApiError> {
+    let workspace: Option<String> = sqlx::query_scalar(INVITATION_WORKSPACE)
+        .bind(hash.as_slice())
+        .fetch_optional(&mut *tx)
+        .await?;
+    let workspace = workspace.ok_or_else(invitation_refused)?;
+    sqlx::query(LOCK_WORKSPACE)
+        .bind(&workspace)
+        .execute(&mut *tx)
+        .await?;
     let row: Option<(String, String, String, String)> = sqlx::query_as(TAKE_INVITATION)
         .bind(hash.as_slice())
         .fetch_optional(&mut *tx)

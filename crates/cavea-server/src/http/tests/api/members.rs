@@ -351,8 +351,9 @@ async fn invitations_work_once_for_their_email() {
 
 /// CON-012: of two acceptances of one link at once, one joins and the other
 /// is refused, with one user and one `member.joined` row; an email that is
-/// already a member's cannot be invited; a link accepted by someone who
-/// became a member meanwhile is used up, keeps their role and writes no row.
+/// already a member's cannot be invited; acceptance racing a new invitation
+/// of the same email never deadlocks; a link accepted by someone who became
+/// a member meanwhile is used up, keeps their role and writes no row.
 #[tokio::test]
 #[ignore = "needs CAVEA_TEST_DATABASE_URL"]
 async fn invitations_hold_under_a_race_and_for_members() {
@@ -360,6 +361,7 @@ async fn invitations_hold_under_a_race_and_for_members() {
     with_db(async move |pool| {
         let app = api(&pool, Some(ADMIN));
         let a = Tenant::create(&app, "a").await;
+        let b = Tenant::create(&app, "b").await;
         let (_, owner) = member(&pool, &a.id, Role::Owner, "owner@a.example").await;
         let invite = async |email: &str| {
             let body = json!({ "email": email, "role": "viewer" });
@@ -394,8 +396,37 @@ async fn invitations_hold_under_a_race_and_for_members() {
         let (response, problem) = invite("owner@a.example").await;
         assert_eq!(response.status(), 409, "{problem}");
 
+        // Acceptance against a new invitation of the same email, which
+        // replaces the one being accepted: never a deadlock (a `500`).
+        let (_, again) = member(&pool, &b.id, Role::Viewer, "again@b.example").await;
+        let headers = console(&again, None);
+        let headers = refs(&headers);
+        for _ in 0..50 {
+            let (_, created) = invite("again@b.example").await;
+            let token = token_of(created["link"].as_str().unwrap()).to_owned();
+            let uri = "/console/api/invitations/accept";
+            let body = Some(json!({ "token": token }));
+            let signed_in = call_with(&app, Method::POST, uri, None, &headers, body);
+            let ((accepted, _), (replaced, _)) = tokio::join!(signed_in, invite("again@b.example"));
+            if accepted.status() == 200 {
+                let leave = "DELETE FROM memberships WHERE workspace_id = $1::uuid
+                  AND user_id = (SELECT id FROM users WHERE email = 'again@b.example')";
+                sqlx::query(leave)
+                    .bind(&a.id[3..])
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+            let pair = (accepted.status().as_u16(), replaced.status().as_u16());
+            assert!(
+                matches!(pair, (200, 409) | (200, 201) | (401, 201)),
+                "{pair:?}"
+            );
+        }
+
         // Invited as a viewer, then made an admin by other means before
         // opening the link: they stay an admin.
+        let before = joined().await;
         let (_, created) = invite("late@a.example").await;
         let token = token_of(created["link"].as_str().unwrap()).to_owned();
         let (user, session) = member(&pool, &a.id, Role::Admin, "late@a.example").await;
@@ -405,7 +436,7 @@ async fn invitations_hold_under_a_race_and_for_members() {
         let (response, me) = call_with(&app, Method::POST, uri, None, &refs(&headers), body).await;
         assert_eq!(response.status(), 200, "{me}");
         assert_eq!(me["workspaces"][0]["role"], "admin");
-        assert_eq!(joined().await, 1, "usr_{user} joined nothing");
+        assert_eq!(joined().await, before, "usr_{user} joined nothing");
         let (response, _) = accept(&token).await;
         assert_eq!(response.status(), 401);
     })
