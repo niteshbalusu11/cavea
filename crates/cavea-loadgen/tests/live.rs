@@ -204,9 +204,17 @@ fn short_runs_check_clean_and_the_reconciler_agrees() {
     assert!(code == 0 || code == 4, "exit {code}: {:#}", r["checks"]);
     assert_eq!(r["checks"]["violations_total"], 0, "{:#}", r["checks"]);
     let cv = &r["checks"]["convergence"];
-    assert_eq!((&cv["differ"], &cv["unverified"]), (&0.into(), &0.into()), "{cv:#}");
+    assert_eq!(
+        (&cv["differ"], &cv["unverified"]),
+        (&0.into(), &0.into()),
+        "{cv:#}"
+    );
     assert!(cv["equal"].as_u64().unwrap() > 0);
-    assert!(r["connections"]["reconnects"].as_u64().unwrap() > 0, "{:#}", r["connections"]);
+    assert!(
+        r["connections"]["reconnects"].as_u64().unwrap() > 0,
+        "{:#}",
+        r["connections"]
+    );
     assert!(!r["outages"].as_array().unwrap().is_empty());
 
     let verify = Command::new(server_binary())

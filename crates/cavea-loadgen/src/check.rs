@@ -540,9 +540,11 @@ pub fn audit(h: &History, seen: &Observed) -> (Vec<Violation>, Resolution) {
                         .iter()
                         .any(|u| u.kind == Kind::Book && u.order == n && u.objects.contains(&o));
                 if !ok {
-                    let check = if h.failed.iter().any(|f| {
-                        f.kind == Kind::Book && f.order == n && f.objects.contains(&o)
-                    }) {
+                    let check = if h
+                        .failed
+                        .iter()
+                        .any(|f| f.kind == Kind::Book && f.order == n && f.objects.contains(&o))
+                    {
                         "failed_took_effect"
                     } else if r.freed.get(&o).is_some_and(|f| f.0 == Kind::Unbook) {
                         "lost_ack"
@@ -571,9 +573,10 @@ pub fn audit(h: &History, seen: &Observed) -> (Vec<Violation>, Resolution) {
                 let server_start = seen.start_ms.saturating_add(h.clock.lo);
                 let late = h.clock.lo != i64::MIN && expires + 999 + SLACK_MS < server_start;
                 // Released by a party whose token has this expiry.
-                let released = r.freed.get(&o).is_some_and(|f| {
-                    f.0 == Kind::Release && h.expiry.get(&f.1) == Some(&expires)
-                });
+                let released = r
+                    .freed
+                    .get(&o)
+                    .is_some_and(|f| f.0 == Kind::Release && h.expiry.get(&f.1) == Some(&expires));
                 // A party not read, or whose token had expired by the time
                 // it was read (the objects are listed first).
                 let possible = h.expiry.iter().any(|(p, e)| {
@@ -610,7 +613,9 @@ pub fn audit(h: &History, seen: &Observed) -> (Vec<Violation>, Resolution) {
                 {
                     bad(
                         "lost_ack",
-                        format!("idx {o}: party {p} still holds it, though its release was acknowledged"),
+                        format!(
+                            "idx {o}: party {p} still holds it, though its release was acknowledged"
+                        ),
                     );
                 }
             } else if !unknown(o, Kind::Hold, Some(p)) {

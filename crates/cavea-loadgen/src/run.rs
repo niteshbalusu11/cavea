@@ -220,7 +220,9 @@ fn micros(d: Duration) -> u64 {
 /// 2^(n−1))` for the n-th consecutive failure, times a random factor from 0.5
 /// to 1.
 pub fn backoff(n: u32, rng: &mut Rng) -> Duration {
-    let base = 500u64.saturating_mul(1 << n.clamp(1, 7).saturating_sub(1)).min(30_000);
+    let base = 500u64
+        .saturating_mul(1 << n.clamp(1, 7).saturating_sub(1))
+        .min(30_000);
     let factor = 0.5 + 0.5 * ((rng.next() >> 11) as f64 / (1u64 << 53) as f64);
     Duration::from_millis((base as f64 * factor) as u64)
 }
@@ -306,8 +308,18 @@ impl Client {
         let Some(conn) = self.conn.as_mut() else {
             return Attempt::NotApplied("not_sent");
         };
-        let headers: Vec<(&str, &str)> = req.headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        match call(conn, req.method, &req.path, req.auth, &headers, req.body.as_ref()).await {
+        let headers: Vec<(&str, &str)> =
+            req.headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        match call(
+            conn,
+            req.method,
+            &req.path,
+            req.auth,
+            &headers,
+            req.body.as_ref(),
+        )
+        .await
+        {
             Ok((503, v)) if v["code"] == "overloaded" => Attempt::NotApplied("overloaded"),
             Ok((503, _)) => Attempt::Unknown("unavailable"),
             Ok((s, v)) => Attempt::Reply(s, v),
@@ -569,7 +581,9 @@ impl Shared {
 
     /// The booking number of one of this run's order references.
     fn order_of(&self, r: &str) -> Option<u64> {
-        r.strip_prefix(&format!("lg-{}-", self.run_id))?.parse().ok()
+        r.strip_prefix(&format!("lg-{}-", self.run_id))?
+            .parse()
+            .ok()
     }
 }
 
@@ -952,7 +966,17 @@ async fn follow(sh: Arc<Shared>, i: u64, probe: bool, mine: Arc<Mutex<SeatView>>
                 }
             }
         };
-        let how = read(&sh, i, probe, &mine, &mut conn, &mut stop, &mut failures, &mut down).await;
+        let how = read(
+            &sh,
+            i,
+            probe,
+            &mine,
+            &mut conn,
+            &mut stop,
+            &mut failures,
+            &mut down,
+        )
+        .await;
         let _ = conn.close(None).await;
         match how {
             Ended::Dropped => {
@@ -979,7 +1003,10 @@ async fn follow(sh: Arc<Shared>, i: u64, probe: bool, mine: Arc<Mutex<SeatView>>
     }
 }
 
-#[allow(clippy::too_many_arguments, reason = "one connection's loop and its counters")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one connection's loop and its counters"
+)]
 async fn read(
     sh: &Shared,
     i: u64,
@@ -1064,7 +1091,13 @@ type Handoff = mpsc::UnboundedSender<(Party, String, Vec<u32>)>;
 
 /// A buyer: a token, 2 to 4 seats its view shows available, a hold (another
 /// pick after a refusal, twice at most), then release, booking or expiry.
-async fn buy(sh: Arc<Shared>, party: Party, view: Option<Arc<Mutex<SeatView>>>, due: Instant, backend: Handoff) {
+async fn buy(
+    sh: Arc<Shared>,
+    party: Party,
+    view: Option<Arc<Mutex<SeatView>>>,
+    due: Instant,
+    backend: Handoff,
+) {
     // How late the generator started this arrival: its own lag, which the
     // token's latency (measured from `due`) includes.
     sh.op("start_lag", due, Ok(()));
@@ -1108,7 +1141,15 @@ async fn buy_inner(
     let token = v["hold_token"].as_str().unwrap_or_default().to_owned();
     // Every attempt creates a token of its own, so a success's `seq` is its own.
     let created = s;
-    sh.ack(party, Kind::CreateHold, v["seq"].as_u64().unwrap_or(0), vec![], &created, false, None);
+    sh.ack(
+        party,
+        Kind::CreateHold,
+        v["seq"].as_u64().unwrap_or(0),
+        vec![],
+        &created,
+        false,
+        None,
+    );
     if let Ok(mut t) = sh.tokens.lock() {
         t.insert(party, token.clone());
     }
@@ -1197,7 +1238,15 @@ async fn buy_inner(
                 {
                     m.insert(seq, s.recv_ms);
                 }
-                sh.ack(party, Kind::Hold, seq, held.clone(), &s, s.unknown_before, None);
+                sh.ack(
+                    party,
+                    Kind::Hold,
+                    seq,
+                    held.clone(),
+                    &s,
+                    s.unknown_before,
+                    None,
+                );
                 let fate = (rng.next() >> 11) as f64 / (1u64 << 53) as f64;
                 if fate < sh.cfg.release_share {
                     sleep(Duration::from_millis(rng.below(1_000))).await;
@@ -1286,7 +1335,14 @@ async fn buy_inner(
     Ok(())
 }
 
-async fn release(sh: &Arc<Shared>, cl: &mut Client, rng: &mut Rng, party: Party, token: &str, held: &[u32]) {
+async fn release(
+    sh: &Arc<Shared>,
+    cl: &mut Client,
+    rng: &mut Rng,
+    party: Party,
+    token: &str,
+    held: &[u32],
+) {
     let path = format!("/v1/public/events/{}/release", query_escape(&sh.event));
     let req = Req::post(path, &sh.pk, json!({"hold_token": token}));
     let s = sh.send(cl, rng, "release", &req, BUYER_RETRY).await;
@@ -1330,7 +1386,14 @@ async fn release(sh: &Arc<Shared>, cl: &mut Client, rng: &mut Rng, party: Party,
 
 /// The backend: books with the secret key and an `Idempotency-Key`, sending a
 /// share of bookings twice, which must get the same reply.
-async fn book(sh: Arc<Shared>, cl: &mut Client, party: Party, token: String, held: Vec<u32>, rng: &mut Rng) {
+async fn book(
+    sh: Arc<Shared>,
+    cl: &mut Client,
+    party: Party,
+    token: String,
+    held: Vec<u32>,
+    rng: &mut Rng,
+) {
     let n = sh.order.fetch_add(1, Relaxed);
     let body = json!({"hold_token": token, "order_ref": sh.order_ref(n)});
     let path = format!("/v1/events/{}/book", query_escape(&sh.event));
@@ -1410,7 +1473,9 @@ async fn unbook(sh: Arc<Shared>, objects: Vec<u32>, n: u64) {
     let path = format!("/v1/events/{}/release", query_escape(&sh.event));
     let req = Req::post(path, &sh.sk, json!({ "objects": sh.objects(&objects) }))
         .key(format!("lg-{}-unbook-{n}", sh.run_id));
-    let s = sh.send(&mut cl, &mut rng, "unbook", &req, BACKEND_RETRY).await;
+    let s = sh
+        .send(&mut cl, &mut rng, "unbook", &req, BACKEND_RETRY)
+        .await;
     match &s.last {
         Attempt::Reply(200, v) => {
             sh.op("unbook", s.started, Ok(()));
@@ -1441,11 +1506,26 @@ async fn unbook(sh: Arc<Shared>, objects: Vec<u32>, n: u64) {
 
 /// Block or unblock one seat, with an `Idempotency-Key`: the acknowledgement,
 /// or `None`.
-async fn change(sh: &Arc<Shared>, cl: &mut Client, rng: &mut Rng, idx: u32, kind: Kind, m: u64) -> bool {
+async fn change(
+    sh: &Arc<Shared>,
+    cl: &mut Client,
+    rng: &mut Rng,
+    idx: u32,
+    kind: Kind,
+    m: u64,
+) -> bool {
     let path = format!("/v1/events/{}/change-status", query_escape(&sh.event));
-    let status = if kind == Kind::Block { "blocked" } else { "free" };
-    let req = Req::post(path, &sh.sk, json!({"objects": sh.objects(&[idx]), "status": status}))
-        .key(format!("lg-{}-{}-{m}", sh.run_id, kind.name()));
+    let status = if kind == Kind::Block {
+        "blocked"
+    } else {
+        "free"
+    };
+    let req = Req::post(
+        path,
+        &sh.sk,
+        json!({"objects": sh.objects(&[idx]), "status": status}),
+    )
+    .key(format!("lg-{}-{}-{m}", sh.run_id, kind.name()));
     let s = sh.send(cl, rng, kind.name(), &req, BACKEND_RETRY).await;
     match &s.last {
         Attempt::Reply(200, v) => {
@@ -1598,7 +1678,11 @@ pub async fn run(cfg: Config) -> Result<Outcome> {
         sh.cfg.subscribers,
         sh.cfg.buyers
     );
-    let cpu0 = (cpu_s(None), sh.cfg.server_pid.and_then(|p| cpu_s(Some(p))), Instant::now());
+    let cpu0 = (
+        cpu_s(None),
+        sh.cfg.server_pid.and_then(|p| cpu_s(Some(p))),
+        Instant::now(),
+    );
     // The time series, until the run stops.
     let series = Arc::new(Mutex::new(Vec::new()));
     let sampler = {
@@ -1606,7 +1690,11 @@ pub async fn run(cfg: Config) -> Result<Outcome> {
         let mut stop = sh.stop.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(sh.cfg.interval);
-            let mut last = (cpu_s(None), sh.cfg.server_pid.and_then(|p| cpu_s(Some(p))), Instant::now());
+            let mut last = (
+                cpu_s(None),
+                sh.cfg.server_pid.and_then(|p| cpu_s(Some(p))),
+                Instant::now(),
+            );
             let mut last_hold = Hist::default();
             loop {
                 tokio::select! { _ = tick.tick() => {}, _ = stop.wait_for(|s| *s) => break }
@@ -1631,11 +1719,16 @@ pub async fn run(cfg: Config) -> Result<Outcome> {
                     let old = now_ms() - 30_000;
                     m.retain(|_, t| *t > old);
                 }
-                let now = (cpu_s(None), sh.cfg.server_pid.and_then(|p| cpu_s(Some(p))), Instant::now());
+                let now = (
+                    cpu_s(None),
+                    sh.cfg.server_pid.and_then(|p| cpu_s(Some(p))),
+                    Instant::now(),
+                );
                 let dt = (now.2 - last.2).as_secs_f64().max(1e-3);
                 let interval = hold.since(&last_hold);
                 last_hold = hold;
-                let q = |p: f64| (interval.count() > 0).then(|| interval.quantile(p) as f64 / 1_000.0);
+                let q =
+                    |p: f64| (interval.count() > 0).then(|| interval.quantile(p) as f64 / 1_000.0);
                 let cores = |a: Option<f64>, b: Option<f64>| Some((b? - a?) / dt);
                 if let Ok(mut s) = series.lock() {
                     s.push(json!({
@@ -1726,7 +1819,11 @@ pub async fn run(cfg: Config) -> Result<Outcome> {
     while sh.unbooks.load(Relaxed) > 0 && Instant::now() < deadline {
         sleep(Duration::from_millis(50)).await;
     }
-    let cpu1 = (cpu_s(None), sh.cfg.server_pid.and_then(|p| cpu_s(Some(p))), Instant::now());
+    let cpu1 = (
+        cpu_s(None),
+        sh.cfg.server_pid.and_then(|p| cpu_s(Some(p))),
+        Instant::now(),
+    );
     sleep(sh.cfg.quiet).await;
     let converged = converge(&sh).await;
     let audit = observe(&sh).await;
@@ -1768,7 +1865,11 @@ pub async fn run(cfg: Config) -> Result<Outcome> {
             .map_err(|_| anyhow!("stats lock poisoned"))?,
     );
     let series = std::mem::take(&mut *series.lock().map_err(|_| anyhow!("series lock poisoned"))?);
-    let outages = sh.outages.lock().map(|o| o.list.clone()).unwrap_or_default();
+    let outages = sh
+        .outages
+        .lock()
+        .map(|o| o.list.clone())
+        .unwrap_or_default();
     let gaps = sh.gaps.lock().map(|g| g.list.clone()).unwrap_or_default();
     let delta = |a: Option<f64>, b: Option<f64>| Some(b? - a?);
     Ok(Outcome {
@@ -1808,7 +1909,12 @@ fn write_acks(sh: &Shared, h: &History, path: &str) -> Result<()> {
             .collect();
         oids.sort_unstable();
         let list: Vec<String> = oids.iter().map(|o| (*o as i32).to_string()).collect();
-        out.push_str(&format!("{},{},\"{{{}}}\"\n", a.seq, a.kind.op(), list.join(",")));
+        out.push_str(&format!(
+            "{},{},\"{{{}}}\"\n",
+            a.seq,
+            a.kind.op(),
+            list.join(",")
+        ));
     }
     std::fs::write(path, out).with_context(|| format!("cannot write {path}"))
 }
@@ -1906,12 +2012,17 @@ async fn observe(sh: &Arc<Shared>) -> Result<Observed> {
                 headers: vec![],
                 body: None,
             };
-            let s = sh.send(&mut cl, &mut rng, "audit", &req, BACKEND_RETRY).await;
+            let s = sh
+                .send(&mut cl, &mut rng, "audit", &req, BACKEND_RETRY)
+                .await;
             let Attempt::Reply(200, page) = s.last else {
                 bail!("listing {status} objects: {:?}", s.last);
             };
             for o in page["data"].as_array().into_iter().flatten() {
-                let Some(&idx) = o["oid"].as_u64().and_then(|oid| sh.oid_idx.get(&(oid as u32))) else {
+                let Some(&idx) = o["oid"]
+                    .as_u64()
+                    .and_then(|oid| sh.oid_idx.get(&(oid as u32)))
+                else {
                     bail!("the objects query named an object not in the chart");
                 };
                 let seen = match o["status"].as_str() {
@@ -1921,7 +2032,9 @@ async fn observe(sh: &Arc<Shared>) -> Result<Observed> {
                             .and_then(parse_rfc3339_ms)
                             .unwrap_or(0),
                     ),
-                    Some("booked") => Seen::Booked(o["order_ref"].as_str().and_then(|r| sh.order_of(r))),
+                    Some("booked") => {
+                        Seen::Booked(o["order_ref"].as_str().and_then(|r| sh.order_of(r)))
+                    }
                     Some("blocked") => Seen::Blocked,
                     _ => Seen::Other,
                 };
@@ -1961,7 +2074,9 @@ async fn observe(sh: &Arc<Shared>) -> Result<Observed> {
                     headers: vec![],
                     body: None,
                 };
-                let s = sh.send(&mut cl, &mut rng, "audit", &req, BACKEND_RETRY).await;
+                let s = sh
+                    .send(&mut cl, &mut rng, "audit", &req, BACKEND_RETRY)
+                    .await;
                 match s.last {
                     Attempt::Reply(200, v) => {
                         let mut held = sh.idx_of(&v["objects"]);

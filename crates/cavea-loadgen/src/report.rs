@@ -76,7 +76,11 @@ pub fn build(cfg: &Config, profile: &str, o: &Outcome) -> (Value, u8) {
         .get("hold")
         .map_or(0, |h| h.ok + h.errors.values().sum::<u64>());
     let (equal, differ, unverified) = o.converged;
-    let lag_p99 = o.stats.ops.get("start_lag").map_or(0.0, |l| ms(l.hist.quantile(0.99)));
+    let lag_p99 = o
+        .stats
+        .ops
+        .get("start_lag")
+        .map_or(0.0, |l| ms(l.hist.quantile(0.99)));
     let cpu = &o.cpu;
     let wall = cpu.wall_s.max(1e-3);
     let (objects_seen, tokens_read, resolution) = match &o.audit {
@@ -188,7 +192,13 @@ pub fn summary(r: &Value) -> String {
     let _ = writeln!(
         s,
         "  connections: {} opened, {} failed, {} given up, {} reconnects, {} resyncs, closes {}, {} frames",
-        c["opened"], c["failed"], c["dropped"], c["reconnects"], c["resyncs"], c["closes"], c["frames"]
+        c["opened"],
+        c["failed"],
+        c["dropped"],
+        c["reconnects"],
+        c["resyncs"],
+        c["closes"],
+        c["frames"]
     );
     let q = &r["requests"];
     let _ = writeln!(
@@ -206,9 +216,15 @@ pub fn summary(r: &Value) -> String {
         "  cpu over {:.1} s of load: generator {:.2} cores, server {} cores; start lag p99 {} ms{}",
         cpu["load_wall_s"].as_f64().unwrap_or(0.0),
         cpu["generator_cores"].as_f64().unwrap_or(0.0),
-        cpu["server_cores"].as_f64().map_or("?".into(), |c| format!("{c:.2}")),
+        cpu["server_cores"]
+            .as_f64()
+            .map_or("?".into(), |c| format!("{c:.2}")),
         l["start_lag_p99_ms"],
-        if l["generator_behind"] == true { " (the generator fell behind its schedule)" } else { "" }
+        if l["generator_behind"] == true {
+            " (the generator fell behind its schedule)"
+        } else {
+            ""
+        }
     );
     let a = &r["audit"];
     let _ = writeln!(
