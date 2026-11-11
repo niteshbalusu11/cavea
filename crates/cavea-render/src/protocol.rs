@@ -20,20 +20,6 @@ pub enum ObjectRef {
     Idx(u32),
 }
 
-/// Seat positions and categories handed over directly, until charts arrive as
-/// CCF bytes (`LoadChart`, REN-012). Seats past the shorter array are ignored.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SeatArrays {
-    /// Centres in chart units.
-    pub pos: Vec<[f32; 2]>,
-    /// Category per seat; the palette row.
-    pub cat: Vec<u16>,
-    /// Seat size in chart units, the same for every seat.
-    pub size: f32,
-    /// Shape id (04 §8), the same for every seat.
-    pub shape: u8,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StatusChange {
     pub idx: u32,
@@ -134,11 +120,12 @@ pub struct ThemeToken {
 /// Input to the engine (04 §3).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
+    /// A public (or full) CCF artefact. Replaces any chart already loaded;
+    /// answered with `Ready`, or an `Error` with `BadChart` that leaves the
+    /// engine as it was.
     LoadChart {
         ccf: Vec<u8>,
     },
-    /// Interim: raw seat arrays instead of a compiled chart.
-    LoadSeats(SeatArrays),
     SetSnapshot {
         seq: u64,
         state: Vec<u8>,
@@ -233,32 +220,43 @@ pub enum Command {
     ContextRestored,
 }
 
+/// A floor, in chart order; its index is its id in `SetFloor`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FloorInfo {
-    pub id: String,
     pub name: String,
+    pub level: i32,
+    pub seats: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SectionInfo {
+    /// Empty for a section without a label.
     pub label: String,
-    pub floor: String,
+    /// Index into `ChartInfo::floors`.
+    pub floor: u32,
+    pub seats: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CategoryInfo {
     pub key: String,
     pub label: String,
+    /// The chart's colour, RGBA.
+    pub color: [u8; 4],
+    /// Bookable objects in this category.
     pub objects: u32,
 }
 
 /// Chart metadata reported by `Ready`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChartInfo {
+    pub name: String,
     pub floors: Vec<FloorInfo>,
     pub sections: Vec<SectionInfo>,
     pub categories: Vec<CategoryInfo>,
+    /// Bookable objects: seats, then tables booked whole, booths and areas.
     pub objects: u32,
+    pub seats: u32,
 }
 
 /// One object as the host sees it.
@@ -309,6 +307,8 @@ pub enum ErrorCode {
     Unsupported,
     /// The command's data is invalid.
     InvalidInput,
+    /// `LoadChart` bytes are not a valid CCF artefact.
+    BadChart,
 }
 
 /// Output of the engine (04 §3).

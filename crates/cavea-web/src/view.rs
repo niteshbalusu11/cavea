@@ -179,24 +179,18 @@ impl View {
         self.send(Command::SetReducedMotion(on))
     }
 
+    /// Loads a compiled chart (public CCF bytes, passed once) and replaces any
+    /// chart already shown. Throws if the bytes are not a valid chart, in which
+    /// case the previous chart stays.
+    #[wasm_bindgen(js_name = loadChart)]
+    pub fn load_chart(&mut self, ccf: Vec<u8>) -> Result<(), JsError> {
+        self.send(Command::LoadChart { ccf })
+    }
+
     /// Whether a frame is wanted, after a call other than `frame`.
     #[wasm_bindgen(getter, js_name = needFrame)]
     pub fn need_frame(&self) -> bool {
         self.need_frame
-    }
-
-    /// Demo only: loads `seats` synthetic stadium seats generated from `seed`,
-    /// all drawn with one shape id (04 §8).
-    #[cfg(feature = "demo")]
-    #[wasm_bindgen(js_name = loadSynthetic)]
-    pub fn load_synthetic(&mut self, seats: u32, seed: u32, shape: u8) -> Result<(), JsError> {
-        let stadium = cavea_testkit::synthetic::stadium(seats as usize, u64::from(seed));
-        self.send(Command::LoadSeats(cavea_render::protocol::SeatArrays {
-            pos: stadium.pos,
-            cat: stadium.cat,
-            size: cavea_testkit::synthetic::SEAT_SIZE,
-            shape,
-        }))
     }
 
     /// Demo only: fits the given chart-unit rectangle into the view.
@@ -214,15 +208,32 @@ impl View {
         })
     }
 
-    /// Demo only: sets the visual state of `count` seats from `start`, which
-    /// uploads only that sub-range of the dynamic buffer.
+    /// Demo only: sets the public status (0 available, 1 unavailable) of
+    /// `count` seats from `start`, which uploads only that dynamic sub-range.
     #[cfg(feature = "demo")]
-    #[wasm_bindgen(js_name = setVisual)]
-    pub fn set_visual(&mut self, start: u32, count: u32, visual: u8) -> Result<(), JsError> {
-        let start = start as usize;
+    #[wasm_bindgen(js_name = setStatus)]
+    pub fn set_status(&mut self, start: u32, count: u32, status: u8) -> Result<(), JsError> {
         self.engine
-            .set_visual(start..start.saturating_add(count as usize), visual);
+            .set_status(start..start.saturating_add(count), status);
         self.drain()
+    }
+
+    /// Demo only: a synthetic stadium of `seats` seats from `seed`, compiled
+    /// in the browser; `shape` 0 circle, 1 rounded, 2 chair. Returns public
+    /// CCF bytes for `loadChart`.
+    #[cfg(feature = "demo")]
+    #[wasm_bindgen(js_name = demoChart)]
+    pub fn demo_chart(seats: u32, seed: u32, shape: u8) -> Result<Vec<u8>, JsError> {
+        use cavea_compiler::document::SeatShape;
+        let mut doc = cavea_testkit::synthetic::stadium(seats, u64::from(seed));
+        doc.settings.seat_shape = match shape {
+            0 => SeatShape::Circle,
+            1 => SeatShape::Rounded,
+            _ => SeatShape::Chair,
+        };
+        cavea_compiler::compile(&doc)
+            .map(|compiled| compiled.public)
+            .map_err(|e| JsError::new(&format!("{e:?}")))
     }
 }
 

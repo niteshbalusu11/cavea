@@ -10,12 +10,15 @@ publish.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-# Debug-only exports for apps/demo (synthetic seats). `cargo xtask build-web`
-# leaves it off; `cargo xtask build-web --demo` turns it on.
-demo = ["dep:cavea-testkit"]
+# Debug-only exports for apps/demo: synthetic charts compiled in the browser,
+# seat status and camera setters. `cargo xtask build-web` leaves it off, so the
+# production WASM has neither the compiler nor the generator;
+# `cargo xtask build-web --demo` turns it on.
+demo = ["dep:cavea-testkit", "dep:cavea-compiler", "cavea-render/demo"]
 
 [dependencies]
 wasm-bindgen.workspace = true
+cavea-compiler = { workspace = true, optional = true }
 cavea-testkit = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

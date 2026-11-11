@@ -18,7 +18,8 @@ struct Globals {
 }
 
 @group(0) @binding(0) var<uniform> globals: Globals;
-// One row per category, two texels (fill, ink) per visual state.
+// One row per category and one for objects without one; three texels
+// (fill, stroke, ink) per visual state (src/theme.rs).
 @group(0) @binding(1) var palette: texture_2d<f32>;
 
 struct SeatIn {
@@ -37,7 +38,7 @@ struct SeatOut {
     // Position in the shape's unit space; the shape edge is at distance 1.
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) fill: vec4<f32>,
-    @location(2) @interpolate(flat) ink: vec4<f32>,
+    @location(2) @interpolate(flat) stroke: vec4<f32>,
     // Half size in device pixels.
     @location(3) @interpolate(flat) half_px: f32,
     @location(4) @interpolate(flat) shape_fx: vec2<u32>,
@@ -57,12 +58,12 @@ fn vs_main(seat: SeatIn) -> SeatOut {
     let world = seat.pos + vec2<f32>(local.x * c - local.y * s, local.x * s + local.y * c);
 
     let row = i32(seat.cat);
-    let column = i32(seat.visual_fx.x) * 2;
+    let column = i32(seat.visual_fx.x) * 3;
     var out: SeatOut;
     out.clip = vec4<f32>((globals.view * vec3<f32>(world, 1.0)).xy, 0.0, 1.0);
     out.uv = uv;
     out.fill = textureLoad(palette, vec2<i32>(column, row), 0);
-    out.ink = textureLoad(palette, vec2<i32>(column + 1, row), 0);
+    out.stroke = textureLoad(palette, vec2<i32>(column + 1, row), 0);
     out.half_px = half_px;
     out.shape_fx = vec2<u32>(seat.angle_shape.y, seat.visual_fx.y);
     return out;
@@ -90,14 +91,15 @@ fn fs_main(seat: SeatOut) -> @location(0) vec4<f32> {
     let coverage = clamp(0.5 - edge_px, 0.0, 1.0);
 
     var stroke = globals.stroke_px;
-    if shape == 2u && seat.uv.y < -0.5 {
-        // Chair: the back (local −y) carries a thicker edge.
+    if shape == 2u && seat.uv.y > 0.5 {
+        // Chair: the back carries a thicker edge. The angle points along the
+        // row, so local +y is behind the seat, away from the front rows.
         stroke = stroke * 3.0;
     }
     var color = seat.fill;
     if seat.half_px * 2.0 >= globals.stroke_min_px {
-        // Ink where −stroke < d × half_px, with a one-pixel blend into the fill.
-        color = mix(seat.fill, seat.ink, clamp(edge_px + stroke + 0.5, 0.0, 1.0));
+        // Stroke where −stroke < d × half_px, with a one-pixel blend into the fill.
+        color = mix(seat.fill, seat.stroke, clamp(edge_px + stroke + 0.5, 0.0, 1.0));
     }
     if (fx & 4u) != 0u {
         let pulse = 0.5 + 0.5 * sin(globals.time * 12.566371);

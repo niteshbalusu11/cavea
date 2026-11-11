@@ -1,8 +1,8 @@
 //! The engine: takes [`Command`]s, emits [`Event`]s, draws through a
-//! [`GpuBackend`]. This slice implements `LoadSeats`, `Resize`, `Pointer`,
-//! `Wheel`, `SetCamera` and `FlyTo` with bounds, `SetGestureHandling`,
-//! `SetReducedMotion`, `Tick` and `ContextLost`; every other command is
-//! answered with an `Unsupported` error event.
+//! [`GpuBackend`]. Implemented so far: `LoadChart`, `Resize`,
+//! `Pointer`, `Wheel`, `SetCamera` and `FlyTo` with bounds,
+//! `SetGestureHandling`, `SetReducedMotion`, `Tick` and `ContextLost`; every
+//! other command is answered with an `Unsupported` error event.
 //!
 //! Frames (04 §18): input, camera commands and resizes are queued and applied
 //! at the start of the next `Tick`. A frame is drawn only when something is
@@ -18,20 +18,15 @@ use crate::{
     },
     camera::{self, Camera, Limits, Rect, Size},
     gesture::{Action, Intent, Recogniser},
-    protocol::{
-        Bounds, CameraTarget, CategoryInfo, ChartInfo, Command, ErrorCode, Event, Lod, PointerKind,
-        PointerType, SeatArrays,
-    },
-    seat::{self, SeatStatic},
+    protocol::{Bounds, CameraTarget, Command, ErrorCode, Event, Lod, PointerKind, PointerType},
+    scene::Scene,
+    seat,
+    theme::{PALETTE_WIDTH, Selection, Theme, picker_visual},
     tuning::{
         INERTIA_STOP_PX_PER_S, INERTIA_TIME_CONSTANT_MS, LOD_DETAIL_SEAT_PX, MAX_BACKING_PX,
         MAX_DPR_OTHER, MAX_QUEUED_INPUT,
     },
 };
-
-const CLEAR: [f32; 4] = [0.96, 0.96, 0.95, 1.0];
-/// Palette texels per row: two (fill, ink) for each of the eight visual states.
-const PALETTE_WIDTH: u32 = 16;
 
 /// The backing-store size in device pixels for a canvas of `width` × `height`
 /// CSS pixels, and the pixel ratio actually used: `min(dpr, max_dpr)`, lowered
@@ -57,14 +52,9 @@ struct Viewport {
     css: Size,
 }
 
-/// Seats on the CPU (04 §5) and their GPU resources.
-struct Scene {
-    bounds: Bounds,
-    /// Default seat size in chart units, for the zoom limit.
-    seat_size: f64,
-    cat: Vec<u16>,
-    visual: Vec<u8>,
-    fx: Vec<u8>,
+/// A loaded chart (04 §5) and its GPU resources (04 §6).
+struct Loaded {
+    scene: Scene,
     static_buf: BufferId,
     dynamic_buf: BufferId,
     palette: TextureId,
@@ -130,7 +120,10 @@ pub struct Engine<B: GpuBackend> {
     camera: Option<Camera>,
     /// The camera last reported with `CameraChanged`.
     reported: Option<Camera>,
-    scene: Option<Scene>,
+    scene: Option<Loaded>,
+    /// Colours of the palette and the clear colour; `SetTheme` (REN-041)
+    /// will replace it.
+    theme: Theme,
     queue: Vec<Queued>,
     actions: Vec<Action>,
     recogniser: Recogniser,
@@ -155,6 +148,7 @@ impl<B: GpuBackend> Engine<B> {
             camera: None,
             reported: None,
             scene: None,
+            theme: Theme::light(),
             queue: Vec::new(),
             actions: Vec::new(),
             recogniser: Recogniser::default(),
@@ -176,8 +170,8 @@ impl<B: GpuBackend> Engine<B> {
 
     pub fn handle(&mut self, command: Command) {
         match command {
-            Command::LoadSeats(arrays) => {
-                if let Err((code, message)) = self.load_seats(arrays) {
+            Command::LoadChart { ccf } => {
+                if let Err((code, message)) = self.load_chart(&ccf) {
                     self.error(code, message);
                 }
             }
@@ -255,19 +249,46 @@ impl<B: GpuBackend> Engine<B> {
         }
     }
 
-    /// Interim, until seat state arrives through `SetSnapshot` and `ApplyDelta`
-    /// (REN-018): sets the visual state of the seats in `range`. Only that
-    /// sub-range of the dynamic buffer is uploaded at the next frame.
-    pub fn set_visual(&mut self, range: Range<usize>, visual: u8) {
-        let Some(scene) = &mut self.scene else { return };
-        let Some(slots) = scene.visual.get_mut(range.clone()) else {
+    /// Demo and test entry point to [`Engine::apply_status`], until state
+    /// arrives through `SetSnapshot` and `ApplyDelta`.
+    #[cfg(feature = "demo")]
+    pub fn set_status(&mut self, range: Range<u32>, status: u8) {
+        self.apply_status(range, status);
+    }
+
+    /// Sets the public status of the seats in `range` and derives their visual
+    /// state (04 §9). Only that sub-range of the dynamic buffer is uploaded,
+    /// at the next frame. `SetSnapshot` and `ApplyDelta` (04 §17) will call
+    /// this, once per run of equal status.
+    #[cfg_attr(
+        not(any(test, feature = "demo")),
+        expect(
+            dead_code,
+            reason = "called by SetSnapshot and ApplyDelta, a later slice"
+        )
+    )]
+    fn apply_status(&mut self, range: Range<u32>, status: u8) {
+        let Some(loaded) = &mut self.scene else {
+            return;
+        };
+        let seats = range.start as usize..range.end as usize;
+        let scene = &mut loaded.scene;
+        let (Some(statuses), Some(visuals)) = (
+            scene.status.get_mut(seats.clone()),
+            scene.visual.get_mut(seats.clone()),
+        ) else {
             self.error(ErrorCode::InvalidInput, "seat range out of bounds");
             return;
         };
-        slots.fill(visual);
-        scene.dirty = Some(match scene.dirty.take() {
-            Some(dirty) => dirty.start.min(range.start)..dirty.end.max(range.end),
-            None => range,
+        if seats.is_empty() {
+            return;
+        }
+        statuses.fill(status);
+        // No selection exists yet (04 §16).
+        visuals.fill(picker_visual(status, Selection::None));
+        loaded.dirty = Some(match loaded.dirty.take() {
+            Some(dirty) => dirty.start.min(seats.start)..dirty.end.max(seats.end),
+            None => seats,
         });
         self.redraw();
     }
@@ -317,154 +338,86 @@ impl<B: GpuBackend> Engine<B> {
         }
     }
 
-    fn load_seats(&mut self, arrays: SeatArrays) -> Result<(), (ErrorCode, String)> {
-        let invalid = |message: &str| (ErrorCode::InvalidInput, message.to_owned());
-        let SeatArrays {
-            mut pos,
-            mut cat,
-            size,
-            shape,
-        } = arrays;
-        let len = pos.len().min(cat.len());
-        pos.truncate(len);
-        cat.truncate(len);
-        if !(size.is_finite() && size > 0.0) {
-            return Err(invalid("seat size must be positive"));
+    /// Decodes a chart and uploads its seats; the previous chart is released
+    /// only once the new one is ready, so a failure leaves the engine as it was.
+    fn load_chart(&mut self, ccf: &[u8]) -> Result<(), (ErrorCode, String)> {
+        let scene = Scene::decode(ccf).map_err(|e| (ErrorCode::BadChart, e.to_string()))?;
+        if !valid_bounds(&scene.bounds) {
+            return Err((
+                ErrorCode::BadChart,
+                "chart bounds do not fit in f32".to_owned(),
+            ));
         }
-        let half_cu = size / 2.0;
-        let mut min = [f32::INFINITY; 2];
-        let mut max = [f32::NEG_INFINITY; 2];
-        for &[x, y] in &pos {
-            if !(x.is_finite() && y.is_finite()) {
-                return Err(invalid("seat positions must be finite"));
-            }
-            min = [min[0].min(x), min[1].min(y)];
-            max = [max[0].max(x), max[1].max(y)];
-        }
-        let bounds = if len == 0 {
-            Bounds {
-                x: 0.0,
-                y: 0.0,
-                width: size,
-                height: size,
-            }
-        } else {
-            Bounds {
-                x: min[0] - half_cu,
-                y: min[1] - half_cu,
-                width: max[0] - min[0] + size,
-                height: max[1] - min[1] + size,
-            }
-        };
-        if !valid_bounds(&bounds) {
-            return Err(invalid("seat positions span more than f32 can hold"));
-        }
-        let rows = u32::from(cat.iter().copied().max().unwrap_or(0)) + 2;
+        let rows = u32::try_from(scene.chart.categories.len() + 1).unwrap_or(u32::MAX);
         if rows > self.backend.caps().max_texture_size {
-            return Err(invalid("too many categories for the palette texture"));
+            return Err((
+                ErrorCode::Gpu,
+                "more categories than the palette texture can hold".to_owned(),
+            ));
         }
-
-        self.release_scene();
         let gpu = |error: BackendError| (ErrorCode::Gpu, error.to_string());
-        // Saturates for absurd sizes rather than wrapping.
-        let half = (half_cu * 4.0).round() as u16;
-        let statics = pos.iter().map(|&pos| SeatStatic {
-            pos,
-            half,
-            angle: 0,
-            shape,
-        });
+        let palette = self.theme.palette(&scene.chart.categories);
+        let seats = scene.pos.len();
+        let dynamic = seat::encode_dynamic(
+            &scene.chart.seat_category,
+            &scene.visual,
+            &scene.fx,
+            0..seats,
+        );
+        let vertex = |usage| BufferDesc {
+            kind: BufferKind::Vertex,
+            usage,
+        };
         let static_buf = self
             .backend
-            .create_buffer(
-                BufferDesc {
-                    kind: BufferKind::Vertex,
-                    usage: BufferUsage::Static,
-                },
-                &seat::encode_static(statics),
-            )
+            .create_buffer(vertex(BufferUsage::Static), &scene.encode_static())
             .map_err(gpu)?;
-        let visual = vec![0; len];
-        let fx = vec![0; len];
-        let dynamic_buf = self
+        let dynamic_buf = match self
             .backend
-            .create_buffer(
-                BufferDesc {
-                    kind: BufferKind::Vertex,
-                    usage: BufferUsage::Dynamic,
-                },
-                &seat::encode_dynamic(&cat, &visual, &fx, 0..len),
-            )
-            .map_err(gpu);
-        let palette = dynamic_buf.and_then(|dynamic_buf| {
-            let desc = TextureDesc {
-                width: PALETTE_WIDTH,
-                height: rows,
-                format: TextureFormat::Rgba8,
-                sampling: Sampling::Nearest,
-            };
-            match self
-                .backend
-                .create_texture(desc, Some(&fixed_palette(rows)))
-            {
-                Ok(palette) => Ok((dynamic_buf, palette)),
-                Err(error) => {
-                    self.backend.destroy(ResourceId::Buffer(dynamic_buf));
-                    Err(gpu(error))
-                }
-            }
-        });
-        let (dynamic_buf, palette) = match palette {
-            Ok(ids) => ids,
+            .create_buffer(vertex(BufferUsage::Dynamic), &dynamic)
+        {
+            Ok(id) => id,
             Err(error) => {
                 self.backend.destroy(ResourceId::Buffer(static_buf));
-                return Err(error);
+                return Err(gpu(error));
+            }
+        };
+        let desc = TextureDesc {
+            width: PALETTE_WIDTH,
+            height: rows,
+            format: TextureFormat::Rgba8,
+            sampling: Sampling::Nearest,
+        };
+        let palette = match self.backend.create_texture(desc, Some(&palette)) {
+            Ok(id) => id,
+            Err(error) => {
+                self.backend.destroy(ResourceId::Buffer(static_buf));
+                self.backend.destroy(ResourceId::Buffer(dynamic_buf));
+                return Err(gpu(error));
             }
         };
 
-        let mut counts = vec![0u32; rows as usize - 1];
-        for &c in &cat {
-            if let Some(count) = counts.get_mut(usize::from(c)) {
-                *count += 1;
-            }
-        }
-        let categories = counts
-            .into_iter()
-            .enumerate()
-            .map(|(key, objects)| CategoryInfo {
-                key: key.to_string(),
-                label: key.to_string(),
-                objects,
-            })
-            .collect();
-        self.scene = Some(Scene {
-            bounds,
-            seat_size: f64::from(size),
-            cat,
-            visual,
-            fx,
+        self.release_scene();
+        self.events.push(Event::Ready(scene.info()));
+        self.scene = Some(Loaded {
+            scene,
             static_buf,
             dynamic_buf,
             palette,
             dirty: None,
         });
+        // The next frame fits the new chart.
         self.camera = None;
-        self.events.push(Event::Ready(ChartInfo {
-            floors: Vec::new(),
-            sections: Vec::new(),
-            categories,
-            // `len` came from a Vec of seats, so it fits a u32 in any real chart.
-            objects: u32::try_from(len).unwrap_or(u32::MAX),
-        }));
+        self.animations.clear();
         self.redraw();
         Ok(())
     }
 
     fn release_scene(&mut self) {
-        if let Some(scene) = self.scene.take() {
-            self.backend.destroy(ResourceId::Buffer(scene.static_buf));
-            self.backend.destroy(ResourceId::Buffer(scene.dynamic_buf));
-            self.backend.destroy(ResourceId::Texture(scene.palette));
+        if let Some(loaded) = self.scene.take() {
+            self.backend.destroy(ResourceId::Buffer(loaded.static_buf));
+            self.backend.destroy(ResourceId::Buffer(loaded.dynamic_buf));
+            self.backend.destroy(ResourceId::Texture(loaded.palette));
         }
     }
 
@@ -508,8 +461,8 @@ impl<B: GpuBackend> Engine<B> {
         self.step_animations(time_ms);
         if self.camera != self.reported {
             self.reported = self.camera;
-            if let (Some(camera), Some(scene)) = (self.camera, &self.scene) {
-                let seat_px = scene.seat_size * camera.zoom;
+            if let (Some(camera), Some(loaded)) = (self.camera, &self.scene) {
+                let seat_px = f64::from(loaded.scene.seat_size) * camera.zoom;
                 self.events.push(Event::CameraChanged {
                     centre: camera.centre.map(|v| v as f32),
                     zoom: camera.zoom as f32,
@@ -541,7 +494,7 @@ impl<B: GpuBackend> Engine<B> {
                 width: viewport.width,
                 height: viewport.height,
             },
-            CLEAR,
+            self.theme.clear(),
         );
         if let Err((code, message)) = self.draw_seats(viewport, ((time_ms - start) / 1000.0) as f32)
         {
@@ -553,7 +506,7 @@ impl<B: GpuBackend> Engine<B> {
     /// The viewport, chart and zoom limits, once a chart and a non-empty
     /// viewport exist.
     fn stage(&self) -> Option<Stage> {
-        let (viewport, scene) = (self.viewport?, self.scene.as_ref()?);
+        let (viewport, scene) = (self.viewport?, &self.scene.as_ref()?.scene);
         let size = viewport.css;
         if size.width <= 0.0 || size.height <= 0.0 {
             return None;
@@ -566,7 +519,7 @@ impl<B: GpuBackend> Engine<B> {
         Some(Stage {
             size,
             chart,
-            limits: Limits::new(chart, scene.seat_size, size),
+            limits: Limits::new(chart, f64::from(scene.seat_size), size),
         })
     }
 
@@ -745,32 +698,39 @@ impl<B: GpuBackend> Engine<B> {
         let _ = intent;
     }
 
+    /// Uploads the dynamic buffer's dirty range, then draws the active
+    /// floor's seats.
     fn draw_seats(&mut self, viewport: Viewport, time: f32) -> Result<(), (ErrorCode, String)> {
         let gpu = |error: BackendError| (ErrorCode::Gpu, error.to_string());
-        let Some(scene) = &mut self.scene else {
+        let Some(loaded) = &mut self.scene else {
             return Ok(());
         };
-        if let Some(range) = scene.dirty.take() {
-            let bytes = seat::encode_dynamic(&scene.cat, &scene.visual, &scene.fx, range.clone());
+        let scene = &loaded.scene;
+        if let Some(range) = loaded.dirty.take() {
+            let bytes = seat::encode_dynamic(
+                &scene.chart.seat_category,
+                &scene.visual,
+                &scene.fx,
+                range.clone(),
+            );
             let offset = u32::try_from(range.start * seat::DYNAMIC_STRIDE)
                 .map_err(|_| gpu(BackendError::InvalidData))?;
             self.backend
-                .update_buffer(scene.dynamic_buf, offset, &bytes)
+                .update_buffer(loaded.dynamic_buf, offset, &bytes)
                 .map_err(gpu)?;
-        }
-        let count = u32::try_from(scene.cat.len()).map_err(|_| gpu(BackendError::InvalidData))?;
-        if count == 0 {
-            return Ok(());
         }
         let Some(camera) = self.camera else {
             return Ok(());
         };
+        if scene.active.is_empty() {
+            return Ok(());
+        }
         let uniforms = Uniforms {
             view: camera.matrix(viewport.css),
             px_per_cu: (camera.zoom * f64::from(viewport.ratio)) as f32,
             stroke_px: 1.5 * viewport.ratio,
             stroke_min_px: 5.0 * viewport.ratio,
-            dim: 0.35,
+            dim: self.theme.dim,
             time,
         };
         // Extreme but finite bounds (a huge offset, a tiny size) can still overflow.
@@ -783,10 +743,10 @@ impl<B: GpuBackend> Engine<B> {
         }
         let call = DrawCall {
             pipeline: Pipeline::Shape,
-            buffers: [Some(scene.static_buf), Some(scene.dynamic_buf)],
-            texture: Some(scene.palette),
+            buffers: [Some(loaded.static_buf), Some(loaded.dynamic_buf)],
+            texture: Some(loaded.palette),
             uniforms,
-            instances: 0..count,
+            instances: scene.active.clone(),
         };
         self.backend.draw(&call).map_err(gpu)
     }
@@ -799,50 +759,6 @@ fn valid_bounds(b: &Bounds) -> bool {
         .all(|v| v.is_finite())
         && b.width > 0.0
         && b.height > 0.0
-}
-
-/// A fixed palette to draw with until themes and visual states exist (REN-018):
-/// one row per category and a last row for category-independent states.
-fn fixed_palette(rows: u32) -> Vec<u8> {
-    const HUES: [[u8; 3]; 8] = [
-        [37, 99, 235],
-        [217, 119, 6],
-        [5, 150, 105],
-        [219, 39, 119],
-        [124, 58, 237],
-        [8, 145, 178],
-        [220, 38, 38],
-        [101, 163, 13],
-    ];
-    const GREY: [u8; 3] = [168, 162, 158];
-    const LIGHT: [u8; 3] = [231, 229, 228];
-    const DARK: [u8; 3] = [41, 37, 36];
-    let darken = |[r, g, b]: [u8; 3]| [r / 2, g / 2, b / 2];
-    let mut out = Vec::with_capacity((rows * PALETTE_WIDTH * 4) as usize);
-    for row in 0..rows {
-        let hue = if row + 1 == rows {
-            GREY
-        } else {
-            HUES[row as usize % HUES.len()]
-        };
-        // (fill, ink) for visual states 0..8 (04 §9).
-        let states = [
-            (hue, darken(hue)),
-            (LIGHT, GREY),
-            (hue, DARK),
-            (DARK, hue),
-            (GREY, DARK),
-            (DARK, GREY),
-            (LIGHT, DARK),
-            (hue, DARK),
-        ];
-        for (fill, ink) in states {
-            for [r, g, b] in [fill, ink] {
-                out.extend_from_slice(&[r, g, b, 255]);
-            }
-        }
-    }
-    out
 }
 
 #[cfg(test)]

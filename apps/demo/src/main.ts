@@ -1,22 +1,26 @@
-// Draws synthetic stadium seats with the Rust renderer, to see and measure it.
-// Query parameters: `seats` (default 100000), `seed` (default 1), `shape`
-// (0 circle, 1 rounded square, 2 chair, 3 diamond), `camera=x:y:width:height`
-// in chart units, and `mark=start:count` to set that range of seats to the
-// "unavailable" visual state after the first frame, which uploads only that
-// dynamic sub-range. Pan and zoom with mouse, wheel, trackpad or touch;
-// `gestures=greedy|cooperative|none` sets gesture handling (cooperative makes
-// the page scroll around the map), `reducedMotion=1` turns animation off.
-// `window.caveaDemo` counts frames and WebGL errors for scripted checks.
+// Draws a synthetic stadium, compiled in the browser, with the Rust renderer,
+// to see and measure it. Query parameters: `seats` (default 100000), `seed`
+// (default 1), `shape` (0 circle, 1 rounded, 2 chair),
+// `camera=x:y:width:height` in chart units,
+// `sold` (fraction of seats made unavailable after the first frame, in runs;
+// default 0.3) or `mark=start:count` to make exactly that range unavailable.
+// Status changes upload only the dynamic sub-range they touch. Pan and zoom
+// with mouse, wheel, trackpad or touch; `gestures=greedy|cooperative|none`
+// sets gesture handling (cooperative makes the page scroll around the map),
+// `reducedMotion=1` turns animation off. `window.caveaDemo` counts frames and
+// WebGL errors for scripted checks.
 import { attach, loadRenderer, View, type GestureHandling } from "@cavea/renderer";
 
 /** Exports present only in `cargo xtask build-web --demo` builds. */
 interface DemoExports {
-  loadSynthetic(seats: number, seed: number, shape: number): void;
   setCamera(x: number, y: number, width: number, height: number): void;
-  setVisual(start: number, count: number, visual: number): void;
+  setStatus(start: number, count: number, status: number): void;
+}
+interface DemoStatics {
+  demoChart(seats: number, seed: number, shape: number): Uint8Array;
 }
 
-const VISUAL_UNAVAILABLE = 1;
+const UNAVAILABLE = 1;
 
 function element<T extends HTMLElement>(id: string, type: new () => T): T {
   const node = document.getElementById(id);
@@ -33,8 +37,8 @@ const lines: string[] = [];
 function report(line: string): void {
   lines.push(line);
   // Keep the first lines (load results) and the most recent frame.
-  if (lines.length > 8) {
-    lines.splice(4, lines.length - 8);
+  if (lines.length > 9) {
+    lines.splice(5, lines.length - 9);
   }
   status.textContent = lines.join("\n");
   console.log(`[cavea-demo] ${line}`);
@@ -44,6 +48,7 @@ const params = new URLSearchParams(location.search);
 const seats = Number(params.get("seats") ?? 100_000);
 const seed = Number(params.get("seed") ?? 1);
 const shape = Number(params.get("shape") ?? 0);
+const sold = Number(params.get("sold") ?? 0.3);
 const mark = params.get("mark")?.split(":").map(Number);
 const camera = params.get("camera")?.split(":").map(Number);
 const gesturesParam = params.get("gestures");
@@ -56,6 +61,7 @@ if (gestures === "cooperative") {
 
 const renderer = await loadRenderer();
 const view = new View(canvas) as View & Partial<DemoExports>;
+const statics = View as typeof View & Partial<DemoStatics>;
 const gl = canvas.getContext("webgl2");
 const debug = gl?.getExtension("WEBGL_debug_renderer_info");
 report(
@@ -64,46 +70,84 @@ report(
   }`,
 );
 
+let host: ReturnType<typeof attach> | undefined;
 const stats = { frames: 0, glErrors: 0 };
 Object.assign(window, { caveaDemo: stats });
 let afterFirstFrame: (() => void) | undefined;
-let host: ReturnType<typeof attach> | undefined;
+let loadedAt = 0;
 
-function onFrame(): void {
+function onFrame(time: number): void {
   stats.frames += 1;
   const error = gl?.getError() ?? -1;
   if (error !== 0) {
     stats.glErrors += 1;
   }
-  report(`frame ${stats.frames}: gl.getError() = ${error}`);
+  if (stats.frames === 1) {
+    report(`first frame ${(performance.now() - loadedAt).toFixed(1)} ms after loadChart returned`);
+  }
+  report(`frame ${stats.frames} at ${time.toFixed(0)}: gl.getError() = ${error}`);
   const next = afterFirstFrame;
   afterFirstFrame = undefined;
   next?.();
 }
 
+/** Seeded runs of unavailable seats covering about `fraction` of the chart. */
+function soldRuns(fraction: number, set: (start: number, count: number) => void): number {
+  let state = seed >>> 0 || 1;
+  const random = (): number => {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    return (state >>> 0) / 2 ** 32;
+  };
+  let runs = 0;
+  for (let at = 0; at < seats;) {
+    const count = 1 + Math.floor(random() * 24);
+    const gap = Math.floor((random() * 2 * count * (1 - fraction)) / Math.max(fraction, 1e-3));
+    at += gap;
+    if (at >= seats) {
+      break;
+    }
+    set(at, Math.min(count, seats - at));
+    at += count;
+    runs += 1;
+  }
+  return runs;
+}
+
 if (
-  view.loadSynthetic === undefined ||
-  view.setVisual === undefined ||
+  statics.demoChart === undefined ||
+  view.setStatus === undefined ||
   view.setCamera === undefined
 ) {
   report("This WASM has no demo exports. Run `cargo xtask build-web --demo` and reload.");
 } else {
-  const setVisual = view.setVisual.bind(view);
-  const start = performance.now();
-  view.loadSynthetic(seats, seed, shape);
-  report(`loaded ${seats} seats in ${(performance.now() - start).toFixed(1)} ms`);
+  const setStatus = view.setStatus.bind(view);
+  const compileStart = performance.now();
+  const ccf = statics.demoChart(seats, seed, shape);
+  const loadStart = performance.now();
+  view.loadChart(ccf);
+  loadedAt = performance.now();
+  report(
+    `compiled ${seats} seats in ${(loadStart - compileStart).toFixed(1)} ms (${ccf.length} B CCF); ` +
+      `loadChart ${(loadedAt - loadStart).toFixed(1)} ms`,
+  );
   if (camera !== undefined && camera.length === 4) {
     const [x = 0, y = 0, width = 1, height = 1] = camera;
     view.setCamera(x, y, width, height);
   }
-  if (mark !== undefined && mark.length === 2) {
-    const [from = 0, count = 0] = mark;
-    afterFirstFrame = () => {
-      setVisual(from, count, VISUAL_UNAVAILABLE);
+  afterFirstFrame = () => {
+    const start = performance.now();
+    if (mark !== undefined && mark.length === 2) {
+      const [from = 0, count = 0] = mark;
+      setStatus(from, count, UNAVAILABLE);
       report(`set seats ${from}..${from + count} unavailable`);
-      host?.update();
-    };
-  }
+    } else if (sold > 0) {
+      const runs = soldRuns(sold, (from, count) => setStatus(from, count, UNAVAILABLE));
+      report(`set ${runs} runs unavailable in ${(performance.now() - start).toFixed(1)} ms`);
+    }
+    host?.update();
+  };
   const options = { gestureHandling: gestures, onFrame };
   host = attach(
     view,

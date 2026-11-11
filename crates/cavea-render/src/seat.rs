@@ -30,7 +30,8 @@ pub struct SeatStatic {
     pub pos: [f32; 2],
     /// Half the seat size, in quarter chart units.
     pub half: u16,
-    /// Rotation in 256ths of a turn, clockwise.
+    /// Rotation in 256ths of a turn, clockwise: the direction of the row at
+    /// the seat, so local +y is behind it (04 §6).
     pub angle: u8,
     pub shape: u8,
 }
