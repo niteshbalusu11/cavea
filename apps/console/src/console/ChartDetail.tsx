@@ -6,8 +6,8 @@ import { A, useParams, useSearchParams } from "@solidjs/router";
 import { createSignal, For, Match, Show, Switch } from "solid-js";
 import { checkChart, checkEventList } from "../api/check.ts";
 import { call } from "../api/client.ts";
-import type { Chart, Event, Version } from "../api/generated.ts";
-import { loadAll } from "../api/pages.ts";
+import type { Chart, Version } from "../api/generated.ts";
+import { createPages } from "../api/pages.ts";
 import { allows } from "../api/permissions.ts";
 import { componentSignal, createQuery, type Query } from "../api/query.ts";
 import { formatNumber, msg } from "../i18n/messages.ts";
@@ -22,15 +22,16 @@ import {
   formatDateTime,
   ListError,
   ListLoading,
+  LoadMore,
+  Paged,
   Tabs,
   table,
   td,
   th,
 } from "./kit.tsx";
 
-/** The Events tab reads at most this many pages of events (the API cannot
- * list a chart's events yet) and shows them only when that is all. */
-const EVENT_PAGES = 10;
+/** Events per page on the Events tab. */
+const PAGE = 25;
 
 type Tab = "versions" | "events" | "settings";
 const TABS: Tab[] = ["versions", "events", "settings"];
@@ -279,94 +280,60 @@ function Versions(props: { chart: Chart; onCreate: (version: number) => void }) 
   );
 }
 
-/** The chart's events, from a bounded read of every event: the list has
- * no filter by chart (08 §6.2), so the tab shows them only when it read
- * the whole list, and otherwise says so rather than show a part. */
+/** The chart's events, from the list filtered by chart (08 §6.2), oldest
+ * first and a page at a time, as the events list pages. */
 function ChartEvents(props: { chart: Chart }) {
-  const all = createQuery(
-    () => workspace()?.id ?? null,
-    (_ws, s) =>
-      loadAll(
-        async (after) =>
-          checkEventList(
-            await call(
-              "listEvents",
-              { query: after === undefined ? { limit: 100 } : { limit: 100, after } },
-              s,
-            ),
-          ),
-        EVENT_PAGES,
+  const events = createPages(
+    () => {
+      const ws = workspace()?.id;
+      return ws === undefined ? null : props.chart.key;
+    },
+    async (chart, after, s) =>
+      checkEventList(
+        await call(
+          "listEvents",
+          { query: after === undefined ? { chart, limit: PAGE } : { chart, limit: PAGE, after } },
+          s,
+        ),
       ),
   );
-  // Newest first; the list comes oldest first.
-  // oxlint-disable-next-line unicorn/no-array-reverse -- reverses a copy of ours; `toReversed` is ES2023, past the lib (ES2022).
-  const mine = (events: Event[]) => events.filter((e) => e.chart === props.chart.key).reverse();
   return (
-    <Switch>
-      <Match when={all.state().status === "loading"}>
-        <ListLoading label={msg("chart.eventsLoading")} rows={3} />
-      </Match>
-      <Match
-        when={(() => {
-          const s = all.state();
-          return s.status === "error" ? s.error : null;
-        })()}
-      >
-        {(e) => <ListError title={msg("events.failed")} error={e()} onRetry={all.refetch} />}
-      </Match>
-      <Match
-        when={(() => {
-          const s = all.state();
-          return s.status === "ready" ? s.data : null;
-        })()}
-      >
-        {(data) => (
-          <Show
-            when={data().complete}
-            fallback={
-              <p class="max-w-xl text-base text-muted">
-                {msg("chart.eventsTooMany", { n: EVENT_PAGES * 100 })}{" "}
-                <A href="/events" class="text-accent underline">
-                  {msg("chart.toEvents")}
-                </A>
-              </p>
-            }
-          >
-            <Show
-              when={mine(data().data).length > 0}
-              fallback={<p class="text-base text-muted">{msg("chart.noEvents")}</p>}
-            >
-              <ul class="divide-y divide-line rounded-md border border-line">
-                <For each={mine(data().data)}>
-                  {(e) => (
-                    <li class="flex flex-wrap items-center gap-3 px-3 py-2">
-                      <span class="min-w-0 flex-1">
-                        <A
-                          href={`/events/${encodeURIComponent(e.key)}`}
-                          class="block font-medium text-accent underline"
-                        >
-                          {e.name ?? e.key}
-                        </A>
-                        <span class="block font-mono text-sm text-muted">{e.key}</span>
-                      </span>
-                      <span class="text-sm text-muted">
-                        {msg("events.versionShort", { number: e.version.number })}
-                      </span>
-                      <span class="text-sm text-muted">{formatDateTime(e.created_at)}</span>
-                      <Show when={e.archived_at !== null}>
-                        <span class="rounded-sm bg-warning-soft px-1.5 text-xs text-warning">
-                          {msg("events.archivedBadge")}
-                        </span>
-                      </Show>
-                    </li>
-                  )}
-                </For>
-              </ul>
-            </Show>
-          </Show>
-        )}
-      </Match>
-    </Switch>
+    <Paged pages={events} loading={msg("chart.eventsLoading")} failed={msg("events.failed")}>
+      {(rows) => (
+        <Show
+          when={rows().length > 0}
+          fallback={<p class="text-base text-muted">{msg("chart.noEvents")}</p>}
+        >
+          <ul class="divide-y divide-line rounded-md border border-line">
+            <For each={rows()}>
+              {(e) => (
+                <li class="flex flex-wrap items-center gap-3 px-3 py-2">
+                  <span class="min-w-0 flex-1">
+                    <A
+                      href={`/events/${encodeURIComponent(e.key)}`}
+                      class="block font-medium text-accent underline"
+                    >
+                      {e.name ?? e.key}
+                    </A>
+                    <span class="block font-mono text-sm text-muted">{e.key}</span>
+                  </span>
+                  <span class="text-sm text-muted">
+                    {msg("events.versionShort", { number: e.version.number })}
+                  </span>
+                  <span class="text-sm text-muted">{formatDateTime(e.created_at)}</span>
+                  <Show when={e.archived_at !== null}>
+                    <span class="rounded-sm bg-warning-soft px-1.5 text-xs text-warning">
+                      {msg("events.archivedBadge")}
+                    </span>
+                  </Show>
+                </li>
+              )}
+            </For>
+          </ul>
+          <LoadMore pages={events} />
+        </Show>
+      )}
+    </Paged>
   );
 }
 

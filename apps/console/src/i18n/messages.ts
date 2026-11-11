@@ -964,9 +964,6 @@ const consoleScreens = {
   "chart.createEvent": "Create event",
   "chart.archivedNoEvents": "the chart is archived",
   "chart.eventsLoading": "Loading events…",
-  "chart.eventsTooMany":
-    "This workspace has more than {n} events, and the server cannot yet list a chart's events, so they are not shown here.",
-  "chart.toEvents": "See all events",
   "chart.noEvents": "No event uses this chart yet.",
   "chart.keyFixed": "A chart's key cannot be changed.",
   "chart.archiveTitle": "Archive",
