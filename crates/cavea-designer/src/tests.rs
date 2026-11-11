@@ -677,7 +677,7 @@ fn measure_canvas() {
     let block = s.insert(None, &draft).expect("block");
     settle(&mut p, &s);
     s.select(Level::Top, [block]);
-    let (c0, u0) = (p.sync().compiled_seats, p.engine().backend().uploaded);
+    let c0 = p.sync().compiled_seats;
     p.engine_mut().backend_mut().clear();
     let t0 = Instant::now();
     s.set_field(&cavea_edit::Field::SeatPitch(52.0))
@@ -690,10 +690,9 @@ fn measure_canvas() {
         "seat pitch of a 5,000-seat block: edit {edit:.2} ms, then draw {:.2} ms: {} seats compiled, {} KB uploaded in {} writes",
         ms(t0),
         p.sync().compiled_seats - c0,
-        (rec.uploaded - 0) / 1024,
+        rec.uploaded / 1024,
         rec.writes.len()
     );
-    let _ = u0;
     for (what, ids) in [
         ("one 5,000-seat block", vec![block]),
         (
@@ -824,21 +823,8 @@ fn measure_canvas() {
         st.vertices
     );
     use cavea_render::overlay::Shape as S;
-    if let Some(S::Line { points, .. }) = shapes
-        .iter()
-        .find(|s| matches!(s, S::Line { dash: Some(_), .. }))
-    {
-        let px: f64 = points
-            .windows(2)
-            .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
-            .sum::<f64>()
-            * base.zoom;
-        println!(
-            "  a section outline: {} points, {px:.0} px around",
-            points.len()
-        );
-    }
-    let kinds: [(&str, fn(&S) -> bool); 4] = [
+    type Pick = fn(&S) -> bool;
+    let kinds: [(&str, Pick); 4] = [
         ("lines", |s| matches!(s, S::Line { dash: None, .. })),
         ("dashed", |s| matches!(s, S::Line { dash: Some(_), .. })),
         ("handles", |s| matches!(s, S::Handle { .. })),
