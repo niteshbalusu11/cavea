@@ -147,7 +147,7 @@ Keep it small and fast.
 - Never end your turn while a command you started is still running: run long commands in the foreground, or wait for them in the same turn. A session that stops to wait may never be woken.
 - Make the smallest change that completes the task. No unrelated cleanup.
 - If code and spec disagree, fix one of them in the same pull request. A reversed design decision gets a new entry in `docs/DECISIONS.md`.
-- A new decision takes the next free number after the ones on `origin/main` and the ones open pull requests claim (`gh pr list`, then each one's title and body). `docs/DECISIONS.md` merges by union (`.gitattributes`), so two pull requests that append entries do not conflict; after a rebase, check that no number appears twice (`grep -c '^## D-' docs/DECISIONS.md` against `grep '^## D-' docs/DECISIONS.md | sort -u | wc -l`) and renumber your own entry, with its references, if it does.
+- A new decision takes the next free number after the ones on `origin/main` and the ones open pull requests claim (`gh pr list`, then each one's title and body). After a rebase, check that no number appears twice (`grep '^## D-' docs/DECISIONS.md | cut -d' ' -f2 | sort | uniq -d` prints nothing) and renumber your own entry, with its references, if one does.
 - Check the payload effect of any new dependency in `cavea-core`, `cavea-format` or `cavea-web`.
 
 ## Local machine limits
