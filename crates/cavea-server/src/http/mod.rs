@@ -18,6 +18,8 @@ pub mod extract;
 pub mod health;
 mod keys;
 mod objects;
+pub mod openapi;
+mod panic;
 mod public;
 mod realtime;
 mod seats;
@@ -62,11 +64,12 @@ pub struct AppState {
 
 /// The whole HTTP surface.
 pub fn router(state: AppState) -> Router {
-    finish(routes(), state)
+    finish(routes().into_router(), state)
 }
 
-fn routes() -> Router<AppState> {
-    Router::new()
+/// Every route, each with its entry in the OpenAPI document.
+fn routes() -> openapi::Routes {
+    openapi::Routes::new()
         .merge(health::routes())
         .merge(workspaces::routes())
         .merge(keys::routes())
@@ -79,8 +82,8 @@ fn routes() -> Router<AppState> {
 }
 
 /// Add the problem+json fallbacks, the default body limit, CORS for the public
-/// routes and the request span layer. The layers only wrap routes added before them, so every route goes
-/// in before this.
+/// routes, the panic layer and the request span layer. The layers only wrap
+/// routes added before them, so every route goes in before this.
 fn finish(routes: Router<AppState>, state: AppState) -> Router {
     routes
         .fallback(|| async { ApiError::new(Code::NotFound).with_message("No such endpoint.") })
@@ -89,6 +92,9 @@ fn finish(routes: Router<AppState>, state: AppState) -> Router {
         })
         .layer(DefaultBodyLimit::max(extract::DEFAULT_BODY_LIMIT))
         .layer(middleware::from_fn_with_state(state.clone(), public::cors))
+        // Inside the request span, so that a panic's `500` carries the request
+        // id and is logged and counted under its route.
+        .layer(panic::CatchPanicLayer)
         .layer(
             RequestLayer::new()
                 .quiet(&["/healthz", "/readyz", "/metrics"])

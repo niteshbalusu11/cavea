@@ -12,11 +12,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use axum::Router;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
 use cavea_engine::{
     BookDetail, ChartVersionId, Clock as _, Command, EventId, Failure, Idempotency, Idx,
     ObjectFailure, ObjectRef, Outcome, Reply, Request, Status, StoreError, Timestamp, TokenHash,
@@ -30,33 +28,170 @@ use tracing::Instrument as _;
 use super::auth::{Auth, PublishableKey, SecretKey, has_hex_tail, push_hex, sha256};
 use super::events::{Settings, archived};
 use super::extract::{Json, Path, check_object_count, invalid, invalid_field};
+use super::openapi::{Needs, Op, Routes};
 use super::session::{self, Session};
 use super::{ApiError, AppState, Code};
 use crate::seats::{Chart, event_id};
 use crate::store::reply;
 use cavea_core::limits::MAX_OBJECTS;
 
-pub(super) fn routes() -> Router<AppState> {
-    Router::new()
-        .route("/v1/hold-tokens", post(create_token))
-        .route(
-            "/v1/hold-tokens/{token}",
-            get(read_token).delete(release_token),
+pub(super) fn routes() -> Routes {
+    let secret = |op: Op| op.needs(Needs::Secret);
+    Routes::new()
+        .add(
+            secret(Op::post(
+                "/v1/hold-tokens",
+                "createHoldToken",
+                "Create a hold token",
+            ))
+            .about("Not idempotent: an `Idempotency-Key` is ignored. The token is shown only here.")
+            .body("CreateHoldToken")
+            .reply(201, "HoldTokenCreated", "The token")
+            .errors(&[404, 503]),
+            create_token,
         )
-        .route("/v1/hold-tokens/{token}/extend", post(extend_token))
-        .route("/v1/events/{event}/hold", post(hold))
-        .route("/v1/events/{event}/release", post(release))
-        .route("/v1/events/{event}/book", post(book))
-        .route("/v1/events/{event}/change-status", post(change_status))
+        .add(
+            secret(Op::get(
+                "/v1/hold-tokens/{token}",
+                "getHoldToken",
+                "A hold token",
+            ))
+            .reply(
+                200,
+                "HoldTokenState",
+                "Its expiry and held objects, as committed",
+            ),
+            read_token,
+        )
+        .add(
+            secret(Op::delete(
+                "/v1/hold-tokens/{token}",
+                "releaseHoldToken",
+                "Release everything a token holds",
+            ))
+            .about("The token stays valid until it expires.")
+            .idempotent()
+            .reply(200, "SeatReply", "The released objects")
+            .errors(&[503]),
+            release_token,
+        )
+        .add(
+            secret(Op::post(
+                "/v1/hold-tokens/{token}/extend",
+                "extendHoldToken",
+                "Extend a hold token",
+            ))
+            .idempotent()
+            .body("ExtendHoldToken")
+            .reply(200, "ExtendReply", "The new expiry")
+            .errors(&[503]),
+            extend_token,
+        )
+        .add(
+            secret(Op::post(
+                "/v1/events/{event}/hold",
+                "hold",
+                "Hold objects under a token",
+            ))
+            .idempotent()
+            .body("Hold")
+            .reply(200, "HoldReply", "The held objects")
+            .errors(&[409, 422, 503]),
+            hold,
+        )
+        .add(
+            secret(Op::post(
+                "/v1/events/{event}/release",
+                "release",
+                "Release held or booked objects",
+            ))
+            .idempotent()
+            .body("Release")
+            .reply(200, "SeatReply", "The released objects")
+            .errors(&[409, 503]),
+            release,
+        )
+        .add(
+            secret(Op::post(
+                "/v1/events/{event}/book",
+                "book",
+                "Book by hold token or directly",
+            ))
+            .idempotent()
+            .body("Book")
+            .reply(200, "SeatReply", "The booked objects")
+            .errors(&[409, 422, 503]),
+            book,
+        )
+        .add(
+            secret(Op::post(
+                "/v1/events/{event}/change-status",
+                "changeStatus",
+                "Block, unblock or set a custom status",
+            ))
+            .idempotent()
+            .body("ChangeStatus")
+            .reply(200, "SeatReply", "The changed objects")
+            .errors(&[409, 503]),
+            change_status,
+        )
 }
 
 /// The buyer's seat routes (08 §6.2 "Public"); `http::public` adds CORS.
-pub(super) fn public_routes() -> Router<AppState> {
-    Router::new()
-        .route("/v1/public/hold-tokens", post(public_create_token))
-        .route("/v1/public/hold-tokens/current", get(public_read_token))
-        .route("/v1/public/events/{event}/hold", post(public_hold))
-        .route("/v1/public/events/{event}/release", post(public_release))
+pub(super) fn public_routes() -> Routes {
+    let public = |op: Op| op.needs(Needs::Publishable);
+    Routes::new()
+        .add(
+            public(Op::post(
+                "/v1/public/hold-tokens",
+                "publicCreateHoldToken",
+                "Create a buyer's hold token",
+            ))
+            .session()
+            .body("PublicCreateHoldToken")
+            .reply(201, "HoldTokenCreated", "The token")
+            .errors(&[404, 422, 503]),
+            public_create_token,
+        )
+        .add(
+            public(Op::get(
+                "/v1/public/hold-tokens/current",
+                "publicGetHoldToken",
+                "The caller's hold token",
+            ))
+            .hold_token()
+            .reply(
+                200,
+                "HoldTokenState",
+                "Its expiry and held objects, as committed",
+            )
+            .errors(&[404]),
+            public_read_token,
+        )
+        .add(
+            public(Op::post(
+                "/v1/public/events/{event}/hold",
+                "publicHold",
+                "Hold with the caller's token",
+            ))
+            .session()
+            .body("Hold")
+            .reply(200, "HoldReply", "The held objects")
+            .errors(&[409, 422, 503]),
+            public_hold,
+        )
+        .add(
+            public(Op::post(
+                "/v1/public/events/{event}/release",
+                "publicRelease",
+                "Release with the caller's token",
+            ))
+            .session()
+            .body("PublicRelease")
+            .reply(200, "SeatReply", "The released objects")
+            .errors(&[409, 503]),
+            public_release,
+        )
 }
 
 /// Random bytes in a hold token: 256 bits from the operating system.

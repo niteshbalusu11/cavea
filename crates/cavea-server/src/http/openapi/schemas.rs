@@ -1,0 +1,563 @@
+//! The document's component schemas: every request and response body, by
+//! name. The router tests validate what the server sends and accepts against
+//! them (`check.rs`): an object lists every field it may have
+//! (`additionalProperties: false`) and requires every field it always has.
+
+use serde_json::{Map, Value, json};
+
+use super::super::Code;
+use super::schema_ref as r;
+
+/// An object with `required` fields always present and `optional` ones
+/// sometimes; nothing else.
+fn object(required: &[(&str, Value)], optional: &[(&str, Value)]) -> Value {
+    let mut properties = Map::new();
+    for (name, schema) in required.iter().chain(optional) {
+        properties.insert((*name).to_owned(), schema.clone());
+    }
+    let mut schema = json!({
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": false,
+    });
+    if !required.is_empty() {
+        let names: Vec<&str> = required.iter().map(|(name, _)| *name).collect();
+        schema["required"] = json!(names);
+    }
+    schema
+}
+
+fn string() -> Value {
+    json!({ "type": "string" })
+}
+
+fn text(description: &str) -> Value {
+    json!({ "type": "string", "description": description })
+}
+
+fn time() -> Value {
+    json!({ "type": "string", "format": "date-time" })
+}
+
+fn integer() -> Value {
+    json!({ "type": "integer" })
+}
+
+fn range(min: u64, max: u64) -> Value {
+    json!({ "type": "integer", "minimum": min, "maximum": max })
+}
+
+fn boolean() -> Value {
+    json!({ "type": "boolean" })
+}
+
+fn array(items: Value) -> Value {
+    json!({ "type": "array", "items": items })
+}
+
+/// `schema` or `null`.
+fn nullable(schema: Value) -> Value {
+    match schema.get("type").and_then(Value::as_str) {
+        Some(t) if schema.get("$ref").is_none() => {
+            let mut schema = schema.clone();
+            schema["type"] = json!([t, "null"]);
+            schema
+        }
+        _ => json!({ "anyOf": [schema, { "type": "null" }] }),
+    }
+}
+
+fn described(mut schema: Value, description: &str) -> Value {
+    schema["description"] = description.into();
+    schema
+}
+
+/// A page of `item` (08 §6.1).
+fn list(item: &str) -> Value {
+    object(
+        &[("data", array(r(item))), ("next", nullable(string()))],
+        &[],
+    )
+}
+
+fn key(with_secret: bool) -> Value {
+    let mut required = vec![
+        ("id", text("`key_` and 32 hex digits; not the key.")),
+        ("kind", json!({ "enum": ["secret", "publishable"] })),
+        ("name", string()),
+        ("prefix", text("The key's first 11 characters.")),
+        (
+            "allowed_origins",
+            described(
+                nullable(array(string())),
+                "Publishable keys only; `null` accepts every origin.",
+            ),
+        ),
+        ("created_at", time()),
+        ("last_used_at", nullable(time())),
+        ("revoked_at", nullable(time())),
+    ];
+    if with_secret {
+        required.push(("key", text("The key itself, shown only in this response.")));
+    }
+    object(&required, &[])
+}
+
+fn workspace(created: bool) -> Value {
+    let mut required = vec![
+        ("id", text("`ws_` and 32 hex digits.")),
+        ("key", string()),
+        ("name", string()),
+        ("created_at", time()),
+    ];
+    if created {
+        required.push(("secret_key", r("KeyCreated")));
+    }
+    object(&required, &[])
+}
+
+fn hold_ttl() -> Value {
+    described(range(60, 7_200), "Seconds.")
+}
+
+/// Every schema, by name.
+pub(super) fn all() -> Map<String, Value> {
+    let codes: Vec<&str> = Code::ALL.iter().map(|c| c.as_str()).collect();
+    let status_wire = json!({ "oneOf": [
+        { "enum": ["free", "blocked"] },
+        described(range(4, 15), "A custom status code."),
+    ] });
+    let object_status = json!({ "oneOf": [
+        { "enum": ["free", "held", "booked", "blocked"] },
+        described(range(4, 15), "A custom status code."),
+    ] });
+    let entries = [
+        (
+            "Problem",
+            described(
+                object(
+                    &[
+                        ("code", json!({ "enum": codes })),
+                        ("status", integer()),
+                        ("message", text("For humans; may change. Match on `code`.")),
+                        (
+                            "details",
+                            described(
+                                json!({ "type": "object" }),
+                                "Empty, or what the code adds (08 §6.4): `reason`, `missing`, \
+`objects`, `field`, `limit`, `requested`, `session`, `findings`, `draft_etag`, `version`.",
+                            ),
+                        ),
+                        ("request_id", text("Equals `Cavea-Request-Id`.")),
+                    ],
+                    &[],
+                ),
+                "An error (08 §6.4).",
+            ),
+        ),
+        (
+            "CreateWorkspace",
+            object(&[("key", string()), ("name", string())], &[]),
+        ),
+        ("Workspace", workspace(false)),
+        ("WorkspaceCreated", workspace(true)),
+        ("WorkspaceList", list("Workspace")),
+        ("MintKey", object(&[("name", string())], &[])),
+        (
+            "CreateKey",
+            object(
+                &[
+                    ("kind", json!({ "enum": ["secret", "publishable"] })),
+                    ("name", string()),
+                ],
+                &[(
+                    "allowed_origins",
+                    described(
+                        nullable(
+                            json!({ "type": "array", "items": string(), "minItems": 1, "maxItems": 50 }),
+                        ),
+                        "Publishable keys only: origins such as `https://tickets.example.com`.",
+                    ),
+                )],
+            ),
+        ),
+        ("Key", key(false)),
+        ("KeyCreated", key(true)),
+        ("KeyList", list("Key")),
+        (
+            "ChartDocument",
+            json!({
+                "type": "object",
+                "description": "A chart document (`docs/03-chart-format.md` §2), stored as sent.",
+            }),
+        ),
+        (
+            "CreateChart",
+            object(
+                &[("key", string()), ("name", string())],
+                &[("document", r("ChartDocument"))],
+            ),
+        ),
+        (
+            "Stats",
+            object(
+                &[
+                    ("seats", integer()),
+                    ("rows", integer()),
+                    ("segments", integer()),
+                    ("sections", integer()),
+                    ("floors", integer()),
+                    ("public_bytes", integer()),
+                    ("public_br_bytes", nullable(integer())),
+                    ("full_bytes", integer()),
+                ],
+                &[],
+            ),
+        ),
+        (
+            "Version",
+            object(
+                &[
+                    ("id", text("`cv_` and 32 hex digits.")),
+                    ("number", integer()),
+                    (
+                        "hash",
+                        text("The public artefact's content hash: 32 hex digits."),
+                    ),
+                    (
+                        "url",
+                        text("Where the compiled chart is served, relative to the server."),
+                    ),
+                    ("stats", r("Stats")),
+                    ("created_at", time()),
+                ],
+                &[],
+            ),
+        ),
+        ("VersionList", list("Version")),
+        (
+            "Chart",
+            object(
+                &[
+                    ("key", string()),
+                    ("name", string()),
+                    ("draft_etag", text("Pass back verbatim in `If-Match`.")),
+                    ("draft_updated_at", time()),
+                    ("published_version", nullable(r("Version"))),
+                    ("archived_at", nullable(time())),
+                    ("created_at", time()),
+                ],
+                &[],
+            ),
+        ),
+        ("ChartList", list("Chart")),
+        (
+            "Finding",
+            object(
+                &[
+                    ("code", text("An E or W code (03 §3.2), or `unsupported`.")),
+                    ("severity", json!({ "enum": ["error", "warning"] })),
+                    ("node", nullable(integer())),
+                    ("related", nullable(integer())),
+                    ("message", string()),
+                ],
+                &[],
+            ),
+        ),
+        (
+            "Validation",
+            object(
+                &[
+                    ("draft_etag", string()),
+                    ("valid", boolean()),
+                    ("findings", array(r("Finding"))),
+                    ("stats", nullable(r("Stats"))),
+                ],
+                &[],
+            ),
+        ),
+        (
+            "EventSettings",
+            object(
+                &[
+                    ("hold_ttl_seconds", hold_ttl()),
+                    ("max_objects", range(1, 100)),
+                    ("require_session", boolean()),
+                    ("max_tokens_per_sub", range(1, 10)),
+                ],
+                &[],
+            ),
+        ),
+        (
+            "EventSettingsInput",
+            object(
+                &[],
+                &[
+                    ("hold_ttl_seconds", hold_ttl()),
+                    ("max_objects", range(1, 100)),
+                    ("require_session", boolean()),
+                    ("max_tokens_per_sub", range(1, 10)),
+                ],
+            ),
+        ),
+        (
+            "Counts",
+            object(
+                &[
+                    ("free", integer()),
+                    ("held", integer()),
+                    ("booked", integer()),
+                    ("blocked", integer()),
+                    (
+                        "custom",
+                        described(
+                            json!({ "type": "object", "additionalProperties": integer() }),
+                            "Objects per custom status code.",
+                        ),
+                    ),
+                ],
+                &[],
+            ),
+        ),
+        (
+            "Event",
+            object(
+                &[
+                    ("key", string()),
+                    ("name", nullable(string())),
+                    ("chart", text("The chart's key.")),
+                    ("version", r("Version")),
+                    ("settings", r("EventSettings")),
+                    ("archived_at", nullable(time())),
+                    ("created_at", time()),
+                ],
+                &[("counts", r("Counts"))],
+            ),
+        ),
+        ("EventList", list("Event")),
+        (
+            "CreateEvent",
+            object(
+                &[("key", string()), ("chart", text("The chart's key."))],
+                &[
+                    (
+                        "version",
+                        described(integer(), "A version number; the published one by default."),
+                    ),
+                    ("name", nullable(string())),
+                    ("settings", r("EventSettingsInput")),
+                ],
+            ),
+        ),
+        (
+            "UpdateEvent",
+            object(
+                &[],
+                &[
+                    ("name", nullable(string())),
+                    ("settings", r("EventSettingsInput")),
+                ],
+            ),
+        ),
+        (
+            "ObjectRefs",
+            json!({
+                "description": "Labels, or `idx` in the event's chart version (08 §6.1). At most 1,000.",
+                "oneOf": [
+                    { "type": "array", "items": string(), "maxItems": 1_000 },
+                    object(
+                        &[
+                            ("version", text("The public hash of the event's chart version.")),
+                            ("idx", json!({ "type": "array", "items": { "type": "integer", "minimum": 0 }, "maxItems": 1_000 })),
+                        ],
+                        &[],
+                    ),
+                ],
+            }),
+        ),
+        (
+            "ObjectLabel",
+            object(&[("label", string()), ("oid", integer())], &[]),
+        ),
+        (
+            "CreateHoldToken",
+            object(
+                &[("event", text("The event's key."))],
+                &[
+                    ("ttl_seconds", hold_ttl()),
+                    (
+                        "max_objects",
+                        described(range(1, 1_000_000), "Unlimited by default."),
+                    ),
+                ],
+            ),
+        ),
+        (
+            "PublicCreateHoldToken",
+            object(
+                &[("event", text("The event's key."))],
+                &[(
+                    "max_objects",
+                    described(range(1, 100), "The event's by default, and at most it."),
+                )],
+            ),
+        ),
+        (
+            "HoldTokenCreated",
+            object(
+                &[
+                    (
+                        "hold_token",
+                        text("`ht_` and 64 hex digits, shown only here."),
+                    ),
+                    ("event", string()),
+                    ("seq", integer()),
+                    ("expires_at", time()),
+                    ("max_objects", nullable(integer())),
+                ],
+                &[],
+            ),
+        ),
+        (
+            "HoldTokenState",
+            object(
+                &[
+                    ("event", string()),
+                    ("expires_at", time()),
+                    ("max_objects", nullable(integer())),
+                    ("objects", array(r("ObjectLabel"))),
+                ],
+                &[],
+            ),
+        ),
+        (
+            "ExtendHoldToken",
+            object(&[], &[("ttl_seconds", hold_ttl())]),
+        ),
+        (
+            "ExtendReply",
+            object(&[("seq", integer()), ("expires_at", time())], &[]),
+        ),
+        (
+            "Hold",
+            object(
+                &[("hold_token", string()), ("objects", r("ObjectRefs"))],
+                &[],
+            ),
+        ),
+        (
+            "HoldReply",
+            object(
+                &[
+                    ("seq", integer()),
+                    ("expires_at", time()),
+                    ("objects", array(r("ObjectLabel"))),
+                ],
+                &[],
+            ),
+        ),
+        (
+            "Release",
+            described(
+                object(
+                    &[],
+                    &[("hold_token", string()), ("objects", r("ObjectRefs"))],
+                ),
+                "With `hold_token`: held objects, all of the token's if `objects` is left out. \
+Without: booked objects.",
+            ),
+        ),
+        (
+            "PublicRelease",
+            object(&[("hold_token", string())], &[("objects", r("ObjectRefs"))]),
+        ),
+        (
+            "Book",
+            object(
+                &[("order_ref", string())],
+                &[
+                    ("hold_token", string()),
+                    ("objects", r("ObjectRefs")),
+                    (
+                        "ticket_types",
+                        described(
+                            json!({ "type": "object", "additionalProperties": string() }),
+                            "A ticket type per label.",
+                        ),
+                    ),
+                    (
+                        "extra",
+                        described(
+                            json!({ "type": "object", "additionalProperties": { "type": "object" } }),
+                            "A JSON object per label, stored as sent.",
+                        ),
+                    ),
+                ],
+            ),
+        ),
+        (
+            "ChangeStatus",
+            object(
+                &[("objects", r("ObjectRefs")), ("status", status_wire)],
+                &[],
+            ),
+        ),
+        (
+            "SeatReply",
+            object(
+                &[("seq", integer()), ("objects", array(r("ObjectLabel")))],
+                &[],
+            ),
+        ),
+        (
+            "EventObject",
+            object(
+                &[
+                    ("label", string()),
+                    ("oid", integer()),
+                    ("status", object_status),
+                ],
+                &[
+                    ("seq", integer()),
+                    ("expires_at", time()),
+                    ("order_ref", string()),
+                    ("ticket_type", nullable(string())),
+                    ("extra", nullable(json!({ "type": "object" }))),
+                ],
+            ),
+        ),
+        (
+            "Objects",
+            json!({ "oneOf": [
+                object(
+                    &[("data", array(r("EventObject"))), ("unknown", array(string()))],
+                    &[],
+                ),
+                object(
+                    &[("data", array(r("EventObject"))), ("next", nullable(string()))],
+                    &[],
+                ),
+            ] }),
+        ),
+        (
+            "PublicEvent",
+            object(
+                &[
+                    ("event", string()),
+                    (
+                        "chart",
+                        object(&[("hash", string()), ("url", string())], &[]),
+                    ),
+                    ("hold_ttl_seconds", integer()),
+                    ("max_objects", integer()),
+                    ("require_session", boolean()),
+                ],
+                &[],
+            ),
+        ),
+    ];
+    entries
+        .into_iter()
+        .map(|(name, schema)| (name.to_owned(), schema))
+        .collect()
+}

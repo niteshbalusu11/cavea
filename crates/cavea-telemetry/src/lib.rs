@@ -162,13 +162,32 @@ pub fn dropped_records() -> u64 {
 /// Install the process-wide subscriber, writing to stdout through an
 /// [`Output`]: logging never waits for stdout and never fails. Call once,
 /// first thing in `main`, and keep the guard until exit: dropping it gives the
-/// output [`FLUSH_AT_EXIT`] to write what is queued.
+/// output [`FLUSH_AT_EXIT`] to write what is queued. Panics are logged by
+/// [`log_panic`] from then on, instead of being printed to standard error.
 pub fn init(filter: &str, format: LogFormat) -> Result<Logging, InitError> {
     let output = Output::spawn(std::io::stdout(), QUEUE_RECORDS).map_err(InitError::Output)?;
     tracing::subscriber::set_global_default(subscriber(filter, format, output.clone())?)
         .map_err(|_| InitError::AlreadyInitialised)?;
     let _ = OUTPUT.set(output.clone());
+    std::panic::set_hook(Box::new(log_panic));
     Ok(Logging(output))
+}
+
+/// The panic hook: one `error` record, `panic`, in the panicking thread's
+/// current span (a request's or an actor's), with the source location. The
+/// message is logged only when it is a string literal: a formatted message
+/// may hold request data (an `unwrap` on a parse error quotes its input), so
+/// it is withheld.
+pub fn log_panic(info: &std::panic::PanicHookInfo<'_>) {
+    let payload = info
+        .payload()
+        .downcast_ref::<&'static str>()
+        .copied()
+        .unwrap_or("<formatted message withheld>");
+    match info.location() {
+        Some(location) => tracing::error!(location = %location, payload, "panic"),
+        None => tracing::error!(payload, "panic"),
+    }
 }
 
 /// Flushes the log output when dropped.

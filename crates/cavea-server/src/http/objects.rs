@@ -9,10 +9,9 @@
 
 use std::collections::HashMap;
 
+use axum::Json as JsonBody;
 use axum::extract::State;
 use axum::response::{IntoResponse as _, Response};
-use axum::routing::get;
-use axum::{Json as JsonBody, Router};
 use cavea_engine::{Idx, ObjectRef, Timestamp};
 use serde::Serialize;
 use serde_json::value::RawValue;
@@ -20,12 +19,47 @@ use tracing::Instrument as _;
 
 use super::auth::SecretKey;
 use super::extract::{Page, Path, Query, check_object_count};
+use super::openapi::{Needs, Op, Routes};
 use super::seats::{Find, chart, rfc3339, target};
 use super::{ApiError, AppState, Code};
 use crate::seats::Chart;
 
-pub(super) fn routes() -> Router<AppState> {
-    Router::new().route("/v1/events/{event}/objects", get(objects))
+pub(super) fn routes() -> Routes {
+    let string = || serde_json::json!({ "type": "string" });
+    Routes::new().add(
+        Op::get(
+            "/v1/events/{event}/objects",
+            "listObjects",
+            "Objects' status",
+        )
+        .about(
+            "By label (`label`, repeated, at most 1,000), or a page in `idx` order \
+(`status`, `limit`, `after`); not both. Read from committed state.",
+        )
+        .needs(Needs::Secret)
+        .query(
+            "label",
+            serde_json::json!({ "type": "array", "items": string(), "maxItems": 1_000 }),
+            "Objects' labels: `label=A&label=B`.",
+        )
+        .query(
+            "status",
+            string(),
+            "`free`, `held`, `booked`, `blocked` or a custom code, 4 to 15.",
+        )
+        .query(
+            "limit",
+            serde_json::json!({ "type": "integer", "minimum": 1, "maximum": 100 }),
+            "Objects per page.",
+        )
+        .query("after", string(), "The `next` of the previous page.")
+        .reply(
+            200,
+            "Objects",
+            "`{data, unknown}` by label, or `{data, next}` for a page",
+        ),
+        objects,
+    )
 }
 
 /// The most objects one page looks at. A page of a rare status may hold fewer

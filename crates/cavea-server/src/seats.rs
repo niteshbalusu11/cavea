@@ -27,6 +27,10 @@ pub enum ServerClock {
     System,
     #[cfg(test)]
     Manual(cavea_engine::ManualClock),
+    /// The system clock, but reading it panics while the flag is set, on a
+    /// task outside any request: inside an event actor.
+    #[cfg(test)]
+    Faulty(Arc<std::sync::atomic::AtomicBool>),
 }
 
 fn wall_ms() -> u64 {
@@ -35,12 +39,32 @@ fn wall_ms() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
+/// Re-read after each sleep: the wall clock may have moved.
+async fn wall_sleep_until(t: Timestamp) {
+    loop {
+        let now = wall_ms();
+        if now >= t.0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(t.0 - now)).await;
+    }
+}
+
 impl Clock for ServerClock {
     fn now(&self) -> Timestamp {
         match self {
             Self::System => Timestamp(wall_ms()),
             #[cfg(test)]
             Self::Manual(clock) => clock.now(),
+            #[cfg(test)]
+            Self::Faulty(fail) => {
+                let armed = fail.load(std::sync::atomic::Ordering::Relaxed);
+                assert!(
+                    !armed || cavea_telemetry::request_id().is_some(),
+                    "injected fault in the actor"
+                );
+                Timestamp(wall_ms())
+            }
         }
     }
 
@@ -48,16 +72,11 @@ impl Clock for ServerClock {
         let clock = self.clone();
         async move {
             match clock {
-                // Re-read after each sleep: the wall clock may have moved.
-                Self::System => loop {
-                    let now = wall_ms();
-                    if now >= t.0 {
-                        return;
-                    }
-                    tokio::time::sleep(Duration::from_millis(t.0 - now)).await;
-                },
+                Self::System => wall_sleep_until(t).await,
                 #[cfg(test)]
                 Self::Manual(clock) => clock.sleep_until(t).await,
+                #[cfg(test)]
+                Self::Faulty(_) => wall_sleep_until(t).await,
             }
         }
     }

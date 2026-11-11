@@ -12,7 +12,7 @@ const SESSION: header::HeaderName = header::HeaderName::from_static("cavea-sessi
 
 /// A session token as a customer's backend signs it: HS256 with the secret
 /// key itself as the secret, which is HMAC with its SHA-256 (RFC 2104 §2).
-fn signed(secret: &str, kid: &str, claims: &Value) -> String {
+pub(super) fn signed(secret: &str, kid: &str, claims: &Value) -> String {
     let b64 = |v: &Value| URL_SAFE_NO_PAD.encode(v.to_string());
     let header = json!({ "alg": "HS256", "typ": "JWT", "kid": kid });
     let signing_input = format!("{}.{}", b64(&header), b64(claims));

@@ -466,7 +466,7 @@ The `SeatStore` trait hides all of this from the engine: `acquire`, `load_event`
 - Lists use cursor pagination: `?limit=100&after=<cursor>` (`limit` 1 to 100, default 100). A list response is `{"data": [..], "next": "<cursor>"}`, oldest first; `next` is the id of the last item when another page may follow, else `null`, and is passed back as `after`. Server-generated ids are `ws_` or `key_` and 32 hex digits.
 - Request limits (`12-security-licensing.md` T19): a body is at most 256 KiB unless its route sets a larger limit; JSON arrays and objects nest at most 32 deep, checked by a scan of the raw bytes before parsing; a command names at most 1,000 objects (`02-domain-model.md` §14). Name and customer key fields are 1 to 128 characters without U+0000.
 - Every response, errors and 404s included, carries `Cavea-Request-Id`. The server generates `req_` and 32 lowercase hex digits. A caller may send its own `Cavea-Request-Id` to correlate with its logs: the server adopts it only if it is 1 to 64 characters from `A-Z a-z 0-9 . _ -`, and otherwise ignores it and generates one. An adopted id is not guaranteed unique.
-- The OpenAPI 3.1 document is served at `/v1/openapi.json`.
+- The OpenAPI 3.1 document is served at `GET /v1/openapi.json`, without a credential (it describes the API, nothing of any workspace), with `Cache-Control: public, max-age=300` and a strong `ETag` (`304` on `If-None-Match`). It is generated, never written by hand (D-46): every route is registered through the route table (`http::openapi::Routes`), which gives the router its method and path and the document its operation, so a route cannot exist without its entry or the reverse; the component schemas (`http/openapi/schemas.rs`) are held to the code by the router tests, which validate every response they receive and every JSON body the server accepted against them. The document is also committed as `crates/cavea-server/openapi.json` (`cavea-server openapi` prints it; a test fails while the file is stale), so a pull request shows API changes in its diff and clients are generated without running the server. Each operation has an `operationId`, a tag (its resource), its security scheme (`adminKey`, `secretKey`, `publishableKey`, `publishableKeyQuery`, `sessionToken`, `holdToken`), its parameters (`Idempotency-Key`, `If-Match`, the page's `limit` and `after`), its request and response schemas by name, the problem+json responses of each status it can return with their codes, and `Cavea-Request-Id` (and `Retry-After` on `429` and `503`) on every response. `GET /v1/public/rt` is described as an upgrade to the WebSocket protocol of §8, which OpenAPI cannot describe.
 
 ### 6.2 Endpoints
 
@@ -607,7 +607,7 @@ The compiled chart route takes no credential and ignores any sent. A chart file 
 
 **System**
 
-`GET /healthz` (process alive), `GET /readyz` (database reachable, migrations applied, not shutting down), `GET /metrics` (Prometheus, admin key), `GET /v1/system/info` (version, licence state). §15 has the details.
+`GET /healthz` (process alive), `GET /readyz` (database reachable, migrations applied, not shutting down), `GET /metrics` (Prometheus, admin key), `GET /v1/openapi.json` (this API, §6.1), `GET /v1/system/info` (version, licence state). §15 has the details.
 
 ### 6.3 Examples
 
@@ -768,7 +768,7 @@ Authorization: Bearer sk_…
 | 422 | `not_enough_objects` | Best-available could not satisfy the request |
 | 422 | `chart_invalid` | Publish blocked by validation errors; `details.findings` lists them (§6.2) |
 | 429 | `rate_limited` | A public rate limit (§12), or the realtime connections one client address may hold (§8.2); `Retry-After` gives the seconds to wait when known |
-| 500 | `internal_error` | Unexpected fault; the cause is logged under the request id, never returned |
+| 500 | `internal_error` | Unexpected fault, a panic included (§16); the cause is logged under the request id, never returned |
 | 503 | `overloaded` | Actor mailbox full, or a chart compile did not finish in time (`reason: "compile_timeout"`); retry after the given delay |
 | 503 | `unavailable` | Storage unreachable |
 
@@ -1185,6 +1185,8 @@ realtime {request_id, transport, workspace, event}   one per realtime connection
 | PostgreSQL unreachable | Commands fail with 503. An actor stops at its next failed commit or heartbeat (within 5 s, §4.8), ending its subscriptions; its event cannot be reloaded, so its snapshot and realtime are unavailable until the database returns. `/readyz` answers `503` within about a second | Automatic when the database returns |
 | Log output fails or stalls (disk full, closed pipe, a stopped collector) | Records are dropped and counted in `cavea_log_records_dropped_total`; requests, actors and shutdown carry on. Standard input, output or error closed at start are held open on `/dev/null`, so the server's sockets never take their descriptors | Fix the output; logging resumes by itself |
 | Fanning out saturates the cores (tens of thousands of subscribers) | Delta delivery slows and publications coalesce over up to 1 s (§8.3); commands, commits and snapshots are not delayed | None needed; fewer subscribers per node, or more cores |
+| A handler, extractor or layer panics (a bug) | That request is answered `500 internal_error` with its request id; the panic is logged once, at `error`, in the request's span (`panic`, with its source location; its message only when it is a string literal, since a formatted one may quote the request), and counted in `cavea_http_requests_total{route, status="500"}`. The connection stays open and every other request is served: the locks requests share recover from poisoning | Fix the bug |
+| An event actor panics | Its callers are answered `503 unavailable`; the panic is logged in the actor's span; the actor is dropped without releasing its lease | The next command for the event reloads it on this node (§4.7) |
 | Server crash | In-flight unacknowledged commands are lost (callers got no success). Subscribers reconnect | Restart; actors reload; holds expire on schedule |
 | Network partition between two nodes (P2) | The old owner's commits fail the fencing check | The new owner continues |
 | Slow webhook endpoint | Deliveries queue for that endpoint only | Retries; replay from the console |

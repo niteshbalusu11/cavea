@@ -11,28 +11,57 @@
 //! and adds the CORS headers to every response under `/v1/public/`, errors
 //! included, so that the renderer can read them.
 
-use axum::Router;
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{Next, map_response};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
 use serde_json::json;
 use tracing::Instrument as _;
 
 use super::auth::PublishableKey;
 use super::extract::Path;
+use super::openapi::{Needs, Op, Routes};
 use super::seats::{Find, target};
 use super::{ApiError, AppState, Code};
 use crate::config::CorsOrigins;
 
-pub(super) fn routes() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/v1/public/charts/{file}",
-            get(chart).layer(map_response(cors_open)),
+pub(super) fn routes() -> Routes {
+    Routes::new()
+        .layered(
+            Op::get(
+                "/v1/public/charts/{file}",
+                "publicChart",
+                "A compiled chart",
+            )
+            .about(
+                "03 §4.6. No credential: the content hash names the file. Brotli when \
+`Accept-Encoding` allows it. Immutable; CORS open.",
+            )
+            .response(
+                200,
+                "The public artefact",
+                Some(serde_json::json!({ CCF_TYPE: {} })),
+            )
+            .etag()
+            .response(304, "Not modified", None)
+            .etag(),
+            chart,
+            |route| route.layer(map_response(cors_open)),
         )
-        .route("/v1/public/events/{event}", get(event))
+        .add(
+            Op::get(
+                "/v1/public/events/{event}",
+                "publicEvent",
+                "What the renderer needs to start",
+            )
+            .needs(Needs::Publishable)
+            .reply(
+                200,
+                "PublicEvent",
+                "The chart file, hold lifetime and selection limit",
+            ),
+            event,
+        )
         .merge(super::seats::public_routes())
 }
 

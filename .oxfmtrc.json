@@ -5,6 +5,7 @@
     "packages/*/wasm/**",
     "bun.lock",
     "crates/*/samples/**",
-    "packages/designer-core/src/generated/**"
+    "packages/designer-core/src/generated/**",
+    "crates/cavea-server/openapi.json"
   ]
 }
