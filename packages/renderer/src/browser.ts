@@ -6,6 +6,8 @@ import { CaveaError } from "./errors.ts";
 import { attach } from "./host.ts";
 import type { SeatMapOptions } from "./options.ts";
 import type { Env } from "./seatmap.ts";
+import { isColourToken, schemeCss } from "./theme.ts";
+import { UI_CSS } from "./ui.ts";
 import type { EngineView } from "./view.ts";
 
 /** A hold or release without an answer this long has failed. */
@@ -39,9 +41,52 @@ function asset(assets: SeatMapOptions["assets"], name: string): URL | undefined 
 }
 
 // The page's own rules for the element win over `:host`; `hidden` still hides.
-const STYLE =
+const css = (): string =>
   ":host{display:block;position:relative}:host([hidden]){display:none}" +
-  "canvas{position:absolute;inset:0;width:100%;height:100%;display:block;outline:none}";
+  ".r canvas{position:absolute;inset:0;width:100%;height:100%;display:block;outline:none}" +
+  schemeCss() +
+  UI_CSS;
+
+/**
+ * One constructed stylesheet for every map on the page: adopted, it needs no
+ * `style-src 'unsafe-inline'` under a Content Security Policy (05 §10).
+ */
+let sheet: CSSStyleSheet | undefined;
+
+type Context2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+let probe: Context2D | null | undefined;
+
+/**
+ * A CSS colour as `#rrggbbaa`, by painting one pixel, so any colour the
+ * browser knows (`rgb()`, `oklch()`, names) reaches the view; a value it
+ * does not take is returned as given, for the view to refuse.
+ */
+function hex(value: string): string {
+  if (/^#([\da-f]{3}|[\da-f]{6}|[\da-f]{8})$/i.test(value)) {
+    return value;
+  }
+  probe ??= (
+    typeof OffscreenCanvas === "undefined"
+      ? document.createElement("canvas")
+      : new OffscreenCanvas(1, 1)
+  ).getContext("2d", { willReadFrequently: true }) as Context2D | null;
+  if (probe === null) {
+    return value;
+  }
+  // Two sentinels: a value the context refuses leaves both unchanged; a
+  // valid one may equal one of them (black, white), never both.
+  const parsed = ["#000", "#fff"].some((sentinel) => {
+    probe!.fillStyle = sentinel;
+    probe!.fillStyle = value;
+    return probe!.fillStyle !== (sentinel === "#000" ? "#000000" : "#ffffff");
+  });
+  if (!parsed) {
+    return value;
+  }
+  probe.clearRect(0, 0, 1, 1);
+  probe.fillRect(0, 0, 1, 1);
+  return `#${[...probe.getImageData(0, 0, 1, 1).data].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
 
 export function browserEnv(): Env {
   return {
@@ -58,26 +103,58 @@ export function browserEnv(): Env {
     },
     atlas: (assets) => loadGlyphAtlas(asset(assets, "glyphs.png")),
     mount(element) {
-      let root: ShadowRoot;
+      let shadow: ShadowRoot;
       try {
-        root = element.shadowRoot ?? element.attachShadow({ mode: "open" });
+        shadow = element.shadowRoot ?? element.attachShadow({ mode: "open" });
       } catch (error) {
         const message = "the element cannot hold the map's shadow root";
         throw new CaveaError("invalid_option", message, true, error, "element");
       }
-      const style = document.createElement("style");
-      style.textContent = STYLE;
-      const canvas = document.createElement("canvas");
+      const doc = element.ownerDocument;
+      let style: HTMLStyleElement | undefined;
+      try {
+        if (sheet === undefined) {
+          sheet = new CSSStyleSheet();
+          sheet.replaceSync(css());
+        }
+        shadow.adoptedStyleSheets = [...shadow.adoptedStyleSheets, sheet];
+      } catch {
+        // No constructable stylesheets (Safari before 16.4), or another document's.
+        style = doc.createElement("style");
+        style.textContent = css();
+        shadow.append(style);
+      }
+      const root = doc.createElement("div");
+      root.className = "r";
+      const canvas = doc.createElement("canvas");
       // Until the accessible list view exists (A11Y-001).
       canvas.setAttribute("role", "img");
-      canvas.setAttribute("aria-label", "Seat map");
-      root.append(style, canvas);
+      root.append(canvas);
+      shadow.append(root);
       return {
         canvas,
-        size: () => [canvas.clientWidth, canvas.clientHeight],
+        root,
+        size: () => [root.clientWidth, root.clientHeight],
+        tokens(names) {
+          const computed = getComputedStyle(root);
+          return names.map((name) => {
+            const value = computed.getPropertyValue(`--cavea-${name}`).trim();
+            return value !== "" && isColourToken(name) ? hex(value) : value;
+          });
+        },
+        watch(listener) {
+          const observer = new MutationObserver(listener);
+          for (const node of [element, doc.documentElement, doc.body]) {
+            if (node !== null) {
+              observer.observe(node, { attributes: true });
+            }
+          }
+          return () => observer.disconnect();
+        },
         remove() {
-          style.remove();
-          canvas.remove();
+          style?.remove();
+          root.remove();
+          shadow.adoptedStyleSheets = shadow.adoptedStyleSheets.filter((s) => s !== sheet);
         },
       };
     },

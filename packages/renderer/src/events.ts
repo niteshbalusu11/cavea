@@ -70,6 +70,8 @@ export type RendererEvent =
       type: "cameraChanged";
       centre: [number, number];
       zoom: number;
+      /** The lowest and highest zoom, for the current chart and size (04 §13). */
+      range: [number, number];
       lod: "overview" | "crossFade" | "seats" | "detail";
     };
 

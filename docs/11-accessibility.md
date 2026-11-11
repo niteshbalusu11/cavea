@@ -92,6 +92,8 @@ Requirements:
 | Announcements | One polite live region for selections and counts; one assertive live region for refusals and expiry |
 | Built-in controls | Native buttons and form controls |
 
+Today (05 §7): the zoom controls, legend, tooltip, toasts and the loading and error states are native buttons and a `<details>` disclosure, named from the message catalogue, reachable with Tab after the canvas, with a visible focus outline. Toasts are one polite `role="status"` region; when A11Y-002 adds the assertive region for refusals and expiry, the toasts' region must stop announcing those, so nothing is said twice. The tooltip is visual: its content reaches screen readers through the proxy's name (A11Y-002), not the tooltip. On touch, a long press shows it and a tap that selects pins it to the seat.
+
 Proxy name pattern:
 
 - Seat: "Orchestra, row C, seat 12. VIP, £95. Available. Aisle seat. Seat 12 of 30."

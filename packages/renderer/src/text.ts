@@ -55,6 +55,9 @@ export function createRasteriser(): Rasteriser {
       }
       const c = context;
       const measure = (size: number): TextMetrics => {
+        // A right-to-left page would make `start` the right edge; labels are
+        // the chart's, drawn the same on any page.
+        c.direction = "ltr";
         c.font = `${weight} ${size}px ${font}`;
         return c.measureText(text);
       };
@@ -74,6 +77,7 @@ export function createRasteriser(): Rasteriser {
       // Resizing clears the canvas and its state.
       canvas.width = w;
       canvas.height = h;
+      c.direction = "ltr";
       c.font = `${weight} ${size}px ${font}`;
       c.fillStyle = "#fff";
       c.fillText(text, PAD + Math.max(m.actualBoundingBoxLeft, 0), PAD + ascent);

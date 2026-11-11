@@ -131,12 +131,12 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **WEB-003** `StateAdapter` interface, `staticState`, `customState` (05 §4)
 - [x] **WEB-004** Callbacks and the `SeatObject` payload (05 §5). `onHoldExpiring` and `onHoldExpired` wait for WEB-024; `onSectionEnter`, `onFloorChange`, `onMetrics` and `price`/`ticketType` (WEB-009) for their features
 - [x] **WEB-005** Methods: selection, pricing, theme, zoom, find, list, destroy (05 §6). `setPricing` waits for WEB-009; floors as zoom targets, per-category availability and the other unbuilt methods of 05 §6 for their features
-- [ ] **WEB-006** Shadow-root interface: zoom controls, legend, loading and error states (05 §7)
-- [ ] **WEB-007** Tooltip with price, ticket-type choice and flags; host replacement (05 §7)
-- [ ] **WEB-008** Toasts for refusals and rule violations (05 §7)
-- [ ] **WEB-009** Pricing display and `formatPrice` (05 §3.1)
-- [ ] **WEB-010** Theme tokens as CSS custom properties, applied live (05 §8)
-- [ ] **WEB-011** Message catalogue in English, `messages` override, `locale` (05 §3.4)
+- [x] **WEB-006** Shadow-root interface: zoom controls, legend, loading and error states (05 §7)
+- [x] **WEB-007** Tooltip with price, ticket-type choice and flags; host replacement (05 §7)
+- [x] **WEB-008** Toasts for refusals and rule violations (05 §7)
+- [x] **WEB-009** Pricing display and `formatPrice` (05 §3.1)
+- [x] **WEB-010** Theme tokens as CSS custom properties, applied live (05 §8)
+- [x] **WEB-011** Message catalogue in English, `messages` override, `locale` (05 §3.4)
 - [ ] **WEB-012** `preloadSeatMap` and preload documentation (05 §10)
 - [ ] **WEB-013** Script-tag build (05 §1)
 - [ ] **WEB-014** React wrapper with one-to-one props and imperative ref (05 §11)
