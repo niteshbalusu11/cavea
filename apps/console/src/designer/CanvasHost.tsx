@@ -82,13 +82,26 @@ export function CanvasHost(props: { editor: Editor }) {
     };
   };
   const send = (input: Input) => editor.input(input);
-  /** Ends the gesture the session is following, as a cancel. */
-  const cancel = () => {
+  /** Ends the gesture the session is following, as a cancel; `release`
+   * also lets go of its pointer (not when the press becomes a pinch's
+   * first finger, which stays captured). */
+  const cancel = (release = true) => {
     if (held === null) return;
     const id = held;
     held = null;
-    if (element.hasPointerCapture(id)) element.releasePointerCapture(id);
+    if (release && element.hasPointerCapture(id)) element.releasePointerCapture(id);
     send({ kind: "pointerCancel" });
+  };
+  /** Forgets touch points whose release this region will not see (a lost
+   * capture, the window's blur), and the pinch once none is left. */
+  const forget = (id: number | null) => {
+    if (id === null) touches.clear();
+    else touches.delete(id);
+    if (touches.size === 0) pinch = null;
+  };
+  const blur = () => {
+    cancel();
+    forget(null);
   };
 
   const cursor = (to: Cursor) => {
@@ -139,13 +152,13 @@ export function CanvasHost(props: { editor: Editor }) {
       }
     });
     theme.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-    window.addEventListener("blur", cancel);
+    window.addEventListener("blur", blur);
     region.addEventListener("wheel", onWheel, { passive: false });
     onCleanup(() => {
       resize.disconnect();
       ratio?.removeEventListener("change", onRatio);
       theme.disconnect();
-      window.removeEventListener("blur", cancel);
+      window.removeEventListener("blur", blur);
       region.removeEventListener("wheel", onWheel);
     });
 
@@ -243,7 +256,7 @@ export function CanvasHost(props: { editor: Editor }) {
     touches.set(e.pointerId, local(e));
     if (touches.size !== 2) return false;
     // A second finger: the gesture becomes a pinch.
-    cancel();
+    cancel(false);
     pinch = { points: [...touches.values()] as Pinch["points"] };
     return true;
   };
@@ -309,6 +322,9 @@ export function CanvasHost(props: { editor: Editor }) {
         // Capture lost while the press is held (the element hidden, another
         // capture): the gesture ends as a cancel, not half way.
         onLostPointerCapture={(e) => {
+          // After a release the pointer is already forgotten; a touch still
+          // tracked here was lost while down.
+          if (touches.has(e.pointerId)) forget(e.pointerId);
           if (e.pointerId === held) cancel();
         }}
         onPointerLeave={() => {
