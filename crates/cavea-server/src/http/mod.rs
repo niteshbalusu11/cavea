@@ -15,6 +15,7 @@ mod charts;
 mod error;
 mod events;
 pub mod extract;
+pub mod health;
 mod keys;
 mod objects;
 mod public;
@@ -28,7 +29,6 @@ use std::sync::Arc;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::middleware;
-use axum::routing::get;
 use cavea_telemetry::RequestLayer;
 use serde::Serialize;
 use sqlx::PgPool;
@@ -41,6 +41,7 @@ use crate::seats::Seats;
 pub use auth::{AdminKey, AdminKeyAuth, Auth, PublishableKey, QueryKey, SecretKey};
 pub use error::{ApiError, Code};
 pub use extract::{Json, Path, Query};
+pub use health::Health;
 
 /// Shared with every handler through `State<AppState>`. Cheap to clone.
 #[derive(Debug, Clone)]
@@ -55,6 +56,8 @@ pub struct AppState {
     pub realtime: Realtime,
     /// The public endpoints' rate limits (08 §12).
     pub limiter: Arc<Limiter>,
+    /// What readiness knows of the database (`GET /readyz`).
+    pub health: Health,
 }
 
 /// The whole HTTP surface.
@@ -64,7 +67,7 @@ pub fn router(state: AppState) -> Router {
 
 fn routes() -> Router<AppState> {
     Router::new()
-        .route("/healthz", get(healthz))
+        .merge(health::routes())
         .merge(workspaces::routes())
         .merge(keys::routes())
         .merge(charts::routes())
@@ -86,12 +89,12 @@ fn finish(routes: Router<AppState>, state: AppState) -> Router {
         })
         .layer(DefaultBodyLimit::max(extract::DEFAULT_BODY_LIMIT))
         .layer(middleware::from_fn_with_state(state.clone(), public::cors))
-        .layer(RequestLayer::new().quiet(&["/healthz"]))
+        .layer(
+            RequestLayer::new()
+                .quiet(&["/healthz", "/readyz", "/metrics"])
+                .on_completed(crate::metrics::record_request),
+        )
         .with_state(state)
-}
-
-async fn healthz() -> &'static str {
-    "ok"
 }
 
 /// A page of a list (08 §6.1): `{"data": [..], "next": "<cursor>"}`. `next` is

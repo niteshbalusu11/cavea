@@ -598,7 +598,12 @@ impl Sim {
             .get(id)
             .cloned()
             .ok_or_else(|| Violation::new("setup", "no clock"))?;
-        let reg = Registry::new(store.clone(), self.charts.clone(), clock, self.config);
+        let reg = Registry::new(
+            store.clone(),
+            self.charts.clone(),
+            clock,
+            self.config.clone(),
+        );
         let (jobs, rx) = mpsc::unbounded_channel();
         rt.spawn(clients(
             reg.clone(),

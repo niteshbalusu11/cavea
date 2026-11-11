@@ -9,7 +9,7 @@ use std::pin::Pin;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::extract::MatchedPath;
 use axum::http::{HeaderName, HeaderValue, Request, Response};
@@ -105,12 +105,18 @@ pub fn record_event(event: &str) {
     });
 }
 
+/// Called once per request when its response is ready: the matched route (or
+/// [`UNMATCHED_ROUTE`]), the status (500 if the service failed) and how long
+/// the request took. For metrics.
+pub type Completed = fn(route: &str, status: u16, elapsed: Duration);
+
 /// Wraps every request in a [`span::REQUEST`](crate::span::REQUEST) span. Add
 /// it with `Router::layer` after every route and fallback, so that the matched
 /// route is known.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RequestLayer {
     quiet: &'static [&'static str],
+    completed: Option<Completed>,
 }
 
 impl RequestLayer {
@@ -123,7 +129,19 @@ impl RequestLayer {
     /// `info`, such as health checks.
     #[must_use]
     pub fn quiet(self, routes: &'static [&'static str]) -> Self {
-        Self { quiet: routes }
+        Self {
+            quiet: routes,
+            ..self
+        }
+    }
+
+    /// Call `completed` as each request completes.
+    #[must_use]
+    pub fn on_completed(self, completed: Completed) -> Self {
+        Self {
+            completed: Some(completed),
+            ..self
+        }
     }
 }
 
@@ -134,6 +152,7 @@ impl<S> Layer<S> for RequestLayer {
         RequestService {
             inner,
             quiet: self.quiet,
+            completed: self.completed,
         }
     }
 }
@@ -142,6 +161,7 @@ impl<S> Layer<S> for RequestLayer {
 pub struct RequestService<S> {
     inner: S,
     quiet: &'static [&'static str],
+    completed: Option<Completed>,
 }
 
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -168,9 +188,9 @@ where
             .get(REQUEST_ID_HEADER)
             .and_then(RequestId::from_inbound)
             .unwrap_or_else(RequestId::generate);
-        let route = request
-            .extensions()
-            .get::<MatchedPath>()
+        let matched = request.extensions().get::<MatchedPath>().cloned();
+        let route = matched
+            .as_ref()
             .map_or(UNMATCHED_ROUTE, MatchedPath::as_str);
         let quiet = self.quiet.contains(&route);
         let span = info_span!(
@@ -192,6 +212,7 @@ where
         };
         let response = SCOPE.scope(scope, span.in_scope(|| self.inner.call(request)));
         let completion = span.clone();
+        let completed = self.completed;
         Box::pin(
             async move {
                 let mut result = response.await;
@@ -203,8 +224,16 @@ where
                         response.headers_mut().insert(REQUEST_ID_HEADER, header);
                     }
                 }
+                let elapsed = start.elapsed();
+                if let Some(completed) = completed {
+                    let status = result.as_ref().map_or(500, |r| r.status().as_u16());
+                    let route = matched
+                        .as_ref()
+                        .map_or(UNMATCHED_ROUTE, MatchedPath::as_str);
+                    completed(route, status, elapsed);
+                }
                 // Milliseconds to the microsecond.
-                let micros = start.elapsed().as_micros();
+                let micros = elapsed.as_micros();
                 completion.record("duration_ms", micros as f64 / 1e3);
                 if quiet {
                     debug!("request completed");

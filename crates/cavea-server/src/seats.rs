@@ -238,14 +238,22 @@ impl fmt::Debug for Seats {
 }
 
 impl Seats {
+    /// With `broadcast_on`, the realtime runtime, each actor's publications
+    /// are broadcast by a task there (08 §8.3).
     #[must_use]
-    pub fn new(pool: PgPool, config: &Config, clock: ServerClock) -> Self {
+    pub fn new(
+        pool: PgPool,
+        config: &Config,
+        clock: ServerClock,
+        broadcast_on: Option<tokio::runtime::Handle>,
+    ) -> Self {
         let lease = Duration::from_secs(config.lease_secs.get().into());
         let store = PgStore::new(pool.clone(), &config.node_id, lease);
         let charts = Arc::new(PgCharts::new(pool.clone(), CHART_CACHE_OBJECTS));
         let registry_config = RegistryConfig {
             actor: ActorConfig {
                 heartbeat_ms: u64::from(config.heartbeat_secs.get()) * 1000,
+                broadcast_on,
                 ..ActorConfig::default()
             },
             ..RegistryConfig::default()

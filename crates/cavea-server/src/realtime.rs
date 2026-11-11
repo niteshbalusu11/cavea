@@ -4,6 +4,10 @@
 //! The HTTP side (the upgrade, SUBSCRIBE, the SSE body, the snapshot and
 //! polling) is in `http::realtime`.
 //!
+//! Streams run on a runtime of their own ([`runtime`]), apart from request
+//! handling (08 §8.3, D-45); the HTTP side spawns them there with
+//! [`Realtime::spawn`] once a subscription is made.
+//!
 //! One connection is one task. It waits on four things at once: the shutdown
 //! signal, the client, the subscription and one timer, which is re-armed for
 //! the next PING or the idle deadline, whichever is first. An idle connection
@@ -30,8 +34,47 @@ use cavea_engine::{
     ChartProvider, Clock, EventId, Frame, Received, Registry, SeatStore, Subscription, TokenHash,
 };
 use cavea_format::wire::{self, CloseReason};
+use tokio::runtime::Handle;
 use tokio::sync::watch;
 use tokio::time::{Instant, sleep_until, timeout};
+
+/// The runtime realtime connections stream on (08 §8.3, D-41): `threads`
+/// workers, each under Linux's `SCHED_IDLE` policy. Request handling, actors
+/// and commits run on another runtime under the default policy, so the kernel
+/// runs them first whenever they are ready, and fanning out frames to
+/// subscribers takes the cores they leave idle: when there are not enough,
+/// it is delta delivery that slows (and publications coalesce over a longer
+/// interval, `cavea_engine::MAX_WAIT_MS`), never a command.
+pub fn runtime(threads: usize) -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(threads.max(1))
+        .thread_name("cavea-realtime")
+        .on_thread_start(yield_to_requests)
+        .enable_all()
+        .build()
+}
+
+#[cfg(target_os = "linux")]
+fn yield_to_requests() {
+    // SAFETY: `sched_setscheduler` reads the parameter struct we pass and
+    // keeps no reference to it; an all-zero `sched_param` is a valid one
+    // (priority 0, the only one `SCHED_IDLE` takes). On Linux a pid of 0
+    // names the calling thread, so this changes only the runtime's own
+    // threads; moving to `SCHED_IDLE` needs no privilege.
+    let failed = unsafe {
+        let param: libc::sched_param = std::mem::zeroed();
+        libc::sched_setscheduler(0, libc::SCHED_IDLE, &raw const param)
+    } != 0;
+    if failed {
+        tracing::warn!(
+            error = %std::io::Error::last_os_error(),
+            "realtime thread not moved to SCHED_IDLE; fanning out competes with requests"
+        );
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn yield_to_requests() {}
 
 /// The protocol's timers (08 §8.3). Fixed in production; tests shorten them.
 #[derive(Debug, Clone, Copy)]
@@ -105,6 +148,10 @@ struct Inner {
     subscribers: [AtomicUsize; 2],
     /// RESYNCs sent, for `cavea_rt_resyncs_total`.
     resyncs: AtomicU64,
+    /// Frames written, for `cavea_rt_frames_total`.
+    frames: AtomicU64,
+    /// Where connections stream; `None`: the caller's runtime.
+    runtime: Option<Handle>,
 }
 
 impl fmt::Debug for Realtime {
@@ -126,8 +173,29 @@ pub enum Refused {
 }
 
 impl Realtime {
+    /// Connections stream on the runtime of whoever spawns them.
     #[must_use]
     pub fn new(max_connections: usize, max_per_ip: u32, timing: Timing) -> Self {
+        Self::build(max_connections, max_per_ip, timing, None)
+    }
+
+    /// Connections stream on `runtime`, apart from request handling (08 §8.3).
+    #[must_use]
+    pub fn on_runtime(
+        max_connections: usize,
+        max_per_ip: u32,
+        timing: Timing,
+        runtime: Handle,
+    ) -> Self {
+        Self::build(max_connections, max_per_ip, timing, Some(runtime))
+    }
+
+    fn build(
+        max_connections: usize,
+        max_per_ip: u32,
+        timing: Timing,
+        runtime: Option<Handle>,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 timing,
@@ -138,7 +206,20 @@ impl Realtime {
                 per_ip: Mutex::default(),
                 subscribers: [AtomicUsize::new(0), AtomicUsize::new(0)],
                 resyncs: AtomicU64::new(0),
+                frames: AtomicU64::new(0),
+                runtime,
             }),
+        }
+    }
+
+    /// Run a connection's stream: on the realtime runtime if there is one.
+    pub fn spawn<F>(&self, stream: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        match &self.inner.runtime {
+            Some(runtime) => drop(runtime.spawn(stream)),
+            None => drop(tokio::spawn(stream)),
         }
     }
 
@@ -212,6 +293,18 @@ impl Realtime {
     #[must_use]
     pub fn resyncs(&self) -> u64 {
         self.inner.resyncs.load(Ordering::Relaxed)
+    }
+
+    /// Frames written since start-up.
+    #[must_use]
+    pub fn frames(&self) -> u64 {
+        self.inner.frames.load(Ordering::Relaxed)
+    }
+
+    /// Whether shutdown has begun.
+    #[must_use]
+    pub fn is_stopping(&self) -> bool {
+        *self.inner.stop.borrow()
     }
 
     /// Count a subscriber on `transport` while the guard lives.
@@ -369,6 +462,7 @@ async fn put<L: Link>(
     match sent {
         Ok(Ok(())) => {
             stats.frames += 1;
+            realtime.inner.frames.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
         Ok(Err(Gone)) => Err(Ending::ClientGone),
@@ -607,6 +701,10 @@ pub(crate) mod tests {
     type Reg = Registry<MemoryStore, MemoryCharts, ManualClock>;
 
     fn setup() -> (Arc<MemoryStore>, Reg) {
+        setup_with(cavea_engine::RegistryConfig::default())
+    }
+
+    fn setup_with(config: cavea_engine::RegistryConfig) -> (Arc<MemoryStore>, Reg) {
         let store = MemoryStore::with_clock(ManualClock::new(T0));
         store.create_event(EV, 0, CHART);
         let store = Arc::new(store);
@@ -617,7 +715,7 @@ pub(crate) mod tests {
             store.clone(),
             Arc::new(charts),
             store.clock().clone(),
-            cavea_engine::RegistryConfig::default(),
+            config,
         );
         (store, reg)
     }
@@ -981,5 +1079,90 @@ pub(crate) mod tests {
         busy.abort();
         drop(link);
         assert_eq!(pings.await.unwrap(), 2);
+    }
+
+    /// A link whose every write takes `cost` of CPU, as a write to a socket
+    /// on loopback costs the kernel's work at both ends; its client says
+    /// nothing.
+    struct Busy {
+        cost: Duration,
+    }
+
+    impl Link for Busy {
+        const HEARS_CLIENT: bool = false;
+
+        async fn send(&mut self, _: Out) -> Result<(), Gone> {
+            let started = std::time::Instant::now();
+            while started.elapsed() < self.cost {
+                std::hint::spin_loop();
+            }
+            Ok(())
+        }
+
+        async fn recv(&mut self) -> Inbound {
+            std::future::pending().await
+        }
+    }
+
+    /// 2,000 subscribers whose every frame takes 200 µs of CPU to write keep
+    /// their runtime busy for 400 ms per publication. Commands go to the
+    /// actor on the request runtime, a single thread here, and each is
+    /// answered at once all the same: no reply waits behind fanning out
+    /// (08 §8.3, D-41). With the streams on the request runtime, each would
+    /// wait for a whole pass.
+    #[test]
+    fn fanning_out_never_delays_a_command() {
+        let _serial = crate::http::tests::serial();
+        let requests = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let streams = runtime(1).unwrap();
+        let worst = requests.block_on(async {
+            let (store, reg) = setup_with(cavea_engine::RegistryConfig {
+                actor: cavea_engine::ActorConfig {
+                    broadcast_on: Some(streams.handle().clone()),
+                    ..cavea_engine::ActorConfig::default()
+                },
+                ..cavea_engine::RegistryConfig::default()
+            });
+            let realtime =
+                Realtime::on_runtime(10_000, 10_000, Timing::default(), streams.handle().clone());
+            for _ in 0..2_000 {
+                let sub = reg.subscribe(EV, 0, None).await.unwrap();
+                let (realtime, reg) = (realtime.clone(), reg.clone());
+                realtime.clone().spawn(async move {
+                    let mut link = Busy {
+                        cost: Duration::from_micros(200),
+                    };
+                    run(
+                        &realtime,
+                        &mut link,
+                        &feed(&reg),
+                        sub,
+                        &mut Stats::default(),
+                    )
+                    .await;
+                });
+            }
+            let mut worst = Duration::ZERO;
+            for i in 0..20 {
+                let status = if i % 2 == 0 {
+                    Status::BLOCKED
+                } else {
+                    Status::FREE
+                };
+                let started = std::time::Instant::now();
+                reg.send(EV, block(i / 2 % N, status)).await.unwrap();
+                worst = worst.max(started.elapsed());
+                // The next publication is due; let the pass get going.
+                store.clock().advance_ms(100);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            realtime.shutdown();
+            worst
+        });
+        streams.shutdown_background();
+        assert!(worst < Duration::from_millis(50), "a reply took {worst:?}");
     }
 }

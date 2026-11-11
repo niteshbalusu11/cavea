@@ -55,6 +55,11 @@ tracing.workspace = true
 # connection; the version axum's `ws` already builds.
 tungstenite = { version = "0.29.0", default-features = false }
 
+# `sched_setscheduler`, to run the realtime runtime's threads under
+# `SCHED_IDLE` (08 §8.3); already in the tree through tokio.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { version = "0.2.191", default-features = false }
+
 [dev-dependencies]
 cavea-testkit.workspace = true
 # `SinkExt` and `StreamExt` for that client; already built for axum.

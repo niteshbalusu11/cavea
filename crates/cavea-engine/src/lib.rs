@@ -23,6 +23,7 @@ mod chart;
 mod feed;
 mod idempotency;
 mod memory;
+pub mod metrics;
 mod registry;
 mod replay;
 mod state;
@@ -32,8 +33,8 @@ mod types;
 pub use actor::{ActorConfig, ActorError, ActorHandle, KeepAlive, PendingReply, actor};
 pub use chart::{ChartError, ChartView};
 pub use feed::{
-    End, Frame, INTERVAL_MS, MAX_INTERVAL_MS, QUEUE_FRAMES, RING_BYTES, RING_MS, Received,
-    STRETCH_SUBSCRIBERS, Subscription, interval_ms,
+    BEHIND_SUBSCRIBERS, End, Frame, INTERVAL_MS, MAX_INTERVAL_MS, MAX_WAIT_MS, QUEUE_FRAMES,
+    RING_BYTES, RING_MS, Received, STRETCH_SUBSCRIBERS, Subscription, interval_ms,
 };
 pub use memory::{Fault, MEMORY_LEASE_MS, MemoryCharts, MemoryStore};
 pub use registry::{OpenError, Registry, RegistryConfig};

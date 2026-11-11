@@ -23,7 +23,7 @@ use axum::middleware::map_response;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use base64::Engine as _;
-use cavea_engine::{EventId, Frame, TokenHash};
+use cavea_engine::{EventId, Frame, Subscription, TokenHash};
 use cavea_format::wire::{self, ClientFrame, CloseReason, WireError};
 use serde::Deserialize;
 use tokio::sync::mpsc;
@@ -227,11 +227,7 @@ async fn websocket(
         .max_message_size(MAX_CLIENT_MESSAGE)
         .max_frame_size(MAX_CLIENT_MESSAGE)
         .on_upgrade(move |socket| {
-            async move {
-                let _slot = slot;
-                websocket_session(state, auth, WsLink(socket)).await;
-            }
-            .instrument(span)
+            websocket_session(state, auth, WsLink(socket), slot).instrument(span)
         }))
 }
 
@@ -321,9 +317,11 @@ async fn first_subscribe(socket: &mut WebSocket) -> Result<Subscribe, Refusal> {
     Err(BAD_FRAME)
 }
 
-async fn websocket_session(state: AppState, auth: Auth, mut link: WsLink) {
+/// The handshake, the event and the token are found here, on the request
+/// runtime, where the database is used; the stream itself runs on the
+/// realtime runtime (08 §8.3), with the connection's slot.
+async fn websocket_session(state: AppState, auth: Auth, mut link: WsLink, slot: Slot) {
     let started = Instant::now();
-    let mut stats = Stats::default();
     let handshake = state.realtime.timing().handshake;
     let first = tokio::select! {
         biased;
@@ -332,15 +330,37 @@ async fn websocket_session(state: AppState, auth: Auth, mut link: WsLink) {
             first.unwrap_or(Err((None, "handshake_timeout")))
         }
     };
-    let ended = match first {
-        Ok(subscribe) => follow(&state, &auth, &mut link, subscribe, &mut stats).await,
+    let followed = match first {
+        Ok(subscribe) => follow(&state, &auth, subscribe).await,
         Err(refusal) => Err(refusal),
     };
+    let (sub, event, token) = match followed {
+        Ok(followed) => followed,
+        Err(refusal) => return finish(&mut link, started, Stats::default(), Err(refusal)).await,
+    };
+    let realtime = state.realtime.clone();
+    let stream = async move {
+        let _slot = slot;
+        let _counted = state.realtime.subscribed(Transport::WebSocket);
+        let mut stats = Stats::default();
+        let feed = Feed {
+            registry: &state.seats.registry,
+            event,
+            token,
+        };
+        let ending = run(&state.realtime, &mut link, &feed, sub, &mut stats).await;
+        finish(&mut link, started, stats, Ok(ending)).await;
+    };
+    realtime.spawn(stream.instrument(Span::current()));
+}
+
+/// Send the CLOSE a refusal calls for, end the WebSocket and log.
+async fn finish(link: &mut WsLink, started: Instant, stats: Stats, ended: Result<Ending, Refusal>) {
     let reason = match ended {
         Ok(ending) => ending.as_str(),
         Err((close_reason, why)) => {
             if let Some(close_reason) = close_reason {
-                close(&mut link, close_reason).await;
+                close(link, close_reason).await;
             }
             why
         }
@@ -390,15 +410,13 @@ async fn followable_token(
     Ok(found.then_some(hash))
 }
 
-/// Find the event and the token, subscribe, and stream. An unknown event and
-/// a token that may not be followed get the same CLOSE 5.
+/// Find the event and the token, and subscribe. An unknown event and a token
+/// that may not be followed get the same CLOSE 5.
 async fn follow(
     state: &AppState,
     auth: &Auth,
-    link: &mut WsLink,
     s: Subscribe,
-    stats: &mut Stats,
-) -> Result<Ending, Refusal> {
+) -> Result<(Subscription, EventId, Option<TokenHash>), Refusal> {
     let target = target(state, auth, Find::Key(&s.event))
         .await
         .map_err(|e| match e.code() {
@@ -418,23 +436,18 @@ async fn follow(
                 .ok_or(NOT_FOUND)?,
         ),
     };
-    let registry = &state.seats.registry;
-    let sub = registry
+    let sub = state
+        .seats
+        .registry
         .subscribe(target.id, s.last_seq, token)
         .await
         .map_err(|_| UNAVAILABLE)?;
-    let _counted = state.realtime.subscribed(Transport::WebSocket);
     info!(
         last_seq = s.last_seq,
         private = token.is_some(),
         "realtime subscribed"
     );
-    let feed = Feed {
-        registry,
-        event: target.id,
-        token,
-    };
-    Ok(run(&state.realtime, link, &feed, sub, stats).await)
+    Ok((sub, target.id, token))
 }
 
 // ---- SSE (08 §8.4) ----
@@ -476,7 +489,10 @@ async fn stream(
     span.record("event", target.key.as_str());
     // One frame waits here at most; the rest stay in the engine's channel.
     let (tx, rx) = mpsc::channel(1);
-    tokio::spawn(sse_session(state, target, last_seq, SseLink(tx)).instrument(span));
+    // On the realtime runtime; the socket itself stays with the HTTP
+    // connection, on the request runtime (08 §8.4).
+    let realtime = state.realtime.clone();
+    realtime.spawn(sse_session(state, target, last_seq, SseLink(tx)).instrument(span));
     let mut response = Body::new(SseBody { rx, _slot: slot }).into_response();
     let headers = response.headers_mut();
     let pairs = [
