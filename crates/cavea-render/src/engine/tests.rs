@@ -437,12 +437,20 @@ fn inertia_decays_stops_and_then_asks_for_nothing() {
         assert!(tick(&mut e, t + f64::from(later) * 16.0).is_empty());
     }
 
-    // A flick that crosses the threshold in one move still flings.
+    // A flick that crosses the threshold in one move still flings, also by
+    // the finger left after a two-finger press.
     let mut e = big();
     ptr(&mut e, Down, 1, TOUCH, [600.0, 300.0], 0.0);
     ptr(&mut e, Move, 1, TOUCH, [500.0, 300.0], 50.0);
     ptr(&mut e, Up, 1, TOUCH, [500.0, 300.0], 51.0);
     assert!(wants_frame(&tick(&mut e, 51.0)));
+    let mut e = big();
+    ptr(&mut e, Down, 1, TOUCH, [200.0, 300.0], 0.0);
+    ptr(&mut e, Down, 2, TOUCH, [600.0, 300.0], 180.0);
+    ptr(&mut e, Up, 1, TOUCH, [200.0, 300.0], 185.0);
+    ptr(&mut e, Move, 2, TOUCH, [500.0, 300.0], 190.0);
+    ptr(&mut e, Up, 2, TOUCH, [500.0, 300.0], 191.0);
+    assert!(wants_frame(&tick(&mut e, 191.0)));
 
     // No inertia under reduced motion.
     let mut e = engine();
@@ -473,6 +481,17 @@ fn double_tap_zooms_in_and_two_finger_tap_zooms_out() {
     settle(&mut e, 5120.0);
     assert!((cam(&e).zoom / zoom - 1.0).abs() < 1e-9);
     assert_eq!(e.intents.len(), 1, "a two-finger tap is not a tap");
+
+    // The threshold counts from each finger's press, even when the first
+    // moved before the second went down: 14 px is no tap.
+    let mut e = engine();
+    ptr(&mut e, Down, 1, TOUCH, [350.0, 300.0], 0.0);
+    ptr(&mut e, Move, 1, TOUCH, [357.0, 300.0], 10.0);
+    ptr(&mut e, Down, 2, TOUCH, [450.0, 300.0], 20.0);
+    ptr(&mut e, Move, 1, TOUCH, [364.0, 300.0], 30.0);
+    ptr(&mut e, Up, 1, TOUCH, [364.0, 300.0], 100.0);
+    ptr(&mut e, Up, 2, TOUCH, [450.0, 300.0], 110.0);
+    assert!(!wants_frame(&tick(&mut e, 110.0)), "no zoom-out animation");
 }
 
 #[test]

@@ -88,7 +88,12 @@ impl GestureHandling {
 struct Tracked {
     id: u32,
     kind: PointerType,
+    /// Where and when it went down: the drag threshold and grab point.
     start: [f64; 2],
+    down_ms: f64,
+    /// Where a pinch measures from: `start`, or for the first of two
+    /// pointers, where it was when the second went down.
+    anchor: [f64; 2],
     pos: [f64; 2],
 }
 
@@ -248,9 +253,8 @@ impl Recogniser {
                 out.push(Action::Interrupt);
             }
         }
-        // A pinch measures from where both fingers were when the second joined.
         let first = self.pointers.iter_mut().flatten().next().map(|p| {
-            p.start = p.pos;
+            p.anchor = p.pos;
             p.pos
         });
         let Some(slot) = self.pointers.iter_mut().find(|p| p.is_none()) else {
@@ -260,6 +264,8 @@ impl Recogniser {
             id,
             kind: pointer,
             start: at,
+            down_ms: time_ms,
+            anchor: at,
             pos: at,
         });
         self.most = self.most.max(count + 1);
@@ -289,7 +295,7 @@ impl Recogniser {
         let Some(Some(p)) = self.pointers.get_mut(i) else {
             return false;
         };
-        let (prev, start, kind) = (p.pos, p.start, p.kind);
+        let (prev, start, down_ms, anchor, kind) = (p.pos, p.start, p.down_ms, p.anchor, p.kind);
         p.pos = at;
         if self.cancelled {
             return true;
@@ -313,7 +319,7 @@ impl Recogniser {
                     self.sampled = 0;
                     if was_still {
                         // A flick may cross the threshold in one move.
-                        self.sample(self.start_ms, start);
+                        self.sample(down_ms, start);
                     }
                 }
                 self.sample(time_ms, at);
@@ -336,7 +342,7 @@ impl Recogniser {
                 // The first pinching move also applies the movement made
                 // under the threshold.
                 let (from, other_from) = if was_still {
-                    (start, other.start)
+                    (anchor, other.anchor)
                 } else {
                     (prev, other.pos)
                 };
