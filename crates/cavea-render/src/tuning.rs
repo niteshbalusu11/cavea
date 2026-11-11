@@ -108,3 +108,7 @@ pub const STROKE_MIN_SEAT_PX: f32 = LOD_SEATS_SEAT_PX as f32;
 /// Most seat draw calls in one frame (04 §11); more visible ranges are merged
 /// across the smallest gaps.
 pub const MAX_SEAT_DRAW_CALLS: usize = 64;
+
+/// `SetCamera` or `FlyTo` to a seat fits a square this many of the chart's
+/// seat sizes wide around it (04 §13).
+pub const OBJECT_VIEW_SEATS: f32 = 20.0;

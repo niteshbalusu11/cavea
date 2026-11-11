@@ -79,7 +79,7 @@ Not yet: `caveaServer` (WEB-020), `pricing` and `formatPrice` (WEB-009) and `sel
 | `gestureHandling` | `'greedy'`, `'cooperative'`, `'none'` | `'greedy'` | Built |
 | `zoomToSelect` | boolean | true on touch | Not yet as an option: the engine always zooms a seat too small to pick (under 18 px on touch, 5 px with a mouse) |
 | `sectionDrillDown` | boolean | true when the chart has sections | Not yet |
-| `initialView` | `'fit'`, section label, or bounds | `'fit'` | Not yet (the rest of WEB-005); the map fits the chart |
+| `initialView` | `'fit'`, section label, or bounds | `'fit'` | Built; a section on the floor shown. An unknown section is reported through `onError` (`invalid_input`) and the chart is fitted |
 | `maxDpr` | number | 2 touch, 3 otherwise | Built |
 | `reducedMotion` | `'auto'`, `true`, `false` | `'auto'` | Built; `'auto'` follows `prefers-reduced-motion` |
 
@@ -242,13 +242,13 @@ Today `kind` is always `'seat'` (tables, booths and areas are not compiled yet),
 | `map.selectBestAvailable({ quantity, categories?, accessible? })` | Uses the adapter's `bestAvailable` | Not yet |
 | `map.setPricing(p)`, `map.setFilter(f)`, `map.setTheme(t)`, `map.setLocale(l)` | Live updates | `setTheme` built (§3.4 values); the others not yet (WEB-009, WEB-030, WEB-011) |
 | `map.setMode(m)`, `map.setSpotlight(labels)` | | Not yet |
-| `map.zoomTo(target, opts?)` | Section label, object label, floor, bounds, or `'fit'` | Not yet (the rest of WEB-005) |
-| `map.zoomIn()`, `map.zoomOut()` | | Not yet (the rest of WEB-005) |
+| `map.zoomTo(target, opts?)` | Section label, object label, floor, bounds, or `'fit'` | Built for `'fit'`, bounds, a section label and a seat label on the floor shown (a string names a section if one has that label, else a seat); floors not yet. Animated unless `{ animate: false }`. The camera stays within the chart, so a seat near its edge may not be centred |
+| `map.zoomIn()`, `map.zoomOut()` | | Built: twice or half the zoom about the centre |
 | `map.setFloor(id)` | | Not yet |
-| `map.findObject(label)` | Details and current status | Not yet (the rest of WEB-005) |
-| `map.listSections()`, `map.listCategories()` | With availability counts | Not yet (the rest of WEB-005) |
+| `map.findObject(label)` | Details and current status | Built: the `SeatObject` and `status` (`'available'`, `'unavailable'` or `'selected'`), or `null` for an unknown label |
+| `map.listSections()`, `map.listCategories()` | With availability counts | Built. Sections: `{ label, floor, seats, available }`, `available` counting seats not drawn unavailable (free, or selected by this buyer). Categories: `{ key, label, color, objects }` (`color` `#rrggbbaa`, `objects` bookable objects); per-category availability not yet (the engine keeps no per-category counters) |
 | `map.showListView(bool)` | Switch between map and accessible list | Not yet |
-| `map.resync()` | Force a fresh snapshot | Not yet (the rest of WEB-005); the engine's own resync requests reach the adapter's `resync` |
+| `map.resync()` | Force a fresh snapshot | Built: calls the adapter's `resync` |
 | `map.toImage({ width, height })` | PNG blob of the current view (thumbnails, confirmation pages) | Not yet |
 | `map.destroy()` | Releases the GL context, sockets and listeners. Does not release holds | Built: disconnects the adapter, aborts its `signal`, removes every listener, observer and pending frame and timer, frees the WASM view and removes the canvas. Later calls do nothing (a development warning); a second `destroy` does nothing |
 

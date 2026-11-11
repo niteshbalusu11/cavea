@@ -10,7 +10,8 @@
 // parallel with the WASM, the atlas and the fake host's state. Map: `theme`
 // (light, dark, high-contrast, auto; default auto), `gestures=greedy|
 // cooperative|none` (cooperative puts the map in a scrolling page),
-// `reducedMotion=1|0`, `max` and `min` (selection rules, default 4 and 0).
+// `reducedMotion=1|0`, `camera=x:y:width:height` (initial view in chart
+// units), `max` and `min` (selection rules, default 4 and 0).
 //
 // Fake host: `sold` (fraction of seats unavailable at start, in runs; default
 // 0.3) or `mark=start:count` (exactly that `idx` range); `stateDelay=ms`
@@ -21,10 +22,10 @@
 // as many every `ms` ms; `snipe=1` also takes a selected seat the buyer does
 // not hold yet, so it is knocked out.
 //
-// `window.caveaDemo` has the map (`map.select([...])`, `map.setTheme(...)`,
-// `map.destroy()` from the console), the seat `labels`, the callback log in
-// `events`, and `take(label)`, `crowd(on)`, `resnapshot()` and
-// `second(hidden)` (a second map on the page, sharing the WASM).
+// `window.caveaDemo` has the map (`map.select([...])`, `map.zoomTo(...)`,
+// `map.destroy()` from the console), the seat `labels`, the callback log in `events`, and
+// `take(label)`, `crowd(on)`, `resnapshot()` and `second(hidden)` (a second map
+// on the same page, sharing the WASM).
 import {
   createSeatMap,
   customState,
@@ -72,6 +73,7 @@ const chartUrl = params.get("chart");
 const preset = params.get("preset") ?? "";
 const sold = num("sold", 0.3);
 const mark = params.get("mark")?.split(":").map(Number);
+const camera = params.get("camera")?.split(":").map(Number);
 const themeParam = params.get("theme") ?? "auto";
 const theme = (
   ["light", "dark", "high-contrast"].includes(themeParam) ? themeParam : "auto"
@@ -292,6 +294,10 @@ const options: SeatMapOptions = {
 };
 if (params.has("reducedMotion")) {
   options.reducedMotion = params.get("reducedMotion") === "1";
+}
+if (camera !== undefined && camera.length === 4) {
+  const [x = 0, y = 0, width = 1, height = 1] = camera;
+  options.initialView = { x, y, width, height };
 }
 
 /** Another map on the page with fixed state, sharing the loaded WASM; `hidden` creates it in a hidden box. */

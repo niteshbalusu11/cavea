@@ -130,7 +130,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **WEB-002** `createSeatMap` with options validation and development warnings (05 §3). Options of unbuilt features are typed out and warned about; the capability ladder waits for WEB-017
 - [x] **WEB-003** `StateAdapter` interface, `staticState`, `customState` (05 §4)
 - [x] **WEB-004** Callbacks and the `SeatObject` payload (05 §5). `onHoldExpiring` and `onHoldExpired` wait for WEB-024; `onSectionEnter`, `onFloorChange`, `onMetrics` and `price`/`ticketType` (WEB-009) for their features
-- [ ] **WEB-005** Methods: selection, pricing, theme, zoom, find, list, destroy (05 §6). Done: `getSelection`, `select`, `deselect`, `clearSelection`, `setTheme`, `destroy`. Left: `zoomTo`, `zoomIn`, `zoomOut`, `findObject`, `listSections`, `listCategories`, `resync` and the `initialView` option (branch `slice/web-sdk-methods`); `setPricing` waits for WEB-009
+- [x] **WEB-005** Methods: selection, pricing, theme, zoom, find, list, destroy (05 §6). `setPricing` waits for WEB-009; floors as zoom targets, per-category availability and the other unbuilt methods of 05 §6 for their features
 - [ ] **WEB-006** Shadow-root interface: zoom controls, legend, loading and error states (05 §7)
 - [ ] **WEB-007** Tooltip with price, ticket-type choice and flags; host replacement (05 §7)
 - [ ] **WEB-008** Toasts for refusals and rule violations (05 §7)

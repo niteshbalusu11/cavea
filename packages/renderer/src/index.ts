@@ -21,6 +21,7 @@ export {
 export { CaveaError, type CaveaErrorCode } from "./errors.ts";
 export type { GestureHandling } from "./host.ts";
 export type {
+  Bounds,
   ReadyInfo,
   SeatMapOptions,
   SeatObject,
@@ -28,7 +29,7 @@ export type {
   Theme,
   ThemeName,
 } from "./options.ts";
-export type { SeatMap } from "./seatmap.ts";
+export type { ObjectStatus, SeatMap } from "./seatmap.ts";
 
 /**
  * Draws a seat map in `element` (in a shadow root, filling the element) and

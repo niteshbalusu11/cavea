@@ -451,11 +451,21 @@ impl<B: GpuBackend> Engine<B> {
     }
 
     /// A seat's details and public status code (0 available, 1 unavailable),
-    /// for the objects the SDK reports that are not selected (05 §5).
+    /// for the SDK's `findObject` (05 §6).
     pub fn object(&mut self, label: &str) -> Option<(ObjectInfo, u8)> {
         let idx = self.idx_of(label)?;
         let status = *self.scene.as_ref()?.scene.status.get(idx as usize)?;
         Some((self.info(idx), status))
+    }
+
+    /// The chart's bounds on the floor shown, which the first frame fits.
+    pub fn chart_bounds(&self) -> Option<Bounds> {
+        Some(self.scene.as_ref()?.scene.bounds)
+    }
+
+    /// Per section of the chart, its seats not drawn unavailable (04 §5).
+    pub fn sections_open(&self) -> &[u32] {
+        self.scene.as_ref().map_or(&[], |l| &l.sections.open)
     }
 
     /// Resolves labels and indices to seats. Unknown objects are reported in

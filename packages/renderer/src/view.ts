@@ -23,8 +23,16 @@ export interface EngineView {
   setTheme(name: string, tokens: string[]): void;
   setGestureHandling(mode: number): void;
   setReducedMotion(on: boolean): void;
+  /** `rect`: x, y, width, height in chart units; else `label`; else the chart. */
+  flyTo(
+    rect: Float32Array | null | undefined,
+    label: string | null | undefined,
+    section: boolean,
+    instant: boolean,
+  ): void;
   /** JSON: the object's details and `status` (0 available, 1 unavailable). */
   object(label: string): string | undefined;
+  sectionsOpen(): Uint32Array;
   resize(width: number, height: number, dpr: number, maxDpr: number): void;
   frame(time: number): boolean;
   pointer(kind: number, id: number, type: number, x: number, y: number, time: number): void;

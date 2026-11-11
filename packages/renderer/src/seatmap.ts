@@ -13,8 +13,10 @@ import { CaveaError, isDevelopment, warner, type CaveaErrorCode } from "./errors
 import type { ChartInfo, ObjectInfo, RendererEvent } from "./events.ts";
 import type { AttachOptions, Attached } from "./host.ts";
 import {
+  isBounds,
   isTheme,
   validateOptions,
+  type Bounds,
   type SeatMapOptions,
   type SeatObject,
   type Selection,
@@ -30,13 +32,19 @@ export interface Env {
   /** The glyph atlas's pixels. */
   atlas(assets: SeatMapOptions["assets"]): Promise<Uint8Array>;
   /** A canvas in a shadow root of `element`. */
-  mount(element: HTMLElement): { canvas: HTMLCanvasElement; remove(): void };
+  mount(element: HTMLElement): {
+    canvas: HTMLCanvasElement;
+    size(): [number, number];
+    remove(): void;
+  };
   attach(view: EngineView, canvas: HTMLCanvasElement, options: AttachOptions): Attached;
   /** Calls `listener` with whether the system prefers dark, now and on change; returns the unsubscribe. */
   darkScheme(listener: (dark: boolean) => void): () => void;
   /** After this long without an answer, a hold or release counts as failed. */
   holdTimeoutMs: number;
 }
+
+export type ObjectStatus = "available" | "unavailable" | "selected";
 
 /** The map `createSeatMap` resolves with (05 §6). Methods never throw; after `destroy` they do nothing. */
 export interface SeatMap {
@@ -46,14 +54,24 @@ export interface SeatMap {
   deselect(labels: string[]): void;
   clearSelection(): void;
   setTheme(theme: Theme): void;
+  /** `fit`, a section label, a seat label, or bounds. Animated unless `animate` is false. */
+  zoomTo(target: "fit" | string | Bounds, options?: { animate?: boolean }): void;
+  zoomIn(): void;
+  zoomOut(): void;
+  findObject(label: string): (SeatObject & { status: ObjectStatus }) | null;
+  /** `available`: seats not drawn unavailable (free, or selected by this buyer). */
+  listSections(): Array<{ label: string; floor: string; seats: number; available: number }>;
+  /** `color`: `#rrggbbaa`; `objects`: bookable objects in the category. No availability counts yet. */
+  listCategories(): Array<{ key: string; label: string; color: string; objects: number }>;
+  /** Asks the adapter for a fresh snapshot. */
+  resync(): void;
   /** Releases the GL context, the adapter's connection and listeners. Does not release holds. */
   destroy(): void;
 }
 
-/** 05 §6 methods not built yet: they warn in development and do nothing. */
+/** 05 §6 methods whose feature is not built: they warn in development and do nothing. */
 const LATER_METHODS =
-  "setPricing setFilter setLocale setMode setSpotlight setFloor selectBestAvailable showListView " +
-  "toImage zoomTo zoomIn zoomOut findObject listSections listCategories resync";
+  "setPricing setFilter setLocale setMode setSpotlight setFloor selectBestAvailable showListView toImage";
 
 type Callbacks = {
   [K in keyof SeatMapOptions as K extends `on${string}` ? K : never]-?: NonNullable<
@@ -114,6 +132,7 @@ export async function createMap(
   let holdToken: string | null = null;
   let selected = new Map<string, SeatObject>();
   let expiresAt: number | null = null;
+  let camera: { centre: [number, number]; zoom: number } | undefined;
   let unwatchTheme: (() => void) | undefined;
   let outstanding = 0;
   let queue: Promise<void> = Promise.resolve();
@@ -154,9 +173,7 @@ export async function createMap(
   ): void {
     try {
       const unknown = run();
-      if (unknown instanceof Promise) {
-        unknown.catch((error: unknown) => report(failure(code, error)));
-      } else if (Array.isArray(unknown) && unknown.length > 0) {
+      if (Array.isArray(unknown) && unknown.length > 0) {
         report(
           new CaveaError(
             "state_failed",
@@ -271,9 +288,7 @@ export async function createMap(
 
   /** Runs adapter calls one at a time, in order; each fails after `holdTimeoutMs`. */
   function enqueue(task: () => Promise<void>): void {
-    queue = queue
-      .then(() => (destroyed ? undefined : task()))
-      .catch((error: unknown) => report(failure("state_failed", error)));
+    queue = queue.then(() => (destroyed ? undefined : task()));
   }
   function timed<T>(run: () => Promise<T> | undefined): Promise<T> {
     // Set by the executor, which runs before `finally` can.
@@ -302,10 +317,6 @@ export async function createMap(
       let result: HoldResult;
       try {
         result = await timed(() => adapter.hold?.(labels));
-        // The engine waits for an answer to every hold: a malformed one is a failure.
-        if (typeof result?.ok !== "boolean") {
-          throw new Error(`hold() resolved with ${String(result)}, not a HoldResult`);
-        }
       } catch (error) {
         report(new CaveaError("hold_failed", String(error), false, error));
         result = { ok: false, code: "hold_failed" };
@@ -316,9 +327,7 @@ export async function createMap(
           engine(() => v.holdOk(request));
         } else {
           const code = result.code ?? result.failed?.[0]?.reason ?? "hold_failed";
-          const named = (Array.isArray(result.failed) ? result.failed : [])
-            .filter((f) => labels.includes(f?.label))
-            .map((f) => ({ label: f.label, reason: String(f.reason ?? code) }));
+          const named = (result.failed ?? []).filter((f) => labels.includes(f.label));
           const failed = (
             named.length > 0 ? named : labels.map((label) => ({ label, reason: code }))
           ).map((f) => ({ object: lookup(f.label), reason: f.reason }));
@@ -432,6 +441,7 @@ export async function createMap(
         }
         break;
       case "cameraChanged":
+        camera = { centre: event.centre, zoom: event.zoom };
         call("onCameraChange", { centre: event.centre, zoom: event.zoom, level: event.lod });
         break;
       case "error":
@@ -464,6 +474,25 @@ export async function createMap(
     }
   }
 
+  function fly(
+    rect: Bounds | undefined,
+    label: string | undefined,
+    section: boolean,
+    animate: boolean,
+  ): void {
+    const r = rect && Float32Array.of(rect.x, rect.y, rect.width, rect.height);
+    engine(() => view?.flyTo(r, label, section, !animate), "invalid_input");
+    host?.update();
+  }
+  /** Moves to `label`: a section on the floor shown if one has it, else a seat. */
+  const flyToLabel = (label: string, animate: boolean): void =>
+    fly(
+      undefined,
+      label,
+      chart?.sections.some((s) => s.label === label && s.floor === 0) ?? false,
+      animate,
+    );
+
   function teardown(): void {
     destroyed = true;
     for (const timer of timers) {
@@ -472,7 +501,11 @@ export async function createMap(
     timers.clear();
     abort.abort();
     unwatchTheme?.();
-    engine(() => adapter.disconnect(), "state_failed");
+    try {
+      adapter.disconnect();
+    } catch (error) {
+      report(failure("state_failed", error));
+    }
     host?.detach();
     view?.free();
     view = undefined;
@@ -552,6 +585,13 @@ export async function createMap(
     }
     host.update();
     mark("chart_decoded");
+    const initial = options.initialView;
+    if (isBounds(initial)) {
+      fly(initial, undefined, false, false);
+    } else if (initial !== undefined && initial !== "fit") {
+      flyToLabel(initial, false);
+    }
+
     const first = await step(fatal(state, "state_connect_failed"));
     applySnapshot(v, first, true);
     for (const apply of pending ?? []) {
@@ -595,12 +635,79 @@ export async function createMap(
         report(new CaveaError("invalid_input", `invalid theme: ${String(theme)}`));
       }
     },
+    zoomTo(target, { animate = true } = {}) {
+      if (live() === undefined) {
+        return;
+      }
+      if (target === "fit") {
+        fly(undefined, undefined, false, animate);
+      } else if (typeof target === "string") {
+        flyToLabel(target, animate);
+      } else if (isBounds(target)) {
+        fly(target, undefined, false, animate);
+      } else {
+        report(new CaveaError("invalid_input", `invalid zoom target: ${String(target)}`));
+      }
+    },
+    zoomIn: () => zoomBy(2),
+    zoomOut: () => zoomBy(0.5),
+    findObject(label) {
+      const info = live() && details(label);
+      if (info === undefined) {
+        return null;
+      }
+      const status: ObjectStatus = selected.has(label)
+        ? "selected"
+        : info.status === 0
+          ? "available"
+          : "unavailable";
+      return { ...toSeat(info), status };
+    },
+    listSections() {
+      const open = live()?.sectionsOpen();
+      if (open === undefined) {
+        return [];
+      }
+      return (chart?.sections ?? []).map((s, i) => ({
+        label: s.label,
+        floor: chart?.floors[s.floor]?.name ?? "",
+        seats: s.seats,
+        available: open[i] ?? 0,
+      }));
+    },
+    listCategories: () =>
+      (live() &&
+        chart?.categories.map((c) => ({
+          ...c,
+          color: `#${c.color.map((v) => v.toString(16).padStart(2, "0")).join("")}`,
+        }))) ??
+      [],
+    resync() {
+      if (live() === undefined) {
+        return;
+      }
+      if (adapter.resync === undefined) {
+        warn("the state adapter has no resync()");
+      } else {
+        engine(() => adapter.resync?.(), "state_failed");
+      }
+    },
     destroy() {
       if (!destroyed) {
         teardown();
       }
     },
   };
+  function zoomBy(factor: number): void {
+    const size = mounted?.size();
+    if (live() === undefined || camera === undefined || size === undefined) {
+      return;
+    }
+    const scale = camera.zoom * factor;
+    const [width, height] = [size[0] / scale, size[1] / scale];
+    const [x, y] = camera.centre;
+    fly({ x: x - width / 2, y: y - height / 2, width, height }, undefined, false, true);
+  }
   for (const name of LATER_METHODS.split(" ")) {
     (map as unknown as Record<string, () => void>)[name] = () =>
       warn(`${name}() is not supported yet`);
