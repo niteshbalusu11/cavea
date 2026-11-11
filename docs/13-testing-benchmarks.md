@@ -73,8 +73,8 @@ Faults injected:
 
 ## 4. Format and compiler
 
-- **Round trip:** generate a random valid chart document, compile, decode, and compare the decoded scene with the expansion computed directly.
-- **Determinism:** the same document produces identical bytes on Linux, macOS and Windows, and in the WASM build.
+- **Round trip:** generate a random valid chart document, compile, decode, and compare the decoded scene with the expansion computed directly (`round_trip_matches_direct_expansion` in `cavea-compiler`, 60 generated documents).
+- **Determinism:** the same document produces identical bytes on Linux, macOS and Windows, and in the WASM build. The compiler's `compiled_bytes_are_deterministic` and the presets' tests pin public-artefact hashes. `cargo xtask determinism` builds the release library tests of `cavea-compiler` and `cavea-testkit` for the host and for `wasm32-unknown-unknown`, runs the first natively and the second under bun, and passes only if both legs pass. A wasm32 test binary prints nothing and takes no arguments: it runs every test that is not ignored and traps on the first failure, so the command first checks that each binary contains the pinned tests, and fails if bun, the target or a binary is missing. What it proves: x86-64 Linux and wasm32 (as bun's JavaScriptCore runs it) compile the pinned documents (two compiler documents and the six presets, up to 500,000 seats) to the same bytes. What it does not prove: macOS, Windows and aarch64, which nothing here can run, and other WASM engines. Those are covered by running the same command on each platform (natively it needs only cargo; the wasm32 leg needs bun), by hand before a release or in a CI matrix if the owner adds one; the compiler's own sine and cosine (`detmath`) and correctly rounded operations are what make agreement expected rather than lucky. Run it before filing any change to the compiler, the CCF writer or the presets.
 - **Validation:** one test per error and warning code, plus a property that a document passing validation always compiles.
 - **Migration:** every past schema version has stored sample documents that must migrate and compile.
 - **Size:** the synthetic corpus is compiled with `cavea compile` and its sizes are recorded against the targets in `03-chart-format.md` §4.5. Each preset's public artefact hash is pinned in a test, so any change to a preset or to the compiler's output fails it, and the sizes are measured again in the pull request that re-pins them. The corpus is not compiled in CI: CI builds in debug, where compiling and compressing the 100,000-seat preset takes 10 to 20 seconds, and the hashes catch every change the sizes would (`DECISIONS.md` D-28).
@@ -91,7 +91,43 @@ Faults injected:
 
 - Seed corpora are kept in the repository.
 - Nightly: 30 minutes per target. Any crash, panic or hang is a release blocker.
-- The WASM build is compiled with overflow checks in the fuzz configuration.
+- The code under fuzzing is compiled with overflow checks and debug assertions on. libFuzzer runs native code only, so the targets fuzz the same crates the WASM build ships, natively.
+
+**What exists.** The crate `fuzz/` holds four `cargo-fuzz` (libFuzzer) targets. It is its own cargo workspace with its own lockfile and target directory, so the main workspace's build, lint and CI never see it; it needs a nightly compiler, which the second dev shell `nix develop .#fuzz` provides with `cargo-fuzz` (the default shell keeps the pinned stable toolchain). Its release profile turns on overflow checks and debug assertions; `cargo fuzz` adds AddressSanitizer.
+
+| Target | Property checked on every input |
+|---|---|
+| `ccf_decode` | Bytes into `decode` as both artefacts. An accepted chart passes `Chart::check`, re-encodes, re-decodes to the same chart, and re-encodes to the same bytes again. A file accepted as the full artefact is accepted as the public one with the same chart less the full-only data |
+| `document_parse` | Bytes into `ChartDocument::from_json`; a parsed document saves and loads back unchanged, then compiles. A refusal lists errors only; a compiled chart carries warnings only, both artefacts decode to the same chart, and their stored content hashes are their BLAKE3 hashes |
+| `wire_decode` | Bytes into `decode_server` (public and manager views) and `decode_client`. Accepted frames: codes within the view, every `idx` strictly increasing and below the object count, a receiver with fewer objects refused, a snapshot's runs covering exactly its objects; re-encoding the decoded values and decoding again gives the same values |
+| `snapshot_apply` | A fixed 102-seat, two-floor chart and a fuzzer-chosen sequence of chart loads, server frames (through `Command::from_frame`), selections, hold results, session modes and frames, into the renderer engine on a backend that asserts every buffer and texture write and every drawn instance range lies inside the resource it created |
+
+Every target is bounded in time by `-timeout=10` (a hang is a finding) and in memory by libFuzzer's default 2,048 MB limit. Seeds are `fuzz/corpus/<target>/seed-*`, 31 files and 54 KB in all: the compiler's stored schema samples, the fixed chart and a 240-seat synthetic stadium as documents and as both artefacts, refusals the parser must give cleanly, one valid frame of each type, and four engine scenarios. `cargo run --example seeds` in the fuzz shell writes them again after a format change. libFuzzer adds the inputs it finds to the same directory under hash names, which are gitignored, as are `fuzz/artifacts/` (crashes) and `fuzz/target/`.
+
+**How to run.** From the repository root, one target for `n` seconds on one core:
+
+```sh
+nix develop .#fuzz -c cargo fuzz run ccf_decode -- -max_total_time=n -timeout=10
+```
+
+The 24-hour run of the CCF decoder for the M1 exit criterion is the same command with `-max_total_time=86400`. A finding stops the run and leaves the input in `fuzz/artifacts/<target>/`; `cargo fuzz run <target> <file>` reproduces it and `cargo fuzz tmin <target> <file>` minimises it. Nothing runs fuzzing nightly yet: there is no nightly job (CI runs no tests by decision).
+
+**Runs so far** (local, on the development machine, AMD Ryzen 9 7900X, one core per target, the four at once):
+
+Thirty minutes per target, started 2026-11-11 09:31 UTC on the code as it stood just before the commit that added `fuzz/`, each from a corpus already grown by earlier short runs. Coverage is libFuzzer's count of instrumented edges reached (`cov`), at the start of the run and at its end; the corpus is the number of inputs it kept.
+
+| Target | Duration | Executions | Executions/s | Coverage, start → end | Corpus, start → end | Result |
+|---|---|---|---|---|---|---|
+| `ccf_decode` | 1,801 s | 35,724,651 | 19,836 | 2,701 → 2,759 | 460 → 625 | Ended at its time limit; no crash, panic, timeout, leak or out-of-memory |
+| `document_parse` | 1,801 s | 11,572,836 | 6,425 | 13,542 → 16,404 | 1,271 → 5,518 | The same |
+| `wire_decode` | 1,801 s | 306,016,899 | 169,914 | 1,302 → 1,327 | 408 → 473 | The same |
+| `snapshot_apply` | 1,801 s | 936,538 | 520 | 7,263 → 7,421 | 372 → 1,577 | The same |
+
+The `wire_decode` run started before its check on Pong frames was written, so those 30 minutes did not exercise that check. A second run of 90 s per target, on the final code after rebasing onto the renderer and realtime work (from the grown corpora), also ended clean: `ccf_decode` 2,022,999 executions (coverage 2,759), `document_parse` 546,562 (16,481), `wire_decode` 14,730,333 (1,343), `snapshot_apply` 32,575 (7,855; the renderer engine has grown since the long run). None of this is the 24-hour run of the M1 exit criterion (`ROADMAP.md`), which has not been done. It is one command:
+
+```sh
+nix develop .#fuzz -c cargo fuzz run ccf_decode -- -max_total_time=86400 -timeout=10 -print_final_stats=1
+```
 
 ## 6. Renderer
 
@@ -152,6 +188,28 @@ Faults injected:
 | Micro-benchmarks (decode, hit test, delta apply, label build, best-available) | Every pull request | More than 10% slower than the baseline |
 | Headless frame-time smoke | Every pull request | Soft warning only; software rendering is not representative |
 | Device benchmarks S1–S5 | Every release | Any budget in `01-architecture.md` §5 is missed |
+
+**Micro-benchmarks.** `cavea bench` (`cargo run --release -p cavea-cli -- bench [name…]`) measures on the `stadium-100k` preset: CCF decode; hit test (10,000 taps near seats at seat sizes of 18 to 64 px with the 12 px touch tolerance, time per test); snapshot apply (100,000 objects) and delta apply (10,000 changes), each from frame bytes through `Command::from_frame`, the engine and the next frame's buffer upload, on a backend that does nothing; seat labels of 4,096 seats (a full render chunk's worth) through `cavea_format::full_label::seat_label`; and compiling each preset. Each benchmark warms up for 0.2 s, then takes 5 to 15 samples of at least 10 ms each (short runs are batched) and reports the median and the minimum time per run, with the budget beside it where one has a hard number: decode 5 ms per 100,000 seats (`03-chart-format.md` §4.4), hit test 20 µs (`04-renderer.md` §15), delta apply 2 ms (`01-architecture.md` §5), label build 1 ms (`04-renderer.md` §14, "well under a millisecond"). A missed budget exits 4. `--json` prints the same as JSON. It refuses to run in a debug build.
+
+The gate compares a machine with itself: `--save <file>` writes the medians, and `--baseline <file>` compares a later run and exits 4 when any benchmark's median is more than 10% slower. A builder runs it with `--save` on `main` and `--baseline` on the branch before filing a change to the measured code; a flagged result is re-run before it is believed (the median of 5 to 15 samples absorbs most noise, but not another process taking the core). No baseline is committed and CI runs none: a number from one machine says nothing about another.
+
+Measured locally, 2026-11-11, AMD Ryzen 9 7900X, Linux, release build, with no fuzzer running but other agents' work on the machine (load average about 5 on 24 threads); not reference-device results:
+
+| Benchmark | Median | Minimum | Budget |
+|---|---|---|---|
+| decode (100,000 seats, 864,477 B) | 0.533 ms | 0.532 ms | 5 ms |
+| hit test (per tap, seats at 18 to 64 px) | 0.296 µs | 0.293 µs | 20 µs |
+| snapshot apply (100,000 objects, 12,509 B frame) | 0.168 ms | 0.168 ms | none |
+| delta apply (10,000 changes) | 0.187 ms | 0.186 ms | 2 ms |
+| label build (4,096 seats) | 0.160 ms | 0.160 ms | 1 ms |
+| compile `theatre` (2,000 seats) | 1.640 ms | 1.604 ms | none |
+| compile `arena` (20,000 seats) | 14.708 ms | 14.525 ms | none |
+| compile `stadium-60k` | 45.671 ms | 45.454 ms | none |
+| compile `stadium-100k` | 81.100 ms | 79.603 ms | none |
+| compile `stress-250k` | 200.248 ms | 197.074 ms | none |
+| compile `stress-500k` | 378.726 ms | 362.338 ms | none |
+
+A second run straight after, with the first as its `--baseline`, was within 6% on every benchmark (compiles from 5.6% faster to 1.4% slower, the rest within 1.5%) and passed the gate.
 
 **Payload gate.** `cargo xtask build-web` measures the renderer payload, the brotli size (quality 11) of the production JavaScript glue plus the WASM after `wasm-opt -Oz` (plus the font atlas once there is one), and compares it with `xtask/payload-baseline.json`, which records the last accepted size and the `wasm-opt` version it was measured with. The build fails when the payload is over the hard cap of 200,000 B (`01-architecture.md` §5), or more than 3% over the baseline. It refuses to compare a build made without `wasm-opt` (about a fifth larger) or with another `wasm-opt` version than the baseline's: either is an error, not a pass. CI installs binaryen 132, the version `flake.nix` provides; upgrading binaryen changes the flake, CI and the baseline together. The `--demo` build is never measured.
 

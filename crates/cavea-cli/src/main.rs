@@ -1,11 +1,14 @@
 //! The `cavea` command-line tool for developer machines and CI: compile,
 //! validate and inspect charts, and generate the synthetic presets. See
-//! `docs/01-architecture.md` §2. Benchmarks come later (TST-011).
+//! `docs/01-architecture.md` §2, and run the micro-benchmarks (`bench`).
 //!
 //! Exit codes: 0 success (warnings allowed); 1 the input is invalid (a chart
 //! document with errors or that does not parse, a corrupt CCF file); 2 usage
 //! error (unknown command, option or preset); 3 any other failure, such as a
-//! file that cannot be read or written.
+//! file that cannot be read or written; 4 a benchmark missed its budget or ran
+//! more than 10% slower than the baseline.
+
+mod bench;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -23,6 +26,7 @@ use cavea_testkit::presets::{self, DEFAULT_SEED, PRESETS, WAITING};
 const INVALID: u8 = 1;
 const USAGE: u8 = 2;
 const FAILURE: u8 = 3;
+const SLOW: u8 = 4;
 
 const HELP: &str = "\
 cavea: compile, validate, inspect and generate seat charts
@@ -33,11 +37,13 @@ usage:
   cavea inspect <chart.ccf>
   cavea gen <preset> [--seed <n>] [-o <file>]
   cavea gen --list
+  cavea bench [<name>...] [--json] [--save <file>] [--baseline <file>]
 
 A missing path or `-` reads standard input. `cavea <command> --help` explains
 a command.
 
-exit codes: 0 success, 1 invalid input, 2 usage error, 3 other failure";
+exit codes: 0 success, 1 invalid input, 2 usage error, 3 other failure,
+4 a benchmark over budget or slower than its baseline";
 
 const COMPILE_HELP: &str = "\
 usage: cavea compile [<document.json>] [-o <dir>]
@@ -68,6 +74,23 @@ usage: cavea gen <preset> [--seed <n>] [-o <file>]
 Writes a synthetic preset's chart document as JSON to standard output or
 <file>. The same preset and seed always give the same bytes. The default seed
 is 1. --list lists the presets with their seat counts.";
+
+const BENCH_HELP: &str = "\
+usage: cavea bench [<name>...] [--json] [--save <file>] [--baseline <file>]
+
+Runs the micro-benchmarks (docs/13-testing-benchmarks.md §6.3) on the
+stadium-100k preset: decode, hit-test, snapshot-apply, delta-apply,
+label-build, and compile (every preset). No name runs them all. Each is
+sampled 5 to 15 times after a warm-up; the median and minimum time per run are
+printed, with the budget of docs/01-architecture.md §5 where one has a hard
+number. Needs a release build: cargo run --release -p cavea-cli -- bench.
+
+--save <file>      write the medians as a baseline (this machine only)
+--baseline <file>  compare with a saved baseline; more than 10% slower fails
+--json             print the results as JSON
+
+Exits 4 if a budget is missed or a benchmark is more than 10% slower than the
+baseline.";
 
 /// A usage error: exit 2 with the message and a pointer to `--help`.
 struct Usage(String);
@@ -114,6 +137,7 @@ fn run(args: &[String]) -> Result<u8, Failure> {
         "validate" => VALIDATE_HELP,
         "inspect" => INSPECT_HELP,
         "gen" => GEN_HELP,
+        "bench" => BENCH_HELP,
         "-h" | "--help" | "help" => HELP,
         "-V" | "--version" => {
             out(&format!("cavea {}\n", env!("CARGO_PKG_VERSION")))?;
@@ -129,6 +153,7 @@ fn run(args: &[String]) -> Result<u8, Failure> {
         "compile" => compile(&Args::parse(rest, &["-o"], &[])?),
         "validate" => validate(&Args::parse(rest, &[], &["--json"])?),
         "inspect" => inspect(&Args::parse(rest, &[], &[])?),
+        "bench" => benchmark(&Args::parse(rest, &["--save", "--baseline"], &["--json"])?),
         _ => generate(&Args::parse(rest, &["--seed", "-o"], &["--list"])?),
     }
 }
@@ -418,6 +443,104 @@ fn inspect(args: &Args) -> Result<u8, Failure> {
     }
     out(&text)?;
     Ok(0)
+}
+
+fn benchmark(args: &Args) -> Result<u8, Failure> {
+    if let Some(name) = args.positional.iter().find(|n| !bench::NAMES.contains(n)) {
+        let names = bench::NAMES.join(", ");
+        return Err(Usage(format!("unknown benchmark {name:?}; one of {names}")).into());
+    }
+    if cfg!(debug_assertions) {
+        let hint = "cargo run --release -p cavea-cli -- bench";
+        return Err(anyhow::anyhow!("benchmarks need a release build: {hint}").into());
+    }
+    let baseline = match args.options.get("--baseline") {
+        Some(path) => {
+            let bytes = fs::read(path).with_context(|| format!("cannot read {path}"))?;
+            let value: serde_json::Value =
+                serde_json::from_slice(&bytes).with_context(|| format!("{path} is not JSON"))?;
+            let medians = bench::from_baseline(&value);
+            Some(medians.with_context(|| format!("{path} is not a `cavea bench --save` file"))?)
+        }
+        None => None,
+    };
+    let results = bench::run(&args.positional, |name| err(&format!("measured {name}")))?;
+    if let Some(path) = args.options.get("--save") {
+        let json = serde_json::to_string_pretty(&bench::to_baseline(&results))
+            .context("cannot write the baseline")?;
+        fs::write(path, json + "\n").with_context(|| format!("cannot write {path}"))?;
+    }
+
+    let mut failed = false;
+    let mut text = String::from(
+        "stadium-100k unless named; time per run, median and minimum of 5 to 15 samples\n\n",
+    );
+    let _ = writeln!(
+        text,
+        "{:<22}{:>12}{:>12}{:>20}{:>12}{:>9}",
+        "benchmark", "median", "min", "budget", "baseline", "change"
+    );
+    let mut rows = Vec::new();
+    for m in &results {
+        // Hit tests in microseconds, everything else in milliseconds.
+        let (unit, scale) = if m.name == "hit-test" {
+            ("µs", 1e3)
+        } else {
+            ("ms", 1e6)
+        };
+        let base = baseline
+            .as_ref()
+            .and_then(|b| b.iter().find(|(name, _)| *name == m.name))
+            .map(|&(_, ns)| ns);
+        let compared = base.map(|ns| bench::compare(ns, m.median_ns));
+        let slower = compared.is_some_and(|(_, slower)| slower);
+        failed |= m.over_budget() || slower;
+        let value = |ns: f64| format!("{:.3} {unit}", ns / scale);
+        let budget = m.budget.map_or_else(String::new, |(ns, source)| {
+            format!("{} ({source})", value(ns))
+        });
+        let _ = writeln!(
+            text,
+            "{}\n  {}",
+            format!(
+                "{:<22}{:>12}{:>12}{budget:>20}{:>12}{:>9}{}{}",
+                m.name,
+                value(m.median_ns),
+                value(m.min_ns),
+                base.map_or_else(String::new, value),
+                compared.map_or_else(String::new, |(change, _)| format!("{change:+.1}%")),
+                if m.over_budget() { "  OVER BUDGET" } else { "" },
+                if slower { "  SLOWER" } else { "" },
+            )
+            .trim_end(),
+            m.what,
+        );
+        rows.push(serde_json::json!({
+            "name": m.name,
+            "what": m.what,
+            "unit": unit,
+            "median": m.median_ns / scale,
+            "min": m.min_ns / scale,
+            "samples": m.samples,
+            "budget": m.budget.map(|(ns, _)| ns / scale),
+            "budgetSource": m.budget.map(|(_, source)| source),
+            "overBudget": m.over_budget(),
+            "baseline": base.map(|ns| ns / scale),
+            "changePercent": compared.map(|(change, _)| change),
+            "slower": compared.map(|(_, slower)| slower),
+        }));
+    }
+    if args.has("--json") {
+        let json = serde_json::to_string_pretty(&serde_json::json!({ "results": rows }))
+            .context("cannot write results")?;
+        out(&format!("{json}\n"))?;
+    } else {
+        out(&text)?;
+    }
+    if failed {
+        err("cavea: a benchmark missed its budget or is more than 10% slower than the baseline");
+    }
+    Ok(if failed { SLOW } else { 0 })
 }
 
 fn generate(args: &Args) -> Result<u8, Failure> {

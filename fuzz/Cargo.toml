@@ -1,0 +1,61 @@
+# Coverage-guided fuzz targets (docs/13-testing-benchmarks.md §5), built by
+# `cargo fuzz` with the nightly toolchain of `nix develop .#fuzz`. Its own
+# workspace, with its own lockfile and target directory: the main workspace,
+# its `cargo build`, `clippy` and CI never see it.
+
+[package]
+name = "cavea-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "UNLICENSED"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+blake3 = { version = "1.8", default-features = false, features = ["pure"] }
+cavea-compiler = { path = "../crates/cavea-compiler" }
+cavea-core = { path = "../crates/cavea-core" }
+cavea-format = { path = "../crates/cavea-format" }
+cavea-render = { path = "../crates/cavea-render" }
+libfuzzer-sys = "0.4"
+
+[dev-dependencies]
+cavea-testkit = { path = "../crates/cavea-testkit" }
+
+# `cargo fuzz` builds with `--release`: keep the checks the shipped build
+# leaves out, so an overflow or a failed debug assertion is a finding.
+[profile.release]
+debug-assertions = true
+overflow-checks = true
+
+[[bin]]
+name = "ccf_decode"
+path = "fuzz_targets/ccf_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "document_parse"
+path = "fuzz_targets/document_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wire_decode"
+path = "fuzz_targets/wire_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "snapshot_apply"
+path = "fuzz_targets/snapshot_apply.rs"
+test = false
+doc = false
+bench = false

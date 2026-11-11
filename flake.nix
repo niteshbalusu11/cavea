@@ -29,7 +29,12 @@
       devShells = forAllSystems (
         pkgs:
         let
-          rust = (rust-overlay.lib.mkRustBin { } pkgs).fromRustupToolchainFile ./rust-toolchain.toml;
+          rustBin = rust-overlay.lib.mkRustBin { } pkgs;
+          rust = rustBin.fromRustupToolchainFile ./rust-toolchain.toml;
+          # Fuzzing only (docs/13-testing-benchmarks.md §5): libFuzzer
+          # instrumentation and sanitizers need a nightly compiler. Pinned to
+          # one date; bump it with the rust-overlay input.
+          nightly = rustBin.nightly."2026-11-05".minimal;
         in
         assert pkgs.lib.assertMsg (
           pkgs.bun.version == bunVersion
@@ -42,6 +47,14 @@
               pkgs.binaryen # wasm-opt, used by `cargo xtask build-web`
               pkgs.brotli
               pkgs.postgresql_18 # psql; the server itself runs in Docker
+            ];
+          };
+          # `nix develop .#fuzz`: the nightly toolchain and cargo-fuzz for the
+          # crate in fuzz/, which is not part of the main workspace.
+          fuzz = pkgs.mkShell {
+            packages = [
+              nightly
+              pkgs.cargo-fuzz
             ];
           };
         }

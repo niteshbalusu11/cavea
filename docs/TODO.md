@@ -153,10 +153,10 @@ Do not start a milestone until the previous one's exit criteria are met.
 ### Testing
 
 - [ ] **TST-010** Golden-image harness with tolerance and stored baselines (13 §6.1)
-- [ ] **TST-011** Micro-benchmarks: decode, hit test, delta apply, label build (13 §6.3)
+- [x] **TST-011** Micro-benchmarks: decode, hit test, delta apply, label build (13 §6.3)
 - [ ] **TST-012** Benchmark page with the scripted gesture trace and result collector (13 §6.2)
-- [ ] **TST-013** Fuzz targets `ccf_decode` and `document_parse` with seed corpora (13 §5)
-- [ ] **TST-014** Compiler round-trip and determinism tests across platforms (13 §4)
+- [x] **TST-013** Fuzz targets `ccf_decode` and `document_parse` with seed corpora (13 §5)
+- [x] **TST-014** Compiler round-trip and determinism tests across platforms (13 §4)
 - [ ] **TST-015** Scripted interaction tests producing expected engine events (13 §6.1)
 - [ ] **TST-016** Run S1–S5 on the reference devices; commit results (13 §6.2)
 
@@ -243,7 +243,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [ ] **TST-024** Scenarios L1 and L2 on reference hardware; record results (13 §7.2)
 - [ ] **TST-025** Chaos: `kill -9` and PostgreSQL restart during load (13 §7.3)
 - [ ] **TST-026** Authorisation matrix and tenant isolation tests (13 §10)
-- [ ] **TST-027** Fuzz targets `wire_decode`, `snapshot_apply` and HTTP (13 §5)
+- [ ] **TST-027** Fuzz targets `wire_decode`, `snapshot_apply` and HTTP (13 §5). `wire_decode` and `snapshot_apply` exist (`fuzz/`); the HTTP target waits for the OpenAPI document
 
 ---
 
