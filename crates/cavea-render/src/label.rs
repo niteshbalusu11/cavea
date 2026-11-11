@@ -81,6 +81,10 @@ pub struct View<'a> {
     /// The "sold out" string and its generation.
     pub sold_out: &'a str,
     pub sold_out_gen: u32,
+    /// Seats the designer draws moved (04 §25): ranges of `idx` and the
+    /// rigid transform of each (columns of a 2 × 3 matrix), increasing.
+    #[cfg(feature = "designer")]
+    pub moved: &'a [(Range<u32>, [[f64; 2]; 3])],
 }
 
 /// One label that may be placed: its box in chart units for collision
@@ -444,7 +448,22 @@ impl MapLabels {
                     color[3] = (f32::from(color[3]) * theme.dim) as u8;
                 }
                 left -= 1;
-                let pos = scene.pos.get(i).copied().unwrap_or_default();
+                #[allow(unused_mut, reason = "moved by the designer's transforms")]
+                let mut pos = scene.pos.get(i).copied().unwrap_or_default();
+                // A seat drawn moved has its label drawn there too.
+                #[cfg(feature = "designer")]
+                {
+                    let at = view.moved.partition_point(|(r, _)| r.end <= idx);
+                    if let Some((r, a)) = view.moved.get(at)
+                        && r.contains(&idx)
+                    {
+                        let [x, y] = pos.map(f64::from);
+                        pos = [
+                            (a[0][0] * x + a[1][0] * y + a[2][0]) as f32,
+                            (a[0][1] * x + a[1][1] * y + a[2][1]) as f32,
+                        ];
+                    }
+                }
                 let (bytes, _) = centred(pos, seat_cu * LABEL_FIT, raster, color);
                 self.cands.push(Cand {
                     bbox: None,

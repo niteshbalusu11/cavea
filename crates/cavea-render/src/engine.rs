@@ -1309,6 +1309,8 @@ impl<B: GpuBackend> Engine<B> {
             state_gen: self.state_gen,
             sold_out: &self.sold_out,
             sold_out_gen: self.sold_out_gen,
+            #[cfg(feature = "designer")]
+            moved: &self.live.moved_seats,
         };
         let gpu = |error: BackendError| (ErrorCode::Gpu, error.to_string());
         let again = loaded

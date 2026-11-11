@@ -58,6 +58,9 @@ pub(super) struct Live {
     pristine: Option<(Vec<Row>, Vec<Section>, Vec<Text>)>,
     /// Seat ranges of each group in the frame being drawn.
     group_ranges: Vec<Vec<Range<u32>>>,
+    /// The moved pieces' seats with their transforms, in `idx` order: the
+    /// labels drawn from the dynamic atlas follow them (`label::View`).
+    pub(super) moved_seats: Vec<(Range<u32>, Affine)>,
     pub(super) overlay: Batch,
 }
 
@@ -542,6 +545,7 @@ impl<B: GpuBackend> Engine<B> {
 
     fn clear_transforms(&mut self) {
         self.live.groups.clear();
+        self.live.moved_seats.clear();
         self.live.span_group.clear();
         self.live.chunk_group.clear();
     }
@@ -561,6 +565,7 @@ impl<B: GpuBackend> Engine<B> {
         }
         live.span_group = vec![NONE; live.pieces.len()];
         live.chunk_group = vec![NONE; chart.chunks.len()];
+        live.moved_seats.clear();
         for (g, group) in (0u32..).zip(&live.groups) {
             let a = &group.affine;
             let spin = turn(a);
@@ -570,6 +575,9 @@ impl<B: GpuBackend> Engine<B> {
                 };
                 if let Some(slot) = live.span_group.get_mut(s) {
                     *slot = g;
+                }
+                if !span.seats.is_empty() {
+                    live.moved_seats.push((span.seats.clone(), *a));
                 }
                 for c in span.chunks.clone() {
                     if let Some(slot) = live.chunk_group.get_mut(c as usize) {
@@ -603,6 +611,7 @@ impl<B: GpuBackend> Engine<B> {
                 }
             }
         }
+        live.moved_seats.sort_by_key(|(r, _)| r.start);
         loaded.map_labels.invalidate();
         self.culled = None;
     }
