@@ -12,8 +12,10 @@ import {
 import { CaveaError, isDevelopment, warner, type CaveaErrorCode } from "./errors.ts";
 import type { ChartInfo, ObjectInfo, RendererEvent } from "./events.ts";
 import type { AttachOptions, Attached } from "./host.ts";
+import { localeDirection, translator } from "./messages.ts";
 import {
   isBounds,
+  isLocale,
   isTheme,
   validateOptions,
   type Bounds,
@@ -22,7 +24,11 @@ import {
   type SeatObject,
   type Selection,
   type Theme,
+  type ThemeName,
 } from "./options.ts";
+import { checkPricing, prices, type CategoryPricing } from "./pricing.ts";
+import { CANVAS_TOKENS } from "./theme.ts";
+import { createUi, type TooltipObject, type UiHost } from "./ui.ts";
 import type { EngineView } from "./view.ts";
 
 /** What `createSeatMap` needs from its platform. */
@@ -32,12 +38,8 @@ export interface Env {
   fetchBytes(url: string | URL, signal: AbortSignal): Promise<Uint8Array>;
   /** The glyph atlas's pixels. */
   atlas(assets: SeatMapOptions["assets"]): Promise<Uint8Array>;
-  /** A canvas in a shadow root of `element`. */
-  mount(element: HTMLElement): {
-    canvas: HTMLCanvasElement;
-    size(): [number, number];
-    remove(): void;
-  };
+  /** A canvas, and the interface's root over it, in a shadow root of `element`. */
+  mount(element: HTMLElement): Mounted;
   attach(view: EngineView, canvas: HTMLCanvasElement, options: AttachOptions): Attached;
   /** Calls `listener` with whether the system prefers dark, now and on change; returns the unsubscribe. */
   darkScheme(listener: (dark: boolean) => void): () => void;
@@ -47,6 +49,22 @@ export interface Env {
   contextLostMs: number;
   /** `onMetrics` fires at most once in this long (04 §24: 1 s). */
   metricsMs: number;
+}
+
+export interface Mounted {
+  canvas: HTMLCanvasElement;
+  /** Holds the canvas and the interface; theme tokens are read and set on it. */
+  root: HTMLElement;
+  /** The map's CSS size. */
+  size(): [number, number];
+  /** `--cavea-<name>` as computed on `root`, trimmed, colours as `#rrggbbaa`; "" where unset. */
+  tokens(names: string[]): string[];
+  /**
+   * Calls `listener` when the page may have restyled the map (an attribute of
+   * the container, `<html>` or `<body>` changed); returns the unsubscribe.
+   */
+  watch(listener: () => void): () => void;
+  remove(): void;
 }
 
 export type ObjectStatus = "available" | "unavailable" | "selected";
@@ -59,6 +77,12 @@ export interface SeatMap {
   deselect(labels: string[]): void;
   clearSelection(): void;
   setTheme(theme: Theme): void;
+  /** Reads the `--cavea-*` custom properties again, after a change the map cannot see (05 §8). */
+  refreshTheme(): void;
+  /** Replaces the prices shown (05 §3.1). */
+  setPricing(pricing: CategoryPricing[]): void;
+  /** Messages, numbers and prices in another language (05 §3.4). */
+  setLocale(locale: string): void;
   /** `fit`, a section label, a seat label, or bounds. Animated unless `animate` is false. */
   zoomTo(target: "fit" | string | Bounds, options?: { animate?: boolean }): void;
   zoomIn(): void;
@@ -76,7 +100,7 @@ export interface SeatMap {
 
 /** 05 §6 methods whose feature is not built: they warn in development and do nothing. */
 const LATER_METHODS =
-  "setPricing setFilter setLocale setMode setSpotlight setFloor selectBestAvailable showListView toImage";
+  "setFilter setMode setSpotlight setFloor selectBestAvailable showListView toImage";
 
 type Callbacks = {
   [K in keyof SeatMapOptions as K extends `on${string}` ? K : never]-?: NonNullable<
@@ -154,12 +178,29 @@ export async function createMap(
   let warned = false;
   let expiryTimer: ReturnType<typeof setTimeout> | undefined;
   let camera: { centre: [number, number]; zoom: number } | undefined;
-  let unwatchTheme: (() => void) | undefined;
+  let unwatch: Array<() => void> = [];
   let outstanding = 0;
+  let locale = options.locale ?? globalThis.navigator?.language ?? "en";
+  let localeGiven = options.locale !== undefined;
+  let t = translator(locale, options.messages);
+  let pricing = checkPricing(options.pricing ?? [], warn);
+  const priceFailed = (error: unknown): void =>
+    report(new CaveaError("callback_failed", `formatPrice threw: ${String(error)}`, false, error));
+  const priceBook = () =>
+    prices(pricing, options.formatPrice, options.currency, locale, t, priceFailed);
+  let book = priceBook();
+  /** The ticket type chosen for each selected object whose category has types. */
+  const chosen = new Map<string, string>();
+  let ui: ReturnType<typeof createUi> | undefined;
+  /** Prices, strings and direction again, after `setPricing` or `setLocale`. */
+  let rebuild: (() => void) | undefined;
   let queue: Promise<void> = Promise.resolve();
 
   /** Tells the host; an `onError` that throws is not called again for its own throw. */
   function report(error: CaveaError): void {
+    if (error.code === "state_disconnected") {
+      ui?.toast(t("reconnecting"));
+    }
     if (options.onError === undefined || destroyed) {
       warn(`${error.code}: ${error.message}`);
       return;
@@ -287,7 +328,38 @@ export async function createMap(
         seat[key] = o[key];
       }
     }
-    return seat;
+    return priced(seat);
+  }
+
+  /** `seat` with the chosen ticket type and the price from `pricing`, if any. */
+  function priced({ ticketType: _type, price: _price, ...seat }: SeatObject): SeatObject {
+    const out: SeatObject = seat;
+    const type = chosen.get(seat.label);
+    const price = book.price(seat.category.key, type);
+    if (type !== undefined) {
+      out.ticketType = type;
+    }
+    if (price !== undefined) {
+      out.price = price;
+    }
+    return out;
+  }
+
+  /** Defaults the ticket type of each selected object whose category has types; forgets the rest. */
+  function chooseDefaults(labels: Array<{ label: string; category: string }>): void {
+    const keep = new Map(labels.map((o) => [o.label, o.category]));
+    for (const [label, key] of chosen) {
+      const types = book.types(keep.get(label) ?? "");
+      if (!types.some((type) => type.key === key)) {
+        chosen.delete(label);
+      }
+    }
+    for (const [label, category] of keep) {
+      const first = book.types(category)[0];
+      if (first !== undefined && !chosen.has(label)) {
+        chosen.set(label, first.key);
+      }
+    }
   }
 
   /** An object's details and public status code, from the view. */
@@ -442,10 +514,14 @@ export async function createMap(
     switch (event.type) {
       case "ready":
         chart = event;
+        ui?.legend(mapCategories());
+        pushTheme();
         break;
       case "selectionChanged": {
         const before = selected;
+        chooseDefaults(event.selected);
         selected = new Map(event.selected.map((o) => [o.label, toSeat(o)]));
+        const added = [...selected.keys()].filter((label) => !before.has(label));
         // A set of own holds without an expiry reports 0.
         expiresAt = event.expiresAt || null;
         if (expiresAt !== null && expiresAt !== deadline) {
@@ -467,11 +543,26 @@ export async function createMap(
           }
         }
         call("onSelectionChange", selection());
+        ui?.selected(added.length === 1 ? (added[0] ?? null) : null);
         break;
       }
-      case "selectionInvalid":
-        call("onSelectionInvalid", event.rule, event.objects.map(lookup));
+      case "selectionInvalid": {
+        const rule = event.rule;
+        call("onSelectionInvalid", rule, event.objects.map(lookup));
+        // `min` is readiness, not a refusal; `not_free` from a hold comes as `objectUnavailable`.
+        if (rule !== "min") {
+          ui?.toast(
+            rule === "max"
+              ? t("max", { count: max })
+              : rule === "not_free"
+                ? t("notFree")
+                : rule === "hold_limit_exceeded"
+                  ? t("holdLimit")
+                  : t("holdFailed"),
+          );
+        }
         break;
+      }
       case "selectionValid":
         call("onSelectionValid");
         break;
@@ -488,21 +579,28 @@ export async function createMap(
         break;
       }
       case "objectHover":
-        call("onObjectHover", event.object && toSeat(event.object), event.at);
-        break;
       case "objectFocus":
-        call("onObjectFocus", event.object && toSeat(event.object), event.at);
+        call(
+          event.type === "objectHover" ? "onObjectHover" : "onObjectFocus",
+          event.object && toSeat(event.object),
+          event.at,
+        );
+        ui?.hover(event.object?.label ?? null, event.at);
         break;
       case "objectUnavailable":
         call("onObjectUnavailable", lookup(event.label));
+        ui?.toast(t("taken", { seat: event.label }));
         break;
-      case "holdLost":
+      case "holdLost": {
         call("onHoldLost", event.labels.map(lookup));
-        if (deadline !== null && serverNow() >= deadline - EXPIRED_SLACK_MS) {
+        const expired = deadline !== null && serverNow() >= deadline - EXPIRED_SLACK_MS;
+        if (expired) {
           deadline = null;
           call("onHoldExpired");
         }
+        ui?.toast(expired ? t("holdExpired") : t("holdLost", { count: event.labels.length }));
         break;
+      }
       case "resync":
         if (adapter.resync === undefined) {
           report(
@@ -514,6 +612,7 @@ export async function createMap(
         break;
       case "cameraChanged":
         camera = { centre: event.centre, zoom: event.zoom };
+        ui?.camera(event.zoom, event.range);
         call("onCameraChange", { centre: event.centre, zoom: event.zoom, level: event.lod });
         break;
       case "error":
@@ -527,23 +626,108 @@ export async function createMap(
     }
   }
 
+  /** The scheme shown, whether it follows the system, and whether the system prefers dark. */
+  let scheme: ThemeName = "light";
+  let auto = false;
+  let dark = false;
+  /** `theme.tokens`, without the `--cavea-` prefix: set on the root for the interface too. */
+  let themeTokens: Array<[string, string]> = [];
+  /** The last theme the view was given, to skip a change that changes nothing. */
+  let sent = "";
+
+  /**
+   * Gives the view the scheme and the `--cavea-*` tokens as the root computes
+   * them: the page's custom properties under `theme.tokens`. A token of
+   * `theme.tokens` with an unknown name is passed as given, for the view to
+   * refuse (05 §3.4).
+   */
+  function pushTheme(): void {
+    if (mounted === undefined || view === undefined) {
+      return;
+    }
+    const names = [
+      ...new Set([
+        ...CANVAS_TOKENS,
+        ...(chart?.categories ?? []).map((c) => `category-${c.key}`),
+        ...themeTokens.map(([name]) => name).filter((name) => name.startsWith("category-")),
+      ]),
+    ];
+    const values = mounted.tokens(names);
+    const pairs = names.flatMap((name, i) => (values[i] ? [name, values[i] ?? ""] : []));
+    for (const [name, value] of themeTokens) {
+      if (!names.includes(name)) {
+        pairs.push(name, value);
+      }
+    }
+    const key = [scheme, ...pairs].join("\n");
+    if (key !== sent) {
+      sent = key;
+      const v = view;
+      engine(() => v.setTheme(scheme, pairs), "invalid_input");
+      host?.update();
+    }
+  }
+
   function applyTheme(theme: Theme): void {
-    unwatchTheme?.();
-    unwatchTheme = undefined;
+    const root = mounted?.root;
     const base = typeof theme === "string" ? theme : (theme.base ?? "light");
-    const tokens =
+    for (const [name] of themeTokens) {
+      root?.style.removeProperty(`--cavea-${name}`);
+    }
+    themeTokens =
       typeof theme === "string"
         ? []
-        : Object.entries(theme.tokens).flatMap(([name, value]) => [name, String(value)]);
-    const apply = (name: string): void => {
-      engine(() => view?.setTheme(name, tokens), "invalid_input");
-      host?.update();
-    };
-    if (base === "auto") {
-      unwatchTheme = env.darkScheme((dark) => apply(dark ? "dark" : "light"));
-    } else {
-      apply(base);
+        : Object.entries(theme.tokens).map(([name, value]) => [
+            name.replace(/^--cavea-/, ""),
+            String(value),
+          ]);
+    for (const [name, value] of themeTokens) {
+      root?.style.setProperty(`--cavea-${name}`, value);
     }
+    auto = base === "auto";
+    setScheme(base === "auto" ? (dark ? "dark" : "light") : base);
+  }
+  function setScheme(name: ThemeName): void {
+    scheme = name;
+    mounted?.root.setAttribute("data-s", name);
+    sent = "";
+    pushTheme();
+  }
+
+  const mapCategories = (): Array<{ key: string; label: string; color: string; objects: number }> =>
+    chart?.categories.map((c) => ({
+      ...c,
+      color: `#${c.color.map((v) => v.toString(16).padStart(2, "0")).join("")}`,
+    })) ?? [];
+
+  /** An object's details with its status (as `findObject`), from the view. */
+  function find(label: string): TooltipObject | null {
+    const info = details(label);
+    if (info === undefined) {
+      return null;
+    }
+    const status: ObjectStatus = selected.has(label)
+      ? "selected"
+      : info.status === 0
+        ? "available"
+        : "unavailable";
+    return { ...(selected.get(label) ?? toSeat(info)), status };
+  }
+
+  /** The interface's language, direction and the strings the view draws. */
+  function localise(): void {
+    const dir = options.dir ?? "auto";
+    const root = mounted?.root;
+    // `auto` without a locale of the host's inherits the page's direction.
+    if (dir === "auto" && !localeGiven) {
+      root?.removeAttribute("dir");
+    } else {
+      root?.setAttribute("dir", dir === "auto" ? localeDirection(locale) : dir);
+    }
+    root?.setAttribute("lang", locale);
+    mounted?.canvas.setAttribute("aria-label", t("mapLabel"));
+    const v = view;
+    engine(() => v?.setMessage("soldOut", t("soldOut")));
   }
 
   function fly(
@@ -632,7 +816,10 @@ export async function createMap(
     }
     timers.clear();
     abort.abort();
-    unwatchTheme?.();
+    for (const off of unwatch.splice(0)) {
+      off();
+    }
+    ui?.destroy();
     engine(() => adapter.disconnect(), "state_failed");
     host?.detach();
     view?.free();
@@ -646,24 +833,31 @@ export async function createMap(
     "bytes" in source
       ? Promise.resolve(bytesOf(source.bytes))
       : env.fetchBytes(source.url, abort.signal);
-  const chartBytes = attempt(() => {
+  const source = attempt((): ChartSource | Promise<ChartSource> => {
     if (options.chart !== undefined) {
-      return load(options.chart);
+      return options.chart;
     }
     if (adapter.chart === undefined) {
       throw new Error("no chart: pass options.chart or an adapter with chart()");
     }
-    return adapter.chart(abort.signal).then(load);
+    return adapter.chart(abort.signal);
   });
+  const given = options.chart;
+  // A chart in the options is fetched at once, with the rest.
+  const fetchChart = (): Promise<Uint8Array> =>
+    given === undefined ? source.then(load) : attempt(() => load(given));
+  let chartBytes = fetchChart();
   const state = attempt(() => adapter.connect(ctx));
   const atlas = attempt(() => env.atlas(options.assets));
   // Each is awaited or handed over below; none is an unhandled rejection meanwhile.
-  for (const promise of [wasm, chartBytes, state, atlas]) {
+  for (const promise of [wasm, source, chartBytes, state, atlas]) {
     promise.catch(() => undefined);
   }
+  /** With the built-in error state, a chart that cannot be fetched is offered again (05 §9). */
+  const retries = options.ui?.loading !== false;
   // A failed chart or connect ends the start at once, whatever is still loading.
   const failed = new Promise<never>((_, reject) => {
-    fatal(chartBytes, "chart_fetch_failed").catch(reject);
+    fatal<unknown>(retries ? source : chartBytes, "chart_fetch_failed").catch(reject);
     fatal(state, "state_connect_failed").catch(reject);
   });
   failed.catch(() => undefined);
@@ -671,7 +865,50 @@ export async function createMap(
   let mounted: ReturnType<Env["mount"]> | undefined;
   try {
     mounted = env.mount(element);
-    const canvas = mounted.canvas;
+    const { canvas, root } = mounted;
+    if (typeof options.reducedMotion === "boolean") {
+      root.setAttribute("data-m", options.reducedMotion ? "reduce" : "full");
+    }
+    const uiHost: UiHost = {
+      t,
+      prices: book,
+      options: options.ui ?? {},
+      size: () => mounted?.size() ?? [0, 0],
+      zoom: (how) =>
+        how === "fit" ? fly(undefined, undefined, false, true) : zoomBy(how === "in" ? 2 : 0.5),
+      describe: find,
+      color: (key) => mapCategories().find((c) => c.key === key)?.color,
+      chooseTicketType,
+      failed: (error) =>
+        report(
+          new CaveaError("callback_failed", `ui.tooltip threw: ${String(error)}`, false, error),
+        ),
+    };
+    const shell = createUi(root, canvas, uiHost);
+    ui = shell;
+    rebuild = () => {
+      book = priceBook();
+      uiHost.t = t;
+      uiHost.prices = book;
+      chooseDefaults(
+        [...selected.values()].map((o) => ({ label: o.label, category: o.category.key })),
+      );
+      selected = new Map([...selected].map(([label, o]) => [label, priced(o)]));
+      ui?.refresh();
+      localise();
+    };
+    localise();
+    unwatch.push(
+      env.darkScheme((on) => {
+        dark = on;
+        if (auto) {
+          setScheme(on ? "dark" : "light");
+        } else {
+          pushTheme();
+        }
+      }),
+      mounted.watch(pushTheme),
+    );
     const makeView = await step(fatal(wasm, "wasm_unavailable"));
     mark("wasm_ready");
     const v = await fatal(
@@ -691,6 +928,7 @@ export async function createMap(
       onFrame: (_time, ms) => {
         if (chart !== undefined && marks["first_frame"] === undefined) {
           mark("first_frame");
+          ui?.loading(false);
         }
         // The first frame drawn with the first state applied.
         if (marks["state_ready"] !== undefined && marks["interactive"] === undefined) {
@@ -717,8 +955,23 @@ export async function createMap(
     }
     host = env.attach(v, canvas, attachOptions);
     applyTheme(options.theme ?? "auto");
+    localise();
 
-    const bytes = await step(fatal(chartBytes, "chart_fetch_failed"));
+    let bytes: Uint8Array | undefined;
+    while (bytes === undefined) {
+      try {
+        bytes = await step(fatal(chartBytes, "chart_fetch_failed"));
+      } catch (error) {
+        if (!retries || !(error instanceof CaveaError) || error.code !== "chart_fetch_failed") {
+          throw error;
+        }
+        // The source is known (`failed` rejects otherwise): show the error and fetch again on retry.
+        report(new CaveaError("chart_fetch_failed", error.message, false, error.cause));
+        await step(shell.failed());
+        shell.loading(true);
+        chartBytes = fetchChart();
+      }
+    }
     mark("chart_fetched");
     try {
       v.loadChart(bytes);
@@ -777,6 +1030,35 @@ export async function createMap(
         report(new CaveaError("invalid_input", `invalid theme: ${String(theme)}`));
       }
     },
+    refreshTheme() {
+      if (live() !== undefined) {
+        pushTheme();
+      }
+    },
+    setPricing(next) {
+      if (live() === undefined) {
+        return;
+      }
+      if (Array.isArray(next)) {
+        pricing = checkPricing(next, warn);
+        rebuild?.();
+      } else {
+        report(new CaveaError("invalid_input", `invalid pricing: ${String(next)}`));
+      }
+    },
+    setLocale(next) {
+      if (live() === undefined) {
+        return;
+      }
+      if (isLocale(next)) {
+        locale = next;
+        localeGiven = true;
+        t = translator(locale, options.messages);
+        rebuild?.();
+      } else {
+        report(new CaveaError("invalid_input", `invalid locale: ${String(next)}`));
+      }
+    },
     zoomTo(target, { animate = true } = {}) {
       if (live() === undefined) {
         return;
@@ -793,18 +1075,7 @@ export async function createMap(
     },
     zoomIn: () => zoomBy(2),
     zoomOut: () => zoomBy(0.5),
-    findObject(label) {
-      const info = live() && details(label);
-      if (info === undefined) {
-        return null;
-      }
-      const status: ObjectStatus = selected.has(label)
-        ? "selected"
-        : info.status === 0
-          ? "available"
-          : "unavailable";
-      return { ...toSeat(info), status };
-    },
+    findObject: (label) => (live() === undefined ? null : find(label)),
     listSections() {
       const open = live()?.sectionsOpen();
       if (open === undefined) {
@@ -817,13 +1088,7 @@ export async function createMap(
         available: open[i] ?? 0,
       }));
     },
-    listCategories: () =>
-      (live() &&
-        chart?.categories.map((c) => ({
-          ...c,
-          color: `#${c.color.map((v) => v.toString(16).padStart(2, "0")).join("")}`,
-        }))) ??
-      [],
+    listCategories: () => (live() === undefined ? [] : mapCategories()),
     resync() {
       if (live() === undefined) {
         return;
@@ -840,6 +1105,16 @@ export async function createMap(
       }
     },
   };
+  /** The buyer chose a ticket type for a selected object, in the tooltip. */
+  function chooseTicketType(label: string, key: string): void {
+    const object = selected.get(label);
+    if (object !== undefined && book.types(object.category.key).some((type) => type.key === key)) {
+      chosen.set(label, key);
+      selected.set(label, priced(object));
+      call("onSelectionChange", selection());
+      ui?.selected(null);
+    }
+  }
   function zoomBy(factor: number): void {
     const size = mounted?.size();
     if (live() === undefined || camera === undefined || size === undefined) {

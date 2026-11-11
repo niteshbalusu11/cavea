@@ -438,9 +438,13 @@ pub enum Event {
     Resync {
         seq: Option<u64>,
     },
+    /// The camera moved, the level of detail changed, or the zoom limits
+    /// changed (a resize): `range` is the lowest and highest zoom (04 §13),
+    /// for zoom controls that disable at the limits.
     CameraChanged {
         centre: [f32; 2],
         zoom: f32,
+        range: [f32; 2],
         lod: Lod,
     },
     Announce {

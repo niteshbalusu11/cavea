@@ -211,8 +211,9 @@ pub struct Engine<B: GpuBackend> {
     /// The latest `Resize`, applied at the next `Tick`.
     resize: Option<[f32; 4]>,
     camera: Option<Camera>,
-    /// The camera last reported with `CameraChanged`.
+    /// The camera and zoom limits last reported with `CameraChanged`.
     reported: Option<Camera>,
+    reported_range: Option<[f32; 2]>,
     /// The level of detail (04 §10), kept for its hysteresis.
     lod: Option<Lod>,
     scene: Option<Loaded>,
@@ -275,6 +276,7 @@ impl<B: GpuBackend> Engine<B> {
             resize: None,
             camera: None,
             reported: None,
+            reported_range: None,
             lod: None,
             scene: None,
             theme: Theme::builtin(BuiltinTheme::Light),
@@ -838,16 +840,22 @@ impl<B: GpuBackend> Engine<B> {
                 self.rehover();
             }
         }
-        if moved || lod_changed {
+        // The limits follow the viewport: a resize can change them alone.
+        let range = self
+            .stage()
+            .map(|s| [s.limits.min_zoom as f32, s.limits.max_zoom as f32]);
+        if moved || lod_changed || range != self.reported_range {
             self.reported = self.camera;
-            if let (Some(camera), Some(lod)) = (self.camera, lod) {
+            self.reported_range = range;
+            if let (Some(camera), Some(lod), Some(range)) = (self.camera, lod, range) {
                 self.events.push(Event::CameraChanged {
                     centre: camera.centre.map(|v| v as f32),
                     zoom: camera.zoom as f32,
+                    range,
                     lod,
                 });
             }
-            self.dirty = true;
+            self.dirty |= moved || lod_changed;
         }
         if !self.animations.is_empty() || self.recogniser.wants_tick() {
             self.want_frame();

@@ -31,7 +31,10 @@ export type {
   Theme,
   ThemeName,
 } from "./options.ts";
+export type { Message, MessageId, Messages } from "./messages.ts";
+export type { CategoryPricing, FormatPrice, PriceContext, TicketTypePrice } from "./pricing.ts";
 export type { ObjectStatus, SeatMap } from "./seatmap.ts";
+export type { TooltipObject, TooltipRenderer, UiOptions } from "./ui.ts";
 
 /**
  * Draws a seat map in `element` (in a shadow root, filling the element) and

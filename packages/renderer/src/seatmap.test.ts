@@ -9,186 +9,9 @@ import {
   type StateAdapter,
 } from "./adapter.ts";
 import { CaveaError, warner } from "./errors.ts";
-import type { ObjectInfo, RendererEvent } from "./events.ts";
-import type { AttachOptions } from "./host.ts";
+import { deferred, fakeEnv, flush, loaded, seat, sleep } from "./fakes.ts";
 import { validateOptions, type Metrics, type SeatMapOptions } from "./options.ts";
-import { createMap, type Env } from "./seatmap.ts";
-import type { EngineView } from "./view.ts";
-
-type Call = [string, ...unknown[]];
-
-function deferred<T>(): { promise: Promise<T>; resolve(v: T): void; reject(e: unknown): void } {
-  let resolve!: (v: T) => void;
-  let reject!: (e: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
-/** Lets every pending promise reaction run. */
-const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
-const READY: RendererEvent = {
-  type: "ready",
-  name: "Hall",
-  floors: [{ name: "Ground", level: 0, seats: 3 }],
-  sections: [{ label: "A", floor: 0, seats: 3 }],
-  categories: [{ key: "vip", label: "VIP", color: [1, 2, 3, 255], objects: 3 }],
-  objects: 3,
-  seats: 3,
-};
-const seat = (label: string, flags = 0): ObjectInfo => ({
-  label,
-  category: "vip",
-  section: "A",
-  row: "1",
-  seat: label.slice(-1),
-  flags,
-});
-
-/** A recording fake of the view: every call is logged, a few answer as the engine does. */
-function fakeView() {
-  const calls: Call[] = [];
-  const queue: RendererEvent[] = [];
-  const answers: Record<string, (...args: never[]) => unknown> = {
-    loadChart: () => queue.push(READY),
-    setSnapshotLabels: (_seq: number, labels: string[]) => labels.filter((l) => l.startsWith("X")),
-    select: (labels: string[]) => {
-      if (labels.includes("nope")) {
-        throw new Error("InvalidInput: 1 unknown objects");
-      }
-    },
-    sectionsOpen: () => Uint32Array.of(2),
-    object: (label: string) =>
-      label.startsWith("A-") ? JSON.stringify({ ...seat(label), status: 1 }) : undefined,
-    takeEvents: () => {
-      const events = queue.splice(0);
-      return events.length === 0 ? undefined : JSON.stringify(events);
-    },
-  };
-  const engine = new Proxy({} as EngineView, {
-    // Not a thenable: `then` stays undefined.
-    get: (_, name: string) =>
-      name === "then" || name === "needFrame"
-        ? undefined
-        : (...args: never[]) => {
-            if (name !== "takeEvents" && name !== "object") {
-              calls.push([
-                name,
-                ...args.map((a: unknown) => (a instanceof Float32Array ? [...a] : a)),
-              ]);
-            }
-            return answers[name]?.(...args) ?? (name.endsWith("Labels") ? [] : undefined);
-          },
-  });
-  return {
-    engine,
-    answers,
-    calls,
-    emit: (...events: RendererEvent[]) => queue.push(...events),
-    names: () => calls.map((c) => c[0]),
-  };
-}
-
-/** A platform whose fetches the test settles. */
-function fakeEnv() {
-  const view = fakeView();
-  const wasm = deferred<(canvas: HTMLCanvasElement) => EngineView>();
-  const chart = deferred<Uint8Array>();
-  const atlas = deferred<Uint8Array>();
-  const started: string[] = [];
-  const state = {
-    removed: false,
-    detached: false,
-    schemeListeners: 0,
-    makeView: (): EngineView => view.engine,
-  };
-  let attached: AttachOptions | undefined;
-  let dark: ((dark: boolean) => void) | undefined;
-  const env: Env = {
-    wasm: () => {
-      started.push("wasm");
-      return wasm.promise;
-    },
-    fetchBytes: () => {
-      started.push("chart");
-      return chart.promise;
-    },
-    atlas: () => {
-      started.push("atlas");
-      return atlas.promise;
-    },
-    mount: () => ({
-      canvas: {} as HTMLCanvasElement,
-      size: () => [800, 600],
-      remove: () => {
-        state.removed = true;
-      },
-    }),
-    attach: (v, _canvas, options) => {
-      attached = options;
-      const update = (): void => {
-        const json = v.takeEvents();
-        if (json !== undefined) {
-          options.onEvents?.(JSON.parse(json) as RendererEvent[]);
-        }
-      };
-      return {
-        update,
-        setGestureHandling() {},
-        detach: () => {
-          state.detached = true;
-        },
-      };
-    },
-    darkScheme(listener) {
-      state.schemeListeners += 1;
-      dark = listener;
-      listener(false);
-      return () => {
-        state.schemeListeners -= 1;
-        dark = undefined;
-      };
-    },
-    holdTimeoutMs: 30,
-    contextLostMs: 30,
-    metricsMs: 40,
-  };
-  return {
-    env,
-    view,
-    wasm,
-    chart,
-    atlas,
-    started,
-    state,
-    attached: () => attached,
-    setDark: (on: boolean) => dark?.(on),
-    /** Settles WASM and chart (the view comes from `state.makeView`). */
-    load(): void {
-      wasm.resolve(() => state.makeView());
-      chart.resolve(new Uint8Array([1]));
-    },
-  };
-}
-
-/** A map loaded with `adapter` and `options`, every fetch settled; `view.emit` then `drain` drives it. */
-async function loaded(options: SeatMapOptions = {}) {
-  const f = fakeEnv();
-  const promise = createMap(f.env, {} as HTMLElement, { chart: { url: "c.ccf" }, ...options });
-  f.load();
-  const map = await promise;
-  const drain = (...events: RendererEvent[]): void => {
-    f.view.emit(...events);
-    // Any method's `host.update()` drains; `select([])` is one the fake accepts.
-    map.select([]);
-  };
-  return { ...f, map, drain };
-}
-
+import { createMap } from "./seatmap.ts";
 const env = process.env as Record<string, string | undefined>;
 afterEach(() => {
   delete env["NODE_ENV"];
@@ -231,7 +54,7 @@ describe("options", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     const once = warner(true);
     const options = {
-      pricing: [],
+      worker: true,
       colour: "red",
       mode: "static",
       selection: { validators: {}, maxx: 1 },
@@ -239,7 +62,7 @@ describe("options", () => {
     validateOptions(options, once);
     validateOptions(options, once);
     expect(warn.mock.calls.map((c) => c[0])).toEqual([
-      '[cavea] option "pricing" is not supported yet and is ignored',
+      '[cavea] option "worker" is not supported yet and is ignored',
       '[cavea] unknown option "colour" is ignored',
       '[cavea] mode "static" is not supported yet; the map runs in picker mode',
       '[cavea] option "selection.validators" is not supported yet and is ignored',
@@ -256,7 +79,7 @@ describe("options", () => {
     ] as const) {
       env["NODE_ENV"] = mode;
       warn.mockClear();
-      const { map } = await loaded({ ui: {} } as SeatMapOptions);
+      const { map } = await loaded({ worker: true } as SeatMapOptions);
       expect(warn).toHaveBeenCalledTimes(count);
       map.destroy();
     }
@@ -324,7 +147,7 @@ describe("load sequence", () => {
     expect(
       f.view
         .names()
-        .filter((n) => n !== "setRules" && n !== "setManualSession" && n !== "setTheme"),
+        .filter((n) => !["setRules", "setManualSession", "setTheme", "setMessage"].includes(n)),
     ).toEqual(["loadChart", "applyFrame", "applyDeltaLabels", "setPrivateLabels"]);
   });
 
@@ -375,6 +198,8 @@ describe("load sequence", () => {
       const promise = createMap(f.env, {} as HTMLElement, {
         chart: { url: "c.ccf" },
         state: adapter,
+        // Without the built-in error state, a chart that fails rejects (05 §9).
+        ui: { loading: false },
       });
       fail(f);
       await expect(promise).rejects.toMatchObject({
@@ -548,7 +373,7 @@ describe("callbacks", () => {
       { type: "objectHover", object: null, at: null },
       { type: "objectUnavailable", label: "A-1-2" },
       { type: "holdLost", labels: ["A-1-2"] },
-      { type: "cameraChanged", centre: [1, 2], zoom: 0.5, lod: "seats" },
+      { type: "cameraChanged", centre: [1, 2], zoom: 0.5, range: [0.1, 10], lod: "seats" },
       { type: "resync", seq: 4 },
       { type: "error", code: "glyphAtlas", message: "404" },
     );
@@ -762,12 +587,12 @@ describe("methods", () => {
     map.zoomTo("A", { animate: false });
     map.zoomTo("A-1-2");
     map.zoomTo({ x: 1, y: 2, width: 3, height: 4 });
-    drain({ type: "cameraChanged", centre: [100, 50], zoom: 2, lod: "seats" });
+    drain({ type: "cameraChanged", centre: [100, 50], zoom: 2, range: [0.1, 10], lod: "seats" });
     map.zoomIn();
     setDark(true);
     map.setTheme({ base: "dark", tokens: { bg: "#000", dim: 0.5 } });
     setDark(false);
-    expect(state.schemeListeners).toBe(0);
+    expect(state.schemeListeners).toBe(1);
     map.setTheme("sepia" as "dark");
     map.resync();
     expect(view.calls.filter((c) => c[0] !== "select" || (c[1] as string[]).length > 0)).toEqual([
@@ -823,10 +648,10 @@ describe("methods", () => {
     expect(map.findObject("A-1-1")).toBeNull();
     expect(map.listSections()).toEqual([]);
     expect(view.calls.length).toBe(before);
-    (map as unknown as { setPricing(): void }).setPricing();
+    (map as unknown as { setFilter(): void }).setFilter();
     expect(warn.mock.calls.map((c) => c[0])).toEqual([
       "[cavea] the map was destroyed: the call is ignored",
-      "[cavea] setPricing() is not supported yet",
+      "[cavea] setFilter() is not supported yet",
     ]);
     warn.mockRestore();
   });

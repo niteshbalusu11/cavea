@@ -100,12 +100,19 @@ fn write_event(event: &Event, out: &mut String) -> bool {
             field(out, "seq");
             optional(out, *seq);
         }
-        Event::CameraChanged { centre, zoom, lod } => {
+        Event::CameraChanged {
+            centre,
+            zoom,
+            range,
+            lod,
+        } => {
             kind(out, "cameraChanged");
             field(out, "centre");
             point(out, *centre);
             field(out, "zoom");
             number(out, *zoom);
+            field(out, "range");
+            point(out, *range);
             field(out, "lod");
             string(
                 out,

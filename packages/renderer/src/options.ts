@@ -4,6 +4,9 @@
 import type { ChartSource, StateAdapter } from "./adapter.ts";
 import { CaveaError } from "./errors.ts";
 import type { GestureHandling } from "./host.ts";
+import { isMessage, MESSAGES, type Messages } from "./messages.ts";
+import type { CategoryPricing, FormatPrice } from "./pricing.ts";
+import type { UiOptions } from "./ui.ts";
 
 export type ThemeName = "light" | "dark" | "high-contrast";
 /** A built-in theme, `auto` (light or dark, following the system), or tokens over one (05 §8). */
@@ -32,7 +35,11 @@ export interface SeatObject {
   /** Floor name. */
   floor: string;
   category: { key: string; label: string };
+  /** The ticket type chosen in the tooltip, for a selected object whose category has types (default the first). */
+  ticketType?: string;
   flags: { accessible: boolean; companion: boolean; restrictedView: boolean; aisle: boolean };
+  /** From `pricing`, in minor units: the ticket type's price, else the category's. */
+  price?: number;
 }
 
 export interface Selection {
@@ -56,6 +63,12 @@ export interface SeatMapOptions {
   chart?: ChartSource;
   /** Default `staticState()`: everything available, no holds. */
   state?: StateAdapter;
+  /** Prices for display, in minor units (05 §3.1). */
+  pricing?: CategoryPricing[];
+  /** Default: `Intl.NumberFormat` for `locale`, in `currency` if given. */
+  formatPrice?: FormatPrice;
+  /** ISO 4217 code for the default price format, such as `"GBP"`; its minor unit divides prices. */
+  currency?: string;
   selection?: {
     /** 1 to 100; default 10. */
     max?: number;
@@ -74,6 +87,14 @@ export interface SeatMapOptions {
   reducedMotion?: "auto" | boolean;
   /** Default `auto`. */
   theme?: Theme;
+  /** The built-in interface; each element is on unless `false` (05 §3.4, §7). */
+  ui?: UiOptions;
+  /** BCP 47 tag for messages, numbers and prices; default the browser's language. */
+  locale?: string;
+  /** Overrides of the English message catalogue, by id (05 §3.4). */
+  messages?: Messages;
+  /** The interface's direction; `auto` (default): `locale`'s if given, else the page's. */
+  dir?: "ltr" | "rtl" | "auto";
   assets?: {
     /** Where `cavea_web_bg.wasm` and `glyphs.png` are served; default next to this package. */
     baseUrl?: string | URL;
@@ -127,10 +148,11 @@ export interface Metrics {
 /** Options of 05 §3 and callbacks of §5 not built yet: ignored, with a development warning. */
 const LATER = new Set(
   (
-    "pricing formatPrice floor spotlight zoomToSelect sectionDrillDown ui colorblind locale " +
-    "messages dir fallback worker onSectionEnter onFloorChange"
+    "floor spotlight zoomToSelect sectionDrillDown colorblind fallback worker onSectionEnter " +
+    "onFloorChange"
   ).split(" "),
 );
+const UI_LATER = new Set("floorSelector filters holdTimer listViewToggle".split(" "));
 const SELECTION_LATER = new Set("groupSize validators categories selectable restore".split(" "));
 const CALLBACKS =
   "onReady onSelectionChange onObjectSelect onObjectDeselect onSelectionInvalid onSelectionValid " +
@@ -152,6 +174,19 @@ export const isBounds = (v: unknown): v is Bounds =>
   (v["height"] as number) > 0 &&
   finite(v["width"]) &&
   finite(v["height"]);
+/** Whether `Intl` takes `v` as a locale (and `currency` as a currency). */
+export const isLocale = (v: unknown, currency?: unknown): boolean => {
+  if (typeof v !== "string" || (currency !== undefined && typeof currency !== "string")) {
+    return false;
+  }
+  try {
+    const options: Intl.NumberFormatOptions =
+      currency === undefined ? {} : { style: "currency", currency };
+    return new Intl.NumberFormat(v, options).resolvedOptions().locale !== "";
+  } catch {
+    return false;
+  }
+};
 const THEMES = ["light", "dark", "high-contrast", "auto"];
 export const isTheme = (v: unknown): v is Theme =>
   THEMES.includes(v as string) ||
@@ -176,6 +211,12 @@ const CHECKS: Record<string, (v: unknown) => boolean> = {
   maxDpr: (v) => finite(v) && (v as number) > 0,
   reducedMotion: (v) => v === "auto" || typeof v === "boolean",
   theme: isTheme,
+  pricing: Array.isArray,
+  currency: (v) => isLocale("en", v),
+  locale: (v) => isLocale(v),
+  messages: (v) => isObject(v) && Object.values(v).every((m) => m === undefined || isMessage(m)),
+  dir: (v) => ["ltr", "rtl", "auto"].includes(v as string),
+  ui: isObject,
   assets: (v) =>
     isObject(v) &&
     (v["baseUrl"] === undefined || isUrl(v["baseUrl"])) &&
@@ -185,7 +226,7 @@ const CHECKS: Record<string, (v: unknown) => boolean> = {
       v["wasm"] instanceof Response ||
       v["wasm"] instanceof WebAssembly.Module),
 };
-for (const name of CALLBACKS.split(" ")) {
+for (const name of `${CALLBACKS} formatPrice`.split(" ")) {
   CHECKS[name] = (v) => typeof v === "function";
 }
 
@@ -224,6 +265,32 @@ export function validateOptions(options: unknown, warn: (message: string) => voi
       );
     } else if (!check(value)) {
       throw invalid(key, value);
+    }
+  }
+  const ui = options["ui"];
+  if (isObject(ui)) {
+    for (const [key, value] of Object.entries(ui)) {
+      if (
+        UI_LATER.has(key) ||
+        !["zoomControls", "legend", "tooltip", "toasts", "loading"].includes(key)
+      ) {
+        warn(
+          UI_LATER.has(key)
+            ? `option "ui.${key}" is not supported yet and is ignored`
+            : `unknown option "ui.${key}" is ignored`,
+        );
+      } else if (
+        value !== undefined &&
+        typeof value !== "boolean" &&
+        !(key === "tooltip" && typeof value === "function")
+      ) {
+        throw invalid(`ui.${key}`, value);
+      }
+    }
+  }
+  for (const id of Object.keys(isObject(options["messages"]) ? options["messages"] : {})) {
+    if (!Object.keys(MESSAGES).includes(id)) {
+      warn(`unknown message "${id}" is ignored`);
     }
   }
   if (options["mode"] !== undefined && options["mode"] !== "picker") {

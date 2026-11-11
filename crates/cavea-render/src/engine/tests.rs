@@ -410,6 +410,37 @@ fn zoom_and_centre_stay_within_limits() {
     }
 }
 
+/// The last `CameraChanged` of `events`: its zoom and range.
+fn reported_range(events: &[Event]) -> Option<(f32, [f32; 2])> {
+    events.iter().rev().find_map(|event| match event {
+        Event::CameraChanged { zoom, range, .. } => Some((*zoom, *range)),
+        _ => None,
+    })
+}
+
+#[test]
+fn camera_changes_report_the_zoom_range_and_a_resize_reports_new_limits() {
+    // A chart 1,000 units across in 800 × 600: fit is (600 − 48) / 1000.
+    let mut e = engine();
+    set_camera(&mut e, [0.0, 0.0, 1e-3, 1e-3]);
+    let Some((zoom, [lo, hi])) = reported_range(&tick(&mut e, 1.0)) else {
+        panic!("no CameraChanged");
+    };
+    assert_eq!(
+        zoom, hi,
+        "zoomed in past the limit, the camera is at the top"
+    );
+    assert_eq!(hi, 64.0);
+    assert!((f64::from(lo) - 0.8 * 552.0 / 1000.0).abs() < 1e-6);
+    // A narrower view lowers the fit, and with it the minimum.
+    resize(&mut e, 400.0, 600.0, 1.0, 3.0);
+    let Some((_, [narrow, _])) = reported_range(&tick(&mut e, 2.0)) else {
+        panic!("a resize that changes the limits is reported");
+    };
+    assert!((f64::from(narrow) - 0.8 * 352.0 / 1000.0).abs() < 1e-6);
+    assert_eq!(reported_range(&tick(&mut e, 3.0)), None, "nothing changed");
+}
+
 #[test]
 fn wheel_zoom_keeps_the_point_under_the_cursor() {
     let mut rng = Rng(7);

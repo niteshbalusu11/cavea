@@ -27,6 +27,15 @@
 // as many every `ms` ms; `snipe=1` also takes a selected seat the buyer does
 // not hold yet, so it is knocked out.
 //
+// Built-in interface (05 §7): `prices=1` gives the chart's first category two
+// ticket types and the others one price each, through `setPricing` once the
+// categories are known (`currency`, default GBP; `locale`); `tooltip=host`
+// renders the tooltip from the page; `hide=zoomControls,legend,tooltip,
+// toasts,loading` turns elements off; `messages=fr` overrides some strings;
+// `dir=rtl` makes the page right to left; `brand=1` sets theme tokens as
+// custom properties on the container (`caveaDemo.brand(on)` toggles them
+// live); `width=px` narrows the container; `quiet=1` hides the readouts.
+//
 // Real server instead of the fake host: `server=<baseUrl>&key=<pk_…>&event=<key>`,
 // with `transport=auto|ws|sse|poll` and `session=start|manual|none` (05 §4);
 // the chart is the event's. Needs no `--demo` build.
@@ -104,6 +113,40 @@ const crowdMs = num("crowd", 0);
 const crowdSize = num("crowdSize", 20);
 const snipe = params.get("snipe") === "1";
 const server = params.get("server");
+const hide = new Set(params.get("hide")?.split(",") ?? []);
+const currency = params.get("currency") ?? "GBP";
+const locale = params.get("locale");
+const brand = (on: boolean): void => {
+  const tokens: Record<string, string> = {
+    "--cavea-bg": "#fff8f0",
+    "--cavea-fg": "#2b1a12",
+    "--cavea-fg-muted": "#6b4a3a",
+    "--cavea-ring-focus": "#c2410c",
+    "--cavea-seat-selected-fill": "#7c2d12",
+    "--cavea-radius": "2px",
+    "--cavea-font": "Georgia, serif",
+  };
+  for (const [name, value] of Object.entries(tokens)) {
+    if (on) {
+      container.style.setProperty(name, value);
+    } else {
+      container.style.removeProperty(name);
+    }
+  }
+};
+if (params.get("brand") === "1") {
+  brand(true);
+}
+if (params.get("dir") === "rtl") {
+  document.documentElement.dir = "rtl";
+}
+if (params.has("width")) {
+  container.style.cssText = `position:relative;width:${num("width", 320)}px;height:90vh;margin:0 auto`;
+}
+if (params.get("quiet") === "1") {
+  status.hidden = true;
+  selectionLine.hidden = true;
+}
 const meter = params.get("meter") === "1" ? document.createElement("pre") : undefined;
 if (meter !== undefined) {
   meter.id = "meter";
@@ -286,6 +329,42 @@ const options: SeatMapOptions = {
   selection: { max, min },
   theme,
   gestureHandling: gestures,
+  currency,
+  ...(locale === null ? {} : { locale }),
+  ui: {
+    zoomControls: !hide.has("zoomControls"),
+    legend: !hide.has("legend"),
+    toasts: !hide.has("toasts"),
+    loading: !hide.has("loading"),
+    tooltip: hide.has("tooltip")
+      ? false
+      : params.get("tooltip") === "host"
+        ? (object) => {
+            // The page's own element: its styles are the page's, not the map's.
+            const card = document.createElement("div");
+            card.style.cssText =
+              "font:600 13px system-ui;color:#0b3d2e;background:#d1fae5;padding:6px 8px";
+            card.textContent = `${object.label} · ${object.category.label}${object.price === undefined ? "" : ` · ${(object.price / 100).toFixed(2)}`}`;
+            return card;
+          }
+        : true,
+  },
+  ...(params.get("messages") === "fr"
+    ? {
+        messages: {
+          zoomIn: "Zoomer",
+          zoomOut: "Dézoomer",
+          zoomFit: "Voir tout le plan",
+          legend: "Légende",
+          available: "Disponible",
+          selected: "Sélectionné",
+          unavailable: "Indisponible",
+          max: { one: "Un seul siège possible.", other: "{count} sièges au maximum." },
+          taken: "{seat} vient d’être pris.",
+          soldOut: "Complet",
+        },
+      }
+    : {}),
   onReady(info) {
     log("ready")(info);
     report(`ready: ${info.chart.seats} seats; marks ${JSON.stringify(info.marks)}`);
@@ -391,6 +470,21 @@ try {
     options.chart = { url: chartUrl };
   }
   map = await createSeatMap(container, options);
+  if (params.get("prices") === "1") {
+    map.setPricing(
+      map.listCategories().map((c, i) =>
+        i === 0
+          ? {
+              category: c.key,
+              ticketTypes: [
+                { key: "adult", label: "Adult", price: 9500 },
+                { key: "child", label: "Child", price: 6000 },
+              ],
+            }
+          : { category: c.key, price: 7500 - 1500 * i },
+      ),
+    );
+  }
   // A timer for the readout only; the map's frame loop stays idle.
   setInterval(showText, 500);
   Object.assign(window, {
@@ -400,6 +494,7 @@ try {
       events,
       second,
       crowd,
+      brand,
       textStats: () => [...(textStats?.() ?? [])],
       resnapshot: () => ctx?.applySnapshot(snapshot()),
       take(label: string) {
