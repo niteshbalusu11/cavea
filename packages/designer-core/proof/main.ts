@@ -73,6 +73,8 @@ new ResizeObserver(() => setView({ ...view, ...size() })).observe(element);
 const proof = {
   ready: false,
   draws: 0,
+  /** Milliseconds of each `canvas.draw()` call, the last 240. */
+  drawMs: [] as number[],
   get view() {
     return view;
   },
@@ -87,7 +89,10 @@ stats.id = "stats";
 function frame(time: number) {
   const changed = session.changed();
   if (changed.length > 0 || wanted) {
+    const t0 = performance.now();
     wanted = canvas.draw(time);
+    proof.drawMs.push(performance.now() - t0);
+    proof.drawMs.splice(0, proof.drawMs.length - 240);
     proof.draws += 1;
     const s = canvas.stats();
     stats.textContent = `${s.level ?? "-"} · ${s.drawCalls} draws · ${s.seatsDrawn} seats · ${s.compiled} compiled`;
@@ -128,7 +133,9 @@ const pointer = (kind: "pointerDown" | "pointerMove" | "pointerUp") => (e: Point
       screen,
       zoom: view.zoom,
       button: buttons[e.button] ?? "primary",
-      kind: (e.pointerType === "touch" || e.pointerType === "pen" ? e.pointerType : "mouse") as PointerKind,
+      kind: (e.pointerType === "touch" || e.pointerType === "pen"
+        ? e.pointerType
+        : "mouse") as PointerKind,
       mods: mods(e),
       time: e.timeStamp,
     },
@@ -159,7 +166,8 @@ const KEYS: Record<string, Key> = {
   Delete: "delete",
 };
 const key = (kind: "keyDown" | "keyUp") => (e: KeyboardEvent) => {
-  const k: Key | undefined = KEYS[e.key] ?? (e.key.length === 1 ? { char: e.key.toLowerCase() } : undefined);
+  const k: Key | undefined =
+    KEYS[e.key] ?? (e.key.length === 1 ? { char: e.key.toLowerCase() } : undefined);
   if (k !== undefined) {
     e.preventDefault();
     send({ kind, data: [k, mods(e)] });

@@ -102,10 +102,7 @@ export function zoomAbout(
   return {
     ...view,
     zoom,
-    centre: [
-      view.centre[0] + before[0] - after[0],
-      view.centre[1] + before[1] - after[1],
-    ],
+    centre: [view.centre[0] + before[0] - after[0], view.centre[1] + before[1] - after[1]],
   };
 }
 
