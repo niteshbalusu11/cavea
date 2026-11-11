@@ -8,11 +8,13 @@ How this repository gets built: one orchestrator thread hands slices of `docs/TO
 
 | Role | Model | Does | Does not |
 |---|---|---|---|
-| **Orchestrator** | Claude Fable 5.2, high effort | Chooses slices, writes briefs, starts builders, checks results, keeps `docs/TODO.md` honest, reports at milestone boundaries | Write product code, review code, merge a builder's pull request for it |
-| **Builder** | Claude Opus 5.5, high effort, "Claude Work" provider | Implements one slice in its own worktree and ships it with the `full-send` skill | Start other builders; approve its own work |
+| **Orchestrator** | Claude Fable 5.2, high effort | Chooses slices, writes briefs, starts builders, runs the merge gate and merges, keeps `docs/TODO.md` honest, reports at milestone boundaries | Write product code, review code, merge anything that has not passed the gate |
+| **Builder** | Claude Opus 5.5, high effort, "Claude Work" provider | Implements one slice in its own worktree and takes it to a reviewed, proven, open pull request | Start other builders; approve its own work; wait on CI or merge |
 | **Reviewer** | GPT-6.1 Sol, high reasoning effort | Reviews a builder's commits through the `sol-loop` skill, started by the builder | Edit code |
 
-The orchestrator only orchestrates. If something needs a code change, however small, it goes to a builder. The orchestrator may commit documentation-only changes (ticking the task list, correcting a spec, this file) through a pull request of its own.
+The orchestrator only orchestrates. If something needs a code change, however small, it goes to a builder.
+
+**Why the orchestrator merges.** A delegated builder is not allowed to watch or poll a pull request, so it cannot wait for CI. The scaffold builder proved this: it stopped with its pull request filed, approved by Sol and unmerged. Builders therefore finish at "pull request open, proof gathered, Sol approved", and the orchestrator, which can watch pull requests, runs the merge gate (§7). The orchestrator may commit documentation-only changes (ticking the task list, correcting a spec, this file) through a pull request of its own.
 
 ## 2. Goal and stopping point
 
@@ -46,7 +48,7 @@ Follow each task's returned `next`. Do not poll running builders; their completi
 A builder knows nothing except its brief and the repository. Every brief must contain:
 
 1. **Where and what:** the repository, that it works in its own worktree on a branch, and the exact task ids.
-2. **Authority:** "Full send" — it must load and follow the `full-send` skill to a squash-merged pull request, and it is allowed to start `sol-loop` review delegates using GPT-6.1 Sol (`gpt-6.1-sol`, codex provider) at high reasoning effort, and no other subagents.
+2. **Authority:** "Full stop" — it must load and follow the `full-stop` skill (the `full-send` workflow without the merge): build, prove locally, review with `sol-loop`, rebase, file the pull request. It must not wait for CI and must not merge. It is allowed to start `sol-loop` review delegates using GPT-6.1 Sol (`gpt-6.1-sol`, codex provider) at high reasoning effort, and no other subagents.
 3. **What to read first:** `AGENTS.md`, then the specific spec sections for its tasks.
 4. **Scope and boundaries:** which crates and directories it owns for this slice, which it must not touch, and any interface another in-flight builder depends on.
 5. **Definition of done:** the behaviour that must work, the proof to gather, and that it ticks its task ids in `docs/TODO.md` in the same pull request.
@@ -74,6 +76,17 @@ A sensible first wave once the scaffold is on `main`:
 
 Slice D in detail: a `flake.nix` dev shell that provides every tool the repository needs beyond a bare OS (the Rust toolchain exactly as pinned in `rust-toolchain.toml` including the `wasm32-unknown-unknown` target, `wasm-bindgen-cli` at the version matching `Cargo.lock`, `binaryen` for `wasm-opt`, `brotli`, `bun`, a PostgreSQL client, and anything else the scaffold installed by hand), plus an `.envrc` containing `use flake`, so that `cd` into the repository followed by `direnv allow` loads everything. Commit `flake.lock`; ignore `.direnv/`. Proof: in a fresh shell, `nix develop -c` runs every command in the `AGENTS.md` "Commands" section successfully. CI does not use Nix; it keeps its plain cached toolchain setup, and the flake must stay in agreement with it.
 
+### What the scaffold established
+
+Carry these into briefs where relevant:
+
+- `wasm-bindgen` and the `wasm-bindgen-cli-support` crate used by `xtask` are pinned to the same version. Bump both together.
+- Run `cargo xtask build-web` before `bun run typecheck`, `build` or `test`; the WASM output is gitignored.
+- Vite runs under the bun runtime; Node is not needed. `@cavea/renderer` ships TypeScript source directly.
+- CI is one workflow: a `rust` job (format, clippy, build, `check-deps`, `build-web`) that uploads the WASM as an artefact, then a `web` job. The Rust cache is saved only from `main`.
+- The machine's Nix-provided Rust has no `rust-lld`, and binaryen is not installed. Slice D's flake must provide both.
+- Still open from the scaffold: measure a cached CI run on `main` against the first run and record both durations.
+
 ## 6. Concurrency and the machine
 
 - **At most three builders at once.** The machine has 24 cores and about 18 GB of free memory, and each builder caps cargo at 8 jobs.
@@ -83,12 +96,20 @@ Slice D in detail: a `flake.nix` dev shell that provides every tool the reposito
 
 ## 7. When a builder finishes
 
-1. Read its final report.
-2. Verify, do not trust: the pull request is merged (`gh pr view`), the `main` workflow run is green, and the task ids are ticked in `docs/TODO.md` on `main`.
-3. If it merged: note any decision that later briefs must carry, then start the next slice.
-4. If it stopped without merging: read why. Then either re-brief a builder with the missing information, split the slice, or, if the blocker is a genuine question for the owner, ask (§9).
-5. If `main` is red after a merge: start a builder immediately with the single job of making `main` green, and start nothing else in the affected crates until it lands.
-6. If a builder's work contradicts a spec for a good reason, make sure the spec was updated in that pull request; if not, send a docs fix.
+1. Read its final report. Link the pull request to your thread and watch it with the harness's pull-request tools; do not poll or sleep.
+2. **Run the merge gate.** Merge (squash) only when all of these hold:
+   - Sol approved the commits that are on the pull request now.
+   - The builder's proof covers the change, including local test runs.
+   - Every CI check is green on the head commit.
+   - GitHub reports the pull request mergeable, with no conflicts against `main`.
+   - The diff stays inside the slice's scope, the task ids are ticked in `docs/TODO.md`, and no unjustified dependency was added.
+3. After merging, confirm GitHub reports it merged and that the `main` workflow run is green. Note any decision that later briefs must carry, then start the next slice.
+4. If the gate fails (CI red, conflict with `main`, scope creep, missing proof): do not fix it yourself. Start a new builder on the same branch with a brief that states exactly what failed and what to do, and that it must rebase onto current `main`, re-run its tests, and get Sol's approval again if behaviour changed.
+5. If a builder stopped without filing: read why. Then re-brief, split the slice, or, if the blocker is a genuine question for the owner, ask (§9).
+6. If `main` is red after a merge: start a builder immediately with the single job of making `main` green, and merge nothing else in the affected crates until it lands.
+7. If a builder's work contradicts a spec for a good reason, make sure the spec was updated in that pull request; if not, send a docs fix.
+
+Merge pull requests one at a time. After each merge, the next one in line must be rebased onto the new `main` and its checks must be green again before it merges; CI runs no tests, so two pull requests that each pass alone can still break each other. When the pull requests touch disjoint crates, a green rebase is enough. When they share code, have the second builder re-run the tests after rebasing.
 
 Never merge around the gate, never use administrator overrides, and never fix a builder's code yourself.
 
