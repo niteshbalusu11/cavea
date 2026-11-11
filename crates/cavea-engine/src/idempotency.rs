@@ -51,7 +51,10 @@ impl Window {
                 Lookup::Mismatch
             };
         }
-        self.evict(now);
+        // Retention counts back from the caller's store lookup, not from now:
+        // a record that lookup could not see stays however long the command
+        // waited in the mailbox.
+        self.evict(now, key.checked_at.min(now));
         if self.order.len() >= limits::IDEMPOTENCY_WINDOW {
             Lookup::Full
         } else {
@@ -65,13 +68,13 @@ impl Window {
         self.records.insert(record.key.clone(), record);
     }
 
-    /// Drop expired records, then the oldest ones past the minimum retention
-    /// while the window is full.
-    fn evict(&mut self, now: Timestamp) {
+    /// Drop expired records, then, while the window is full, the oldest ones
+    /// older than the minimum retention at `checked_at`.
+    fn evict(&mut self, now: Timestamp, checked_at: Timestamp) {
         while let Some((created, key)) = self.order.front() {
             let expired = age_at_least(*created, now, limits::IDEMPOTENCY_TTL_MS);
             let make_room = self.order.len() >= limits::IDEMPOTENCY_WINDOW
-                && age_at_least(*created, now, limits::IDEMPOTENCY_MIN_RETENTION_MS);
+                && age_at_least(*created, checked_at, limits::IDEMPOTENCY_MIN_RETENTION_MS);
             if !expired && !make_room {
                 break;
             }

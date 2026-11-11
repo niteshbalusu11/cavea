@@ -747,8 +747,12 @@ impl EventState {
         };
         let oids = self.oids(&idxs)?;
         let seq = self.next_seq();
-        for &idx in &idxs {
+        let mut logged = Vec::with_capacity(detail_of.len());
+        for (&idx, &oid) in idxs.iter().zip(&oids) {
             let detail = detail_of.get(&idx);
+            if let Some(d) = detail {
+                logged.push((oid, d.ticket_type.clone(), d.extra.clone()));
+            }
             let booking = Booking {
                 order_ref: order_ref.clone(),
                 ticket_type: detail.and_then(|d| d.ticket_type.clone()),
@@ -767,6 +771,7 @@ impl EventState {
         }
         self.log(LogRecord {
             order_ref: Some(order_ref.clone()),
+            details: logged,
             ..record(seq, Op::Book, actor, hold_id, oids)
         });
         Ok(Outcome::Booked { seq, objects: idxs })
@@ -933,6 +938,7 @@ fn record(
         expires_at: None,
         order_ref: None,
         status: None,
+        details: Vec::new(),
     }
 }
 

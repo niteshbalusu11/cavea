@@ -26,7 +26,7 @@ pub use chart::{ChartError, ChartView};
 pub use memory::{Fault, MemoryStore};
 pub use state::{EventState, HoldView, InvariantViolation, LoadError};
 pub use store::{
-    Batch, Booking, HoldRow, IdempotencyRecord, LoadedEvent, LogRecord, ObjectRow, SeatStore,
-    StoreError,
+    Batch, Booking, HoldRow, IdempotencyRecord, LoadedEvent, LogDetail, LogRecord, ObjectRow,
+    SeatStore, StoreError,
 };
 pub use types::*;

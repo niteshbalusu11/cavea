@@ -158,6 +158,8 @@ pub enum Authority {
 pub struct Idempotency {
     pub key: Arc<str>,
     pub fingerprint: [u8; 32],
+    /// When the caller looked the key up in the store and did not find it.
+    pub checked_at: Timestamp,
 }
 
 impl fmt::Debug for Idempotency {

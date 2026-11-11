@@ -104,6 +104,7 @@ fn keyed(command: Command, key: &str, fingerprint: u8) -> Request {
         idempotency: Some(Idempotency {
             key: key.into(),
             fingerprint: [fingerprint; 32],
+            checked_at: T0,
         }),
         ..req(command)
     }
@@ -677,16 +678,28 @@ fn the_idempotency_window_is_bounded() {
         first
     );
 
-    // Past the minimum retention the oldest record makes room.
+    // Retention counts from the caller's store lookup: a command looked up at
+    // T0 that waited in the mailbox past the minute still finds no room, so a
+    // record its lookup could not see is never dropped under it.
     let later = Timestamp(T0.0 + limits::IDEMPOTENCY_MIN_RETENTION_MS);
+    assert_eq!(s.apply(&fresh, later).unwrap(), Err(Failure::Overloaded));
+    // A fresh lookup a minute after the oldest record makes room.
+    let mut looked_up = fresh.clone();
+    if let Some(key) = &mut looked_up.idempotency {
+        key.checked_at = later;
+    }
     assert!(matches!(
-        s.apply(&fresh, later).unwrap(),
+        s.apply(&looked_up, later).unwrap(),
         Err(Failure::NotFound(Missing::HoldToken))
     ));
     // k0 was dropped from memory, so it runs again; the caller's store lookup
     // covers records the window has dropped (08 §6.1).
+    let mut k0 = keyed(create(1, None), "k0", 0);
+    if let Some(key) = &mut k0.idempotency {
+        key.checked_at = later;
+    }
     assert_eq!(
-        s.apply(&keyed(create(1, None), "k0", 0), later).unwrap(),
+        s.apply(&k0, later).unwrap(),
         Err(Failure::InvalidRequest(InvalidReason::TokenAlreadyExists))
     );
 }
@@ -697,8 +710,8 @@ fn the_idempotency_window_is_bounded() {
 /// nothing; `seq` moved by at most one; a publishable command left booked
 /// objects alone (INV-3); a key replays its first reply or is a mismatch.
 /// Batches commit at random points and the store rejects any `seq` gap
-/// (INV-5). At the end: INV-10 over the committed log, and reloading from the
-/// committed batches reproduces memory (INV-6).
+/// (INV-5). At the end: replaying the committed log rebuilds memory (INV-6),
+/// INV-10 holds over that log, and reloading from the store reproduces memory.
 #[tokio::test]
 async fn random_command_sequences_keep_invariants() {
     const SEATS: u32 = 12;
@@ -780,6 +793,7 @@ async fn random_command_sequences_keep_invariants() {
                 idempotency: key.map(|(k, odd)| Idempotency {
                     key: format!("key-{k}").into(),
                     fingerprint: [u8::from(odd); 32],
+                    checked_at: now,
                 }),
             };
 
@@ -824,24 +838,70 @@ async fn random_command_sequences_keep_invariants() {
             store.commit_batch(batch).await.unwrap();
         }
 
-        // INV-10: no object is booked twice without a release in between.
-        let mut booked = std::collections::BTreeSet::new();
-        for record in store.committed().iter().flat_map(|b: &Batch| &b.log) {
-            for oid in &record.oids {
-                match record.op {
-                    Op::Book => assert!(booked.insert(*oid), "seed {seed}: INV-10"),
-                    Op::Release => {
-                        booked.remove(oid);
-                    }
-                    _ => {}
+        // INV-6 from the log alone, as the reconciler does (13 §3.3): every
+        // object and hold rebuilt from `event_log` matches memory. Along the
+        // way, INV-10: no object is booked twice without a release between.
+        let mut objects = std::collections::HashMap::new();
+        let mut holds = std::collections::BTreeMap::new();
+        for r in store.committed().iter().flat_map(|b: &Batch| &b.log) {
+            let hold = r.hold_id.and_then(|id| holds.get_mut(&id).map(|h| (id, h)));
+            match (r.op, hold) {
+                (Op::CreateHold, _) => {
+                    holds.insert(r.hold_id.unwrap(), (r.expires_at.unwrap(), vec![]));
                 }
+                (Op::ExtendHold, Some((_, h))) => h.0 = r.expires_at.unwrap(),
+                (Op::Hold, Some((_, h))) => h.1.extend(&r.oids),
+                (Op::Release | Op::Book, Some((id, h))) => {
+                    h.1.retain(|o| !r.oids.contains(o));
+                    if h.1.is_empty() && r.op == Op::Book {
+                        holds.remove(&id);
+                    }
+                }
+                (Op::Expire, Some((id, _))) => {
+                    holds.remove(&id);
+                }
+                (Op::Release | Op::Book | Op::ChangeStatus, None) => {}
+                (op, _) => panic!("seed {seed}: {op:?} for an unknown hold"),
+            }
+            for &oid in &r.oids {
+                let before = objects.get(&oid).map(|o: &(Status, _, _)| o.0);
+                let after = match r.op {
+                    Op::Hold => (Status::HELD, r.hold_id, None),
+                    Op::Book => {
+                        assert_ne!(before, Some(Status::BOOKED), "seed {seed}: INV-10");
+                        let detail = r.details.iter().find(|d| d.0 == oid);
+                        let booking = Booking {
+                            order_ref: r.order_ref.clone().unwrap(),
+                            ticket_type: detail.and_then(|d| d.1.clone()),
+                            extra: detail.and_then(|d| d.2.clone()),
+                        };
+                        (Status::BOOKED, None, Some(booking))
+                    }
+                    Op::ChangeStatus => (r.status.unwrap(), None, None),
+                    _ => (Status::FREE, None, None),
+                };
+                objects.insert(oid, after);
             }
         }
-        let live: std::collections::BTreeSet<_> = (0..SEATS)
-            .filter(|&i| s.status(i) == Some(Status::BOOKED))
-            .map(|i| 100 + i)
+        for i in 0..SEATS {
+            let replayed = objects.remove(&(100 + i));
+            let replayed = replayed.unwrap_or((Status::FREE, None, None));
+            let live = (s.status(i).unwrap(), s.holder(i), s.booking(i).cloned());
+            assert_eq!(replayed, live, "seed {seed}: object {i}");
+        }
+        let replayed: Vec<_> = holds
+            .into_iter()
+            .map(|(id, (at, mut oids))| {
+                oids.sort_unstable();
+                (id, at, oids)
+            })
             .collect();
-        assert_eq!(booked, live, "seed {seed}");
+        let live: Vec<_> = fingerprint(&s)
+            .2
+            .into_iter()
+            .map(|(id, at, _, idxs)| (id, at, idxs.iter().map(|i| 100 + i).collect()))
+            .collect();
+        assert_eq!(replayed, live, "seed {seed}: holds");
 
         let loaded = store.load_event(EVENT).await.unwrap();
         let reloaded = EventState::restore(EVENT, chart(SEATS), loaded).unwrap();

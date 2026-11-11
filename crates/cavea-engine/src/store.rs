@@ -73,7 +73,13 @@ pub struct LogRecord {
     pub order_ref: Option<Arc<str>>,
     /// The status set, for `ChangeStatus` (`detail`).
     pub status: Option<Status>,
+    /// For `Book`: `(oid, ticket_type, extra)` of each object that has either
+    /// (`detail`), so replaying the log rebuilds `object_state`.
+    pub details: Vec<LogDetail>,
 }
+
+/// `(oid, ticket_type, extra)` of one booked object.
+pub type LogDetail = (Oid, Option<Arc<str>>, Option<Arc<str>>);
 
 impl std::fmt::Debug for LogRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
