@@ -846,10 +846,19 @@ export async function createMap(
       void ui?.failed(id, false);
     }
   }
-  /** Ends the loading or error state once the map is drawn and no start waits for Retry. */
+  /** The context has been lost longer than `contextLostMs` and has not returned. */
+  let gone = false;
+  /**
+   * Ends the loading or error state once the map is drawn and no start
+   * waits for Retry; a context still gone shows its notice instead.
+   */
   function settled(): void {
     if (marks["first_frame"] !== undefined && failing === 0) {
-      ui?.loading(false);
+      if (gone) {
+        notice("contextLost");
+      } else {
+        ui?.loading(false);
+      }
     }
   }
 
@@ -862,10 +871,15 @@ export async function createMap(
         report(
           new CaveaError("context_lost", `the WebGL context was lost for ${env.contextLostMs} ms`),
         );
-        notice("contextLost");
+        gone = true;
+        // A start waiting for Retry keeps its error state and button.
+        if (failing === 0) {
+          notice("contextLost");
+        }
       }, env.contextLostMs);
       timers.add(lostTimer);
     } else {
+      gone = false;
       settled();
     }
   }

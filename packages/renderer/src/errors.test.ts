@@ -194,6 +194,29 @@ describe("error state over a drawn map", () => {
     map.destroy();
   });
 
+  test("a context lost while a start waits for Retry leaves the Retry", async () => {
+    const f = fakeEnv();
+    let connects = 0;
+    const state = customState({
+      connect: () =>
+        ++connects <= 4
+          ? Promise.reject(http(503))
+          : Promise.resolve({ kind: "map", unavailable: [] }),
+      disconnect() {},
+    });
+    const promise = createMap(f.env, {} as HTMLElement, { chart: { url: "c.ccf" }, state });
+    f.load();
+    await sleep(50);
+    f.attached()?.onFrame?.(0, 0);
+    f.attached()?.onContext?.(false);
+    await sleep(50);
+    expect([shown(f.root, "error"), shown(f.root, "retry")]).toEqual([true, true]);
+    f.attached()?.onContext?.(true);
+    expect([shown(f.root, "error"), shown(f.root, "retry")]).toEqual([true, true]);
+    part(f.root, "retry")?.click();
+    (await promise).destroy();
+  });
+
   test("without the loading state, offline and a lost context reject nothing", async () => {
     const rejections: unknown[] = [];
     const listener = (reason: unknown): void => {

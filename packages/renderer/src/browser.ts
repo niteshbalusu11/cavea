@@ -103,6 +103,8 @@ function asset(assets: SeatMapOptions["assets"], name: string): URL | undefined 
 const css = (): string =>
   ":host{display:block;position:relative}:host([hidden]){display:none}" +
   ".r canvas{position:absolute;inset:0;width:100%;height:100%;display:block;outline:none}" +
+  // The map's own focus, from the keyboard, before a seat has one (11 §3.1).
+  ".r canvas:focus-visible{outline:2px solid var(--_ring-focus);outline-offset:-2px}" +
   schemeCss() +
   UI_CSS;
 
