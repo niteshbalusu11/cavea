@@ -5,6 +5,7 @@ use cavea_format::{Artefact, Chart, NONE, decode};
 
 use super::*;
 use crate::document::Node;
+use crate::finding::Severity;
 
 /// xorshift64*: deterministic, no dependency.
 struct Rng(u64);
@@ -167,7 +168,7 @@ impl Gen {
             self.r.pick(&["below", "above"])
         );
         let (w, h) = (self.r.real(1.0, 800.0), self.r.real(1.0, 800.0));
-        let body = match self.r.int(0, 4) {
+        let body = match self.r.int(0, 7) {
             0 => format!(
                 r#""type":"shape","kind":"rect","size":[{w},{h}],"cornerRadius":{},{style}"#,
                 self.r.real(0.0, 300.0)
@@ -196,8 +197,28 @@ impl Gen {
                 f = h / 2.0,
                 g = w.min(h) / 3.0,
             ),
-            _ => format!(
+            4 => format!(
                 r#""type":"shape","kind":"line","points":[[0,0],[{w},{h}],[{w},0]],{style}"#
+            ),
+            5 => format!(
+                r##""type":"text","text":"T{id} ünï","size":{},"weight":{},"color":{},"align":"{}","minZoom":{}"##,
+                self.r.real(1.0, 300.0),
+                self.r.int(1, 1000),
+                color(&mut self.r),
+                self.r.pick(&["left", "center", "right"]),
+                self.r.real(0.0, 2.0)
+            ),
+            6 => format!(
+                r#""type":"icon","icon":"{}","size":{}"#,
+                self.r
+                    .pick(&["entrance", "exit", "stairs", "toilets", "bar", "lift"]),
+                self.r.real(1.0, 300.0)
+            ),
+            _ => format!(
+                r#""type":"image","asset":"{:032x}","size":[{w},{h}],"opacity":{},"role":"{}""#,
+                self.r.next(),
+                self.r.real(0.0, 1.0),
+                self.r.pick(&["background", "reference"])
             ),
         };
         format!(r#"{{"id":{id},{extra}{place},{body}}}"#)
@@ -497,7 +518,7 @@ fn decoded_labels(c: &Chart) -> Vec<String> {
     out
 }
 
-fn compile_json(json: &str) -> Result<Compiled, CompileError> {
+pub(super) fn compile_json(json: &str) -> Result<Compiled, CompileError> {
     compile(&ChartDocument::from_json(json.as_bytes()).unwrap())
 }
 
@@ -613,12 +634,26 @@ const FIXED: &str = r##"{"schema":1,"name":"fixed","nextOid":9000,
     {"id":52,"type":"shape","kind":"path","floor":2,"rotation":151,"d":"M0 0 C 100 -80 300 -80 400 0 S 700 80 800 0 L 800 300 Q 400 500 0 300 Z m 300 100 h 200 v 60 h -200 z",
      "style":{"fill":"#374151","stroke":"#9CA3AF","strokeWidth":10,"opacity":0.6}}]}"##;
 
-/// The same document gives the same bytes, here and in the wasm32 build. It
-/// covers rotated sections with automatic and explicit outlines, and every
-/// shape kind with fill and stroke, inside a rotated section and at the top
-/// level, on two floors. A
-/// change to the stored hash changes every compiled chart. To run it in
-/// wasm32 (a failing test traps):
+/// [`FIXED`] with text, an icon and images: text in a rotated section and at
+/// the top level, on both floors, and a background and a reference image.
+fn fixed_marks() -> String {
+    let child = r##"{"id":42,"type":"text","text":"Box seats ↓","origin":[350,-40.3],"rotation":12,"size":40.3,"color":"#111827","align":"right","weight":700},"##;
+    let top = r##",{"id":60,"type":"text","floor":2,"text":"STAGE","origin":[-200,-900],"rotation":-90,"size":120.3,"weight":600,"color":"#F9FAFB","align":"left","minZoom":0.05},
+    {"id":61,"type":"icon","icon":"exit","origin":[450.5,-75.25],"rotation":405,"size":80},
+    {"id":62,"type":"image","floor":2,"asset":"0123456789abcdef0123456789abcdef","origin":[100,200],"rotation":30,"size":[4000,3000],"opacity":0.5,"role":"background"},
+    {"id":63,"type":"image","asset":"fedcba9876543210fedcba9876543210","size":[10,10],"role":"reference"}]}"##;
+    let anchor = r#"{"id":41,"type":"shape""#;
+    let json = FIXED.replacen(anchor, &format!("{child}{anchor}"), 1);
+    format!("{}{top}", json.strip_suffix("]}").unwrap())
+}
+
+/// The same document gives the same bytes, here and in the wasm32 build.
+/// [`FIXED`] covers rotated sections with automatic and explicit outlines,
+/// and every shape kind with fill and stroke, inside a rotated section and at
+/// the top level, on two floors; its hash is the one from before text, icons
+/// and images were compiled. [`fixed_marks`] adds them. A change to a stored
+/// hash changes every compiled chart. To run it in wasm32 (a failing test
+/// traps):
 ///
 /// ```sh
 /// cargo test -p cavea-compiler --target wasm32-unknown-unknown --no-run
@@ -645,8 +680,222 @@ fn compiled_bytes_are_deterministic() {
         .map(|d| (d.floor, d.layer))
         .collect();
     assert_eq!(draws, [(0, Below), (0, Above), (1, Below)]);
-    let hex: String = a.public_hash.iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!(hex, "45674153e02ad0c8c7b3f602f1bb3c99");
+    let hex = |h: [u8; 16]| -> String { h.iter().map(|b| format!("{b:02x}")).collect() };
+    assert_eq!(hex(a.public_hash), "45674153e02ad0c8c7b3f602f1bb3c99");
+
+    let json = fixed_marks();
+    let a = compile_json(&json).unwrap();
+    assert_eq!(a.public, compile_json(&json).unwrap().public);
+    let chart = decode_both(&a);
+    let floors = |v: &[u32]| v.to_vec();
+    assert_eq!(
+        floors(&chart.texts.iter().map(|t| t.floor).collect::<Vec<_>>()),
+        [0, 1]
+    );
+    assert_eq!((chart.icons.len(), chart.images.len()), (1, 1));
+    assert_eq!(hex(a.public_hash), "21116ec57d0fecdf22970b3c89fad5f6");
+}
+
+/// Text, icons and background images reach `TEXT`, `ICON` and `IMGS` with
+/// their fields, floors and placement through their section; reference
+/// images are not compiled; each grows its floor's bounds.
+#[test]
+fn text_icons_and_images_reach_the_format() {
+    let json = r##"{"schema":1,"name":"m","nextOid":999,"categories":[{"key":"a","label":"A","color":"#2563EB"}],
+      "floors":[{"id":1,"name":"Ground"},{"id":2,"name":"Upper"}],
+      "nodes":[
+        {"id":10,"type":"section","floor":2,"origin":[1000,0],"rotation":90,"category":"a","children":[
+          {"id":11,"type":"row","path":{"kind":"polyline","points":[[0,0],[10,0]]},"seats":1,"oids":[[100,1]],"label":"A"},
+          {"id":12,"type":"text","text":"AB","origin":[100,0],"size":100,"weight":700,"color":"#102030","align":"left","minZoom":0.5}]},
+        {"id":20,"type":"icon","floor":1,"icon":"lift","origin":[-500,30.1],"rotation":-45,"size":50},
+        {"id":21,"type":"image","floor":1,"asset":"00112233445566778899aabbccddeeff","size":[400,300],"opacity":0.5,"role":"background"},
+        {"id":22,"type":"image","floor":1,"asset":"00112233445566778899aabbccddeeff","size":[9000,9000],"role":"reference"}]}"##;
+    let chart = decode_both(&compile_json(json).unwrap());
+    let s = |i: u32| chart.strings.get(i).unwrap();
+    let [t] = chart.texts.as_slice() else {
+        panic!()
+    };
+    assert_eq!(s(t.text), "AB");
+    assert_eq!(
+        (t.floor, t.pos, t.size, t.angle),
+        (1, [4000, 400], 400, 16_384)
+    );
+    assert_eq!(
+        (t.color, t.align, t.weight, t.min_zoom),
+        ([0x10, 0x20, 0x30, 255], ccf::TextAlign::Left, 700, 0.5)
+    );
+    let [i] = chart.icons.as_slice() else {
+        panic!()
+    };
+    assert_eq!(
+        (s(i.key), i.floor, i.pos, i.size, i.angle),
+        ("lift", 0, [-2000, 120], 200, 57_344)
+    );
+    // Only the background image; unrotated bounds; opacity 127.5 to even.
+    let [m] = chart.images.as_slice() else {
+        panic!()
+    };
+    assert_eq!(s(m.asset), "00112233445566778899aabbccddeeff");
+    assert_eq!(
+        (m.floor, m.bounds, m.angle, m.opacity),
+        (0, [-800, -600, 800, 600], 0, 128)
+    );
+    // Upper: the seat and the text's box, 0.6 × 2 × 100 wide and 120 tall,
+    // left-aligned on its position, turned 90°: x 940 to 1060, y 100 to 220.
+    let b = chart.floors[1].bounds;
+    assert!(
+        b[0] <= 3760 && b[1] <= 400 && b[2] >= 4240 && b[3] >= 880,
+        "{b:?}"
+    );
+    // Ground: the image, and the icon turned 45° (half-diagonal 25√2).
+    let half = (25.0 * 2f64.sqrt() * 4.0).ceil() as i32;
+    assert_eq!(chart.floors[0].bounds, [-2000 - half, -600, 800, 600]);
+    assert_eq!(chart.meta.bounds[3], 880);
+}
+
+/// Each error code on a minimal document that triggers exactly it, naming
+/// the most specific node; the nearby document compiles. E001 and E009 have
+/// their own test, E005 has `bad_decoration_names_its_node` and the outline
+/// tests, E010 is in the migration tests, and E004 cannot occur while areas
+/// are not compiled.
+#[test]
+fn each_error_names_its_node() {
+    let doc = |cats: &str, nodes: &str| {
+        format!(
+            r##"{{"schema":1,"name":"e","nextOid":999,"categories":[{{"key":"a","label":"A","color":"#2563EB"}}{cats}],"floors":[{{"id":1,"name":"F"}}],"nodes":[{nodes}]}}"##
+        )
+    };
+    let row = |extra: &str| {
+        format!(
+            r#"{{"id":5,"type":"row","path":{{"kind":"polyline","points":[[0,0],[10,0]]}},"seats":2,"oids":[[10,2]]{extra}}}"#
+        )
+    };
+    let text = |id: u32, t: &str| {
+        format!(r##"{{"id":{id},"type":"text","text":"{t}","size":10,"color":"#000000"}}"##)
+    };
+    let b = r##",{"key":"b","label":"B","color":"#B45309"}"##;
+    let ok = r#","label":"A","category":"a""#;
+    let cases = [
+        // No category from an override, the row or a section; a seat
+        // inherits its section's.
+        (
+            Code::E002,
+            Some(5),
+            doc("", &row(r#","label":"A""#)),
+            doc(
+                "",
+                &format!(
+                    r#"{{"id":4,"type":"section","category":"a","children":[{}]}}"#,
+                    row(r#","label":"A""#)
+                ),
+            ),
+        ),
+        (
+            Code::E003,
+            Some(5),
+            doc("", &row(r#","label":"","category":"a""#)),
+            doc("", &row(ok)),
+        ),
+        (
+            Code::E003,
+            Some(5),
+            doc(
+                "",
+                &row(r#","label":"A","category":"a","seatOverrides":{"11":{"label":""}}"#),
+            ),
+            doc(
+                "",
+                &row(r#","label":"A","category":"a","seatOverrides":{"11":{"label":"x"}}"#),
+            ),
+        ),
+        (
+            Code::E005,
+            Some(6),
+            doc("", &text(6, "")),
+            doc("", &text(6, "x")),
+        ),
+        (
+            Code::E006,
+            Some(6),
+            doc("", &text(6, &"x".repeat(257))),
+            doc("", &text(6, &"é".repeat(128))),
+        ),
+        (
+            Code::E007,
+            Some(5),
+            doc("", &row(r#","label":"A","category":"b""#)),
+            doc(b, &row(r#","label":"A","category":"b""#)),
+        ),
+        (
+            Code::E007,
+            Some(7),
+            doc("", r#"{"id":7,"type":"icon","icon":"teapot","size":10}"#),
+            doc("", r#"{"id":7,"type":"icon","icon":"toilets","size":10}"#),
+        ),
+        (
+            Code::E007,
+            Some(6),
+            doc(
+                "",
+                &text(6, "x").replace(r#""id":6"#, r#""id":6,"floor":2"#),
+            ),
+            doc(
+                "",
+                &text(6, "x").replace(r#""id":6"#, r#""id":6,"floor":1"#),
+            ),
+        ),
+        (
+            Code::E008,
+            None,
+            doc(&b.replace(r#""b""#, r#""a""#), &row(ok)),
+            doc(b, &row(ok)),
+        ),
+        // A node id equal to a seat's oid: named on the later node.
+        (
+            Code::E009,
+            Some(11),
+            doc("", &format!("{},{}", row(ok), text(11, "x"))),
+            doc("", &format!("{},{}", row(ok), text(12, "x"))),
+        ),
+    ];
+    for (code, node, bad, good) in cases {
+        let got: Vec<_> = findings(&bad)
+            .into_iter()
+            .map(|f| (f.code, f.node))
+            .collect();
+        assert_eq!(got, [(code, node)], "{bad}");
+        compile_json(&good).unwrap_or_else(|e| panic!("{e}\n{good}"));
+    }
+}
+
+/// The JSON form of a finding (03 §3.2), with document text quoted at most
+/// 64 bytes long.
+#[test]
+fn findings_serialise_to_their_documented_form() {
+    let json = |f: Finding| serde_json::to_string(&f).unwrap();
+    let dup = Finding {
+        code: Code::E009,
+        node: Some(11),
+        detail: Detail::DuplicateId { id: 11, first: 5 },
+    };
+    assert_eq!(
+        json(dup),
+        r#"{"code":"E009","severity":"error","node":11,"related":5,"message":"id 11 is also used in node 5"}"#
+    );
+    let unused = Finding {
+        code: Code::W105,
+        node: None,
+        detail: Detail::UnusedCategory {
+            key: "é".repeat(40),
+        },
+    };
+    let quoted = format!(r#"\"{}\"…"#, "é".repeat(32));
+    assert_eq!(
+        json(unused),
+        format!(
+            r#"{{"code":"W105","severity":"warning","node":null,"related":null,"message":"category {quoted} is not used by any seat"}}"#
+        )
+    );
 }
 
 /// One row of 10: position 3 removed, and position 7 nudged 30 cu right, so
@@ -1279,8 +1528,20 @@ fn bad_decoration_names_its_node() {
            {{"id":19,"type":"shape","kind":"rect"}},
            {{"id":21,"type":"shape","kind":"path","d":"M0 0 L10 0","style":{{"fill":"#000000"}}}},
            {{"id":22,"type":"shape","kind":"ellipse","size":[2000000,2000000],"style":{{"fill":"#000000"}}}},
-           {{"id":23,"type":"shape","kind":"path","d":"M0 0 L10 10 L0 10 L10 0 Z M20 0 h10 v10 h-10 Z","style":{{"fill":"#000000"}}}}"##,
+           {{"id":23,"type":"shape","kind":"path","d":"M0 0 L10 10 L0 10 L10 0 Z M20 0 h10 v10 h-10 Z","style":{{"fill":"#000000"}}}},
+           {{"id":24,"type":"text","text":"","size":10,"color":"#000000"}},
+           {{"id":25,"type":"text","text":"x","size":0.1,"color":"#000000"}},
+           {{"id":26,"type":"text","text":"x","size":10,"color":"#000000","weight":1001}},
+           {{"id":27,"type":"text","text":"x","size":10,"color":"red"}},
+           {{"id":28,"type":"text","text":"x","size":10,"color":"#000000","minZoom":-1}},
+           {{"id":29,"type":"icon","icon":"bar","size":16384}},
+           {{"id":30,"type":"image","asset":"B3A1B3A1B3A1B3A1B3A1B3A1B3A1B3A1","size":[1,1],"role":"background"}},
+           {{"id":31,"type":"image","asset":"{hash}","size":[1,1],"opacity":1.5,"role":"background"}},
+           {{"id":32,"type":"image","asset":"{hash}","size":[0.05,10],"role":"background"}},
+           {{"id":33,"type":"image","asset":"not a hash","size":[0,0],"opacity":9,"role":"reference"}},
+           {{"id":34,"type":"icon","icon":"bar","size":5,"origin":[1e9,0]}}"##,
         many = points(4097),
+        hash = "0".repeat(32),
     ));
     let mut got: Vec<_> = findings(&json)
         .into_iter()
@@ -1329,6 +1590,17 @@ fn bad_decoration_names_its_node() {
         ),
         // A bowtie: no signed area, but not flat.
         (23, Code::E005, geometry("self-intersecting fill")),
+        (24, Code::E005, Detail::EmptyText),
+        (25, Code::E005, invalid("size")),
+        (26, Code::E005, invalid("weight")),
+        (27, Code::E005, invalid("color")),
+        (28, Code::E005, invalid("minZoom")),
+        (29, Code::E005, invalid("size")),
+        (30, Code::E005, invalid("asset")),
+        (31, Code::E005, invalid("opacity")),
+        (32, Code::E005, geometry("zero size")),
+        // 33: a reference image is the designer's only and is not compiled.
+        (34, Code::E005, Detail::OutOfRange),
     ]
     .map(|(n, code, detail)| (Some(n), code, detail));
     assert_eq!(got, want);
@@ -1345,12 +1617,17 @@ fn random_documents_never_panic_and_accepted_ones_decode() {
         for _ in 0..r.int(0, 3) {
             mutate(&mut doc, &mut r);
         }
+        // 13 §4: a document with no error always compiles; a refusal lists
+        // errors only, and a compiled chart warnings only.
         match compile(&doc) {
             Ok(c) => {
                 decode_both(&c);
+                assert!(c.findings.iter().all(|f| f.severity() == Severity::Warning));
                 accepted += 1;
             }
-            Err(CompileError::Invalid(f)) => assert!(!f.is_empty()),
+            Err(CompileError::Invalid(f)) => {
+                assert!(!f.is_empty() && f.iter().all(|f| f.severity() == Severity::Error));
+            }
             Err(e) => panic!("seed {seed}: compiler bug: {e}"),
         }
     }
@@ -1498,6 +1775,25 @@ fn mutate_node(node: &mut Node, r: &mut Rng, w: f64, n: u32) {
             }
             _ => shape.points = Some(zigzag(5000)),
         },
+        Node::Text(t) => match r.int(0, 5) {
+            0 => t.size = w,
+            1 => t.text = ["", "x"][(n % 2) as usize].repeat(n as usize * 3),
+            2 => t.min_zoom = w,
+            3 => t.weight = (n * 700) as u16,
+            4 => t.color = "#12345G".into(),
+            _ => t.origin = [w, w],
+        },
+        Node::Icon(i) => match r.int(0, 2) {
+            0 => i.size = w,
+            1 => i.icon = "teapot".into(),
+            _ => i.rotation = w,
+        },
+        Node::Image(i) => match r.int(0, 3) {
+            0 => i.size = [w, 1.0],
+            1 => i.asset = "B3A1".into(),
+            2 => i.opacity = w,
+            _ => i.origin = [0.0, w],
+        },
         Node::Row(row) => match r.int(0, 5) {
             0 => row.seat_pitch = w,
             1 => row.label = Some(String::new()),
@@ -1561,22 +1857,52 @@ fn compile_100k_timing() {
         nodes.join(",")
     );
     let doc = ChartDocument::from_json(json.as_bytes()).unwrap();
-    let mut best = f64::MAX;
-    for _ in 0..5 {
-        let t = std::time::Instant::now();
-        let c = compile(&doc).unwrap();
-        best = best.min(t.elapsed().as_secs_f64());
-        assert_eq!(c.stats.seats, 100_000);
-    }
+    let best = |f: &dyn Fn()| {
+        (0..5)
+            .map(|_| {
+                let t = std::time::Instant::now();
+                f();
+                t.elapsed().as_secs_f64() * 1e3
+            })
+            .fold(f64::MAX, f64::min)
+    };
+    let full = best(&|| assert_eq!(compile(&doc).unwrap().stats.seats, 100_000));
+    // Validation without encoding: steps 1–13 and the warnings.
+    let checked = best(&|| assert!(check(&doc).is_ok()));
     let c = compile(&doc).unwrap();
     if let Ok(path) = std::env::var("CAVEA_DUMP") {
         std::fs::write(path, &c.public).unwrap();
     }
     eprintln!(
-        "100k seats: best of 5 {:.1} ms; public {} B, full {} B, {:?}",
-        best * 1e3,
+        "100k seats: best of 5 {full:.1} ms; without encoding {checked:.1} ms; {} warnings; public {} B, full {} B, {:?}",
+        c.findings.len(),
         c.public.len(),
         c.full.len(),
         c.stats
+    );
+
+    // W101 on 409,500 seats stacked 100 rows deep, each row's 4,095 seats
+    // within 4 cu: one cell each, so the check stays linear.
+    let rows: Vec<String> = (0..100)
+        .map(|i| {
+            format!(
+                r#"{{"rid":{},"seats":4095,"oids":[[{},4095]]}}"#,
+                i + 10,
+                1000 + i * 4095
+            )
+        })
+        .collect();
+    let json = format!(
+        r##"{{"schema":1,"name":"stack","nextOid":999999,"categories":[{{"key":"a","label":"A","color":"#2563EB"}}],
+          "nodes":[{{"id":1,"type":"rowBlock","category":"a","seatPitch":0.001,"rows":[{}]}}]}}"##,
+        rows.join(",")
+    );
+    let doc = ChartDocument::from_json(json.as_bytes()).unwrap();
+    let t = std::time::Instant::now();
+    let c = compile(&doc).unwrap();
+    let w101 = c.findings.iter().filter(|f| f.code == Code::W101).count();
+    eprintln!(
+        "409,500 stacked seats: {:.1} ms, {w101} W101",
+        t.elapsed().as_secs_f64() * 1e3
     );
 }

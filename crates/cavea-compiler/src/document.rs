@@ -10,13 +10,48 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// A parse or serialisation failure, with the JSON line and column.
+use crate::finding::{Code, Detail, Finding};
+
+/// A parse, migration or serialisation failure.
 #[derive(Debug)]
-pub struct DocumentError(serde_json::Error);
+pub enum DocumentError {
+    /// Not JSON, or not a chart document of its schema: the parser's message
+    /// with the line and column.
+    Json(serde_json::Error),
+    /// A `schema` this compiler does not read: 0, or newer than
+    /// [`crate::SCHEMA`].
+    Schema { schema: u32 },
+    /// The migration step from schema `from` failed.
+    Migration { from: u32, problem: &'static str },
+}
+
+impl DocumentError {
+    /// The E010 finding for a schema or migration failure; `None` for a
+    /// document that is not well formed.
+    pub fn finding(&self) -> Option<Finding> {
+        let detail = match *self {
+            Self::Json(_) => return None,
+            Self::Schema { schema } => Detail::Schema { schema },
+            Self::Migration { from, problem } => Detail::Migration { from, problem },
+        };
+        Some(Finding {
+            code: Code::E010,
+            node: None,
+            detail,
+        })
+    }
+}
 
 impl fmt::Display for DocumentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "chart document: {}", self.0)
+        f.write_str("chart document: ")?;
+        match self {
+            Self::Json(e) => e.fmt(f),
+            _ => match self.finding() {
+                Some(finding) => f.write_str(&finding.message()),
+                None => Ok(()),
+            },
+        }
     }
 }
 
@@ -40,13 +75,14 @@ pub struct ChartDocument {
 }
 
 impl ChartDocument {
-    /// Parses a document. Nesting deeper than 128 levels is rejected.
+    /// Parses a document, migrating an older schema to the current one
+    /// (03 §2.8). Nesting deeper than 128 levels is rejected.
     pub fn from_json(bytes: &[u8]) -> Result<Self, DocumentError> {
-        serde_json::from_slice(bytes).map_err(DocumentError)
+        crate::migrate::parse(bytes)
     }
 
     pub fn to_json(&self) -> Result<Vec<u8>, DocumentError> {
-        serde_json::to_vec(self).map_err(DocumentError)
+        serde_json::to_vec(self).map_err(DocumentError::Json)
     }
 }
 
@@ -644,20 +680,11 @@ fn text_weight() -> u16 {
 }
 
 node!(Icon {
-    pub icon: IconKind,
+    /// One of `entrance`, `exit`, `stairs`, `toilets`, `bar`, `lift`; any
+    /// other key parses and is E007, so the designer keeps it.
+    pub icon: String,
     pub size: f64,
 });
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum IconKind {
-    Entrance,
-    Exit,
-    Stairs,
-    Toilets,
-    Bar,
-    Lift,
-}
 
 node!(Image {
     /// Asset hash.

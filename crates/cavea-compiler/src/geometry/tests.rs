@@ -337,3 +337,56 @@ fn anchors_and_label_sizes() {
     assert_eq!(label_size(&square, [500.0, 500.0], 0), 0);
     assert_eq!(label_size(&l, [300.0, 100.0], 3), 0);
 }
+
+/// [`Bands`] answers as [`contains`] does, on combs (every band crossed by
+/// many edges whole), stars and polygons with many equal `y` values, for
+/// points on and off vertices and edges.
+#[test]
+fn bands_agree_with_the_crossing_rule() {
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    // A comb: 40 teeth 1,000 tall, so every band holds most edges whole.
+    let mut comb = vec![[0.0, 0.0]];
+    for k in 0..40 {
+        let x = f64::from(k) * 10.0;
+        comb.extend([
+            [x, 1000.0],
+            [x + 5.0, 1000.0],
+            [x + 5.0, 1.0 + f64::from(k)],
+        ]);
+    }
+    comb.extend([[405.0, 1000.0], [405.0, 0.0]]);
+    let star = |n: usize, next: &mut dyn FnMut() -> f64| -> Vec<P> {
+        (0..n)
+            .map(|k| {
+                let (s, c) = (k as f64 * core::f64::consts::TAU / n as f64).sin_cos();
+                let r = 50.0 + 450.0 * next();
+                // Rounded to whole units: many vertices share a `y`.
+                [(r * c).round(), (r * s).round()]
+            })
+            .collect()
+    };
+    let mut polys = vec![comb];
+    for n in [3, 7, 33, 64, 65, 500] {
+        polys.push(star(n, &mut next));
+    }
+    for poly in &polys {
+        assert!(is_simple(poly));
+        let bands = Bands::new(poly);
+        let mut probes: Vec<P> = poly.clone();
+        probes.extend((0..poly.len()).map(|i| {
+            let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+            [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]
+        }));
+        probes.extend((0..2000).map(|_| [next() * 1100.0 - 550.0, next() * 1100.0 - 550.0]));
+        probes.extend((0..2000).map(|_| [next() * 410.0, next() * 1010.0]));
+        for p in probes {
+            assert_eq!(bands.contains(p), contains(poly, p), "{p:?}");
+        }
+    }
+}
