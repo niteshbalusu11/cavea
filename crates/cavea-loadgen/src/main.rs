@@ -26,6 +26,7 @@ const USAGE: &str =
   --rate R --duration-s S sustained: R buyer arrivals a second for S seconds
   --pick clustered|random --release-share F --book-share F --retry-book-share F
   --blocks-per-sec F      backend blocks and unblocks free seats
+  --unbook-after-ms MS    backend cancels each booking this long after it (l2: 5000)
   --hold-ttl S --max-objects N   the event's settings when setting up
   --source loopback|forwarded|single --addresses N   distinct client addresses
   --max-in-flight N --probes N --seed N --interval-ms MS --quiet-ms MS
@@ -108,8 +109,12 @@ fn parse(
     if chart.is_some() == event.is_some() {
         return Err("give one of --chart and --event".into());
     }
-    let release_share = num(&mut map, "release-share", 0.2)?;
-    let book_share = num(&mut map, "book-share", 0.5)?;
+    // A sustained run must not fill the event: buyers mostly release, and
+    // the backend cancels its bookings (13 §7.1 gives the arithmetic).
+    let l2 = profile == "l2";
+    let release_share = num(&mut map, "release-share", if l2 { 0.89 } else { 0.2 })?;
+    let book_share = num(&mut map, "book-share", if l2 { 0.1 } else { 0.5 })?;
+    let unbook_after = num(&mut map, "unbook-after-ms", if l2 { 5_000.0 } else { 0.0 })?;
     if release_share + book_share > 1.0 {
         return Err("--release-share plus --book-share is at most 1".into());
     }
@@ -136,6 +141,7 @@ fn parse(
         book_share,
         retry_book_share: num(&mut map, "retry-book-share", 0.1)?,
         blocks_per_sec: num(&mut map, "blocks-per-sec", 0.0)?,
+        unbook_after: Duration::from_millis(unbook_after as u64),
         hold_ttl: num(&mut map, "hold-ttl", 60.0)? as u64,
         max_objects: num(&mut map, "max-objects", 10.0)? as u32,
         source,

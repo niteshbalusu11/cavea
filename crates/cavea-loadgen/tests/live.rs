@@ -2,6 +2,11 @@
 //! workspace's build, as a child process) on a database of its own, then the
 //! reconciler over everything they wrote.
 
+#![allow(
+    clippy::unwrap_used,
+    reason = "test helpers outside #[test] functions; a panic is a test failure"
+)]
+
 use std::io::{Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;

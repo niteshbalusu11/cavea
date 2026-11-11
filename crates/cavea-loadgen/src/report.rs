@@ -90,6 +90,7 @@ pub fn build(cfg: &Config, profile: &str, o: &Outcome) -> (Value, u8) {
             "pick": if cfg.clustered { "clustered" } else { "random" },
             "release_share": cfg.release_share, "book_share": cfg.book_share,
             "retry_book_share": cfg.retry_book_share, "blocks_per_sec": cfg.blocks_per_sec,
+            "unbook_after_s": cfg.unbook_after.as_secs_f64(),
             "source": format!("{:?}", cfg.source).to_lowercase(), "addresses": cfg.addresses,
             "max_in_flight": cfg.max_in_flight, "probes": cfg.probes, "seed": cfg.seed,
         },
