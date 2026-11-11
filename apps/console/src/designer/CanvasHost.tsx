@@ -19,7 +19,7 @@ import {
   type PointerKind,
   type Theme,
 } from "@cavea/designer-core";
-import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { msg } from "../i18n/messages.ts";
 import { notify } from "../ui/overlays.tsx";
 import type { Editor } from "./editor.ts";
@@ -109,10 +109,15 @@ export function CanvasHost(props: { editor: Editor }) {
       editor.setDpr(window.devicePixelRatio || 1);
     };
     const resize = new ResizeObserver(measure);
-    resize.observe(region);
+    // In device pixels, so that a pixel-ratio change alone (a window moved
+    // to another screen, the browser's zoom) is seen too.
+    try {
+      resize.observe(region, { box: "device-pixel-content-box" });
+    } catch {
+      resize.observe(region);
+    }
     measure();
-    // A pixel-ratio change (a window moved to another screen, the
-    // browser's zoom) does not always resize the region.
+    // Where device pixels are not observed.
     let ratio: MediaQueryList | null = null;
     const watchRatio = () => {
       ratio?.removeEventListener("change", onRatio);
@@ -172,6 +177,14 @@ export function CanvasHost(props: { editor: Editor }) {
       },
       (names) => {
         if (names.has("cursor")) cursor(editor.session.cursor());
+        // The readout lives in the overlay: read it only while a gesture or
+        // a drawing tool may have one.
+        if (names.has("overlay")) {
+          const drawing = editor.views.history.gesture || editor.views.tool.tool !== "select";
+          const o = drawing ? editor.run((s) => s.overlay()) : undefined;
+          const shown = o !== undefined && (o.readout !== null || o.entry !== "");
+          editor.setReadout(shown ? { readout: o.readout, entry: o.entry } : null);
+        }
         // A new preview relabels the seat under a still pointer.
         if (names.has("numbering")) resample();
       },
@@ -208,15 +221,13 @@ export function CanvasHost(props: { editor: Editor }) {
     canvas.setView(view);
     painter?.invalidate();
   });
-  // Zoom to fit on the first measure.
-  createEffect(
-    on(
-      () => editor.size()[0] > 0,
-      (measured) => {
-        if (measured) editor.frame(editor.run((s) => s.fit()) ?? null);
-      },
-    ),
-  );
+  // Zoom to fit on the first measure, and only then.
+  let fitted = false;
+  createEffect(() => {
+    if (fitted || editor.size()[0] <= 0) return;
+    fitted = true;
+    editor.frame(editor.run((s) => s.fit()) ?? null);
+  });
 
   function onWheel(e: WheelEvent) {
     e.preventDefault();

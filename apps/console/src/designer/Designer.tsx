@@ -34,7 +34,13 @@ import { LAYOUT_KEY, parseLayout, SIDE, SPLIT, type Layout, type PanelTab } from
 import { StatusBar, ToolRail } from "./Rails.tsx";
 import { emptyChart, fileName, type ChartSource } from "./source.ts";
 import { TopBar } from "./TopBar.tsx";
+import { Tour } from "./Tour.tsx";
+import { TOUR_KEY } from "./tour.ts";
 import { ValidationPanel } from "./ValidationPanel.tsx";
+
+/** The numbering panel's share of the right column at least, while it is
+ * open in the inspector's place: it has more fields than the inspector. */
+const NUMBERING_SPLIT = 0.7;
 
 /** 09 §8: the designer needs 1,280 px. */
 const MIN_WIDTH = 1280;
@@ -276,6 +282,12 @@ function Shell(props: {
   const [help, setHelp] = createSignal(false);
   const [insert, setInsert] = createSignal(false);
   const [numbering, setNumbering] = createSignal(false);
+  // The first-run tour: once per browser, then from the palette.
+  const [tour, setTour] = createSignal(load(TOUR_KEY, (v) => v !== "done", true));
+  const endTour = () => {
+    setTour(false);
+    save(TOUR_KEY, "done");
+  };
   const openNumbering = () => {
     setLayout({ inspectorOpen: true });
     setNumbering(true);
@@ -294,6 +306,7 @@ function Shell(props: {
     inspector: () => setLayout({ inspectorOpen: !layout().inspectorOpen }),
     newChart: props.ui.onNew,
     open: props.ui.onOpen,
+    tour: () => setTour(true),
   });
   let column: HTMLElement | undefined;
 
@@ -333,7 +346,7 @@ function Shell(props: {
               flex: !layout().inspectorOpen
                 ? "0 0 auto"
                 : layout().panelsOpen
-                  ? `0 0 ${layout().split * 100}%`
+                  ? `0 0 ${(numbering() ? Math.max(layout().split, NUMBERING_SPLIT) : layout().split) * 100}%`
                   : "1 1 0",
             }}
           >
@@ -427,6 +440,7 @@ function Shell(props: {
       <Palette open={palette()} commands={() => all} onClose={() => setPalette(false)} />
       <Help open={help()} onClose={() => setHelp(false)} />
       <InsertForm editor={editor} open={insert()} onClose={() => setInsert(false)} />
+      <Tour editor={editor} open={tour()} onClose={endTour} />
     </div>
   );
 }

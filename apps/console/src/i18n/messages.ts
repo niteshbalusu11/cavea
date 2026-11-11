@@ -421,6 +421,36 @@ const ui = {
   "status.zoomOut": "Zoom out",
   "status.zoomFit": "Zoom to fit",
   "status.cursor": "x {x}  y {y}",
+  "tour.step": "Step {n} of {of}",
+  "tour.skip": "Skip tour",
+  "tour.back": "Back",
+  "tour.next": "Next",
+  "tour.done": "Done",
+  "tour.draw": "Draw a block",
+  "tour.drawBody":
+    "Choose the row block tool (R) and drag on the canvas: rows and seats follow the drag. No pointer? Choose the tool with the keyboard for the Insert row block form.",
+  "tour.curve": "Curve it",
+  "tour.curveBody":
+    "With the block selected, drag the small diamond on the middle of its front row back or forward. The inspector's curve fields do the same.",
+  "tour.number": "Number it",
+  "tour.numberBody":
+    "In the inspector, choose Row and seat labels…: the canvas previews the labels before you apply them.",
+  "tour.category": "Assign a category",
+  "tour.categoryBody":
+    "Pick the block's category in the inspector, or choose one in the Categories panel and paint seats with the brush (C).",
+  "tour.publish": "Publish",
+  "tour.publishBody":
+    "When the Validation panel has no errors, Publish makes the chart available to events. It needs the server.",
+  "readout.block": "{rows} rows × {seats} seats",
+  "readout.arc": "Radius {radius} · {span}° · {rows} rows × {seats} seats",
+  "readout.row": "{length} cu · {seats} seats",
+  "readout.size": "{width} × {height} cu",
+  "readout.line": "{length} cu · {angle}°",
+  "readout.points": "{n} points",
+  "readout.rotate": "{angle}°",
+  "readout.curve": "Depth {depth} cu",
+  "readout.curveArc": "Depth {depth} cu · radius {radius} cu",
+  "readout.entry": "Typed: {entry}",
 
   "panel.inspector": "Inspector",
   "panel.panels": "Panels",
@@ -580,6 +610,7 @@ const ui = {
   "reason.tooMany": "More than {n} are selected: act on fewer at a time",
 
   "command.insertRowBlock": "Insert row block…",
+  "command.tour": "Show the designer tour",
   "command.numbering": "Row and seat labels…",
   "command.align.left": "Align left edges",
   "command.align.centre": "Align horizontal centres",

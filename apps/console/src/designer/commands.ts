@@ -32,6 +32,7 @@ export interface Hooks {
   inspector: () => void;
   newChart: () => void;
   open: () => void;
+  tour: () => void;
 }
 
 const TOOLS_WITHOUT_KEYS: ToolId[] = ["ellipse", "polygon", "line"];
@@ -195,6 +196,7 @@ export function commands(editor: Editor, act: Record<string, () => void>, hooks:
   add("panel.inspector", msg("command.panel.inspector"), "panels", hooks.inspector);
   add("newChart", msg("menu.new"), "file", hooks.newChart);
   add("open", msg("menu.open"), "file", hooks.open);
+  add("tour", msg("command.tour"), "general", hooks.tour);
   for (const theme of ["system", "light", "dark"] as const) {
     add(`theme.${theme}`, msg(`command.theme.${theme}`), "theme", () => setThemeChoice(theme));
   }

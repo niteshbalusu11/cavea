@@ -8,6 +8,7 @@ import {
   type Input,
   type Key,
   type Modifiers,
+  type Readout,
   type Rect,
   type Session,
   type ToolId,
@@ -77,6 +78,10 @@ export interface Editor {
   /** The pointer over the canvas region, in chart units, for the status bar. */
   pointer: Accessor<[number, number] | null>;
   setPointer: (at: [number, number] | null) => void;
+  /** The gesture's live readout and typed numbers (the overlay's), while
+   * there are any: for the status bar. */
+  readout: Accessor<{ readout: Readout | null; entry: string } | null>;
+  setReadout: (r: { readout: Readout | null; entry: string } | null) => void;
   /** The layers row to bring into view, set by `reveal`. */
   revealed: Accessor<{ row: number } | null>;
   /** The revision last saved (or opened): differs when there is something to save. */
@@ -178,6 +183,10 @@ export function createEditor(session: Session, onPanic: (message: string) => voi
   const attached: (() => void)[] = [];
   const [revealed, setRevealed] = createSignal<{ row: number } | null>(null);
   const [pointer, setPointer] = createSignal<[number, number] | null>(null);
+  const [readout, setReadout] = createSignal<{ readout: Readout | null; entry: string } | null>(
+    null,
+    { equals: (a, b) => JSON.stringify(a) === JSON.stringify(b) },
+  );
   const [saved, setSaved] = createSignal({
     revision: views.status.revision,
     at: null as Date | null,
@@ -213,6 +222,8 @@ export function createEditor(session: Session, onPanic: (message: string) => voi
     limits,
     setLimits,
     view,
+    readout,
+    setReadout,
     revealed,
     pointer,
     setPointer,

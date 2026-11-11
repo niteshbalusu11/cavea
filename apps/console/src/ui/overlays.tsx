@@ -11,7 +11,7 @@ import { Icon } from "./Icon.tsx";
 export const menuContent =
   "z-50 min-w-48 rounded-md bg-raised p-1 text-base text-fg shadow-menu outline-none";
 export const menuItem =
-  "flex h-7 cursor-default items-center gap-2 rounded-sm px-2 outline-none select-none data-disabled:opacity-45 data-highlighted:bg-hover";
+  "flex h-7 cursor-default items-center gap-2 rounded-sm px-2 outline-none select-none data-disabled:opacity-45 data-highlighted:bg-active";
 export const menuSeparator = "my-1 h-px border-0 bg-line";
 export const menuKeys = "ml-auto pl-4 text-sm text-faint";
 

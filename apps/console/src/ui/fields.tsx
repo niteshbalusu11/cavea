@@ -267,7 +267,7 @@ export function SelectField(props: {
         itemComponent={(p) => (
           <Select.Item
             item={p.item}
-            class="flex h-7 cursor-default items-center justify-between gap-3 rounded-sm px-2 text-base text-fg outline-none data-highlighted:bg-hover"
+            class="flex h-7 cursor-default items-center justify-between gap-3 rounded-sm px-2 text-base text-fg outline-none data-highlighted:bg-active"
           >
             <Select.ItemLabel>{p.item.rawValue.label}</Select.ItemLabel>
             <Select.ItemIndicator>
