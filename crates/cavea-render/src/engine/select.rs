@@ -134,6 +134,13 @@ impl SelectState {
             || has(&self.released, s.idx)
     }
 
+    /// A status change or a snapshot newer than the release of `idx` confirms
+    /// it: the seat is no longer the buyer's, whatever an older set said.
+    pub(super) fn confirm_release(&mut self, idx: u32) {
+        remove(&mut self.released, idx);
+        remove(&mut self.private, idx);
+    }
+
     /// Every seat whose visual state depends on the selection.
     pub(super) fn seats(&self) -> Vec<u32> {
         let mut seats: Vec<u32> = self.selected.iter().map(|s| s.idx).collect();
@@ -561,6 +568,10 @@ impl<B: GpuBackend> Engine<B> {
             }
             HoldOutcome::Failed(failures) => failures,
         };
+        // Deselected in flight and not held: no longer the buyer's to draw.
+        for &idx in &flight.dropped {
+            self.refresh(idx);
+        }
         if failures.iter().any(|f| f.code == TOKEN_GONE) {
             return self.token_gone();
         }

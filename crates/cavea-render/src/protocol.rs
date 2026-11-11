@@ -256,9 +256,11 @@ impl Command {
     /// The state command a realtime server frame carries (08 §8.1):
     /// `SetSnapshot`, `ApplyDelta` or `SetPrivateHolds`. `None` for the frames
     /// the adapter handles itself and for unknown frame types, which are
-    /// skipped (08 §8.6). The engine checks counts and `idx` against its chart.
-    pub fn from_frame(frame: &[u8]) -> Result<Option<Self>, WireError> {
-        let all = cavea_core::limits::MAX_OBJECTS;
+    /// skipped (08 §8.6). Every `idx`, ignored area entries included, is
+    /// checked against `objects`, the receiver's object count; the engine
+    /// checks the rest.
+    pub fn from_frame(frame: &[u8], objects: u32) -> Result<Option<Self>, WireError> {
+        let all = objects.min(cavea_core::limits::MAX_OBJECTS);
         Ok(Some(match decode_server(frame, View::Public) {
             Ok(ServerFrame::Snapshot(s)) => {
                 let mut state = vec![0; s.objects as usize];

@@ -23,7 +23,7 @@ pub(super) struct State {
 
 impl<B: GpuBackend> Engine<B> {
     /// Objects in the loaded chart: seats, then tables, booths and areas.
-    pub(super) fn objects(&self) -> Option<usize> {
+    pub fn objects(&self) -> Option<usize> {
         let chart = &self.scene.as_ref()?.scene.chart;
         Some(chart.meta.seat_count as usize + chart.objects.len())
     }
@@ -51,7 +51,9 @@ impl<B: GpuBackend> Engine<B> {
         }
         self.state.seq = Some(seq);
         self.state.resync_asked = false;
-        self.selection.released.clear();
+        for idx in std::mem::take(&mut self.selection.released) {
+            self.selection.confirm_release(idx);
+        }
         let Some(loaded) = &mut self.scene else {
             return;
         };
@@ -94,9 +96,11 @@ impl<B: GpuBackend> Engine<B> {
         self.state.seq = Some(to_seq);
         let named = |idx: u32| changes.binary_search_by_key(&idx, |c| c.idx).is_ok();
         // A status change for a released seat is newer than the release.
-        let released = &mut self.selection.released;
+        let released = &self.selection.released;
         let unreleased: Vec<u32> = released.iter().copied().filter(|&i| named(i)).collect();
-        released.retain(|&idx| !named(idx));
+        for &idx in &unreleased {
+            self.selection.confirm_release(idx);
+        }
         let Some(loaded) = &mut self.scene else {
             return;
         };

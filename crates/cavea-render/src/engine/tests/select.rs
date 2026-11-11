@@ -323,6 +323,26 @@ fn selection_state_machine() {
             (Status(1, 0), ""),
             (Visual("u....u...."), ""),
         ],
+        // A status change confirms a release over an older set: selecting
+        // the seat again asks for a new hold.
+        &[
+            (Reload, ""),
+            (Snapshot(&[0]), ""),
+            (Private(&[0]), r#"changed ["S-A-1"]"#),
+            (Tap(0), r#"changed []; release 1 ["S-A-1"]"#),
+            (Status(0, 0), ""),
+            (Tap(0), r#"changed ["S-A-1"]; hold 2 ["S-A-1"]"#),
+            (Private(&[]), r#"changed ["S-A-1"]"#),
+            (Visual("p........."), ""),
+            // Deselected in flight, then taken: a failed hold no longer
+            // draws it as the buyer's.
+            (Tap(0), "changed []"),
+            (Visual(".........."), ""),
+            (Status(0, 1), ""),
+            (Visual(".........."), ""),
+            (Fail(2, "object_not_free", &[0]), ""),
+            (Visual("u........."), ""),
+        ],
         // The set confirms a hold in flight; a lost token loses everything.
         &[
             (Tap(0), r#"changed ["S-A-1"]; hold 1 ["S-A-1"]"#),
