@@ -8,12 +8,11 @@ use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use cavea_core::label::{LabelRule, Scheme};
-use cavea_core::limits::MAX_LABEL_LEN;
 use cavea_engine::{
     ActorConfig, ChartProvider, ChartVersionId, ChartView, Clock, EventId, Idx, Registry,
     RegistryConfig, StoreError, Timestamp,
 };
+use cavea_format::full_label::full_label;
 use cavea_format::{Artefact, NONE};
 use sqlx::PgPool;
 use tracing::Instrument as _;
@@ -186,122 +185,32 @@ impl ChartProvider for PgCharts {
     }
 }
 
-/// Decode a full artefact and compose every object's full label from the
-/// chart-level template, the section and row labels and the seat's rule or
-/// exception, as the compiler composed them (03 §3.1 step 6). Every input is
-/// treated as hostile: a reference out of range, a label that cannot be
-/// written, a missing or duplicate label or `oid` is an error, never a panic.
+/// Decode a full artefact and take every object's full label: seats through
+/// `cavea_format::full_label`, composed as the compiler composed them (03
+/// §3.1 step 6), other objects as stored. Every input is treated as hostile:
+/// a label that cannot be composed, or a missing or duplicate label or `oid`,
+/// is an error, never a panic.
 fn build(bytes: &[u8]) -> Result<Chart, String> {
     let c = cavea_format::decode(bytes, Artefact::Full).map_err(|e| e.to_string())?;
     let full = c.full.as_ref().ok_or("no full-artefact data")?;
-    let s = |i: u32| -> Result<&str, String> {
-        if i == NONE {
-            Ok("")
-        } else {
-            c.strings
-                .get(i)
-                .ok_or_else(|| format!("string {i} out of range"))
-        }
-    };
-    let seats = c.meta.seat_count as usize;
-    let total = seats
+    let total = (c.meta.seat_count as usize)
         .checked_add(c.objects.len())
         .filter(|&n| n == full.oids.len())
         .ok_or("object count does not match the oids")?;
-    let exceptions: HashMap<u32, u32> = c
-        .label_exceptions
-        .iter()
-        .map(|x| (x.idx, x.label))
-        .collect();
-    let template = s(c.meta.label_template)?;
-    let mut labels: Vec<Option<Box<str>>> = vec![None; total];
-    let mut seat = String::new();
-    for g in &c.segments {
-        let row = c
-            .rows
-            .get(g.row as usize)
-            .ok_or("segment row out of range")?;
-        let section = match row.section {
-            NONE => "",
-            i => s(c
-                .sections
-                .get(i as usize)
-                .ok_or("row section out of range")?
-                .label)?,
-        };
-        for k in 0..u32::from(g.seat_count) {
-            let idx = g.seat_first.checked_add(k).ok_or("seat index overflow")?;
-            seat.clear();
-            if let Some(&x) = exceptions.get(&idx) {
-                seat.push_str(s(x)?);
-            } else {
-                let l = c
-                    .label_rules
-                    .get(row.label_rule as usize)
-                    .ok_or("seat without a label")?;
-                let (prefix, suffix) = (s(l.prefix)?, s(l.suffix)?);
-                let position = u32::from(g.position) + k;
-                let within = cavea_core::label::seat_ordinal(
-                    row.direction.into(),
-                    0,
-                    row.positions.into(),
-                    position,
-                );
-                let ordinal = row
-                    .ordinal_base
-                    .checked_add(within)
-                    .ok_or("ordinal overflow")?;
-                if l.scheme == Scheme::Custom {
-                    // As `LabelRule::write` does for a custom list, without
-                    // copying the list: overlapping ranges in a hostile file
-                    // cannot multiply memory.
-                    let text = (ordinal < l.custom_count)
-                        .then(|| l.custom_first.checked_add(ordinal))
-                        .flatten()
-                        .ok_or("custom labels exhausted")?;
-                    seat.push_str(prefix);
-                    seat.push_str(s(text)?);
-                    seat.push_str(suffix);
-                    if seat.len() > MAX_LABEL_LEN {
-                        return Err("seat label too long".into());
-                    }
-                } else {
-                    let rule = LabelRule {
-                        scheme: l.scheme,
-                        start: l.start,
-                        step: l.step,
-                        overflow: l.overflow,
-                        prefix,
-                        suffix,
-                        custom: &[],
-                    };
-                    rule.write(ordinal, &mut seat).map_err(|e| e.to_string())?;
-                }
-            }
-            let mut label = String::new();
-            cavea_compiler::write_full_label(template, section, s(row.label)?, &seat, &mut label)
-                .map_err(|e| e.to_string())?;
-            let slot = labels
-                .get_mut(idx as usize)
-                .ok_or("seat index out of range")?;
-            if slot.replace(label.into()).is_some() {
-                return Err(format!("seat {idx} labelled twice"));
-            }
-        }
+    let mut labels: Vec<Box<str>> = Vec::with_capacity(total);
+    for idx in 0..c.meta.seat_count {
+        let label = full_label(&c, idx).map_err(|e| format!("seat {idx}: {e}"))?;
+        labels.push(label.as_str().into());
     }
-    for (o, slot) in c.objects.iter().zip(labels.iter_mut().skip(seats)) {
-        *slot = Some(s(o.label)?.into());
+    for o in &c.objects {
+        let label = c.strings.get(o.label).filter(|_| o.label != NONE);
+        labels.push(label.ok_or("object without a label")?.into());
     }
-    let labels = labels
-        .into_iter()
-        .enumerate()
-        .map(|(idx, l)| l.ok_or_else(|| format!("object {idx} has no label")))
-        .collect::<Result<Box<[_]>, _>>()?;
     let view = ChartView::new(full.oids.iter().copied().zip(labels.iter().cloned()))
         .map_err(|e| e.to_string())?;
     Ok(Chart {
         view: Arc::new(view),
-        labels,
+        labels: labels.into(),
     })
 }
 

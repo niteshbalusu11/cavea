@@ -16,8 +16,8 @@ brotli.workspace = true
 # Parses, validates and compiles chart drafts (03 §3); its dependencies are
 # already in the workspace.
 cavea-compiler.workspace = true
-# Seat label rules and the full-artefact decoder, for the chart provider;
-# both already built for cavea-compiler.
+# The object limit, and the full-artefact decoder and label composition for
+# the chart provider; both already built for cavea-compiler.
 cavea-core.workspace = true
 cavea-engine.workspace = true
 cavea-format.workspace = true
