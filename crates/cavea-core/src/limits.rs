@@ -6,3 +6,9 @@ pub const MAX_OBJECTS: u32 = 1_000_000;
 pub const MAX_SEATS_PER_ROW: u32 = 4_095;
 /// Bytes of UTF-8 in any label or label part.
 pub const MAX_LABEL_LEN: usize = 64;
+/// Categories per chart.
+pub const MAX_CATEGORIES: u32 = 4_095;
+/// Floors per chart.
+pub const MAX_FLOORS: u32 = 255;
+/// Sections per chart.
+pub const MAX_SECTIONS: u32 = 65_535;

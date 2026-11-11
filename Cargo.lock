@@ -190,6 +190,9 @@ dependencies = [
 [[package]]
 name = "cavea-format"
 version = "0.0.0"
+dependencies = [
+ "cavea-core",
+]
 
 [[package]]
 name = "cavea-render"
