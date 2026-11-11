@@ -12,7 +12,7 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { Cavea, CaveaError, type Fetch } from "../src/index.ts";
 
-const URL_ = process.env["CAVEA_TEST_DATABASE_URL"];
+const DATABASE = process.env["CAVEA_TEST_DATABASE_URL"];
 const ROOT = join(import.meta.dir, "../../..");
 const SLOW = 600_000;
 
@@ -105,16 +105,16 @@ async function all<T>(items: AsyncIterable<T>): Promise<T[]> {
   return out;
 }
 
-describe.skipIf(URL_ === undefined)("against cavea-server", () => {
+describe.skipIf(DATABASE === undefined)("against cavea-server", () => {
   const admin = randomBytes(24).toString("hex");
   const db = `cavea_sdk_e2e_${process.pid}_${randomBytes(4).toString("hex")}`;
-  const server = (URL_ ?? "").replace(/\/[^/]*$/, "");
+  const server = (DATABASE ?? "").replace(/\/[^/]*$/, "");
   let base = "";
   let proc: Bun.Subprocess | undefined;
   let log = "";
 
   beforeAll(async () => {
-    await run(["psql", URL_ ?? "", "-qc", `CREATE DATABASE ${db}`]);
+    await run(["psql", DATABASE ?? "", "-qc", `CREATE DATABASE ${db}`]);
     await run(["cargo", "build", "-q", "-p", "cavea-server"], { CARGO_BUILD_JOBS: "8" });
     const port = freePort();
     base = `http://127.0.0.1:${port}`;
@@ -160,7 +160,7 @@ describe.skipIf(URL_ === undefined)("against cavea-server", () => {
       proc.kill();
       await proc.exited;
     }
-    await run(["psql", URL_ ?? "", "-qc", `DROP DATABASE IF EXISTS ${db} WITH (FORCE)`]);
+    await run(["psql", DATABASE ?? "", "-qc", `DROP DATABASE IF EXISTS ${db} WITH (FORCE)`]);
   }, SLOW);
 
   test(
