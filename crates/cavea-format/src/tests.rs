@@ -6,17 +6,17 @@ use crate::tags::*;
 use crate::*;
 
 /// xorshift64*: deterministic, no dependency.
-struct Rng(u64);
+pub(crate) struct Rng(pub u64);
 
 impl Rng {
-    fn next(&mut self) -> u64 {
+    pub fn next(&mut self) -> u64 {
         self.0 ^= self.0 >> 12;
         self.0 ^= self.0 << 25;
         self.0 ^= self.0 >> 27;
         self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
     /// Uniform in `0..n` (0 when `n` is 0).
-    fn below(&mut self, n: u32) -> u32 {
+    pub fn below(&mut self, n: u32) -> u32 {
         if n == 0 {
             0
         } else {
@@ -26,7 +26,7 @@ impl Rng {
     fn i32(&mut self) -> i32 {
         self.next() as i32
     }
-    fn chance(&mut self, percent: u32) -> bool {
+    pub fn chance(&mut self, percent: u32) -> bool {
         self.below(100) < percent
     }
 }

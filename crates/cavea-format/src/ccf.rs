@@ -353,38 +353,56 @@ pub fn decode(file: &[u8], want: Artefact) -> Result<Chart, Error> {
     if seats > MAX_OBJECTS as usize {
         return Err(Error::at(META, ErrorKind::OverLimit));
     }
-    let rows = raw(get(ROWS)?, usize::MAX).map_err(at(ROWS))?;
-    let seat_pos = positions(get(SPOS)?, seats, &rows).map_err(at(SPOS))?;
-    let full = match want {
-        Artefact::Public => None,
-        Artefact::Full => Some(Full {
+    // Filled field by field in a fixed order, so that every error path drops
+    // one `Chart` instead of each vector read so far: that drop code, once per
+    // `?`, was most of this function's size in the renderer's WASM.
+    let mut chart = Chart {
+        meta,
+        strings: Strings::default(),
+        categories: Vec::new(),
+        floors: Vec::new(),
+        sections: Vec::new(),
+        chunks: Vec::new(),
+        rows: Vec::new(),
+        segments: Vec::new(),
+        label_rules: Vec::new(),
+        label_exceptions: Vec::new(),
+        seat_pos: Vec::new(),
+        seat_category: Vec::new(),
+        seat_flags: Vec::new(),
+        objects: Vec::new(),
+        tables: Vec::new(),
+        mesh: Mesh::default(),
+        texts: Vec::new(),
+        icons: Vec::new(),
+        images: Vec::new(),
+        full: None,
+    };
+    chart.rows = raw(get(ROWS)?, usize::MAX).map_err(at(ROWS))?;
+    chart.seat_pos = positions(get(SPOS)?, seats, &chart.rows).map_err(at(SPOS))?;
+    if want == Artefact::Full {
+        chart.full = Some(Full {
             oids: deltas(get(SOID)?).map_err(at(SOID))?,
             ranks: deltas(get(SRNK)?).map_err(at(SRNK))?,
             priorities: raw(get(OPRI)?, MAX_SECTIONS as usize).map_err(at(OPRI))?,
-        }),
-    };
-    let chart = Chart {
-        meta,
-        strings: strings(get(STRS)?).map_err(at(STRS))?,
-        categories: raw(get(CATS)?, MAX_CATEGORIES as usize).map_err(at(CATS))?,
-        floors: raw(get(FLRS)?, MAX_FLOORS as usize).map_err(at(FLRS))?,
-        sections: raw(get(SECT)?, MAX_SECTIONS as usize).map_err(at(SECT))?,
-        chunks: raw(get(CHNK)?, usize::MAX).map_err(at(CHNK))?,
-        rows,
-        segments: raw(get(RSEG)?, usize::MAX).map_err(at(RSEG))?,
-        label_rules: raw(get(LBLR)?, usize::MAX).map_err(at(LBLR))?,
-        label_exceptions: exceptions(get(LBLX)?).map_err(at(LBLX))?,
-        seat_pos,
-        seat_category: runs(get(SCAT)?, seats).map_err(at(SCAT))?,
-        seat_flags: runs(get(SFLG)?, seats).map_err(at(SFLG))?,
-        objects: raw(get(OBJS)?, MAX_OBJECTS as usize).map_err(at(OBJS))?,
-        tables: raw(get(TBLS)?, usize::MAX).map_err(at(TBLS))?,
-        mesh: mesh(get(MESH)?).map_err(at(MESH))?,
-        texts: raw(get(TEXT)?, usize::MAX).map_err(at(TEXT))?,
-        icons: raw(get(ICON)?, usize::MAX).map_err(at(ICON))?,
-        images: raw(get(IMGS)?, usize::MAX).map_err(at(IMGS))?,
-        full,
-    };
+        });
+    }
+    chart.strings = strings(get(STRS)?).map_err(at(STRS))?;
+    chart.categories = raw(get(CATS)?, MAX_CATEGORIES as usize).map_err(at(CATS))?;
+    chart.floors = raw(get(FLRS)?, MAX_FLOORS as usize).map_err(at(FLRS))?;
+    chart.sections = raw(get(SECT)?, MAX_SECTIONS as usize).map_err(at(SECT))?;
+    chart.chunks = raw(get(CHNK)?, usize::MAX).map_err(at(CHNK))?;
+    chart.segments = raw(get(RSEG)?, usize::MAX).map_err(at(RSEG))?;
+    chart.label_rules = raw(get(LBLR)?, usize::MAX).map_err(at(LBLR))?;
+    chart.label_exceptions = exceptions(get(LBLX)?).map_err(at(LBLX))?;
+    chart.seat_category = runs(get(SCAT)?, seats).map_err(at(SCAT))?;
+    chart.seat_flags = runs(get(SFLG)?, seats).map_err(at(SFLG))?;
+    chart.objects = raw(get(OBJS)?, MAX_OBJECTS as usize).map_err(at(OBJS))?;
+    chart.tables = raw(get(TBLS)?, usize::MAX).map_err(at(TBLS))?;
+    chart.mesh = mesh(get(MESH)?).map_err(at(MESH))?;
+    chart.texts = raw(get(TEXT)?, usize::MAX).map_err(at(TEXT))?;
+    chart.icons = raw(get(ICON)?, usize::MAX).map_err(at(ICON))?;
+    chart.images = raw(get(IMGS)?, usize::MAX).map_err(at(IMGS))?;
     chart.check()?;
     Ok(chart)
 }

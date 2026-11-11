@@ -776,34 +776,62 @@ If fewer than `quantity` eligible objects exist, reply `not_enough_objects`.
 
 ## 8. Realtime protocol
 
-Binary frames. Integers are LEB128 varints unless stated. The protocol version is 1.
+Binary frames, encoded and decoded by `cavea_format::wire`, which the server and every client share. The protocol version is 1.
+
+Field types used below:
+
+| Notation | Bytes |
+|---|---|
+| `u8` | One byte |
+| `v64` | Unsigned LEB128, 1 to 10 bytes, least significant group first. The tenth byte, if reached, is 0 or 1. Redundant `0x80` continuation bytes are accepted |
+| `v32` | A `v64` whose value is at most 2³² − 1 |
+| `hash` | 16 bytes |
+| `bytes(n)` | A `v32` length of at most `n`, then that many bytes |
+| `opt bytes(n)` | A presence byte: 0 (absent; nothing follows) or 1 (followed by `bytes(n)`) |
+| `list(F)` | A `v32` count, then per item: its `idx` as a `v32` difference from the previous item's `idx` (the first item's from 0, so its own `idx`), followed by `F` |
+
+A frame is a type byte followed by its fields in the order listed, with nothing between them. The rules every decoder applies, and version negotiation, are in §8.6.
 
 ### 8.1 Server to client
 
-| Type | Name | Payload |
+| Type | Name | Layout |
 |---|---|---|
-| `0x01` | HELLO | Protocol version (u8), server time in ms, chart hash (16 bytes), object count |
-| `0x02` | SNAPSHOT | `seq`, object count, encoding (u8), state payload, area count, per area (`idx`, availability) |
-| `0x03` | DELTA | `from_seq`, `to_seq`, change count, per change (`idx` difference from the previous, code u8), area change count, per area (`idx`, availability) |
-| `0x04` | PRIVATE | Hold expiry in ms, object count, `idx` list, per-area quantities |
-| `0x05` | RESYNC | The client fell behind; fetch a new snapshot |
-| `0x06` | PING | Nonce |
-| `0x07` | CLOSE | Reason: event archived, chart upgraded (reload the chart), server shutting down |
+| `0x01` | HELLO | `u8` version · `v64` server time (Unix ms) · `hash` chart hash · `v32` object count |
+| `0x02` | SNAPSHOT | `v64` `seq` · `v32` object count · `u8` encoding · `v32` state length · state (that many bytes) · `list(v32 value)` areas |
+| `0x03` | DELTA | `v64` `from_seq` · `v64` `to_seq` · `list(u8 code)` changes · `list(v32 value)` area changes |
+| `0x04` | PRIVATE | `v64` hold expiry (Unix ms) · `list()` held objects · `list(v32 quantity)` held area quantities |
+| `0x05` | RESYNC | Nothing. The client fell behind; fetch a new snapshot |
+| `0x06` | PING | `v64` nonce |
+| `0x07` | CLOSE | `u8` reason |
 
-Snapshot encodings: 0 = one byte per object; 1 = run-length pairs; 2 = one bit per object (public streams only). The server picks the smallest.
+**Snapshot encodings.** The state covers exactly the object count, in `idx` order:
+
+| Encoding | State |
+|---|---|
+| 0 | One code byte per object. Length = object count |
+| 1 | (`u8` code, `v32` run) pairs. Every run is at least 1; the runs add up to exactly the object count; the state ends with the last pair |
+| 2 | One bit per object, bit `i % 8` of byte `i / 8` (least significant first). Length = ⌈object count / 8⌉; the padding bits of the last byte are 0. Public streams only |
+
+The server picks the encoding with the smallest state, ties going to the lower number, and never picks 2 on a manager stream or for a code above 1. A manager-stream decoder refuses encoding 2. An empty event (object count 0) has an empty state in encoding 0.
+
+**Codes.** On a public stream every code is 0 (available) or 1 (unavailable) (`02-domain-model.md` §4.2); on a manager stream it is a domain status, 0 to 15 (§4.1). A code outside the stream's range is an error. The only way the server builds a public frame is by reducing domain statuses to public codes inside the encoder (any status other than 0 becomes 1), so held and booked cannot be told apart (INV-9). Channel streams (§8.3) will reduce against the viewer's channel set the same way.
+
+**Areas.** Area fields belong to a later milestone (`02-domain-model.md` §8). Servers send area counts of 0 today. Their layout is fixed now, so that adding them needs no new version: a version-1 receiver parses and checks area entries like any other list, and may ignore them.
 
 ### 8.2 Client to server
 
-| Type | Name | Payload |
+| Type | Name | Layout |
 |---|---|---|
-| `0x10` | SUBSCRIBE | Protocol version, event key, last `seq` seen (0 if none), optional hold token, optional session token |
-| `0x11` | PONG | Nonce |
+| `0x10` | SUBSCRIBE | `u8` version · `bytes(512)` event key (UTF-8 of at most 128 characters, `02-domain-model.md` §3) · `v64` last `seq` seen (0 if none) · `opt bytes(256)` hold token · `opt bytes(256)` session token |
+| `0x11` | PONG | `v64` nonce, echoing the PING's |
+
+Tokens are opaque bytes; a present token may be empty.
 
 ### 8.3 Behaviour
 
 - On SUBSCRIBE the server replies HELLO, then either the DELTAs since `last_seq` (if still in the 60-second ring buffer) or a SNAPSHOT, then PRIVATE if a hold token was given.
 - Deltas are coalesced every 100 ms. With more than 20,000 subscribers on an event the interval stretches, up to 500 ms.
-- If an object changes twice within an interval, only the final state is sent.
+- If an object changes twice within an interval, only the final state is sent (`wire::coalesce`).
 - A subscriber whose send queue exceeds 64 frames is sent RESYNC and its queue is cleared.
 - PING every 25 s; a connection silent for 60 s is closed.
 - **Public streams** carry public codes only (`02-domain-model.md` §4.2). **Manager streams** (`GET /v1/events/{event}/rt`, secret key or console session) carry domain statuses.
@@ -817,11 +845,38 @@ Snapshot encodings: 0 = one byte per object; 1 = run-length pairs; 2 = one bit p
 | SSE | Each frame base64-encoded in a `data:` line; `Last-Event-ID` carries `seq` |
 | Polling | `GET …/state?after_seq=n` every 2 s returns a DELTA or SNAPSHOT frame |
 
+SSE and polling have no client-to-server frames: the SUBSCRIBE fields travel as request parameters (RT-007, RT-008).
+
 ### 8.5 Caching the snapshot
 
 - `GET /v1/public/events/{event}/state` returns a SNAPSHOT frame with `ETag: "<seq>"` and `Cache-Control: public, max-age=1, stale-while-revalidate=5` (configurable).
 - With a CDN in front, the opening rush of an on-sale hits the CDN, not the server. Clients then catch up through deltas.
 - Channel-specific snapshots are `private` and not cached by intermediaries.
+
+### 8.6 Framing, validation and versioning
+
+- **One frame per message.** A WebSocket binary message, an SSE `data:` line once base64-decoded, and an HTTP response body (the snapshot endpoint, polling) each carry exactly one frame.
+- **Unknown frame types** are ignored: the receiver skips the message and carries on. One frame per message is what makes skipping possible on every transport.
+- **Trailing bytes** after a frame's last field are an error, except in a SUBSCRIBE whose version is above the server's (versioning, below).
+- **Lists.** Each `idx` is strictly above the previous one: a difference of 0 after the first item is an error. Every `idx` is below 1,000,000 (`02-domain-model.md` §14) when decoded, and below the receiver's object count before anything is applied; a frame naming an `idx` at or past the receiver's count is refused whole. A SNAPSHOT's areas are checked against its own object count when decoded.
+- **Counts and lengths.** An object or list count above 1,000,000 is an error; so is a list count the remaining bytes could not hold (two bytes per item with a code or value, one without), so a hostile count never drives a large allocation. A length past the end of the frame is an error.
+- **Object count.** A SNAPSHOT's object count must equal the receiver's (from its chart); otherwise it is refused. A client that receives the snapshot before its chart keeps the bytes and checks them when the chart is decoded (`04-renderer.md` §4).
+- **Sequence numbers.** A DELTA has `to_seq` > `from_seq`; it moves the receiver from `from_seq` to `to_seq` and is applied only by a receiver whose `seq` is `from_seq`. Anything else (a gap, a repeat) is the adapter's cue to resync; the decoder never guesses. A DELTA may carry no changes: commands that change nothing a public stream shows (held to booked) still advance `seq`.
+- **PRIVATE** carries the full set of the subscriber's own holds, replacing the previous one; an empty list means none.
+- **Errors.** A frame that fails any rule is not applied. A client then resyncs (reconnects with its last `seq`); a server sends CLOSE 6 and closes.
+
+**Versioning.** HELLO and SUBSCRIBE carry the version at offset 1, and CLOSE's layout never changes. SUBSCRIBE carries the highest version the client speaks (0 is invalid). The server answers with HELLO in the lower of that and its own highest, and every later frame on the stream uses that version; if the client's version is below the oldest the server supports, the server sends CLOSE 4 and closes. A later version may only append fields to SUBSCRIBE, so a server reading a SUBSCRIBE from a newer client reads the fields it knows and ignores the rest. A client refuses a HELLO whose version it does not speak. Frames served over plain HTTP (the snapshot endpoint, polling) are version 1; a later version will be requested explicitly.
+
+**CLOSE reasons.** A client treats an unknown reason like 3.
+
+| Code | Reason | Client |
+|---|---|---|
+| 1 | Event archived | Stop |
+| 2 | Chart upgraded | Reload the chart, then resubscribe |
+| 3 | Server shutting down | Reconnect with backoff |
+| 4 | Unsupported version | Stop and report |
+| 5 | No such event for this credential | Stop and report |
+| 6 | The server could not decode the client's frame | Reconnect with backoff |
 
 ## 9. Webhooks
 
