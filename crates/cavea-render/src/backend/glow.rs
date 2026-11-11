@@ -515,30 +515,43 @@ unsafe fn link(gl: &glow::Context, vert: &str, frag: &str) -> Result<glow::Progr
     unsafe {
         let program = gl.create_program().map_err(BackendError::Create)?;
         let mut shaders = Vec::with_capacity(2);
+        let mut failed = None;
         for (stage, source) in [(glow::VERTEX_SHADER, vert), (glow::FRAGMENT_SHADER, frag)] {
-            let shader = gl.create_shader(stage).map_err(BackendError::Create)?;
+            let shader = match gl.create_shader(stage) {
+                Ok(shader) => shader,
+                Err(error) => {
+                    failed = Some(BackendError::Create(error));
+                    break;
+                }
+            };
             gl.shader_source(shader, source);
             gl.compile_shader(shader);
             if !gl.get_shader_compile_status(shader) {
-                let log = gl.get_shader_info_log(shader);
+                failed = Some(BackendError::Shader(gl.get_shader_info_log(shader)));
                 gl.delete_shader(shader);
-                gl.delete_program(program);
-                return Err(BackendError::Shader(log));
+                break;
             }
             gl.attach_shader(program, shader);
             shaders.push(shader);
         }
-        gl.link_program(program);
+        if failed.is_none() {
+            gl.link_program(program);
+            if !gl.get_program_link_status(program) {
+                failed = Some(BackendError::Shader(gl.get_program_info_log(program)));
+            }
+        }
+        // Every exit deletes the shaders made, and the program unless it linked.
         for shader in shaders {
             gl.detach_shader(program, shader);
             gl.delete_shader(shader);
         }
-        if !gl.get_program_link_status(program) {
-            let log = gl.get_program_info_log(program);
-            gl.delete_program(program);
-            return Err(BackendError::Shader(log));
+        match failed {
+            Some(error) => {
+                gl.delete_program(program);
+                Err(error)
+            }
+            None => Ok(program),
         }
-        Ok(program)
     }
 }
 
