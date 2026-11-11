@@ -741,7 +741,11 @@ pub fn summary(report: &Report) -> String {
             },
         );
         for f in &e.findings {
-            let mut line = format!("  - {}", f.check);
+            // `object` and `hold` findings start with the object or hold.
+            let mut line = match f.check {
+                "object" | "hold" => "  -".to_owned(),
+                check => format!("  - {check}"),
+            };
             if let Some(i) = f.invariant {
                 let _ = write!(line, " [{i}]");
             }
