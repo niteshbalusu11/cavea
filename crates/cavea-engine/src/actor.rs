@@ -12,6 +12,7 @@ use std::task::{Context, Poll};
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{Instrument, Span, debug, error, info, info_span};
 
+use crate::feed::{End, Feed, Publisher, Sealed};
 use crate::state::{EventState, InvariantViolation};
 use crate::store::{SeatStore, StoreError};
 use crate::types::{Clock, Failure, Op, Reply, Request, Timestamp};
@@ -78,6 +79,7 @@ type Queued = (oneshot::Sender<Reply>, Reply, Span, Span);
 pub struct ActorHandle {
     tx: mpsc::Sender<Envelope>,
     control: Arc<Control>,
+    feed: Arc<Feed>,
 }
 
 #[derive(Debug)]
@@ -183,6 +185,11 @@ impl ActorHandle {
         KeepAlive(self.control.clone())
     }
 
+    /// What the actor publishes for realtime readers.
+    pub(crate) fn feed(&self) -> &Arc<Feed> {
+        &self.feed
+    }
+
     /// Whether both handles lead to the same actor.
     pub(crate) fn same_actor(&self, other: &Self) -> bool {
         self.tx.same_channel(&other.tx)
@@ -192,7 +199,8 @@ impl ActorHandle {
 /// Create an actor for `state`. The caller drives the returned future on its
 /// runtime; it ends with `Ok` once every handle is dropped, it is stopped, or
 /// it has been idle for [`ActorConfig::idle_ms`], and all its work is
-/// committed; or with the error that stopped it. Its lease is renewed by every
+/// committed and published; or with the error that stopped it. Its first
+/// public snapshot is published before this returns. Its lease is renewed by every
 /// commit and, when no commit has done it for [`ActorConfig::heartbeat_ms`],
 /// by a heartbeat; a failed heartbeat stops it like a failed commit.
 pub fn actor<S: SeatStore, C: Clock>(
@@ -210,8 +218,9 @@ pub fn actor<S: SeatStore, C: Clock>(
         keep: AtomicUsize::new(0),
         released: AtomicU64::new(0),
     });
-    let run = run(state, store, clock, rx, control.clone(), config);
-    (ActorHandle { tx, control }, run)
+    let (feed, publisher) = Publisher::new(&state);
+    let run = run(state, publisher, store, clock, rx, control.clone(), config);
+    (ActorHandle { tx, control, feed }, run)
 }
 
 #[allow(
@@ -228,6 +237,8 @@ enum Next {
     Chore,
     /// [`ActorHandle::stop`] was called.
     Stop,
+    /// The clock reached the next publication.
+    Publish,
 }
 
 /// A commit or a heartbeat.
@@ -235,12 +246,21 @@ type Write<'a> = Pin<Box<dyn Future<Output = Result<(), StoreError>> + Send + 'a
 
 async fn run<S: SeatStore, C: Clock>(
     mut state: EventState,
+    publisher: Result<Publisher, InvariantViolation>,
     store: Arc<S>,
     clock: C,
     mut rx: mpsc::Receiver<Envelope>,
     control: Arc<Control>,
     config: ActorConfig,
 ) -> Result<(), ActorError> {
+    let mut publisher = match publisher {
+        Ok(p) => p,
+        Err(v) => return Err(stop(ActorError::Invariant(v), Vec::new(), Vec::new(), rx)),
+    };
+    // What the batch in flight changes, published only once it commits.
+    let mut sealed = Sealed::default();
+    // The wait for the next publication.
+    let mut publish_timer = None;
     let max_batch = config.max_batch.max(1);
     let (event, epoch) = (state.event(), state.epoch());
     // Replies applied to memory, waiting for the next commit to start.
@@ -272,7 +292,7 @@ async fn run<S: SeatStore, C: Clock>(
         // Expiries change state without a caller, so a batch may have no
         // replies.
         if in_flight.is_none() {
-            match state.take_batch() {
+            match state.take_batch_into(&mut sealed) {
                 Err(v) => return Err(stop(ActorError::Invariant(v), pending, committing, rx)),
                 // Only refusals and no-ops: nothing to write, and everything
                 // they observed is already committed.
@@ -297,8 +317,23 @@ async fn run<S: SeatStore, C: Clock>(
                 }
             }
         }
+        let now = clock.now();
+        if publisher.due().is_some_and(|at| now >= at)
+            && let Err(v) = publisher.publish(now)
+        {
+            return Err(stop(ActorError::Invariant(v), pending, committing, rx));
+        }
         if !open && in_flight.is_none() && pending.is_empty() {
+            // Everything is committed: publish it before ending.
+            if let Err(v) = publisher.publish(now) {
+                return Err(stop(ActorError::Invariant(v), pending, committing, rx));
+            }
+            publisher.end(End::Stopped);
             return Ok(());
+        }
+        let next_publish = publisher.wake_at(now);
+        if publish_timer.as_ref().map(|(at, _)| *at) != next_publish {
+            publish_timer = next_publish.map(|at| (at, Box::pin(clock.sleep_until(at))));
         }
         let next_expiry = state.next_expiry();
         if timer.as_ref().map(|(at, _)| *at) != next_expiry {
@@ -332,6 +367,11 @@ async fn run<S: SeatStore, C: Clock>(
             {
                 return Poll::Ready(Next::Chore);
             }
+            if let Some((_, sleep)) = publish_timer.as_mut()
+                && sleep.as_mut().poll(cx).is_ready()
+            {
+                return Poll::Ready(Next::Publish);
+            }
             if let Some(stop) = stop_signal.as_mut()
                 && stop.as_mut().poll(cx).is_ready()
             {
@@ -355,6 +395,7 @@ async fn run<S: SeatStore, C: Clock>(
                     debug!("lease renewed");
                 } else {
                     debug!(commands = committing.len(), "batch committed");
+                    publisher.commit(&sealed);
                 }
                 release(&mut committing);
             }
@@ -368,9 +409,12 @@ async fn run<S: SeatStore, C: Clock>(
                 // Commands already accepted are still received, then `None`.
                 rx.close();
             }
+            // Published at the top of the loop.
+            Next::Publish => publish_timer = None,
             Next::Chore => {
                 chore = None;
                 let now = clock.now();
+                publisher.prune(now);
                 if now >= idle_at {
                     // A guard dropped since the last check started a new
                     // idle period. `keep` is read before `released`, the

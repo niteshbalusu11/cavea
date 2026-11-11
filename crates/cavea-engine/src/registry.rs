@@ -18,9 +18,10 @@ use tokio::sync::watch;
 use tracing::{Instrument as _, debug, error, info, info_span, warn};
 
 use crate::actor::{ActorConfig, ActorHandle, KeepAlive, PendingReply, Rejected, actor};
+use crate::feed::{Frame, Subscription};
 use crate::state::{EventState, LoadError};
 use crate::store::{Acquired, ChartProvider, SeatStore, StoreError};
-use crate::types::{Clock, EventId, Failure, Reply, Request, Timestamp};
+use crate::types::{Clock, EventId, Failure, Reply, Request, Timestamp, TokenHash};
 
 #[derive(Debug, Clone, Copy)]
 pub struct RegistryConfig {
@@ -176,6 +177,63 @@ impl<S: SeatStore, P: ChartProvider, C: Clock + Clone> Registry<S, P, C> {
     /// guard no longer applies: the holder must ask again.
     pub async fn keep_alive(&self, event: EventId) -> Result<KeepAlive, OpenError> {
         Ok(self.handle(event).await?.keep_alive())
+    }
+
+    /// Attach a realtime subscriber that last saw `last_seq` (0 if none),
+    /// loading the event if needed (08 §8.3). Send [`Subscription::hello`],
+    /// then [`Subscription::first`], then what [`Subscription::next`] gives:
+    /// no frame between them is lost or repeated. With a hold token's hash,
+    /// PRIVATE frames for it follow. The subscription keeps the actor from
+    /// being evicted while it lives.
+    pub async fn subscribe(
+        &self,
+        event: EventId,
+        last_seq: u64,
+        token: Option<TokenHash>,
+    ) -> Result<Subscription, OpenError> {
+        for _ in 0..TRIES {
+            let handle = self.handle(event).await?;
+            let now = self.inner.clock.now();
+            match handle
+                .feed()
+                .attach(last_seq, token, handle.keep_alive(), now)
+            {
+                Ok(subscription) => return Ok(subscription),
+                // The actor is ending: attach to the one that replaces it.
+                Err(_) => self.wait_until_gone(event, &handle).await,
+            }
+        }
+        Err(OpenError::Store(StoreError::Unavailable(
+            "event actor kept stopping".into(),
+        )))
+    }
+
+    /// The event's current public SNAPSHOT, read without a message to its
+    /// actor; its `seq` is the `ETag` (08 §8.5). Loads the event if needed.
+    pub async fn snapshot(&self, event: EventId) -> Result<Frame, OpenError> {
+        let handle = self.handle(event).await?;
+        handle
+            .feed()
+            .snapshot()
+            .ok_or(OpenError::Store(StoreError::Unavailable(
+                "event has no snapshot".into(),
+            )))
+    }
+
+    /// For polling with `after_seq` (08 §8.4): `None` if nothing was
+    /// published after it, a DELTA from it if the ring buffer reaches back
+    /// that far, otherwise a SNAPSHOT. Loads the event if needed.
+    pub async fn after(&self, event: EventId, after_seq: u64) -> Result<Option<Frame>, OpenError> {
+        Ok(self.handle(event).await?.feed().after(after_seq))
+    }
+
+    /// Realtime subscribers of the event on this node; 0 if it is not loaded.
+    #[must_use]
+    pub fn subscribers(&self, event: EventId) -> usize {
+        match self.inner.slots().map.get(&event) {
+            Some(Slot::Live(live)) => live.handle.feed().subscribers(),
+            _ => 0,
+        }
     }
 
     /// Load each event, one at a time, and return those that failed. For the

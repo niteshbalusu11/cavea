@@ -13,6 +13,8 @@ pub struct ChartView {
     oids: Vec<Oid>,
     by_label: HashMap<Box<str>, Idx>,
     by_oid: HashMap<Oid, Idx>,
+    /// The public artefact's content hash, sent in HELLO (08 §8.1).
+    hash: [u8; 16],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +45,7 @@ impl ChartView {
             oids: Vec::new(),
             by_label: HashMap::new(),
             by_oid: HashMap::new(),
+            hash: [0; 16],
         };
         for (oid, label) in objects {
             let idx = Idx::try_from(view.oids.len()).map_err(|_| ChartError::TooManyObjects)?;
@@ -60,6 +63,19 @@ impl ChartView {
             view.oids.push(oid);
         }
         Ok(view)
+    }
+
+    /// Set the public artefact's content hash (03 §4.1), which HELLO carries
+    /// so that a client can check it has the right chart. Zero until set.
+    #[must_use]
+    pub fn with_hash(mut self, hash: [u8; 16]) -> Self {
+        self.hash = hash;
+        self
+    }
+
+    #[must_use]
+    pub fn hash(&self) -> [u8; 16] {
+        self.hash
     }
 
     #[must_use]
