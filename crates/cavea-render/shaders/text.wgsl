@@ -46,6 +46,8 @@ struct TextOut {
     @location(1) @interpolate(flat) color: vec4<f32>,
     // The halo's reach in texels, 0 for none.
     @location(2) @interpolate(flat) halo: f32,
+    // The raster's texels, inset half a texel: the halo samples nothing else.
+    @location(3) @interpolate(flat) bounds: vec4<f32>,
 }
 
 @vertex
@@ -56,6 +58,7 @@ fn vs_main(text: TextIn) -> TextOut {
     out.uv = vec2<f32>(0.0);
     out.color = text.color;
     out.halo = 0.0;
+    out.bounds = vec4<f32>(0.0);
     var em_px = text.em * globals.px_per_cu;
     if em_px < f32(text.bytes.y) * 0.25 * globals.stroke_px || text.px_angle.x == 0u {
         return out;
@@ -77,6 +80,7 @@ fn vs_main(text: TextIn) -> TextOut {
     let world = text.pos + vec2<f32>(local.x * c - local.y * s, local.x * s + local.y * c);
     out.clip = vec4<f32>((globals.view * vec3<f32>(world, 1.0)).xy, 0.0, 1.0);
     out.uv = vec2<f32>(text.rect.xy) + texel;
+    out.bounds = vec4<f32>(vec2<f32>(text.rect.xy) + 0.5, vec2<f32>(text.rect.xy) + size - 0.5);
     if (text.bytes.x & 1u) != 0u {
         out.halo = 1.5 * globals.stroke_px / scale;
     }
@@ -99,7 +103,7 @@ fn fs_main(text: TextOut) -> @location(0) vec4<f32> {
     if text.halo > 0.0 {
         var h = 0.0;
         for (var i = 0u; i < 8u; i = i + 1u) {
-            let p = (text.uv + AROUND[i] * text.halo) / size;
+            let p = clamp(text.uv + AROUND[i] * text.halo, text.bounds.xy, text.bounds.zw) / size;
             h = max(h, textureSampleLevel(atlas, atlas_sampler, p, 0.0).r);
         }
         // Black behind light text, white behind dark text, under the ink.

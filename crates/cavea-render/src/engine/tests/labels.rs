@@ -274,6 +274,8 @@ fn section_labels_show_at_overview_and_cross_fade_at_their_anchor_within_the_cla
     assert_eq!(name.0, sold.0, "one anchor");
     assert!(sold.1 < name.1);
     assert!(name.3[1] > sold.3[1], "the name above, the message below");
+    // Hidden on its own below 8 px, so a narrow section keeps its name.
+    assert_eq!(sold.5[0], 32);
     // A new message replaces it.
     e.handle(Command::SetMessage {
         key: "soldOut".into(),

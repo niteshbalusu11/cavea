@@ -249,14 +249,20 @@ impl MapLabels {
             } else {
                 None
             };
+            // The compiler's box, 0.6 em a character by 1.2 em at the
+            // compiled size: the name fits it, sold out or not, so it keeps
+            // its size; the message, at most `k` of the name's em, fits its
+            // width, and the two lines are centred together (the message may
+            // reach below the box). It has its own smallest em, so a section
+            // too narrow for it still shows its name.
             let (w1, h1) = em_size(name);
-            let (w2, h2) = second.map_or((0.0, 0.0), em_size);
-            let (width, height) = (w1.max(k * w2), h1 + k * h2);
-            // The compiler's box: 0.6 em a character by 1.2 em.
-            let chars = label.chars().count() as f32;
-            let em = most * 1f32.min(0.6 * chars / width).min(1.2 / height);
+            let (w2, _) = second.map_or((0.0, 0.0), em_size);
+            let box_w = 0.6 * label.chars().count() as f32 * most;
+            let em = most.min(box_w / w1).min(1.2 * most / h1);
+            let em2 = (k * em).min(box_w / w2.max(f32::MIN_POSITIVE));
+            let r = em2 / em.max(f32::MIN_POSITIVE);
             let pos = s.label_anchor.map(|v| v as f32 * 0.25);
-            let instance = |raster: Raster, em: f32, oy: f32, scale: f32| {
+            let instance = |raster: Raster, em: f32, oy: f32, min_px: f32, max_px: f32| {
                 TextInstance {
                     pos,
                     em,
@@ -264,24 +270,26 @@ impl MapLabels {
                     anchor: [f32::from(raster.rect[2]) / 2.0, oy],
                     angle: 0,
                     halo: true,
-                    min_q: (SECTION_MIN_PX * scale * 4.0) as u8,
-                    max_q: (SECTION_MAX_PX * scale * 4.0) as u8,
+                    min_q: (min_px * 4.0) as u8,
+                    max_q: (max_px * 4.0) as u8,
                     color: theme.fg,
                 }
                 .encode()
             };
             // The two lines' anchors, in each raster's texels, centre the
-            // block on the anchor at any zoom.
+            // block on the anchor at any zoom; the message's largest em keeps
+            // its ratio to the name's when both are clamped.
             let (rh1, px1) = (f32::from(name.rect[3]), f32::from(name.px));
             let mut oy1 = rh1 / 2.0;
-            let second = second.map(|r| {
-                let (rh2, px2) = (f32::from(r.rect[3]), f32::from(r.px));
-                oy1 = (rh1 + rh2 * k * px1 / px2) / 2.0;
-                instance(r, k * em, (rh2 - rh1 * px2 / (k * px1)) / 2.0, k)
+            let second = second.filter(|_| r > 0.0).map(|m| {
+                let (rh2, px2) = (f32::from(m.rect[3]), f32::from(m.px));
+                oy1 = (rh1 + rh2 * r * px1 / px2) / 2.0;
+                let oy2 = (rh2 - rh1 * px2 / (r * px1)) / 2.0;
+                instance(m, em2, oy2, k * SECTION_MIN_PX, r * SECTION_MAX_PX)
             });
             self.cands.push(Cand {
                 kind: Kind::Section,
-                bytes: instance(name, em, oy1, 1.0),
+                bytes: instance(name, em, oy1, SECTION_MIN_PX, SECTION_MAX_PX),
                 second,
             });
         }
