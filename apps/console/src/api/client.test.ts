@@ -53,6 +53,12 @@ beforeEach(() => {
 const header = (i: number, name: string) => new Headers(seen[i]?.init.headers).get(name);
 const signal = () => new AbortController().signal;
 
+test("an array query parameter is repeated, each value encoded", async () => {
+  answer = async () => json(200, { data: [], unknown: [] });
+  await call("listObjects", { path: { event: "e" }, query: { label: ["A-1", "B 2&x"] } }, signal());
+  expect(seen[0]?.url).toBe("/v1/events/e/objects?label=A-1&label=B+2%26x");
+});
+
 test("a read sends the workspace and no CSRF token; a write sends both", async () => {
   await call("listCharts", { query: { limit: 100, after: "a b" } }, signal());
   answer = async () => json(201, { key: "k" });
