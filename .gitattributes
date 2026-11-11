@@ -1,4 +1,0 @@
-# Parallel pull requests each append an entry to the decision log. A union merge
-# keeps both sides' entries instead of reporting a conflict; the merge gate then
-# checks that no decision number is used twice (docs/ORCHESTRATION.md §7).
-docs/DECISIONS.md merge=union

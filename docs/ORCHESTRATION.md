@@ -119,12 +119,14 @@ Carry these into every brief:
    - Every CI check is green on the head commit.
    - GitHub reports the pull request mergeable, with no conflicts against `main`.
    - The diff stays inside the slice's scope, the task ids are ticked in `docs/TODO.md`, and no unjustified dependency was added.
-   - No decision number is used twice in `docs/DECISIONS.md` after the rebase. The file merges by union (`.gitattributes`), so two pull requests that each append an entry no longer conflict, and a clash of numbers has to be caught here.
+   - No decision number is used twice in `docs/DECISIONS.md`.
 3. After merging, confirm GitHub reports it merged and that the `main` workflow run is green. Note any decision that later briefs must carry, then start the next slice.
 4. If the gate fails (CI red, conflict with `main`, scope creep, missing proof): do not fix it yourself. Start a new builder on the same branch with a brief that states exactly what failed and what to do, and that it must rebase onto current `main`, re-run its tests, and get Sol's approval again if behaviour changed.
 5. If a builder stopped without filing: read why. Then re-brief, split the slice, or, if the blocker is a genuine question for the owner, ask (§9).
 6. If `main` is red after a merge: start a builder immediately with the single job of making `main` green, and merge nothing else in the affected crates until it lands.
 7. If a builder's work contradicts a spec for a good reason, make sure the spec was updated in that pull request; if not, send a docs fix.
+
+Every pull request that records a decision appends to `docs/DECISIONS.md`, so two waiting pull requests always conflict there. When that file is the only conflict, merge `main` into the branch yourself in a scratch worktree, keep both sides' entries in number order, check that the pull request's own diff is otherwise unchanged (`git diff origin/main HEAD` against the diff before), push, and wait for CI again; any other conflict goes to a rebase builder. Do not rebase such a branch: a union merge driver was tried (#66) and silently kept stale headings from the branch's intermediate commits, and GitHub ignores it.
 
 Merge pull requests one at a time. After each merge, the next one in line must be rebased onto the new `main` and its checks must be green again before it merges; CI runs no tests, so two pull requests that each pass alone can still break each other. When the pull requests touch disjoint crates, a green rebase is enough. When they share code, have the second builder re-run the tests after rebasing.
 
@@ -159,31 +161,32 @@ Ask only when a decision is genuinely the owner's and work cannot route around i
 
 ## 11. Slice plan and open notes
 
-The orchestrator keeps this section current so that the plan survives a context summary. Done work is whatever `docs/TODO.md` ticks on `main`; this lists only what is planned and what to remember. Last refreshed after pull request #44 (2026-11-11).
+The orchestrator keeps this section current so that the plan survives a context summary. Done work is whatever `docs/TODO.md` ticks on `main`; this lists only what is planned and what to remember. Last refreshed after pull request #66 (2026-11-11).
 
-Three chains run side by side, one builder each, because each chain's slices edit the same crates. When a builder splits a slice, the next builder in that chain inherits the unreviewed branch and takes it through review together with the chain's next tasks. A builder may send an interim note and keep running: check the task's status before starting a follow-up, so that two builders never work one branch.
+Up to three builders run side by side, one per chain, because a chain's slices edit the same files. When a builder splits a slice, the next builder in that chain inherits the unreviewed branch and takes it through review together with the chain's next tasks. A builder may send an interim note and keep running: check the task's status before starting a follow-up, so that two builders never work one branch.
 
-**Renderer chain** (`cavea-render`, `cavea-web`, `packages/renderer`, `apps/demo`):
+**Renderer and SDK chain** (`cavea-render`, `cavea-web`, `packages/renderer`, `packages/react`, `apps/demo`, `fixtures/`):
 
-1. In review: dynamic text atlas, row and section labels, icons: `REN-026` to `REN-028` (pull request #46).
-2. Designer canvas support, because the designer shell cannot mount a canvas without it: live scene and renderer extensions (`DSN-004`, `DSN-005`), with the view-model boundary (`DSN-006`) if it fits.
-3. Built-in interface: `WEB-006` to `WEB-011`; then accessibility baseline `A11Y-001`, `A11Y-002`.
-4. Context loss, timing marks, headless render, golden images: `REN-040`, `REN-044`, `REN-045`, `REN-006`, `TST-010`; scripted interaction tests and the benchmark page `TST-015`, `TST-012`.
-5. Packaging: `WEB-012` to `WEB-018`, generated types `FND-007`.
-6. `REN-020` (background images) waits for asset upload (`SRV-010`).
+1. In the merge gate: packaging, script-tag build, React wrapper, Next.js, CSP and bundler checks, changelog convention: `WEB-013` to `WEB-016`, `WEB-018`, `FND-009` (pull request #64).
+2. Running: headless render, golden images, scripted interaction tests, benchmark page: `REN-045`, `TST-010`, `TST-015`, `TST-012` (branch `slice/renderer-test-harness`).
+3. Then the last of M1: generated SDK types `FND-007` (the engine's events are hand-written JSON in `cavea-web/src/events.rs`, so it needs serde attributes the generator can read plus a test that the hand-written JSON matches), and background images `REN-020` (assets exist since #59; about 14 KB of payload is left under the 150 KB target).
+4. M2's leftovers: Node server SDK `WEB-026` (the OpenAPI document and a TypeScript generator for it exist: `xtask/src/api.rs`), HTTP fuzz target `TST-027`.
 
-**Designer chain** (`cavea-edit`, later `apps/console`); took over the format and tooling slot once the compiler, CLI, presets, fuzz targets and determinism check were done:
+**Designer chain** (`cavea-edit`, `cavea-designer`, `packages/designer-core`, `apps/console/src/designer`):
 
-1. In review: rows and seats, category brush, focal point, arrange, duplicate and clipboard: `DSN-021`, `DSN-022`, `DSN-025`, `DSN-026`, `DSN-032`, `DSN-033`, part of `DSN-034` (pull request #45). Grouping decoration nodes probably needs a schema decision.
-2. Remaining logic that needs no canvas: numbering (`DSN-027`), categories (`DSN-028`), layers (`DSN-029`), guides (`DSN-031`), continuous validation (`DSN-038`), export and import (`DSN-041`).
-3. The application shell in `apps/console` (`DSN-008` to `DSN-010`, `DSN-013`), which the console (`CON-001`) shares: build the shell once. Then inspectors (`DSN-023`, `DSN-024`), image tool (`DSN-020`, after `SRV-010`), saving (`DSN-035` to `DSN-037`), preview and publish (`DSN-039`, `DSN-040`), new-chart screen and form (`DSN-042`, `DSN-043`), performance pass (`DSN-044`), end-to-end test (`TST-031`).
+1. In the merge gate: the canvas, `DSN-004`, `DSN-005` (pull request #63).
+2. Approved and pushed, to be rebased and filed once #63 lands: the canvas in the shell, camera and zoom, curve handle, numbering preview, markers, insert form, new-chart screen and tour: `DSN-013`, `DSN-023`, `DSN-027`, `DSN-038`, `DSN-042`, `DSN-043` (branch `slice/designer-shell-3-canvas`, head `0d0ea92`, based on `da4d71b`; its decision D-60 must be renumbered).
+3. Then: rulers and guides `DSN-031`; the server-backed draft: autosave with etag, the IndexedDB safety net, the single-editor lock, preview, publish with thumbnail (`DSN-035` to `DSN-040`); image tool `DSN-020`; performance pass `DSN-044`; end-to-end test `TST-031`. `DSN-034` grouping needs a chart-schema change and is the owner's call.
 
-**Server chain** (`cavea-engine`, `cavea-server`, `cavea-sim`, `cavea-loadgen`):
+**Server chain** (`cavea-engine`, `cavea-server`, `deploy/`):
 
-1. In flight: load generator through review with reconnection, local L1 and L2 runs, `kill -9` and PostgreSQL-restart chaos on a private container: `TST-023` to `TST-025`.
-2. Health, readiness, metrics and the tracing gap (`SRV-020`); OpenAPI (`SRV-019`); assets (`SRV-010`).
-3. Docker image and compose (`SRV-023`); Node server SDK (`WEB-026`, after OpenAPI); authorisation matrix completion and the HTTP fuzz target (`TST-026`, `TST-027`).
-4. M4's server side: licensing, security and operations tasks in `docs/TODO.md` order, and the endpoints the console needs.
+1. Running: invitations, audit log, pool warm-up, the console embedded in the server binary, Docker image and compose: `CON-012`, `CON-013`, `CON-015`, `SRV-023` (branch `slice/server-audit-embed-docker`). After #65, a change to `openapi.json` also needs `cargo xtask types`.
+2. Then M4's server side in `docs/TODO.md` order: licensing `LIC-*`, security `SEC-*`, operations `OPS-*`, the Helm chart and systemd unit, TOTP and password reset (`CON-003`). A workspace created by the admin key after setup already has the owner as a member, which 09 §2 does not say: settle it with the invitations work.
+
+**Console chain** (`apps/console` outside the designer):
+
+1. Merged: API client, setup, sign-in, workspace switcher, role-aware navigation, charts list (#65).
+2. Next: chart detail `CON-006`, events list and create `CON-007`, event manager `CON-008`, event settings `CON-009`, API keys and quick start `CON-010`, `CON-011`, members and invitations screens `CON-012`, interface standards `CON-014`. New screens use `call()` in `api/client.ts`, `createQuery` keyed on the workspace, `Gate` around each section route, `allows(workspace(), "<operationId>")` for actions, and the `consoleScreens` block of `messages.ts`.
 
 No milestone report has been posted yet: M1 and M2 each still have open tasks. Post each one when its last agent-doable task merges.
 
