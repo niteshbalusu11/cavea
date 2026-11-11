@@ -49,7 +49,7 @@ export interface Rendered {
 const MAX_FRAMES = 600;
 const FRAME_MS = 1000 / 60;
 
-let ready: Promise<Uint8Array> | undefined;
+let loaded: Promise<Uint8Array> | undefined;
 const charts = new Map<string, Promise<Uint8Array>>();
 
 async function bytes(url: string): Promise<Uint8Array> {
@@ -61,10 +61,10 @@ async function bytes(url: string): Promise<Uint8Array> {
 }
 
 async function render(panel: Panel): Promise<Rendered> {
-  ready ??= init({ module_or_path: "wasm/cavea_web_bg.wasm" }).then(() =>
+  loaded ??= init({ module_or_path: "wasm/cavea_web_bg.wasm" }).then(() =>
     loadGlyphAtlas("glyphs.png"),
   );
-  const atlas = await ready;
+  const atlas = await loaded;
   let chart = charts.get(panel.chart);
   if (chart === undefined) {
     chart = bytes(`charts/${panel.chart}.ccf`);
@@ -120,7 +120,7 @@ async function render(panel: Panel): Promise<Rendered> {
     if (panel.held !== undefined) {
       view.select(panel.held);
       frame();
-      const request = log.findLast((e) => e.type === "holdRequest");
+      const request = log.filter((e) => e.type === "holdRequest").at(-1);
       if (request === undefined || request.type !== "holdRequest") {
         throw new Error("no hold request for the held seats");
       }
@@ -180,10 +180,10 @@ function chartObjects(log: RendererEvent[]): number {
   return ready.objects;
 }
 
-function base64(bytes: Uint8Array): string {
+function base64(data: Uint8Array): string {
   let text = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  for (let i = 0; i < data.length; i += 0x8000) {
+    text += String.fromCharCode(...data.subarray(i, i + 0x8000));
   }
   return btoa(text);
 }

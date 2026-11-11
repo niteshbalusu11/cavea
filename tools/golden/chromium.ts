@@ -17,7 +17,7 @@ type Message = {
 };
 
 /** Runs `cmd` and returns its standard output; throws with its output on failure. */
-export async function sh(cmd: string[], cwd?: string): Promise<string> {
+export async function sh(cmd: string[], cwd = process.cwd()): Promise<string> {
   const proc = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe" });
   const [out, err, code] = await Promise.all([
     new Response(proc.stdout).text(),
