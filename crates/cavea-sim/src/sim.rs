@@ -1348,10 +1348,12 @@ impl Sim {
                         }
                         let first = std::mem::take(&mut sub.first);
                         s.live = Some(sub);
+                        s.mine = None;
                         for f in first {
                             apply(s, &f, &self.evs, &mut self.trace, i)?;
                             self.stats.count("INV-8, INV-9 frames checked");
                         }
+                        private_sent(s)?;
                     }
                     Some(Err(_)) => {
                         s.pending = None;
@@ -1380,10 +1382,12 @@ impl Sim {
                         self.stats.count("subscriber lagged and resynced");
                         match live.resync() {
                             Ok(frames) => {
+                                s.mine = None;
                                 for f in frames {
                                     apply(s, &f, &self.evs, &mut self.trace, i)?;
                                     self.stats.count("INV-8, INV-9 frames checked");
                                 }
+                                private_sent(s)?;
                             }
                             Err(_) => s.live = None,
                         }
@@ -1630,12 +1634,14 @@ impl Sim {
                 open.retain(|&(i, lo, hi)| {
                     let Some(r) = reqs.get(i) else { return false };
                     let reply = r.reply.clone();
-                    if let Some(Ok(o)) = &reply {
-                        // A no-op names the seq it saw.
-                        if outcome_seq(o) != seq {
-                            return true;
-                        }
-                    } else if seq < lo || seq > hi {
+                    // Only a state the command could have observed.
+                    if seq < lo || seq > hi {
+                        return true;
+                    }
+                    // A no-op names the seq it saw.
+                    if let Some(Ok(o)) = &reply
+                        && outcome_seq(o) != seq
+                    {
                         return true;
                     }
                     let mut at = model.clone();
@@ -1853,6 +1859,18 @@ fn apply(
     if matches!(frame, ServerFrame::Private(_)) {
         check_private(s, ev)?;
     }
+    Ok(())
+}
+
+/// A subscriber with a token gets a PRIVATE frame when it attaches or
+/// resyncs, an empty one if the token holds nothing (08 §8.3).
+fn private_sent(s: &Sub) -> Result<(), Violation> {
+    ensure!(
+        s.token.is_none() || s.mine.is_some(),
+        "INV-8",
+        "a token subscriber started at {:?} without a PRIVATE frame",
+        s.seq
+    );
     Ok(())
 }
 
