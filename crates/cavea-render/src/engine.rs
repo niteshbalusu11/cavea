@@ -800,6 +800,11 @@ impl<B: GpuBackend> Engine<B> {
     /// One `Tick` (04 §18): apply the coalesced resize, then queued input in
     /// arrival order, then the animation list; report the camera; draw if dirty.
     fn frame(&mut self, time_ms: f64) {
+        self.draw_frame(time_ms);
+        self.refocus();
+    }
+
+    fn draw_frame(&mut self, time_ms: f64) {
         self.frame_requested = false;
         let css_before = self.viewport.map(|v| v.css);
         if let Some([width, height, dpr, max_dpr]) = self.resize.take() {
@@ -869,7 +874,6 @@ impl<B: GpuBackend> Engine<B> {
             }
             self.dirty |= moved || lod_changed;
         }
-        self.refocus();
         if !self.animations.is_empty() || self.recogniser.wants_tick() {
             self.want_frame();
         }

@@ -31,6 +31,7 @@ impl<B: GpuBackend> Engine<B> {
         }
     }
 
+    #[inline(never)]
     pub(super) fn key(&mut self, key: &str, m: Modifiers) {
         if !self.takes_key(key, m) {
             return;
@@ -170,6 +171,7 @@ impl<B: GpuBackend> Engine<B> {
 
     /// At the end of a frame: reports the focus again if its seat's state
     /// changed, or the camera came to rest elsewhere than it was reported.
+    #[inline(never)]
     pub(super) fn refocus(&mut self) {
         let Some(idx) = self.focus.filter(|_| self.focus_shown) else {
             return;
