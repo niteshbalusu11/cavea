@@ -143,6 +143,7 @@ version = "0.0.0"
 name = "cavea-compiler"
 version = "0.0.0"
 dependencies = [
+ "cavea-core",
  "serde",
  "serde_json",
 ]
