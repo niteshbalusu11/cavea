@@ -5,12 +5,16 @@
 //!
 //! [`encode`] turns a [`Chart`] into the public or full artefact; [`decode`]
 //! turns bytes back into a [`Chart`] whose cross-references are all in range.
+//! [`wire`] holds the realtime frame codecs.
 
 mod ccf;
 mod chart;
 mod codec;
 #[cfg(test)]
 mod tests;
+pub mod wire;
+#[cfg(test)]
+mod wire_tests;
 
 use core::fmt;
 
