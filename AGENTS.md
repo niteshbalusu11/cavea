@@ -146,6 +146,7 @@ Several agents share this machine.
 - Use the one shared PostgreSQL container from `deploy/compose.yaml`. Tests create and drop their own uniquely named database; never rely on a fixed database name or leave data behind.
 - Do not leave servers, watchers or containers of your own running when you finish.
 - Pick a free port at run time; do not hard-code one.
+- `/tmp` is a 15 GB memory-backed filesystem shared by every agent, and it has filled up. Set `TMPDIR` to a gitignored directory in your worktree (`target/tmp`) for builds and tests, keep scratch files and review checkouts there, and delete your temporary files when you finish. Never delete another session's.
 
 ## Out of scope for agents
 
