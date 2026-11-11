@@ -523,6 +523,13 @@ fn single_row_tool() {
     let live = t.s.document().children(None).last().copied().expect("live");
     assert!(matches!(t.node(live), Node::Row(r) if r.seats == 11));
     t.key(Key::Escape);
+    // An end placed closer than 1 cu shows nothing, whatever was shown.
+    let before = t.state();
+    t.click([0.0, 4_000.0]);
+    t.to([550.0, 4_000.0], NONE);
+    t.click([0.5, 4_000.0]);
+    t.key(Key::Enter);
+    assert_eq!(t.state(), before);
     // Escape after the second click leaves nothing.
     let before = t.state();
     t.click([0.0, 2_000.0]);
@@ -1653,6 +1660,30 @@ fn snapping() {
     t.s.select(Level::Section(s), [lone]);
     t.by(HandleKind::Corner(Corner::BottomRight), [5.0, 5.0], NONE);
     assert_eq!(shape(&t.node(lone)).size, Some([105.0, 105.0]));
+    // Nor is the section a new node is drawn into, from the first press.
+    let room = vec![[0.0, 8e3], [1e3, 8e3], [1e3, 9e3], [0.0, 9e3]];
+    let room = t.s.group(&[], Some(room)).expect("room");
+    t.s.select(Level::Section(room), []);
+    t.s.set_tool(ToolId::Rect);
+    t.drag([5.0, 8_200.0], [100.0, 8_300.0], NONE);
+    assert_eq!(shape(&t.node(t.selected())).size, Some([95.0, 100.0]));
+    // The grid line held stays while the pointer jitters across the middle.
+    t.s.set_snap(SnapSettings {
+        objects: false,
+        grid: true,
+        ..only
+    });
+    t.s.set_tool(ToolId::Select);
+    t.s.select(Level::Top, [b]);
+    t.down([380.0, 280.0], NONE);
+    let mut lefts = Vec::new();
+    for x in [2.4, 2.6, 2.4, 2.6] {
+        t.to([x + 380.0 - 350.0, 280.0], NONE);
+        lefts.push(shape(&t.node(b)).origin[0] - 50.0);
+    }
+    t.key(Key::Escape);
+    t.up([380.0, 280.0], NONE);
+    assert_eq!(lefts, [0.0; 4]);
     t.s.set_snap(all);
     // No flicker: C's left edge (203) and A's right edge (200) both in
     // reach; the one held first stays while it is.
@@ -1746,6 +1777,26 @@ fn row_alignment() {
     t.key(Key::Escape);
     t.up(from, NONE);
     assert_eq!(ys, [190.0; 4]);
+    // At 10% (a 60 cu reach) one neighbour's lines 95 apart: the one held
+    // stays as the pointer jitters across the middle.
+    t.s.undo().expect("undo");
+    t.s.undo().expect("undo");
+    assert!(t.s.document().node(k).is_none());
+    t.zoom = 0.1;
+    // On a seat clear of the handles' 60 cu reach.
+    let from = t.s.index().to_world(m, [82.5, 95.0]).expect("seat");
+    t.down(from, NONE);
+    let mut ys = Vec::new();
+    for y in [-87.6, -87.4, -87.6, -87.4] {
+        let to = at(0.0, y);
+        t.to([from[0] + to[0], from[1] + to[1]], NONE);
+        let o = block(&t.node(m)).origin;
+        ys.push(((o[0] * nrm[0] + o[1] * nrm[1]) * 1e6).round() / 1e6);
+    }
+    t.key(Key::Escape);
+    t.up(from, NONE);
+    assert_eq!(ys, [95.0; 4]);
+    t.zoom = 1.0;
     let all = SnapSettings::default();
     t.s.set_snap(SnapSettings { rows: false, ..all });
     move_by(&mut t, m, from, at(0.0, -37.0), NONE);

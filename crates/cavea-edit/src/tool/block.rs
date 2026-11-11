@@ -91,7 +91,7 @@ impl Tool for BlockTool {
         match (&mut self.state, *input) {
             (Block::Idle, Input::PointerDown(p)) if p.button == Button::Primary => {
                 let spot = Spot::at(cx, &p);
-                let at = snap::point(cx, &p, None);
+                let at = snap::point(cx, &p, None, spot.parent);
                 let a = spot.local(cx, at);
                 self.entry = Entry::default();
                 self.state = Block::Drag {
@@ -123,7 +123,7 @@ impl Tool for BlockTool {
                 },
                 Input::PointerMove(p),
             ) => {
-                let at = snap::point(cx, &p, live.created());
+                let at = snap::point(cx, &p, live.created(), spot.parent);
                 (*b, *shift) = (spot.local(cx, at), p.mods.shift);
                 *dragged |= p.dragged_from(down);
                 self.show(cx, None);
@@ -411,13 +411,13 @@ impl ArcTool {
         match &mut self.state {
             Arc::Idle => {
                 let spot = Spot::at(cx, &p);
-                let at = snap::point(cx, &p, None);
+                let at = snap::point(cx, &p, None, spot.parent);
                 let c = spot.local(cx, at);
                 let budget = budget(cx);
                 self.state = Arc::Centre { spot, c, budget };
             }
             Arc::Centre { spot, c, budget } => {
-                let at = snap::point(cx, &p, None);
+                let at = snap::point(cx, &p, None, spot.parent);
                 let q = spot.local(cx, at);
                 let start = (q[1] - c[1]).atan2(q[0] - c[0]);
                 let shape = ArcShape {

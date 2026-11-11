@@ -64,7 +64,7 @@ impl Tool for RowTool {
                         live,
                     } => {
                         if *dragged {
-                            let at = snap::point(cx, &p, live.created());
+                            let at = snap::point(cx, &p, live.created(), spot.parent);
                             let b = spot.local(cx, at);
                             self.state = State::End {
                                 spot: *spot,
@@ -133,7 +133,7 @@ impl RowTool {
         match &mut self.state {
             State::Idle => {
                 let spot = Spot::at(cx, &p);
-                let at = snap::point(cx, &p, None);
+                let at = snap::point(cx, &p, None, spot.parent);
                 let a = spot.local(cx, at);
                 self.state = State::Start {
                     spot,
@@ -145,7 +145,7 @@ impl RowTool {
             }
             // The second click places the end.
             State::Start { spot, a, live, .. } => {
-                let at = snap::point(cx, &p, live.created());
+                let at = snap::point(cx, &p, live.created(), spot.parent);
                 let b = spot.local(cx, at);
                 self.state = State::End {
                     spot: *spot,
@@ -158,7 +158,7 @@ impl RowTool {
             // The third: on the end it keeps the row straight; elsewhere
             // it bends the row through it.
             State::End { spot, b, live, .. } => {
-                let at = snap::point(cx, &p, live.created());
+                let at = snap::point(cx, &p, live.created(), spot.parent);
                 let m = spot.local(cx, at);
                 let near = dist(m, *b) <= px(&p, tuning::DOUBLE_CLICK_PX);
                 self.bend(cx, (!near).then_some(m));
@@ -184,7 +184,7 @@ impl RowTool {
                 if let Some(d) = down {
                     *dragged |= p.dragged_from(d);
                 }
-                let at = snap::point(cx, &p, live.created());
+                let at = snap::point(cx, &p, live.created(), spot.parent);
                 let end = spot.local(cx, at);
                 let draft = Draft::Row {
                     start: *a,
@@ -201,7 +201,7 @@ impl RowTool {
                 }
             }
             State::End { spot, b, live, .. } => {
-                let at = snap::point(cx, &p, live.created());
+                let at = snap::point(cx, &p, live.created(), spot.parent);
                 let m = spot.local(cx, at);
                 let near = dist(m, *b) <= px(&p, tuning::DOUBLE_CLICK_PX);
                 self.bend(cx, (!near).then_some(m));
@@ -219,8 +219,12 @@ impl RowTool {
                 bend: m,
                 seat_pitch: SEAT_PITCH,
             };
-            if let Some(command) = spot.create(cx.category, &draft) {
-                live.show(cx, command);
+            match spot.create(cx.category, &draft) {
+                Some(command) => drop(live.show(cx, command)),
+                // Ends closer than 1 cu: nothing shows (a row too long keeps
+                // the last one shown).
+                None if dist(*a, *b) < MIN_SIZE => live.clear(cx),
+                None => {}
             }
         }
     }

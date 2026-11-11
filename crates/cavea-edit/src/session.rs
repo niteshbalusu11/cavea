@@ -191,6 +191,9 @@ impl Session {
             _ => {}
         }
         self.snap.guides.clear();
+        if matches!(input, Input::PointerDown(_)) {
+            self.snap.release();
+        }
         self.with_tool(|tool, cx| tool.input(cx, &input));
         if matches!(input, Input::PointerUp(_) | Input::PointerCancel) {
             self.snap.guides.clear();

@@ -111,9 +111,9 @@ impl ShapeTool {
                 *dragged |= p.dragged_from(down);
                 let at = match kind {
                     ShapeKindTool::Line if !p.mods.shift => {
-                        snap::line_end(cx, &p, down.world, live.created())
+                        snap::line_end(cx, &p, down.world, live.created(), spot.parent)
                     }
-                    _ => snap::point(cx, &p, live.created()),
+                    _ => snap::point(cx, &p, live.created(), spot.parent),
                 };
                 *b = spot.local(cx, at);
                 if (!*dragged && !*clicks) || self.kind == ShapeKindTool::Section {
@@ -127,7 +127,7 @@ impl ShapeTool {
                 points,
                 pointer,
             } => {
-                let at = snap::point(cx, &p, None);
+                let at = snap::point(cx, &p, None, spot.parent);
                 let q = spot.local(cx, at);
                 *pointer = Some(match points.last() {
                     Some(&last) if p.mods.shift => snap15(last, q),
@@ -161,7 +161,7 @@ impl ShapeTool {
         } = &mut self.state
         else {
             let spot = self.spot(cx, &p);
-            let at = snap::point(cx, &p, None);
+            let at = snap::point(cx, &p, None, spot.parent);
             let q = spot.local(cx, at);
             self.state = State::Polygon {
                 spot,
@@ -170,7 +170,7 @@ impl ShapeTool {
             };
             return;
         };
-        let at = snap::point(cx, &p, None);
+        let at = snap::point(cx, &p, None, spot.parent);
         let mut q = spot.local(cx, at);
         if let (Some(&last), true) = (points.last(), p.mods.shift) {
             q = snap15(last, q);
@@ -302,7 +302,7 @@ impl Tool for ShapeTool {
                     }
                     _ => {
                         let spot = self.spot(cx, &p);
-                        let at = snap::point(cx, &p, None);
+                        let at = snap::point(cx, &p, None, spot.parent);
                         let a = spot.local(cx, at);
                         self.state = State::Drag {
                             down: Pointer { world: at, ..p },

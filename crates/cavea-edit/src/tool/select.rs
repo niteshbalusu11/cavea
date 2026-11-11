@@ -393,7 +393,7 @@ impl SelectTool {
                 }
             }
             State::Pivot { .. } => {
-                let at = snap::point(cx, &p, None);
+                let at = snap::point(cx, &p, None, None);
                 let sel = &cx.selection;
                 self.pivot = Some((sel.level(), sel.items().clone(), at));
             }
@@ -425,7 +425,7 @@ impl SelectTool {
                 readout,
                 live,
             } => {
-                let q = place.invert(snap::point(cx, &p, Some(*id)));
+                let q = place.invert(snap::point(cx, &p, Some(*id), None));
                 let d = [q[0] - start[0], q[1] - start[1]];
                 match handles::resize(base, *id, *kind, d, q, p.mods, *room) {
                     Step::Base => {

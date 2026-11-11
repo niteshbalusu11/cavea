@@ -146,8 +146,9 @@ impl Tool for TextTool {
                 self.edit = match hit {
                     Some(id) => TextEdit::edit(cx, id, level),
                     None => {
-                        let at = snap::point(cx, &p, None);
-                        Some(TextEdit::new(cx, Spot::at(cx, &p), at))
+                        let spot = Spot::at(cx, &p);
+                        let at = snap::point(cx, &p, None, spot.parent);
+                        Some(TextEdit::new(cx, spot, at))
                     }
                 };
                 self.swallow = true;

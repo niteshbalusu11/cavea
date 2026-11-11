@@ -125,6 +125,11 @@ fn shift(r: &Rect, v: P) -> Rect {
 }
 
 impl Snap {
+    /// Forgets the targets held: a press starts afresh.
+    pub(crate) fn release(&mut self) {
+        (self.held, self.row) = ([None; 3], None);
+    }
+
     /// Whether this event snaps at all, and the threshold in chart units.
     fn on(&self, p: &Pointer) -> Option<f64> {
         let s = &self.settings;
@@ -133,12 +138,19 @@ impl Snap {
         (any && !p.mods.alt && thr.is_finite()).then_some(thr)
     }
 
-    fn grid(&self, v: f64, thr: f64, out: &mut Vec<Cand>) {
+    /// The nearest grid line on axis `a` and, if still in reach, the one
+    /// held there.
+    fn grid(&self, a: usize, v: f64, thr: f64, out: &mut Vec<Cand>) {
         let step = self.settings.step;
         if self.settings.grid && step.is_finite() && step > 0.0 {
-            let target = (v / step).round() * step;
-            if (target - v).abs() <= thr && target.is_finite() {
-                out.push(cand(Kind::Grid, target - v, target));
+            let held = match self.held.get(a) {
+                Some(&Some((Kind::Grid, t))) => Some(t),
+                _ => None,
+            };
+            for target in held.into_iter().chain([(v / step).round() * step]) {
+                if (target - v).abs() <= thr && target.is_finite() {
+                    out.push(cand(Kind::Grid, target - v, target));
+                }
             }
         }
     }
@@ -181,17 +193,34 @@ fn cand(kind: Kind, off: f64, target: f64) -> Cand {
     }
 }
 
+/// What a point snap ignores: the node being drawn or edited (with its
+/// section and what it holds), and the section a new node goes into.
+type Skip = (Option<u32>, Option<u32>);
+
 /// The world point to use for a pointer at `p` while drawing: snapped to
 /// the grid and to edges, centres and row ends of nodes within
-/// `tuning::SNAP_REACH` px, except `exclude` (the node being drawn).
-pub(crate) fn point(cx: &mut Context<'_>, p: &Pointer, exclude: Option<u32>) -> P {
-    point_with(cx, p, exclude, true).0
+/// `tuning::SNAP_REACH` px, except `node` (the node being drawn or edited,
+/// with its section and children) and `parent` (where it goes).
+pub(crate) fn point(
+    cx: &mut Context<'_>,
+    p: &Pointer,
+    node: Option<u32>,
+    parent: Option<u32>,
+) -> P {
+    point_with(cx, p, (node, parent), true).0
 }
 
 /// A line's end: onto edges, centres and row ends, else onto a 15° step
 /// from `from`, else onto the grid (which, finer than the snap distance,
 /// would otherwise always win).
-pub(crate) fn line_end(cx: &mut Context<'_>, p: &Pointer, from: P, exclude: Option<u32>) -> P {
+pub(crate) fn line_end(
+    cx: &mut Context<'_>,
+    p: &Pointer,
+    from: P,
+    node: Option<u32>,
+    parent: Option<u32>,
+) -> P {
+    let exclude = (node, parent);
     let (at, hit) = point_with(cx, p, exclude, false);
     if hit {
         return at;
@@ -204,7 +233,7 @@ pub(crate) fn line_end(cx: &mut Context<'_>, p: &Pointer, from: P, exclude: Opti
 
 /// The snapped point and whether a target was chosen. `exclude`, its
 /// section and what it holds are not targets.
-fn point_with(cx: &mut Context<'_>, p: &Pointer, exclude: Option<u32>, grid: bool) -> (P, bool) {
+fn point_with(cx: &mut Context<'_>, p: &Pointer, (node, parent): Skip, grid: bool) -> (P, bool) {
     let Some(thr) = cx.snap.on(p) else {
         return (p.world, false);
     };
@@ -213,12 +242,13 @@ fn point_with(cx: &mut Context<'_>, p: &Pointer, exclude: Option<u32>, grid: boo
     if cx.snap.settings.objects {
         let reach = Rect::new(at, at).grow(tuning::SNAP_REACH / p.zoom);
         let doc = cx.editor.document();
-        let mut exclude: Vec<u32> = exclude.into_iter().collect();
-        if let Some(&id) = exclude.first() {
+        let mut exclude: Vec<u32> = node.into_iter().chain(parent).collect();
+        if let Some(id) = node {
             exclude.extend(doc.parent(id));
             exclude.extend(doc.children(Some(id)));
-            exclude.sort_unstable();
         }
+        exclude.sort_unstable();
+        exclude.dedup();
         let anchors = cx.index.anchors(reach, &exclude);
         for anchor in anchors.iter().filter(|a| shown(doc, cx.floor, a.node)) {
             for (a, list) in cands.iter_mut().enumerate() {
@@ -234,7 +264,7 @@ fn point_with(cx: &mut Context<'_>, p: &Pointer, exclude: Option<u32>, grid: boo
         }
     }
     for (a, list) in cands.iter_mut().enumerate().filter(|_| grid) {
-        cx.snap.grid(at[a], thr, list);
+        cx.snap.grid(a, at[a], thr, list);
     }
     let point = Rect::new(at, at);
     let (off, any) = cx.snap.finish(cands, &point, at);
@@ -325,7 +355,7 @@ pub(crate) fn translation(cx: &mut Context<'_>, p: &Pointer, m: &Moving, delta: 
         if s.spacing {
             spacing(a, &moved, &siblings, thr, list);
         }
-        cx.snap.grid(moved.min[a], thr, list);
+        cx.snap.grid(a, moved.min[a], thr, list);
     }
     let rows = s.rows.then(|| rows(cx, m, delta, &near, thr)).flatten();
     cx.snap.row = rows.as_ref().map(|r| r.line);
@@ -436,21 +466,27 @@ fn rows(cx: &Context<'_>, m: &Moving, delta: P, near: &[(u32, Rect)], thr: f64) 
         }
         let n = Place::of([0.0; 2], b.rotation).turn([0.0, 1.0]);
         let y = (o[0] - b.origin[0]) * n[0] + (o[1] - b.origin[1]) * n[1];
-        let line = (y / b.row_pitch).round() * b.row_pitch;
-        let off = line - y;
-        // The line held at the last event stays while it is in reach.
-        let held = cx.snap.row == Some((id, line));
-        let better = |x: &Row| !x.held && (held || off.abs() < x.off.abs());
-        if off.abs() <= thr && best.as_ref().is_none_or(better) {
-            let base = [b.origin[0] + line * n[0], b.origin[1] + line * n[1]];
-            best = Some(Row {
-                off,
-                id,
-                n,
-                base,
-                held,
-                line,
-            });
+        // The nearest line and, if still in reach, the one held at the last
+        // event, which stays.
+        let kept = cx.snap.row.filter(|h| h.0 == id).map(|h| h.1);
+        for line in kept
+            .into_iter()
+            .chain([(y / b.row_pitch).round() * b.row_pitch])
+        {
+            let off = line - y;
+            let held = kept == Some(line);
+            let better = |x: &Row| !x.held && (held || off.abs() < x.off.abs());
+            if off.abs() <= thr && best.as_ref().is_none_or(better) {
+                let base = [b.origin[0] + line * n[0], b.origin[1] + line * n[1]];
+                best = Some(Row {
+                    off,
+                    id,
+                    n,
+                    base,
+                    held,
+                    line,
+                });
+            }
         }
     }
     let Row {
@@ -519,11 +555,16 @@ fn angle_pick(
 ) -> Option<f64> {
     let reach = angle_reach(cx, p, pivot)?;
     let near = |t: f64| (normalise(t - a).abs() <= reach).then(|| cand(Kind::Object, 0.0, t));
-    let step = (a / 15.0).round() * 15.0;
+    // The nearest 15° step and, if still in reach, the one held.
+    let held = match cx.snap.held[2] {
+        Some((Kind::Grid, t)) => Some(t),
+        _ => None,
+    };
+    let steps = held.into_iter().chain([(a / 15.0).round() * 15.0]);
     let list: Vec<Cand> = facing
         .and_then(near)
         .into_iter()
-        .chain(near(step).map(|c| Cand {
+        .chain(steps.filter_map(near).map(|c| Cand {
             kind: Kind::Grid,
             ..c
         }))
