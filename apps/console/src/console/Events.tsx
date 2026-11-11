@@ -124,7 +124,7 @@ export function Events() {
       <Paged pages={events} loading={msg("events.loading")} failed={msg("events.failed")}>
         {(rows) => (
           <Show
-            when={rows.length > 0}
+            when={rows().length > 0}
             fallback={
               <Empty
                 icon="calendar"
@@ -181,8 +181,10 @@ export function Events() {
               </label>
               <p class="ml-auto text-sm text-muted" role="status">
                 {more()
-                  ? msg("events.countPartial", { n: shown().length, loaded: rows.length })
-                  : msg("events.count", { n: shown().length })}
+                  ? msg("events.countPartial", { n: shown().length, loaded: rows().length })
+                  : shown().length === 1
+                    ? msg("events.countOne")
+                    : msg("events.count", { n: shown().length })}
               </p>
             </div>
             <Show when={more() && filtered()}>

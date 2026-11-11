@@ -101,7 +101,7 @@ function Keys() {
       <Paged pages={keys} loading={msg("keys.loading")} failed={msg("keys.failed")}>
         {(rows) => (
           <Show
-            when={rows.length > 0}
+            when={rows().length > 0}
             fallback={
               <Empty icon="code" title={msg("keys.emptyTitle")} body={msg("keys.emptyBody")} />
             }
@@ -144,13 +144,13 @@ function Keys() {
                   </tr>
                 </thead>
                 <tbody>
-                  <For each={rows.filter((k) => revoked() || k.revoked_at === null)}>
+                  <For each={rows().filter((k) => revoked() || k.revoked_at === null)}>
                     {(key) => <KeyRow key={key} onRevoke={() => setRevoking(key)} />}
                   </For>
                 </tbody>
               </table>
             </div>
-            <Show when={!revoked() && rows.every((k) => k.revoked_at !== null)}>
+            <Show when={!revoked() && rows().every((k) => k.revoked_at !== null)}>
               <p class="mt-3 text-base text-muted">{msg("keys.allRevoked")}</p>
             </Show>
             <LoadMore pages={keys} />
