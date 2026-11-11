@@ -120,12 +120,16 @@ With `"outline": "auto"` the compiler computes a concave hull around the childre
 Rules:
 
 - Row index 0 is the front row (nearest the focal point).
-- `curve.kind = "arc"`: rows are concentric arcs. Row *i* has radius `radius + i × rowPitch`; seats are spaced `seatPitch` along the arc. A positive radius curves towards the front.
-- `curve.kind = "bulge"`: each row is displaced by `amount × (1 − (2t − 1)²)` for `t` from 0 to 1 along the row.
+- Geometry is in the node's own space, before `origin` and `rotation`. Row *i*'s baseline is `y = i × rowPitch`, so rows run towards +y. A row of `seats` positions has length `L = (seats − 1) × seatPitch`; position *k* lies at distance `s = a + offset + k × seatPitch` along the row, where `align` sets `a`: `left` 0, `center` −L/2, `right` −L. So the alignment line is `x = 0`. `offset` is in chart units.
+- `stagger` shifts odd rows (1, 3, …) by `stagger × seatPitch` along the row.
+- `curve.kind = "arc"`: rows are concentric arcs. Row *i* has radius `radius + i × rowPitch`; seats are spaced `seatPitch` along the arc. A positive radius curves towards the front. Exactly: with `R = radius + i × rowPitch`, the seat at distance `s` is at `(R sin(s/R), R cos(s/R) − radius)`, so the centre is `(0, −radius)`. A negative radius curves away from the front. It is an error for `R` to reach zero or change sign, or for a seat to be more than half a turn from the apex.
+- `curve.kind = "bulge"`: each row is displaced by `amount × (1 − (2t − 1)²)` for `t` from 0 to 1 along the row. The displacement is along +y, so a positive bulge curves the same way as a positive arc; `t = k / (seats − 1)`, and 0.5 for a single seat.
+- `skew` shears the block: `x' = x − y × tan(skew)`, so the block's sides turn clockwise. `|skew|` is below 90.
 - `oids` is a list of `[first, count]` runs covering the row's seat positions in physical order. Runs keep identities stable when seats are added at either end. The runs must cover exactly `seats` positions.
 - `removed` lists seat positions (0-based, from the left end) that leave a physical gap. A gap splits the row into segments. A removed position keeps its `oid` and its seat number, so removing a seat never renames the others.
 - A row's `label` replaces the scheme's label; the row keeps its place in the sequence.
-- `seatOverrides` is keyed by `oid`. An override may set `flags` (`accessible`, `companion`, `restrictedView`, `aisle`, `removable`), `category`, `label` and `nudge` (`[dx, dy]` in node space).
+- `seatOverrides` is keyed by `oid`. An override may set `flags` (`accessible`, `companion`, `restrictedView`, `aisle`, `removable`), `category`, `label` and `nudge` (`[dx, dy]` in node space, added after curve and skew).
+- At most 4,095 positions per row (`02-domain-model.md` §14). Expansion uses only correctly rounded arithmetic and its own trigonometry, so positions are bit-identical on every platform and in WASM.
 
 ### 2.5 Label schemes
 
@@ -183,7 +187,7 @@ Details:
   "label": "Standing", "capacity": 500, "oid": 700, "category": "ga" }
 ```
 
-`path.kind` is `polyline` only: the designer stores a curved row as points along the curve. The node `id` is also the row's id. A `table` with `"shape": "rect"` takes `size: [w, h]` instead of `radius`.
+A `row` places position *k* at `k × seatPitch` from its first point, measured along the path; positions past the end continue along the last segment. `path.kind` is `polyline` only: the designer stores a curved row as points along the curve. The node `id` is also the row's id. A `table` with `"shape": "rect"` takes `size: [w, h]` instead of `radius`.
 
 ### 2.7 Decoration nodes
 
