@@ -117,6 +117,10 @@ pub struct Batch {
     pub objects_set: Vec<ObjectRow>,
     /// Objects that returned to the default state: deleted from `object_state`.
     pub objects_freed: Vec<Oid>,
+    /// By status code: how many more objects have it after the batch than
+    /// before (negative for fewer), so that the store keeps each event's
+    /// count per status with its rows (`events.counts`). Sums to 0.
+    pub counts: [i32; 16],
     /// Contiguous: `log[i].seq == seq - (log.len() - 1 - i)`. Empty only when
     /// the batch carries nothing but idempotency records of refusals; `seq` is
     /// then unchanged.

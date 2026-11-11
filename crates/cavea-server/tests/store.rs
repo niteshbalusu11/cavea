@@ -298,6 +298,7 @@ fn batch(event: EventId, seq: u64, log: Vec<LogRecord>) -> Batch {
         holds_deleted: vec![],
         objects_set: vec![],
         objects_freed: vec![],
+        counts: [0; 16],
         log,
         idempotency: vec![],
     }

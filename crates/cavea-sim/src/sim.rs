@@ -332,6 +332,8 @@ enum Job {
         Option<TokenHash>,
         Slot<Result<Subscription, OpenError>>,
     ),
+    /// Read the staff state of an event from a `seq` (08 §8.3).
+    Manager(usize, u64, Slot<StaffRead>),
     /// An orderly shutdown; the flag is set once it has finished.
     Shutdown(Arc<AtomicBool>),
 }
@@ -377,6 +379,11 @@ async fn clients(
                 progress.fetch_add(1, Ordering::Relaxed);
                 *lock(&out) = Some(r);
             }
+            Job::Manager(event, after, out) => {
+                let r = reg.manager_after(EVENTS[event], after).await;
+                progress.fetch_add(1, Ordering::Relaxed);
+                *lock(&out) = Some(r);
+            }
         }
     }
 }
@@ -417,6 +424,19 @@ struct Sub {
     stalled: u32,
 }
 
+/// A staff client polling the manager state of an event (08 §8.3), as the
+/// console does: domain statuses, from its `seq`.
+#[derive(Default)]
+struct Staff {
+    event: usize,
+    pending: Option<(usize, Slot<StaffRead>)>,
+    seq: Option<u64>,
+    codes: Vec<u8>,
+}
+
+/// What a staff read answers: nothing new, or a frame.
+type StaffRead = Result<Option<Frame>, OpenError>;
+
 /// What the harness knows of one event's committed history.
 #[derive(Default)]
 struct Ev {
@@ -451,6 +471,7 @@ struct Sim {
     reqs: Vec<Req>,
     pipelines: u64,
     subs: Vec<Sub>,
+    staff: Vec<Staff>,
     evs: Vec<Ev>,
     seen: usize,
     /// Commands of batches that failed or died with their node: never visible.
@@ -563,6 +584,13 @@ impl Sim {
             reqs: Vec::new(),
             pipelines: 0,
             subs: Vec::new(),
+            staff: (0..EVENTS.len())
+                .map(|event| Staff {
+                    event,
+                    codes: vec![0; OBJECTS as usize],
+                    ..Staff::default()
+                })
+                .collect(),
             evs: EVENTS.iter().map(|_| Ev::default()).collect(),
             seen: 0,
             failed: HashSet::new(),
@@ -1009,6 +1037,11 @@ impl Sim {
                 s.pending = None;
             }
         }
+        for s in &mut self.staff {
+            if s.pending.as_ref().is_some_and(|(node, _)| *node == n) {
+                s.pending = None;
+            }
+        }
         Ok(())
     }
 
@@ -1414,6 +1447,59 @@ impl Sim {
             }
             if s.live.is_none() && s.pending.is_none() && (resubscribe || self.rng.chance(30)) {
                 self.subscribe(Some(i))?;
+            }
+        }
+        self.poll_staff()
+    }
+
+    /// Apply what each staff client got and, now and then, ask again: from
+    /// its `seq`, or now and then from 0 (a fresh page).
+    fn poll_staff(&mut self) -> Result<(), Violation> {
+        for i in 0..self.staff.len() {
+            let Some(p) = self.staff.get_mut(i) else {
+                continue;
+            };
+            if let Some((_, slot)) = &p.pending {
+                let ready = lock(slot).take();
+                match ready {
+                    None => continue,
+                    Some(Ok(Some(frame))) => {
+                        p.pending = None;
+                        apply_manager(p, &frame, &self.evs)?;
+                        self.stats.count("staff frames checked");
+                    }
+                    Some(Ok(None)) => {
+                        p.pending = None;
+                        self.stats.count("staff polls with nothing new");
+                    }
+                    Some(Err(_)) => p.pending = None,
+                }
+            }
+            if !self.rng.chance(20) {
+                continue;
+            }
+            let Some(p) = self.staff.get(i) else {
+                continue;
+            };
+            let event = p.event;
+            let after = p.seq.filter(|_| !self.rng.chance(10)).unwrap_or(0);
+            let owner = self.db.lease(EVENTS[event]).and_then(|(o, _)| o);
+            let n = owner
+                .as_deref()
+                .and_then(|o| o.strip_prefix('n'))
+                .and_then(|n| n.parse().ok())
+                .filter(|_| self.rng.chance(70))
+                .unwrap_or_else(|| self.rng.below(NODES as u64) as usize);
+            let slot: Slot<StaffRead> = Arc::default();
+            let _ = self
+                .node_mut(n)?
+                .jobs
+                .send(Job::Manager(event, after, slot.clone()));
+            if let Some(p) = self.staff.get_mut(i) {
+                p.pending = Some((n, slot));
+                if after == 0 {
+                    p.seq = None;
+                }
             }
         }
         Ok(())
@@ -1864,6 +1950,56 @@ fn apply(
     if matches!(frame, ServerFrame::Private(_)) {
         check_private(s, ev)?;
     }
+    Ok(())
+}
+
+/// Apply one manager frame as a staff client would: it carries domain
+/// statuses, never encoding 2, and leaves the client exactly at a committed
+/// state (INV-8).
+fn apply_manager(p: &mut Staff, f: &Frame, evs: &[Ev]) -> Result<(), Violation> {
+    let Some(ev) = evs.get(p.event) else {
+        return Ok(());
+    };
+    let frame = wire::decode_server(f.bytes(), View::Manager)
+        .map_err(|e| Violation::new("INV-8", format!("manager frame: {e:?}")))?;
+    match frame {
+        ServerFrame::Snapshot(snap) => {
+            snap.write_into(&mut p.codes)
+                .map_err(|e| Violation::new("INV-8", format!("{e:?}")))?;
+            p.seq = Some(snap.seq);
+        }
+        ServerFrame::Delta(d) => {
+            ensure!(
+                p.seq == Some(d.from_seq),
+                "INV-8",
+                "manager delta from {} applied at {:?}",
+                d.from_seq,
+                p.seq
+            );
+            let changes = d
+                .changes(OBJECTS)
+                .map_err(|e| Violation::new("INV-8", format!("{e:?}")))?;
+            for c in changes {
+                if let Some(code) = p.codes.get_mut(c.idx as usize) {
+                    *code = c.code;
+                }
+            }
+            p.seq = Some(d.to_seq);
+        }
+        other => return Err(Violation::new("INV-8", format!("unexpected {other:?}"))),
+    }
+    let seq = p.seq.unwrap_or(0);
+    let Some(state) = ev.history.get(&seq) else {
+        return Err(Violation::new(
+            "INV-8",
+            format!("staff at {seq}, never a committed boundary"),
+        ));
+    };
+    ensure!(
+        p.codes == crate::model::domain(state, OBJECTS),
+        "INV-8",
+        "staff statuses at {seq} differ from the committed state"
+    );
     Ok(())
 }
 

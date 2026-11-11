@@ -233,6 +233,29 @@ impl<S: SeatStore, P: ChartProvider, C: Clock + Clone> Registry<S, P, C> {
         Ok(self.handle(event).await?.feed().after(after_seq))
     }
 
+    /// The staff state (08 §8.3), in domain statuses: `None` if nothing was
+    /// published after `after_seq`, a manager DELTA from it if the ring
+    /// buffer reaches back that far, otherwise the manager SNAPSHOT (always
+    /// for an `after_seq` of 0). Read without a message to the actor; loads
+    /// the event if needed.
+    pub async fn manager_after(
+        &self,
+        event: EventId,
+        after_seq: u64,
+    ) -> Result<Option<Frame>, OpenError> {
+        for _ in 0..TRIES {
+            let handle = self.handle(event).await?;
+            match handle.feed().manager_after(after_seq) {
+                Ok(frame) => return Ok(frame),
+                // The actor is ending: read the one that replaces it.
+                Err(_) => self.wait_until_gone(event, &handle).await,
+            }
+        }
+        Err(OpenError::Store(StoreError::Unavailable(
+            "event actor kept stopping".into(),
+        )))
+    }
+
     /// Realtime subscribers of the event on this node; 0 if it is not loaded.
     #[must_use]
     pub fn subscribers(&self, event: EventId) -> usize {

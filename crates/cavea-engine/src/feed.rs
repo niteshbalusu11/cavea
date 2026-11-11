@@ -24,7 +24,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Instant;
 
 use cavea_format::wire::{self, Change, Hello, ServerFrame, View, WireError};
@@ -147,12 +147,23 @@ struct Publication {
     most: usize,
 }
 
+/// One publication's DELTA in the ring buffer, in both views.
+struct Buffered {
+    from: u64,
+    at: Timestamp,
+    public: Frame,
+    /// The same changes as domain statuses, for staff (08 §8.3).
+    manager: Frame,
+}
+
 struct Shared {
     /// `None` only if the first snapshot could not be encoded.
     snapshot: Option<Frame>,
-    /// `(from_seq, published at, frame)`; contiguous, ending at the
-    /// snapshot's `seq`.
-    ring: VecDeque<(u64, Timestamp, Frame)>,
+    /// The committed domain statuses at the snapshot's `seq`, from which the
+    /// manager SNAPSHOT is encoded when staff first ask for it.
+    statuses: Arc<[u8]>,
+    /// Contiguous, ending at the snapshot's `seq`.
+    ring: VecDeque<Buffered>,
     ring_bytes: usize,
     /// Every live hold as of the snapshot's `seq`.
     holds: HashMap<TokenHash, Arc<Holding>>,
@@ -163,12 +174,12 @@ struct Shared {
 
 impl Shared {
     fn prune(&mut self, now: Timestamp) {
-        while let Some((_, at, frame)) = self.ring.front() {
-            let old = now.0.saturating_sub(at.0) > RING_MS;
+        while let Some(front) = self.ring.front() {
+            let old = now.0.saturating_sub(front.at.0) > RING_MS;
             if !old && self.ring_bytes <= RING_BYTES {
                 break;
             }
-            self.ring_bytes -= frame.bytes.len();
+            self.ring_bytes -= front.public.bytes.len() + front.manager.bytes.len();
             self.ring.pop_front();
         }
     }
@@ -178,19 +189,29 @@ impl Shared {
     /// `last_seq` of 0 means none seen: always the snapshot.
     fn since(&self, last_seq: u64) -> Option<(u64, Vec<Frame>)> {
         let snapshot = self.snapshot.as_ref()?;
-        let frames = if last_seq == 0 {
-            vec![snapshot.clone()]
-        } else if last_seq == snapshot.seq {
-            Vec::new()
-        } else if let Ok(i) = self
-            .ring
-            .binary_search_by_key(&last_seq, |(from, _, _)| *from)
-        {
-            self.ring.range(i..).map(|(_, _, f)| f.clone()).collect()
-        } else {
-            vec![snapshot.clone()]
+        let frames = match self.buffered(last_seq, snapshot.seq) {
+            Some(range) => range.map(|b| b.public.clone()).collect(),
+            None => vec![snapshot.clone()],
         };
         Some((snapshot.seq, frames))
+    }
+
+    /// The buffered deltas from `last_seq` to `seq` (none if equal), or
+    /// `None` if the ring buffer does not reach back to it or `last_seq` is 0:
+    /// the receiver needs a SNAPSHOT.
+    fn buffered(
+        &self,
+        last_seq: u64,
+        seq: u64,
+    ) -> Option<std::collections::vec_deque::Iter<'_, Buffered>> {
+        if last_seq == 0 {
+            None
+        } else if last_seq == seq {
+            Some(self.ring.range(self.ring.len()..))
+        } else {
+            let i = self.ring.binary_search_by_key(&last_seq, |b| b.from).ok()?;
+            Some(self.ring.range(i..))
+        }
     }
 }
 
@@ -201,6 +222,8 @@ pub(crate) struct Feed {
     chart_hash: [u8; 16],
     subscribers: AtomicUsize,
     shared: RwLock<Shared>,
+    /// The manager SNAPSHOT last encoded, reused while its `seq` is current.
+    manager: Mutex<Option<Frame>>,
 }
 
 impl fmt::Debug for Feed {
@@ -242,25 +265,73 @@ impl Feed {
         match frames.as_slice() {
             [] => None,
             [one] => Some(one.clone()),
-            many => Some(self.merge(after_seq, seq, many).unwrap_or_else(|e| {
-                error!(error = %e, "buffered deltas did not merge; sending the snapshot");
-                snapshot
-            })),
+            many => Some(
+                self.merge(View::Public, after_seq, seq, many)
+                    .unwrap_or_else(|e| {
+                        error!(error = %e, "buffered deltas did not merge; sending the snapshot");
+                        snapshot
+                    }),
+            ),
         }
     }
 
-    /// One public DELTA equivalent to the contiguous `frames`.
-    fn merge(&self, from: u64, to: u64, frames: &[Frame]) -> Result<Frame, WireError> {
+    /// One DELTA equivalent to the contiguous `frames` of `view`.
+    fn merge(&self, view: View, from: u64, to: u64, frames: &[Frame]) -> Result<Frame, WireError> {
         let mut changes = Vec::new();
         for frame in frames {
-            match wire::decode_server(&frame.bytes, View::Public)? {
+            match wire::decode_server(&frame.bytes, view)? {
                 ServerFrame::Delta(d) => changes.extend(d.changes(self.objects)?),
                 _ => return Err(WireError::UnknownType),
             }
         }
         wire::coalesce(&mut changes);
-        let bytes = wire::encode_delta(View::Public, from, to, &changes, self.objects, &[])?;
+        let bytes = wire::encode_delta(view, from, to, &changes, self.objects, &[])?;
         Ok(Frame::new(to, bytes))
+    }
+
+    /// The staff counterpart of [`Self::after`], in domain statuses (08
+    /// §8.3): `None` if `after_seq` is current; one manager DELTA from it if
+    /// the ring buffer reaches back to it; otherwise the manager SNAPSHOT,
+    /// also for an `after_seq` of 0. `Err` if the event has no snapshot.
+    pub(crate) fn manager_after(&self, after_seq: u64) -> Result<Option<Frame>, End> {
+        let (seq, deltas, statuses) = {
+            let shared = self.read();
+            let ended = shared.end.unwrap_or(End::Failed);
+            let seq = shared.snapshot.as_ref().ok_or(ended)?.seq;
+            let deltas = shared
+                .buffered(after_seq, seq)
+                .map(|range| range.map(|b| b.manager.clone()).collect::<Vec<_>>());
+            (seq, deltas, shared.statuses.clone())
+        };
+        match deltas.as_deref() {
+            Some([]) => return Ok(None),
+            Some([one]) => return Ok(Some(one.clone())),
+            Some(many) => match self.merge(View::Manager, after_seq, seq, many) {
+                Ok(frame) => return Ok(Some(frame)),
+                Err(e) => error!(error = %e, "buffered deltas did not merge; sending the snapshot"),
+            },
+            None => {}
+        }
+        self.manager_snapshot(seq, &statuses).map(Some)
+    }
+
+    /// The manager SNAPSHOT at `seq`, encoded from `statuses` once per
+    /// publication that staff ask for: concurrent readers wait for the one
+    /// encoding it.
+    fn manager_snapshot(&self, seq: u64, statuses: &[u8]) -> Result<Frame, End> {
+        let mut cached = self.manager.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(frame) = cached.as_ref().filter(|f| f.seq == seq) {
+            return Ok(frame.clone());
+        }
+        let bytes = wire::encode_snapshot(View::Manager, seq, statuses, &[]).map_err(|e| {
+            error!(error = %e, "manager SNAPSHOT not encoded");
+            End::Failed
+        })?;
+        let frame = Frame::new(seq, bytes);
+        if cached.as_ref().is_none_or(|f| f.seq < seq) {
+            *cached = Some(frame.clone());
+        }
+        Ok(frame)
     }
 
     /// Attach a subscriber that last saw `last_seq`. `Err` if the actor has
@@ -535,12 +606,14 @@ impl Publisher {
             subscribers: AtomicUsize::new(0),
             shared: RwLock::new(Shared {
                 snapshot: snapshot.ok().map(|b| Frame::new(state.seq(), b)),
+                statuses: status.as_slice().into(),
                 ring: VecDeque::new(),
                 ring_bytes: 0,
                 holds,
                 tx: ok.then(|| tx.clone()),
                 end: (!ok).then_some(End::Failed),
             }),
+            manager: Mutex::new(None),
         });
         if !ok {
             return (feed, Err(wire_corrupt(WireError::BadCount)));
@@ -671,6 +744,19 @@ impl Publisher {
             return Ok(None);
         }
         wire::coalesce(&mut self.changes);
+        let objects = self.feed.objects;
+        // Staff see every change, as domain statuses. One that came back to
+        // where it was at the last publication is sent too: applying it
+        // changes nothing.
+        let manager = wire::encode_delta(
+            View::Manager,
+            self.published,
+            self.seq,
+            &self.changes,
+            objects,
+            &[],
+        )
+        .map_err(wire_corrupt)?;
         // Drop what the public cannot see: a code the subscribers already
         // have, such as held to booked.
         let shown = &mut self.shown;
@@ -685,7 +771,6 @@ impl Publisher {
             }
             visible
         });
-        let objects = self.feed.objects;
         let delta = wire::encode_delta(
             View::Public,
             self.published,
@@ -713,6 +798,9 @@ impl Publisher {
             })
             .collect();
         let delta = Frame::new(self.seq, delta);
+        let manager = Frame::new(self.seq, manager);
+        // Copied for the manager SNAPSHOT, encoded only if staff ask.
+        let statuses: Arc<[u8]> = self.status.as_slice().into();
         let holds = (!holds.is_empty()).then(|| Arc::new(holds));
         let taken = Arc::new(AtomicUsize::new(0));
         let sent_to = self.feed.subscribers();
@@ -720,8 +808,14 @@ impl Publisher {
         {
             let mut shared = self.feed.write();
             shared.snapshot = Some(Frame::new(self.seq, snapshot));
-            shared.ring_bytes += delta.bytes.len();
-            shared.ring.push_back((self.published, now, delta.clone()));
+            shared.statuses = statuses;
+            shared.ring_bytes += delta.bytes.len() + manager.bytes.len();
+            shared.ring.push_back(Buffered {
+                from: self.published,
+                at: now,
+                public: delta.clone(),
+                manager,
+            });
             shared.prune(now);
             for (token, hold) in holds.iter().flat_map(|h| h.iter()) {
                 match hold {

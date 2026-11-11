@@ -266,6 +266,26 @@ impl SeatStore for MemoryStore {
         {
             return Err(StoreError::Inconsistent("deleted an unknown hold".into()));
         }
+        // The counts must follow the rows, as `events.counts` does in
+        // PostgreSQL: an engine that miscounted is caught here.
+        let mut counts = [0i32; 16];
+        let set = batch.objects_set.iter().map(|o| (o.oid, o.status.code()));
+        for (oid, now) in set.chain(batch.objects_freed.iter().map(|&oid| (oid, 0))) {
+            let was = e.objects.get(&oid).map_or(0, |o| o.status.code());
+            if was != now {
+                if let Some(c) = counts.get_mut(usize::from(was)) {
+                    *c -= 1;
+                }
+                if let Some(c) = counts.get_mut(usize::from(now)) {
+                    *c += 1;
+                }
+            }
+        }
+        if counts != batch.counts {
+            return Err(StoreError::Inconsistent(
+                "status counts do not follow the objects".into(),
+            ));
+        }
         e.seq = batch.seq;
         e.lease_until = Some(lease_until);
         for h in &batch.holds_created {
