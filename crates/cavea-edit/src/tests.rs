@@ -1,7 +1,7 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cavea_compiler::ChartDocument;
-use cavea_compiler::document::{Category, Curve, Floor, Node};
+use cavea_compiler::document::{Category, Curve, Floor, Node, SeatOverride};
 use cavea_testkit::presets::PRESETS;
 use cavea_testkit::synthetic;
 
@@ -127,9 +127,31 @@ pub(crate) fn command(r: &mut Rng, doc: &Document) -> Command {
         r.pick(&sections)
     };
     let index = r.below(doc.children(parent).len() + 2) as u32;
-    let bid = r.pick(&blocks).unwrap_or(id);
+    let block = r.pick(&blocks).and_then(|b| match doc.node(b) {
+        Some(Node::RowBlock(b)) => Some(b.clone()),
+        _ => None,
+    });
+    let rid = block
+        .as_ref()
+        .and_then(|b| b.rows.get(r.below(b.rows.len())).map(|row| row.rid))
+        .unwrap_or(7);
+    let oid = block
+        .as_ref()
+        .and_then(|b| b.rows.iter().find(|row| row.rid == rid))
+        .and_then(|row| {
+            row.oids
+                .first()
+                .map(|o| o[0] + r.below(o[1] as usize) as u32)
+        })
+        .unwrap_or(9);
+    let bid = block.as_ref().map_or(id, |b| b.id);
+    let end = if r.below(2) == 0 {
+        End::Start
+    } else {
+        End::End
+    };
     let cat = |r: &mut Rng| ["standard", "vip", "access", "premium", "x"][r.below(5)].to_string();
-    match r.below(16) {
+    match r.below(24) {
         0 | 1 => {
             let text = match r.below(4) {
                 0 => {
@@ -244,11 +266,41 @@ pub(crate) fn command(r: &mut Rng, doc: &Document) -> Command {
                 property: Property::Floor(doc.floors().first().map(|f| f.id)),
             },
         },
-        13 => Command::SetProperty {
+        13 | 14 => Command::AddSeats {
             id: bid,
-            property: Property::Category(None),
+            rid,
+            end,
+            count: 1 + r.below(4) as u32,
         },
-        14 => Command::MoveNodes {
+        15 | 16 => Command::RemoveSeats {
+            id: bid,
+            rid,
+            end,
+            count: 1 + r.below(3) as u32,
+        },
+        17 => Command::AddRows {
+            id: bid,
+            index: r.below(4) as u32,
+            count: 1 + r.below(2) as u32,
+            seats: 1 + r.below(12) as u32,
+        },
+        18 => Command::RemoveRows {
+            id: bid,
+            rids: vec![rid],
+        },
+        19 => Command::RemoveSeat { id: bid, oid },
+        20 => Command::RestoreSeat { id: bid, oid },
+        21 => Command::SetSeatOverride {
+            id: bid,
+            oid,
+            value: (r.below(3) > 0).then(|| SeatOverride {
+                flags: Vec::new(),
+                category: Some(cat(r)),
+                label: None,
+                nudge: Some([r.f(5.0), 0.0]),
+            }),
+        },
+        22 => Command::MoveNodes {
             ids: vec![id],
             delta: [f64::MAX, 0.0],
         },
@@ -421,6 +473,181 @@ fn duplicate_node_ids_are_refused_at_load() {
     assert_eq!(Editor::load(doc).err(), Some(LoadError::DuplicateNodeId(1)));
 }
 
+/// Seats added at either end extend the runs without renumbering; removing
+/// seats at an end drops their overrides; undo restores the same oids and
+/// overrides; removing a seat position keeps its oid.
+#[test]
+fn seat_identity() {
+    let mut editor = Editor::load(sample("full.json")).expect("load");
+    let rows = |e: &Editor| block(e, 11).rows;
+    let next = editor.document().next_oid();
+    let add = |end, count| Command::AddSeats {
+        id: 11,
+        rid: 12,
+        end,
+        count,
+    };
+    editor.apply(add(End::End, 2)).expect("add end");
+    editor.apply(add(End::End, 1)).expect("add end");
+    editor.apply(add(End::Start, 3)).expect("add start");
+    let row = &rows(&editor)[0];
+    assert_eq!(row.seats, 26);
+    assert_eq!(
+        row.oids,
+        vec![[next + 3, 3], [100, 10], [150, 10], [next, 3]]
+    );
+    assert_eq!(editor.document().next_oid(), next + 6);
+
+    let before = state(&editor);
+    editor
+        .apply(Command::RemoveSeats {
+            id: 11,
+            rid: 12,
+            end: End::Start,
+            count: 4,
+        })
+        .expect("remove start");
+    let b = block(&editor, 11);
+    assert_eq!(b.rows[0].oids.first(), Some(&[101, 9]));
+    assert!(
+        !b.seat_overrides.contains_key(&100),
+        "override of a removed seat is dropped"
+    );
+    editor.undo().expect("undo");
+    assert_eq!(state(&editor), before);
+    assert!(block(&editor, 11).seat_overrides.contains_key(&100));
+
+    // Removed positions keep their oid and shift with seats added in front.
+    editor
+        .apply(Command::RemoveSeat { id: 11, oid: 203 })
+        .expect("remove");
+    assert_eq!(rows(&editor)[1].removed, vec![3, 5, 6]);
+    assert_eq!(
+        editor.apply(Command::RemoveSeat { id: 11, oid: 205 }),
+        Err(CommandError::SeatState { id: 11, oid: 205 })
+    );
+    editor
+        .apply(Command::AddSeats {
+            id: 11,
+            rid: 13,
+            end: End::Start,
+            count: 2,
+        })
+        .expect("add");
+    assert_eq!(rows(&editor)[1].removed, vec![5, 7, 8]);
+    editor
+        .apply(Command::RestoreSeat { id: 11, oid: 203 })
+        .expect("restore");
+    assert_eq!(rows(&editor)[1].removed, vec![7, 8]);
+    assert_eq!(rows(&editor)[1].oids[1], [200, 22]);
+}
+
+/// Seats added or removed at either end leave every kept seat where it was,
+/// whatever the alignment, on a curved, staggered block; rows added at the
+/// front or back keep every other row as it was; a block keeps one row.
+#[test]
+fn row_edits_keep_seats_in_place() {
+    for align in ["left", "center", "right"] {
+        for end in [End::Start, End::End] {
+            let doc: ChartDocument = serde_json::from_value(serde_json::json!({
+                "schema": 1, "name": "r", "nextOid": 100,
+                "nodes": [{ "id": 1, "type": "rowBlock", "origin": [10, 20], "rotation": 15,
+                    "seatPitch": 50, "rowPitch": 90, "align": align, "stagger": 0.5,
+                    "curve": { "kind": "arc", "radius": 900 },
+                    "rows": [{ "rid": 2, "seats": 5, "oids": [[10, 5]], "removed": [1] },
+                             { "rid": 3, "seats": 5, "oids": [[20, 5]] }] }]
+            }))
+            .expect("doc");
+            let mut editor = Editor::load(doc).expect("load");
+            let seats = |e: &Editor| {
+                let mut index = SpatialIndex::new();
+                index.sync(e.document());
+                index
+                    .seats(1)
+                    .iter()
+                    .map(|s| (s.oid, (s.pos, s.removed)))
+                    .collect::<BTreeMap<_, _>>()
+            };
+            let before = seats(&editor);
+            let rows = block(&editor, 1).rows;
+            for (cmd, kept) in [
+                (
+                    Command::AddSeats {
+                        id: 1,
+                        rid: 2,
+                        end,
+                        count: 2,
+                    },
+                    12,
+                ),
+                (
+                    Command::RemoveSeats {
+                        id: 1,
+                        rid: 2,
+                        end,
+                        count: 3,
+                    },
+                    9,
+                ),
+            ] {
+                editor.apply(cmd).expect("apply");
+                let now = seats(&editor);
+                assert_eq!(now.len(), kept, "{align} {end:?}");
+                for (oid, (pos, removed)) in &before {
+                    if let Some((p, r)) = now.get(oid) {
+                        let d = (p[0] - pos[0]).hypot(p[1] - pos[1]);
+                        assert!(d < 1e-9 && r == removed, "{align} {end:?} oid {oid}: {d}");
+                    }
+                }
+            }
+            editor
+                .apply(Command::AddRows {
+                    id: 1,
+                    index: 0,
+                    count: 2,
+                    seats: 3,
+                })
+                .expect("front");
+            editor
+                .apply(Command::AddRows {
+                    id: 1,
+                    index: 4,
+                    count: 1,
+                    seats: 3,
+                })
+                .expect("back");
+            let now = block(&editor, 1).rows;
+            assert_eq!(now.len(), 5);
+            assert_eq!(now[3], rows[1]);
+            assert_eq!(now[2].rid, rows[0].rid);
+            // Many rows at once cost time in proportion, not its square.
+            let (before, kept) = (state(&editor), block(&editor, 1).rows);
+            editor
+                .apply(Command::AddRows {
+                    id: 1,
+                    index: 2,
+                    count: 200_000,
+                    seats: 1,
+                })
+                .expect("many");
+            let rids: Vec<u32> = block(&editor, 1).rows.iter().map(|r| r.rid).collect();
+            let many: Vec<u32> = rids.iter().skip(2).take(200_000).copied().collect();
+            editor
+                .apply(Command::RemoveRows { id: 1, rids: many })
+                .expect("remove many");
+            assert_eq!(block(&editor, 1).rows, kept);
+            editor.undo().expect("undo");
+            editor.undo().expect("undo");
+            assert_eq!(state(&editor), before);
+            let rids: Vec<u32> = now.iter().map(|r| r.rid).collect();
+            assert_eq!(
+                editor.apply(Command::RemoveRows { id: 1, rids }),
+                Err(CommandError::Limit("rows removed"))
+            );
+        }
+    }
+}
+
 /// `nextOid` is restored by undo, so the document returns byte for byte, but
 /// ids are never handed out again: allocation and `save` use the session's
 /// high-water mark, and redo brings back the same ids.
@@ -456,9 +683,6 @@ fn refusals() {
     let mut editor = Editor::load(sample("full.json")).expect("load");
     let before = state(&editor);
     let saved = json(&editor.document().save());
-    // 300 rows of 4,000 seats: over the 1,000,000 objects of 02 §14.
-    let rows = vec![r#"{"rid":0,"seats":4000,"oids":[]}"#; 300].join(",");
-    let huge = node(&format!(r#"{{"id":0,"type":"rowBlock","rows":[{rows}]}}"#));
     let refused = [
         (
             Command::DeleteNodes { ids: vec![10, 999] },
@@ -490,12 +714,22 @@ fn refusals() {
             CommandError::IndexOutOfRange,
         ),
         (
-            Command::CreateNode {
-                parent: None,
+            Command::AddRows {
+                id: 11,
                 index: 0,
-                node: huge,
+                count: 1_000_000,
+                seats: 100,
             },
             CommandError::Limit("objects"),
+        ),
+        (
+            Command::AddSeats {
+                id: 11,
+                rid: 12,
+                end: End::End,
+                count: 4_090,
+            },
+            CommandError::Limit("seats per row"),
         ),
         (
             Command::CreateNode {
@@ -531,10 +765,11 @@ fn refusals() {
                         ids: vec![11],
                         delta: [5.0, 5.0],
                     },
-                    Command::CreateNode {
-                        parent: Some(10),
+                    Command::AddRows {
+                        id: 11,
                         index: 0,
-                        node: node(r#"{"id":0,"type":"booth","size":[10,10],"oid":0}"#),
+                        count: 2,
+                        seats: 3,
                     },
                     Command::RemoveCategory {
                         key: "nope".into(),

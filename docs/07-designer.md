@@ -65,11 +65,30 @@ A command is plain data, serialised as JSON tagged by `op` (camelCase field name
 | `addFloor` | `index`, `floor` | Its `id` is assigned: one above the largest; at most 255 |
 | `updateFloor` | `floor` | Replaces the floor with that `id` |
 | `removeFloor` | `id`, `replacement` | Nodes on it move to `replacement`, or to the default floor when it is `null` |
+| `addRows` | `id`, `index`, `count`, `seats` | Inserts `count` rows of `seats` positions, with fresh `rid`s and oids, before row `index` of a row block. Other rows keep their `rid`s, oids and overrides; in node space the rows from `index` on move back by `count × rowPitch` (03 §2.4) |
+| `removeRows` | `id`, `rids` | Removes rows with their seats' overrides. A block keeps at least one row (deleting it is `deleteNodes`) |
+| `addSeats` | `id`, `rid`, `end` (`start` or `end`), `count` | Adds positions at one end with fresh oids; existing runs are kept (extended when contiguous) and `removed` positions shift with seats added in front. The kept seats stay where they are: the row's `offset` takes up the shift its alignment would cause (`offset += a × Δ − (Δ at the start, else 0)`, with `Δ = count × seatPitch` and `a` 0, ½ or 1 for left, centre, right). Only a bulge, which depends on the row's length, reshapes |
+| `removeSeats` | `id`, `rid`, `end`, `count` | Removes positions at one end with their overrides, the kept seats staying in place as for `addSeats`; a row keeps at least one position. Undo restores the same oids |
+| `removeSeat`, `restoreSeat` | `id`, `oid` | Adds the seat's position to `removed`, or takes it out; the oid stays |
+| `setSeatOverride` | `id`, `oid`, `value` | Sets or (`null`) clears one seat's override in a row block or row |
 | `composite` | `commands` | Applies them in order as one undo step |
 
-Commands are refused, with a typed error, for: a missing node; a parent that is not a section, is the node or is inside it; a placement that breaks the structure rule; an index out of range; a field the node does not have; a number that is not finite (the saved document must parse again); a node over the limits of `02-domain-model.md` §14 (4,095 seats in a row; 1,000,000 bookable objects in the chart, counting seat positions, booths, areas and tables booked whole, the chart's existing ones included), checked before any id is allocated; a duplicate category key; an unknown category or floor named by a category or floor command. References to unknown categories or floors in node fields are validation findings (E007), not refusals: users make mistakes mid-edit.
+Commands are refused, with a typed error, for: a missing node; a `count` or `seats` of 0; a parent that is not a section, is the node or is inside it; a placement that breaks the structure rule; an index out of range; a field the node does not have; a number that is not finite (the saved document must parse again); a node over the limits of `02-domain-model.md` §14 (4,095 seats in a row; 1,000,000 bookable objects in the chart, counting seat positions, booths, areas and tables booked whole, the chart's existing ones included), checked before any id is allocated; a duplicate category key; an unknown category or floor named by a category or floor command. References to unknown categories or floors in node fields are validation findings (E007), not refusals: users make mistakes mid-edit.
 
-Each command is translated into small internal operations (insert or remove a subtree, place a node, set a transform, swap a property value, replace the category or floor list, set a seat override, set `nextOid`), each of which returns the operation that restores the previous state exactly. Operations carry ids, so they are never accepted from outside.
+Each command is translated into small internal operations (insert or remove a subtree, place a node, set a transform, swap a property value, replace the category or floor list, replace a row block's rows or one row, set a seat override, set `nextOid`), each of which returns the operation that restores the previous state exactly. Operations carry ids, so they are never accepted from outside.
+
+### 2.3 Tools and the session
+
+A `Session` holds the editor, the spatial index (§5.2), the selection (§5.1), the floor shown and the active tool. Everything from outside goes through it: input for the tool, and commands, undo, redo and selection changes from the chrome. After each, the index is synced from change tracking and the selection is reconciled with the document. A command, undo, redo or selection change from the chrome first makes the active tool abandon what it is doing, as Escape would.
+
+A tool is a state machine implementing one small interface:
+
+- **Input.** Pointer down, move and up, each with its position in chart units and in CSS pixels, the zoom (CSS pixels per chart unit, to turn screen tolerances into chart units), the button, the pointer kind (mouse, touch, pen), the modifiers (Shift, Alt, Ctrl, which is Cmd on macOS) and a timestamp in milliseconds; pointer cancel; key down and up with modifiers. The session drops a pointer down or move with a non-finite number or a zoom of 0 or less, and turns such a release into a cancel, so a drag never outlives its pointer. A release or move without a press, a second press during a drag and a key repeated any number of times are expected and do bounded work.
+- **What it may do.** Change the selection; apply commands to the editor, opening a gesture when a drag starts, applying a command on each move (the document changes at once; the live scene redraws it) and closing it on release as one undo entry, or cancelling it on Escape; report a cursor; add overlay data.
+- **Reset.** Abandons the tool's state as Escape would: cancels the gesture it opened and restores the selection from before an unfinished press or box. The session calls it before switching tools and before anything from the chrome, so no gesture is ever left open by a tool.
+- **Overlay.** Plain data in chart units for the canvas's overlay batcher (`04-renderer.md` §25): one outline per selected item, following its node's rotation (a node's box in its own space, a row's box around its seats, a seat's box); the frame around the whole selection (the item's own outline for one item, else the bounds of the outlines), where handles will attach; the selection box being dragged. Screen-space sizes and thresholds are constants in `cavea_edit::tuning`.
+
+Tools have no clock and do no I/O, and every order they produce comes from sorted sets, so the same input gives the same document, selection and overlay. A new tool is a type implementing the interface and a `ToolId` the session maps to it.
 
 ## 3. Layout
 
@@ -142,6 +161,16 @@ Common to all tools:
 - Click selects the top-level node (block, table, shape). Double-click enters it: first to rows, then to seats (**seat-edit mode**). Escape steps back out.
 - Drag box selects what it fully contains; with Alt held, what it touches.
 - Move: drag, or arrow keys (1 cu; with Shift, 10 cu).
+
+**Selection levels.** The selection is a set of items at one level: top-level nodes; the children of one section; the rows of one row block; or the seat positions of one row block or row (seat-edit mode, removed positions included so they can be restored). It is not part of the document and not on the undo stack. After every change it drops what the document no longer holds at its level, and falls back to an empty top-level selection when the section, block or row it is in is gone; undo does not bring a selection back.
+
+- **Click.** A press acts on the topmost item at the current level under the pointer, within 4 CSS px (mouse) or 12 (touch, pen). At the top level a node inside a section is reached through its section, so a click there selects the section, as the layers panel shows it. A press that hits nothing at the current level stays there if it is on the node holding the level (a gap between seats, the empty part of a section), and otherwise is tried at the level holding that node, out to the top. A press on an item not selected selects it alone, or with Shift adds it; a press on a selected item keeps the selection (so it can be dragged), and the release selects it alone, or with Shift takes it out. A click on empty canvas clears the selection, except with Shift.
+- **Picking.** Hidden and locked nodes, nodes in a hidden or locked section and nodes on another floor than the one shown are not picked on the canvas (rows and seats through their node). The layers and validation panels can still select them.
+- **Double-click.** A second press within 300 ms and 24 px of the first click's release enters the item it lands on: a section to its children, a row block to its rows, a row to its seats, a block's row to the block's seats. The item under the pointer at the new level is selected.
+- **Escape** cancels a drag in progress; otherwise it steps out one level, selecting what held the items: from seats to the rows holding them (or to the row node), from rows to the block, from a section's children to the section. At the top level it clears the selection.
+- **Keyboard.** Ctrl+A selects every item at the current level that can be picked; Enter steps into the one selected item, selecting everything in it; Escape as above.
+- **Drag.** A press becomes a drag after 4 CSS px (mouse) or 8 (touch, pen); a press that moves less is a click. A drag starting on a selected node at a node level moves the selection; any other drag draws a box from the press, which selects live: the items its box contains or, with Alt held at the last move, touches (a block or row through its seats, a section through its children or explicit outline, other nodes through their bounds; a row when all its seats are contained or any is touched); with Shift at the press it adds to the selection. Escape during a box restores the selection from before the press.
+- **Move.** The selected nodes that can be picked follow the pointer on screen, also inside a turned section: each origin is set to its start plus the pointer's travel turned into the parent's space, so the result does not drift. One gesture, one undo entry; Escape puts everything back. Each arrow key press, auto-repeat included, nudges as one undo entry. Rows and seats are not moved by dragging or nudging yet.
 - Rotate: a handle outside the selection box; snaps to 15° with Shift; the pivot is draggable.
 - Resize: on a row block, dragging a side handle adds or removes rows or seats; with Ctrl held it changes the pitch instead. On shapes it scales.
 - Flip horizontal and vertical; duplicate (Ctrl+D); copy and paste, including between charts.
@@ -162,6 +191,15 @@ Common to all tools:
 | User guides dragged from the rulers | Cyan lines |
 
 Snapping considers only nodes near the viewport, through a spatial index kept by the edit core.
+
+The index (`SpatialIndex`) caches each node's bounds in world space and in its own space, from its expanded seats for row blocks and rows (the expansion is cached per node and redone only when the node's content revision changes) and from its fields otherwise, and is brought up to date from `Document::changes_since`; only a change of seat size or alphabet overflow recomputes every node. A chart is a few hundred to a few thousand nodes, so queries scan cached bounds:
+
+- `hit`: the topmost node at a point, among one level's children, that the caller's filter accepts (§5.1 picking), within a tolerance. A row block or row is hit within half the diagonal between neighbouring seats of a present seat, so the space between its seats and rows is on it and an aisle is not; a section through a child or its explicit outline's box; any other node inside its box in its own space, so a turned node is not hit in the corners of its world bounds.
+- `select`: the nodes at one level whose world bounds a box contains or, with Alt, that it touches (as in §5.1).
+- `anchors`: bounds corners, centres and row ends of nodes touching a region, for snapping.
+- `seat_at`: the seat position nearest a point, for rows and seat-edit mode.
+
+A row block or row whose labels do not expand (halfway through an edit, or with more rows than letters label in 64 bytes) is placed with plain numbers, so it can still be picked. An SVG `path` shape's box is that of its end and control points, reflected ones included: a Bézier curve lies in the hull of its control points, so the box holds what the compiler draws. Data that does not parse keeps the points before the error, so the shape can still be selected and fixed.
 
 ### 5.3 Row blocks
 
