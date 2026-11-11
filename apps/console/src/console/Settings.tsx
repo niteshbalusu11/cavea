@@ -291,7 +291,7 @@ function MembersTab() {
                     </tr>
                   </thead>
                   <tbody>
-                    <For each={rows}>
+                    <For each={rows()}>
                       {(m) => (
                         <MemberRow
                           member={m}
@@ -317,7 +317,7 @@ function MembersTab() {
         <Paged pages={invitations} loading={msg("invite.loading")} failed={msg("invite.failed")}>
           {(rows) => (
             <Show
-              when={rows.length > 0}
+              when={rows().length > 0}
               fallback={<p class="mt-3 text-base text-muted">{msg("invite.none")}</p>}
             >
               <div class="mt-3 overflow-x-auto">
@@ -343,7 +343,7 @@ function MembersTab() {
                     </tr>
                   </thead>
                   <tbody>
-                    <For each={rows}>
+                    <For each={rows()}>
                       {(inv) => (
                         <tr>
                           <td class={td}>{inv.email}</td>
@@ -619,7 +619,7 @@ function AuditTab() {
       <Paged pages={entries} loading={msg("audit.loading")} failed={msg("audit.failed")}>
         {(rows) => (
           <Show
-            when={rows.length > 0}
+            when={rows().length > 0}
             fallback={
               <Empty icon="report" title={msg("audit.emptyTitle")} body={msg("audit.emptyBody")} />
             }
@@ -647,7 +647,7 @@ function AuditTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  <For each={rows}>{(entry) => <AuditRow entry={entry} who={who} />}</For>
+                  <For each={rows()}>{(entry) => <AuditRow entry={entry} who={who} />}</For>
                 </tbody>
               </table>
             </div>

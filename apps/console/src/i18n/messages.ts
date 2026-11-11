@@ -873,7 +873,8 @@ const consoleScreens = {
   "events.allCharts": "All charts",
   "events.showArchived": "Show archived",
   "events.count": "{n} events",
-  "events.countPartial": "{n} of the first {loaded} events",
+  "events.countOne": "1 event",
+  "events.countPartial": "{n} shown of {loaded} loaded; more to load",
   "events.filterReach":
     "Search and filters cover the events loaded so far, oldest first. Load more to search further.",
   "events.noMatch": "No loaded event matches the search and filters.",

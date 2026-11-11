@@ -4,7 +4,7 @@
 // secret's copy field, tabs, and dates through `Intl`.
 import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { Tooltip } from "@kobalte/core/tooltip";
-import { createSignal, createUniqueId, For, Show, type JSX } from "solid-js";
+import { createSignal, createUniqueId, For, Show, type Accessor, type JSX } from "solid-js";
 import type { ApiError } from "../api/client.ts";
 import type { Pages } from "../api/pages.ts";
 import { msg } from "../i18n/messages.ts";
@@ -83,7 +83,8 @@ export function Paged<T>(props: {
   pages: Pages<T>;
   loading: string;
   failed: string;
-  children: (rows: T[]) => JSX.Element;
+  /** Given the rows as an accessor: they change with every page loaded. */
+  children: (rows: Accessor<T[]>) => JSX.Element;
 }) {
   const state = () => props.pages.state();
   return (
@@ -104,7 +105,7 @@ export function Paged<T>(props: {
         </Show>
       }
     >
-      {(rows) => props.children(rows())}
+      {(rows) => props.children(rows)}
     </Show>
   );
 }
