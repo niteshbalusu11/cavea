@@ -30,6 +30,7 @@ const CODES: Record<Problem["code"], true> = {
   orphan_rule_violated: true,
   not_enough_objects: true,
   chart_invalid: true,
+  chart_locked: true,
   rate_limited: true,
   internal_error: true,
   overloaded: true,

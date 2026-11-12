@@ -21,6 +21,8 @@ import type {
   Book,
   ChangeStatus,
   Chart,
+  ChartLock,
+  ChartLockState,
   ChartDocument,
   CreateChart,
   CreateEvent,
@@ -39,11 +41,14 @@ import type {
   InviteOwner,
   Key,
   KeyCreated,
+  LockChart,
   MintKey,
   OperationId,
   Release,
   SeatReply,
+  SetThumbnail,
   UpdateEvent,
+  UpdateKey,
   Validation,
   Version,
   Workspace,
@@ -99,6 +104,10 @@ export interface PageOptions extends CallOptions {
   limit?: number;
   after?: string;
 }
+
+/** `events.list`'s filters (08 §6.2): one chart's events, a search, archived
+ * or not, newest first. */
+export type EventFilters = Omit<NonNullable<Input<"listEvents">["query"]>, "limit" | "after">;
 
 /** Claims of a buyer's session token (08 §11, D-34). */
 export interface SessionClaims {
@@ -362,18 +371,39 @@ export class Cavea {
     /** A chart's versions, oldest first. */
     versions: (chart: string, options: PageOptions = {}): Paginated<Version> =>
       this.#page("listVersions", (query) => ({ path: { chart }, query }), options),
+    /** Attach an uploaded image (`assets.upload`) to version `number` as its thumbnail. */
+    setThumbnail: (
+      chart: string,
+      number: number,
+      body: SetThumbnail,
+      options?: CallOptions,
+    ): Promise<Version> =>
+      this.call("setVersionThumbnail", { path: { chart, number: String(number) }, body }, options),
+    /** Who holds the editing lock (07 §9): `lock`, or `null`. */
+    getLock: (chart: string, options?: CallOptions): Promise<ChartLockState> =>
+      this.call("getChartLock", { path: { chart } }, options),
+    /** Take or renew the editing lock for 60 s (renew every 20); held by
+     * another, `chart_locked` unless `take_over`. While another holds it,
+     * saving the draft and publishing are `chart_locked`. */
+    lock: (chart: string, body: LockChart = {}, options?: CallOptions): Promise<ChartLock> =>
+      this.call("lockChart", { path: { chart }, body }, options),
+    /** Release this key's lock; another's is left. Idempotent. */
+    unlock: async (chart: string, options?: CallOptions): Promise<void> => {
+      await this.call("unlockChart", { path: { chart } }, options);
+    },
   };
 
   readonly events = {
     /** Every event, archived ones included, oldest first; `chart` keeps one
      * chart's. */
-    list: (options: PageOptions & { chart?: string } = {}): Paginated<Event> => {
-      const { chart, ...rest } = options;
-      return this.#page(
-        "listEvents",
-        (query) => ({ query: chart === undefined ? query : { ...query, chart } }),
-        rest,
-      );
+    list: (options: PageOptions & EventFilters = {}): Paginated<Event> => {
+      const { chart, q, archived, order, ...rest } = options;
+      const filters: EventFilters = {};
+      if (chart !== undefined) filters.chart = chart;
+      if (q !== undefined) filters.q = q;
+      if (archived !== undefined) filters.archived = archived;
+      if (order !== undefined) filters.order = order;
+      return this.#page("listEvents", (query) => ({ query: { ...query, ...filters } }), rest);
     },
     create: (body: CreateEvent, options?: CallOptions): Promise<Event> =>
       this.call("createEvent", { body }, options),
@@ -454,6 +484,9 @@ export class Cavea {
     /** Revoke a key by its id. Idempotent; a key cannot revoke itself. */
     revoke: (id: string, options?: CallOptions): Promise<Key> =>
       this.call("revokeKey", { path: { id } }, options),
+    /** Replace a publishable key's origin allow-list (`null`: every origin). */
+    updateOrigins: (id: string, body: UpdateKey, options?: CallOptions): Promise<Key> =>
+      this.call("updateKeyOrigins", { path: { id }, body }, options),
   };
 
   readonly assets = {

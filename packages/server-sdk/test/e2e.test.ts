@@ -206,6 +206,12 @@ describe.skipIf(DATABASE === undefined)("against cavea-server", () => {
       ]);
       expect(stale.requestId).toMatch(/^req_[0-9a-f]{32}$/);
       expect((await all(cavea.charts.versions("hall"))).map((v) => v.number)).toEqual([1]);
+      // The editing lock: this key takes it, sees it, gives it back.
+      const lock = await cavea.charts.lock("hall");
+      expect(lock.holder).toBe(ws.secret_key.id);
+      expect((await cavea.charts.getLock("hall")).lock?.holder).toBe(ws.secret_key.id);
+      expect(await cavea.charts.unlock("hall")).toBeUndefined();
+      expect((await cavea.charts.getLock("hall")).lock).toBeNull();
 
       // Events, walked two to a page.
       for (const key of ["show", "e1", "e2", "e3", "e4"]) {
@@ -221,6 +227,9 @@ describe.skipIf(DATABASE === undefined)("against cavea-server", () => {
         "e4",
       ]);
       expect((await all(cavea.events.list({ chart: "hall" }))).length).toBe(5);
+      expect(
+        (await all(cavea.events.list({ order: "newest", limit: 2 }))).map((e) => e.key),
+      ).toEqual(["e4", "e3", "e2", "e1", "show"]);
 
       // Every object once, seven to a page.
       const objects = await all(cavea.events.listObjects("show", { limit: 7 }));
@@ -293,6 +302,11 @@ describe.skipIf(DATABASE === undefined)("against cavea-server", () => {
       // Keys.
       const pk = await cavea.keys.create({ kind: "publishable", name: "web" });
       expect((await all(cavea.keys.list())).map((k) => k.id)).toEqual([ws.secret_key.id, pk.id]);
+      const origins = ["https://tickets.example.org"];
+      expect(
+        (await cavea.keys.updateOrigins(pk.id, { allowed_origins: origins })).allowed_origins,
+      ).toEqual(origins);
+      await cavea.keys.updateOrigins(pk.id, { allowed_origins: null });
       const self = await rejection(cavea.keys.revoke(ws.secret_key.id));
       expect([self.status, self.reason]).toEqual([403, "self_revocation"]);
 

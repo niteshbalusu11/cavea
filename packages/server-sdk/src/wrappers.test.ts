@@ -15,6 +15,8 @@ const ARGS: Record<string, unknown[]> = {
   "assets.upload": [new Uint8Array([1])],
   "charts.create": [{ key: "k", name: "n" }],
   "charts.saveDraft": ["p", {}, { ifMatch: "*" }],
+  "charts.setThumbnail": ["p", 1, { asset: "0".repeat(32) }],
+  "keys.updateOrigins": ["p", { allowed_origins: null }],
   "events.create": [{ key: "k", chart: "c" }],
   "events.update": ["p", {}],
   "events.book": ["p", { order_ref: "o" }],
@@ -66,7 +68,7 @@ test("every wrapped operation sends its own method and path", async () => {
       await out;
     }
     const info: { method: string; path: string } = OPERATIONS[op];
-    const pattern = new RegExp(`^${info.path.replace(/\{\w+\}/g, "p")}$`);
+    const pattern = new RegExp(`^${info.path.replace(/\{\w+\}/g, "[^/]+")}$`);
     const last = seen.at(-1);
     expect(seen).toHaveLength(1);
     expect({ op, method: last?.method, path: pattern.test(last?.path ?? "") }).toEqual({

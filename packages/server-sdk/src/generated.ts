@@ -49,6 +49,20 @@ export interface ChartList {
   next: string | null;
 }
 
+export interface ChartLock {
+  /** The holder's email, for a console member who may edit charts; otherwise `null`. */
+  email: string | null;
+  /** The lock ends then unless renewed. */
+  expires_at: string;
+  /** `usr_…`, or `key_…` for an API key. */
+  holder: string;
+  since: string;
+}
+
+export interface ChartLockState {
+  lock: ChartLock | null;
+}
+
 export interface Counts {
   blocked: number;
   booked: number;
@@ -99,10 +113,12 @@ export interface Event {
   archived_at: string | null;
   /** The chart's key. */
   chart: string;
-  counts?: Counts;
+  counts: Counts;
   created_at: string;
   key: string;
   name: string | null;
+  /** The committed `seq`: it changes exactly when the seat state does. */
+  seq: number;
   settings: EventSettings;
   version: Version;
 }
@@ -239,6 +255,11 @@ export interface KeyList {
   next: string | null;
 }
 
+export interface LockChart {
+  /** Take the lock from another who holds a live one. Default false. */
+  take_over?: boolean;
+}
+
 export interface MintKey {
   name: string;
 }
@@ -265,7 +286,7 @@ export type Objects = {
 
 /** An error (08 §6.4). */
 export interface Problem {
-  code: "invalid_request" | "unauthorized" | "forbidden" | "not_found" | "already_exists" | "object_not_free" | "object_not_held_by_token" | "object_status_conflict" | "version_conflict" | "upgrade_conflict" | "idempotency_mismatch" | "hold_token_expired" | "hold_limit_exceeded" | "channel_not_allowed" | "orphan_rule_violated" | "not_enough_objects" | "chart_invalid" | "rate_limited" | "internal_error" | "overloaded" | "unavailable";
+  code: "invalid_request" | "unauthorized" | "forbidden" | "not_found" | "already_exists" | "object_not_free" | "object_not_held_by_token" | "object_status_conflict" | "version_conflict" | "chart_locked" | "upgrade_conflict" | "idempotency_mismatch" | "hold_token_expired" | "hold_limit_exceeded" | "channel_not_allowed" | "orphan_rule_violated" | "not_enough_objects" | "chart_invalid" | "rate_limited" | "internal_error" | "overloaded" | "unavailable";
   /** Empty, or what the code adds (08 §6.4): `reason`, `missing`, `objects`, `field`, `limit`, `requested`, `session`, `findings`, `draft_etag`, `version`. */
   details: Record<string, unknown>;
   /** For humans; may change. Match on `code`. */
@@ -286,6 +307,11 @@ export interface SeatReply {
   seq: number;
 }
 
+export interface SetThumbnail {
+  /** An uploaded image's hash (`POST /v1/assets`): 32 hex digits. */
+  asset: string;
+}
+
 export interface Stats {
   floors: number;
   full_bytes: number;
@@ -302,6 +328,11 @@ export interface UpdateEvent {
   settings?: EventSettingsInput;
 }
 
+export interface UpdateKey {
+  /** Origins such as `https://tickets.example.com`; `null` allows every origin. */
+  allowed_origins: string[] | null;
+}
+
 export interface Validation {
   draft_etag: string;
   findings: Finding[];
@@ -311,12 +342,23 @@ export interface Validation {
 
 export interface Version {
   created_at: string;
+  /** Who published it: `usr_…` or `key_…`; `null` if not recorded (published with a key before this was). */
+  created_by: string | null;
+  /** In the versions list only: the publisher's email, for a console member whose role may see members, while the publisher is one; otherwise `null`. */
+  created_by_email?: string | null;
   /** The public artefact's content hash: 32 hex digits. */
   hash: string;
   /** `cv_` and 32 hex digits. */
   id: string;
   number: number;
   stats: Stats;
+  /** An image the publisher attached, or `null`. */
+  thumbnail: {
+    /** The asset's hash: 32 hex digits. */
+    hash: string;
+    /** `/v1/public/assets/{hash}`. */
+    url: string;
+  } | null;
   /** Where the compiled chart is served, relative to the server. */
   url: string;
 }
@@ -383,6 +425,18 @@ export interface Operations {
     input: { path: { chart: string }; headers: { "If-Match": string }; body: ChartDocument };
     reply: Chart;
   };
+  unlockChart: {
+    input: { path: { chart: string } };
+    reply: undefined;
+  };
+  getChartLock: {
+    input: { path: { chart: string } };
+    reply: ChartLockState;
+  };
+  lockChart: {
+    input: { path: { chart: string }; body: LockChart };
+    reply: ChartLock;
+  };
   publishChart: {
     input: { path: { chart: string }; headers?: { "If-Match"?: string } };
     reply: Version;
@@ -395,8 +449,12 @@ export interface Operations {
     input: { path: { chart: string }; query?: { limit?: number; after?: string } };
     reply: VersionList;
   };
+  setVersionThumbnail: {
+    input: { path: { chart: string; number: string }; body: SetThumbnail };
+    reply: Version;
+  };
   listEvents: {
-    input: { query?: { limit?: number; after?: string; chart?: string } };
+    input: { query?: { limit?: number; after?: string; chart?: string; q?: string; archived?: boolean; order?: "oldest" | "newest" } };
     reply: EventList;
   };
   createEvent: {
@@ -435,6 +493,10 @@ export interface Operations {
     input: { path: { event: string }; body: Release };
     reply: SeatReply;
   };
+  eventState: {
+    input: { path: { event: string }; query?: { after_seq?: number } };
+    reply: ArrayBuffer | undefined;
+  };
   createHoldToken: {
     input: { body: CreateHoldToken };
     reply: HoldTokenCreated;
@@ -463,6 +525,10 @@ export interface Operations {
     input: { path: { id: string } };
     reply: Key;
   };
+  updateKeyOrigins: {
+    input: { path: { id: string }; body: UpdateKey };
+    reply: Key;
+  };
   listWorkspaces: {
     input: { query?: { limit?: number; after?: string } };
     reply: WorkspaceList;
@@ -486,38 +552,45 @@ export type OperationId = keyof Operations;
 /** Each operation's method and path; its credential (`admin` where the
  * admin key may call it, else `secret`); whether it takes an
  * `Idempotency-Key`, which the client sets; whether it is a page of a
- * list (`after`); whether every success answers JSON. */
+ * list (`after`); the body its successes answer (`json`, `text` or
+ * `bytes`) and whether one may be empty. */
 export const OPERATIONS = {
-  metrics: { method: "GET", path: "/metrics", credential: "admin", idempotencyKey: false, paginated: false, json: false },
-  uploadAsset: { method: "POST", path: "/v1/assets", credential: "secret", idempotencyKey: false, paginated: false, json: true },
-  listCharts: { method: "GET", path: "/v1/charts", credential: "secret", idempotencyKey: false, paginated: true, json: true },
-  createChart: { method: "POST", path: "/v1/charts", credential: "secret", idempotencyKey: false, paginated: false, json: true },
-  archiveChart: { method: "DELETE", path: "/v1/charts/{chart}", credential: "secret", idempotencyKey: false, paginated: false, json: true },
-  getChart: { method: "GET", path: "/v1/charts/{chart}", credential: "secret", idempotencyKey: false, paginated: false, json: true },
-  getDraft: { method: "GET", path: "/v1/charts/{chart}/draft", credential: "secret", idempotencyKey: false, paginated: false, json: true },
-  saveDraft: { method: "PUT", path: "/v1/charts/{chart}/draft", credential: "secret", idempotencyKey: false, paginated: false, json: true },
-  publishChart: { method: "POST", path: "/v1/charts/{chart}/publish", credential: "secret", idempotencyKey: false, paginated: false, json: true },
-  validateDraft: { method: "POST", path: "/v1/charts/{chart}/validate", credential: "secret", idempotencyKey: false, paginated: false, json: true },
-  listVersions: { method: "GET", path: "/v1/charts/{chart}/versions", credential: "secret", idempotencyKey: false, paginated: true, json: true },
-  listEvents: { method: "GET", path: "/v1/events", credential: "secret", idempotencyKey: false, paginated: true, json: true },
-  createEvent: { method: "POST", path: "/v1/events", credential: "secret", idempotencyKey: false, paginated: false, json: true },
-  archiveEvent: { method: "DELETE", path: "/v1/events/{event}", credential: "secret", idempotencyKey: false, paginated: false, json: true },
-  getEvent: { method: "GET", path: "/v1/events/{event}", credential: "secret", idempotencyKey: false, paginated: false, json: true },
-  updateEvent: { method: "PATCH", path: "/v1/events/{event}", credential: "secret", idempotencyKey: false, paginated: false, json: true },
-  book: { method: "POST", path: "/v1/events/{event}/book", credential: "secret", idempotencyKey: true, paginated: false, json: true },
-  changeStatus: { method: "POST", path: "/v1/events/{event}/change-status", credential: "secret", idempotencyKey: true, paginated: false, json: true },
-  hold: { method: "POST", path: "/v1/events/{event}/hold", credential: "secret", idempotencyKey: true, paginated: false, json: true },
-  listObjects: { method: "GET", path: "/v1/events/{event}/objects", credential: "secret", idempotencyKey: false, paginated: true, json: true },
-  release: { method: "POST", path: "/v1/events/{event}/release", credential: "secret", idempotencyKey: true, paginated: false, json: true },
-  createHoldToken: { method: "POST", path: "/v1/hold-tokens", credential: "secret", idempotencyKey: false, paginated: false, json: true },
-  releaseHoldToken: { method: "DELETE", path: "/v1/hold-tokens/{token}", credential: "secret", idempotencyKey: true, paginated: false, json: true },
-  getHoldToken: { method: "GET", path: "/v1/hold-tokens/{token}", credential: "secret", idempotencyKey: false, paginated: false, json: true },
-  extendHoldToken: { method: "POST", path: "/v1/hold-tokens/{token}/extend", credential: "secret", idempotencyKey: true, paginated: false, json: true },
-  listKeys: { method: "GET", path: "/v1/keys", credential: "secret", idempotencyKey: false, paginated: true, json: true },
-  createKey: { method: "POST", path: "/v1/keys", credential: "secret", idempotencyKey: false, paginated: false, json: true },
-  revokeKey: { method: "DELETE", path: "/v1/keys/{id}", credential: "secret", idempotencyKey: false, paginated: false, json: true },
-  listWorkspaces: { method: "GET", path: "/v1/workspaces", credential: "admin", idempotencyKey: false, paginated: true, json: true },
-  createWorkspace: { method: "POST", path: "/v1/workspaces", credential: "admin", idempotencyKey: false, paginated: false, json: true },
-  inviteWorkspaceOwner: { method: "POST", path: "/v1/workspaces/{workspace}/invitations", credential: "admin", idempotencyKey: false, paginated: false, json: true },
-  mintWorkspaceKey: { method: "POST", path: "/v1/workspaces/{workspace}/keys", credential: "admin", idempotencyKey: false, paginated: false, json: true },
+  metrics: { method: "GET", path: "/metrics", credential: "admin", idempotencyKey: false, paginated: false, reply: "text", empty: false },
+  uploadAsset: { method: "POST", path: "/v1/assets", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  listCharts: { method: "GET", path: "/v1/charts", credential: "secret", idempotencyKey: false, paginated: true, reply: "json", empty: false },
+  createChart: { method: "POST", path: "/v1/charts", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  archiveChart: { method: "DELETE", path: "/v1/charts/{chart}", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  getChart: { method: "GET", path: "/v1/charts/{chart}", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  getDraft: { method: "GET", path: "/v1/charts/{chart}/draft", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  saveDraft: { method: "PUT", path: "/v1/charts/{chart}/draft", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  unlockChart: { method: "DELETE", path: "/v1/charts/{chart}/lock", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: true },
+  getChartLock: { method: "GET", path: "/v1/charts/{chart}/lock", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  lockChart: { method: "POST", path: "/v1/charts/{chart}/lock", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  publishChart: { method: "POST", path: "/v1/charts/{chart}/publish", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  validateDraft: { method: "POST", path: "/v1/charts/{chart}/validate", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  listVersions: { method: "GET", path: "/v1/charts/{chart}/versions", credential: "secret", idempotencyKey: false, paginated: true, reply: "json", empty: false },
+  setVersionThumbnail: { method: "PUT", path: "/v1/charts/{chart}/versions/{number}/thumbnail", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  listEvents: { method: "GET", path: "/v1/events", credential: "secret", idempotencyKey: false, paginated: true, reply: "json", empty: false },
+  createEvent: { method: "POST", path: "/v1/events", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  archiveEvent: { method: "DELETE", path: "/v1/events/{event}", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  getEvent: { method: "GET", path: "/v1/events/{event}", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  updateEvent: { method: "PATCH", path: "/v1/events/{event}", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  book: { method: "POST", path: "/v1/events/{event}/book", credential: "secret", idempotencyKey: true, paginated: false, reply: "json", empty: false },
+  changeStatus: { method: "POST", path: "/v1/events/{event}/change-status", credential: "secret", idempotencyKey: true, paginated: false, reply: "json", empty: false },
+  hold: { method: "POST", path: "/v1/events/{event}/hold", credential: "secret", idempotencyKey: true, paginated: false, reply: "json", empty: false },
+  listObjects: { method: "GET", path: "/v1/events/{event}/objects", credential: "secret", idempotencyKey: false, paginated: true, reply: "json", empty: false },
+  release: { method: "POST", path: "/v1/events/{event}/release", credential: "secret", idempotencyKey: true, paginated: false, reply: "json", empty: false },
+  eventState: { method: "GET", path: "/v1/events/{event}/state", credential: "secret", idempotencyKey: false, paginated: false, reply: "bytes", empty: true },
+  createHoldToken: { method: "POST", path: "/v1/hold-tokens", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  releaseHoldToken: { method: "DELETE", path: "/v1/hold-tokens/{token}", credential: "secret", idempotencyKey: true, paginated: false, reply: "json", empty: false },
+  getHoldToken: { method: "GET", path: "/v1/hold-tokens/{token}", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  extendHoldToken: { method: "POST", path: "/v1/hold-tokens/{token}/extend", credential: "secret", idempotencyKey: true, paginated: false, reply: "json", empty: false },
+  listKeys: { method: "GET", path: "/v1/keys", credential: "secret", idempotencyKey: false, paginated: true, reply: "json", empty: false },
+  createKey: { method: "POST", path: "/v1/keys", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  revokeKey: { method: "DELETE", path: "/v1/keys/{id}", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  updateKeyOrigins: { method: "PATCH", path: "/v1/keys/{id}", credential: "secret", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  listWorkspaces: { method: "GET", path: "/v1/workspaces", credential: "admin", idempotencyKey: false, paginated: true, reply: "json", empty: false },
+  createWorkspace: { method: "POST", path: "/v1/workspaces", credential: "admin", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  inviteWorkspaceOwner: { method: "POST", path: "/v1/workspaces/{workspace}/invitations", credential: "admin", idempotencyKey: false, paginated: false, reply: "json", empty: false },
+  mintWorkspaceKey: { method: "POST", path: "/v1/workspaces/{workspace}/keys", credential: "admin", idempotencyKey: false, paginated: false, reply: "json", empty: false },
 } as const;

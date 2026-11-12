@@ -226,29 +226,14 @@ export function transport(options: TransportOptions): Send {
           redirect: "error",
           signal,
         });
-        const text = await response.text();
         if (response.ok) {
-          let reply: unknown = text;
-          if (info.json) {
-            // A proxy's page or an empty answer is not the operation's reply:
-            // a booking must never look done when it did not reach Cavea.
-            try {
-              if (!isJson(response)) {
-                throw new TypeError("not JSON");
-              }
-              reply = JSON.parse(text);
-            } catch {
-              throw new CaveaError({
-                operation: op,
-                status: response.status,
-                code: "unexpected",
-                requestId: response.headers.get("Cavea-Request-Id"),
-                message: `${op}: HTTP ${response.status} without the JSON reply the operation answers`,
-              });
-            }
-          }
-          return { reply: reply as Reply<Op>, status: response.status, headers: response.headers };
+          return {
+            reply: (await reply(op, response)) as Reply<Op>,
+            status: response.status,
+            headers: response.headers,
+          };
         }
+        const text = await response.text();
         const error = problem(op, response, text);
         if (!TRANSIENT.has(response.status)) {
           throw error;
@@ -278,6 +263,43 @@ export function transport(options: TransportOptions): Send {
       await sleep(next, call.signal);
     }
   };
+}
+
+/**
+ * A success's body as the operation answers it: JSON parsed, text, or bytes;
+ * `undefined` for an empty answer where the operation may give one. Anything
+ * else, such as a proxy's page or nothing where a reply is due, is
+ * `unexpected`: a booking must never look done when it did not reach Cavea.
+ */
+async function reply(op: OperationId, response: Response): Promise<unknown> {
+  const info = OPERATIONS[op];
+  const unexpected = (): CaveaError =>
+    new CaveaError({
+      operation: op,
+      status: response.status,
+      code: "unexpected",
+      requestId: response.headers.get("Cavea-Request-Id"),
+      message: `${op}: HTTP ${response.status} without the reply the operation answers`,
+    });
+  if (info.reply === "bytes") {
+    const bytes = await response.arrayBuffer();
+    return bytes.byteLength === 0 && info.empty ? undefined : bytes;
+  }
+  const text = await response.text();
+  if (text === "" && info.empty) {
+    return undefined;
+  }
+  if (info.reply === "text") {
+    return text;
+  }
+  if (!isJson(response)) {
+    throw unexpected();
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw unexpected();
+  }
 }
 
 /** A network failure's system code (`ECONNREFUSED`), never its message,

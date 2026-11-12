@@ -142,6 +142,18 @@ export interface ChartList {
     data: Chart[];
     next: string | null;
 }
+export interface ChartLock {
+    /** The holder's email, for a console member who may edit charts; otherwise `null`. */
+    email: string | null;
+    /** The lock ends then unless renewed. */
+    expires_at: string;
+    /** `usr_…`, or `key_…` for an API key. */
+    holder: string;
+    since: string;
+}
+export interface ChartLockState {
+    lock: ChartLock | null;
+}
 export interface Counts {
     blocked: number;
     booked: number;
@@ -186,10 +198,12 @@ export interface Event {
     archived_at: string | null;
     /** The chart's key. */
     chart: string;
-    counts?: Counts;
+    counts: Counts;
     created_at: string;
     key: string;
     name: string | null;
+    /** The committed `seq`: it changes exactly when the seat state does. */
+    seq: number;
     settings: EventSettings;
     version: Version;
 }
@@ -308,6 +322,10 @@ export interface KeyList {
     data: Key[];
     next: string | null;
 }
+export interface LockChart {
+    /** Take the lock from another who holds a live one. Default false. */
+    take_over?: boolean;
+}
 export interface MintKey {
     name: string;
 }
@@ -330,7 +348,7 @@ export type Objects = {
 };
 /** An error (08 §6.4). */
 export interface Problem {
-    code: "invalid_request" | "unauthorized" | "forbidden" | "not_found" | "already_exists" | "object_not_free" | "object_not_held_by_token" | "object_status_conflict" | "version_conflict" | "upgrade_conflict" | "idempotency_mismatch" | "hold_token_expired" | "hold_limit_exceeded" | "channel_not_allowed" | "orphan_rule_violated" | "not_enough_objects" | "chart_invalid" | "rate_limited" | "internal_error" | "overloaded" | "unavailable";
+    code: "invalid_request" | "unauthorized" | "forbidden" | "not_found" | "already_exists" | "object_not_free" | "object_not_held_by_token" | "object_status_conflict" | "version_conflict" | "chart_locked" | "upgrade_conflict" | "idempotency_mismatch" | "hold_token_expired" | "hold_limit_exceeded" | "channel_not_allowed" | "orphan_rule_violated" | "not_enough_objects" | "chart_invalid" | "rate_limited" | "internal_error" | "overloaded" | "unavailable";
     /** Empty, or what the code adds (08 §6.4): `reason`, `missing`, `objects`, `field`, `limit`, `requested`, `session`, `findings`, `draft_etag`, `version`. */
     details: Record<string, unknown>;
     /** For humans; may change. Match on `code`. */
@@ -348,6 +366,10 @@ export interface SeatReply {
     objects: ObjectLabel[];
     seq: number;
 }
+export interface SetThumbnail {
+    /** An uploaded image's hash (`POST /v1/assets`): 32 hex digits. */
+    asset: string;
+}
 export interface Stats {
     floors: number;
     full_bytes: number;
@@ -362,6 +384,10 @@ export interface UpdateEvent {
     name?: string | null;
     settings?: EventSettingsInput;
 }
+export interface UpdateKey {
+    /** Origins such as `https://tickets.example.com`; `null` allows every origin. */
+    allowed_origins: string[] | null;
+}
 export interface Validation {
     draft_etag: string;
     findings: Finding[];
@@ -370,12 +396,23 @@ export interface Validation {
 }
 export interface Version {
     created_at: string;
+    /** Who published it: `usr_…` or `key_…`; `null` if not recorded (published with a key before this was). */
+    created_by: string | null;
+    /** In the versions list only: the publisher's email, for a console member whose role may see members, while the publisher is one; otherwise `null`. */
+    created_by_email?: string | null;
     /** The public artefact's content hash: 32 hex digits. */
     hash: string;
     /** `cv_` and 32 hex digits. */
     id: string;
     number: number;
     stats: Stats;
+    /** An image the publisher attached, or `null`. */
+    thumbnail: {
+        /** The asset's hash: 32 hex digits. */
+        hash: string;
+        /** `/v1/public/assets/{hash}`. */
+        url: string;
+    } | null;
     /** Where the compiled chart is served, relative to the server. */
     url: string;
 }
@@ -466,6 +503,31 @@ export interface Operations {
         };
         reply: Chart;
     };
+    unlockChart: {
+        input: {
+            path: {
+                chart: string;
+            };
+        };
+        reply: undefined;
+    };
+    getChartLock: {
+        input: {
+            path: {
+                chart: string;
+            };
+        };
+        reply: ChartLockState;
+    };
+    lockChart: {
+        input: {
+            path: {
+                chart: string;
+            };
+            body: LockChart;
+        };
+        reply: ChartLock;
+    };
     publishChart: {
         input: {
             path: {
@@ -497,12 +559,25 @@ export interface Operations {
         };
         reply: VersionList;
     };
+    setVersionThumbnail: {
+        input: {
+            path: {
+                chart: string;
+                number: string;
+            };
+            body: SetThumbnail;
+        };
+        reply: Version;
+    };
     listEvents: {
         input: {
             query?: {
                 limit?: number;
                 after?: string;
                 chart?: string;
+                q?: string;
+                archived?: boolean;
+                order?: "oldest" | "newest";
             };
         };
         reply: EventList;
@@ -588,6 +663,17 @@ export interface Operations {
         };
         reply: SeatReply;
     };
+    eventState: {
+        input: {
+            path: {
+                event: string;
+            };
+            query?: {
+                after_seq?: number;
+            };
+        };
+        reply: ArrayBuffer | undefined;
+    };
     createHoldToken: {
         input: {
             body: CreateHoldToken;
@@ -642,6 +728,15 @@ export interface Operations {
         };
         reply: Key;
     };
+    updateKeyOrigins: {
+        input: {
+            path: {
+                id: string;
+            };
+            body: UpdateKey;
+        };
+        reply: Key;
+    };
     listWorkspaces: {
         input: {
             query?: {
@@ -680,7 +775,8 @@ export type OperationId = keyof Operations;
 /** Each operation's method and path; its credential (`admin` where the
  * admin key may call it, else `secret`); whether it takes an
  * `Idempotency-Key`, which the client sets; whether it is a page of a
- * list (`after`); whether every success answers JSON. */
+ * list (`after`); the body its successes answer (`json`, `text` or
+ * `bytes`) and whether one may be empty. */
 export declare const OPERATIONS: {
     readonly metrics: {
         readonly method: "GET";
@@ -688,7 +784,8 @@ export declare const OPERATIONS: {
         readonly credential: "admin";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: false;
+        readonly reply: "text";
+        readonly empty: false;
     };
     readonly uploadAsset: {
         readonly method: "POST";
@@ -696,7 +793,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly listCharts: {
         readonly method: "GET";
@@ -704,7 +802,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: true;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly createChart: {
         readonly method: "POST";
@@ -712,7 +811,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly archiveChart: {
         readonly method: "DELETE";
@@ -720,7 +820,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly getChart: {
         readonly method: "GET";
@@ -728,7 +829,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly getDraft: {
         readonly method: "GET";
@@ -736,7 +838,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly saveDraft: {
         readonly method: "PUT";
@@ -744,7 +847,35 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
+    };
+    readonly unlockChart: {
+        readonly method: "DELETE";
+        readonly path: "/v1/charts/{chart}/lock";
+        readonly credential: "secret";
+        readonly idempotencyKey: false;
+        readonly paginated: false;
+        readonly reply: "json";
+        readonly empty: true;
+    };
+    readonly getChartLock: {
+        readonly method: "GET";
+        readonly path: "/v1/charts/{chart}/lock";
+        readonly credential: "secret";
+        readonly idempotencyKey: false;
+        readonly paginated: false;
+        readonly reply: "json";
+        readonly empty: false;
+    };
+    readonly lockChart: {
+        readonly method: "POST";
+        readonly path: "/v1/charts/{chart}/lock";
+        readonly credential: "secret";
+        readonly idempotencyKey: false;
+        readonly paginated: false;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly publishChart: {
         readonly method: "POST";
@@ -752,7 +883,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly validateDraft: {
         readonly method: "POST";
@@ -760,7 +892,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly listVersions: {
         readonly method: "GET";
@@ -768,7 +901,17 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: true;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
+    };
+    readonly setVersionThumbnail: {
+        readonly method: "PUT";
+        readonly path: "/v1/charts/{chart}/versions/{number}/thumbnail";
+        readonly credential: "secret";
+        readonly idempotencyKey: false;
+        readonly paginated: false;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly listEvents: {
         readonly method: "GET";
@@ -776,7 +919,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: true;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly createEvent: {
         readonly method: "POST";
@@ -784,7 +928,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly archiveEvent: {
         readonly method: "DELETE";
@@ -792,7 +937,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly getEvent: {
         readonly method: "GET";
@@ -800,7 +946,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly updateEvent: {
         readonly method: "PATCH";
@@ -808,7 +955,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly book: {
         readonly method: "POST";
@@ -816,7 +964,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: true;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly changeStatus: {
         readonly method: "POST";
@@ -824,7 +973,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: true;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly hold: {
         readonly method: "POST";
@@ -832,7 +982,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: true;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly listObjects: {
         readonly method: "GET";
@@ -840,7 +991,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: true;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly release: {
         readonly method: "POST";
@@ -848,7 +1000,17 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: true;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
+    };
+    readonly eventState: {
+        readonly method: "GET";
+        readonly path: "/v1/events/{event}/state";
+        readonly credential: "secret";
+        readonly idempotencyKey: false;
+        readonly paginated: false;
+        readonly reply: "bytes";
+        readonly empty: true;
     };
     readonly createHoldToken: {
         readonly method: "POST";
@@ -856,7 +1018,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly releaseHoldToken: {
         readonly method: "DELETE";
@@ -864,7 +1027,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: true;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly getHoldToken: {
         readonly method: "GET";
@@ -872,7 +1036,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly extendHoldToken: {
         readonly method: "POST";
@@ -880,7 +1045,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: true;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly listKeys: {
         readonly method: "GET";
@@ -888,7 +1054,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: true;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly createKey: {
         readonly method: "POST";
@@ -896,7 +1063,8 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly revokeKey: {
         readonly method: "DELETE";
@@ -904,7 +1072,17 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
+    };
+    readonly updateKeyOrigins: {
+        readonly method: "PATCH";
+        readonly path: "/v1/keys/{id}";
+        readonly credential: "secret";
+        readonly idempotencyKey: false;
+        readonly paginated: false;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly listWorkspaces: {
         readonly method: "GET";
@@ -912,7 +1090,8 @@ export declare const OPERATIONS: {
         readonly credential: "admin";
         readonly idempotencyKey: false;
         readonly paginated: true;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly createWorkspace: {
         readonly method: "POST";
@@ -920,7 +1099,8 @@ export declare const OPERATIONS: {
         readonly credential: "admin";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly inviteWorkspaceOwner: {
         readonly method: "POST";
@@ -928,7 +1108,8 @@ export declare const OPERATIONS: {
         readonly credential: "admin";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
     readonly mintWorkspaceKey: {
         readonly method: "POST";
@@ -936,7 +1117,8 @@ export declare const OPERATIONS: {
         readonly credential: "admin";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly json: true;
+        readonly reply: "json";
+        readonly empty: false;
     };
 };
 ```
@@ -945,7 +1127,7 @@ export declare const OPERATIONS: {
 
 ```ts
 import { type Answer, type CallOptions, type Fetch, type Input, type Reply } from "./core.js";
-import type { Asset, Book, ChangeStatus, Chart, ChartDocument, CreateChart, CreateEvent, CreateHoldToken, CreateKey, CreateWorkspace, Event, EventObject, ExtendHoldToken, ExtendReply, Hold, HoldReply, HoldTokenCreated, HoldTokenState, InvitationCreated, InviteOwner, Key, KeyCreated, MintKey, OperationId, Release, SeatReply, UpdateEvent, Validation, Version, Workspace, WorkspaceCreated } from "./generated.js";
+import type { Asset, Book, ChangeStatus, Chart, ChartLock, ChartLockState, ChartDocument, CreateChart, CreateEvent, CreateHoldToken, CreateKey, CreateWorkspace, Event, EventObject, ExtendHoldToken, ExtendReply, Hold, HoldReply, HoldTokenCreated, HoldTokenState, InvitationCreated, InviteOwner, Key, KeyCreated, LockChart, MintKey, OperationId, Release, SeatReply, SetThumbnail, UpdateEvent, UpdateKey, Validation, Version, Workspace, WorkspaceCreated } from "./generated.js";
 export { CaveaError, isCaveaError, type ErrorCode } from "./errors.js";
 export type { Answer, CallOptions, Fetch, Input, Reply } from "./core.js";
 export type * from "./generated.js";
@@ -991,6 +1173,9 @@ export interface PageOptions extends CallOptions {
     limit?: number;
     after?: string;
 }
+/** `events.list`'s filters (08 §6.2): one chart's events, a search, archived
+ * or not, newest first. */
+export type EventFilters = Omit<NonNullable<Input<"listEvents">["query"]>, "limit" | "after">;
 /** Claims of a buyer's session token (08 §11, D-34). */
 export interface SessionClaims {
     /** Your identifier for the buyer, 1 to 128 characters. */
@@ -1045,13 +1230,21 @@ export declare class Cavea {
         }>;
         /** A chart's versions, oldest first. */
         versions: (chart: string, options?: PageOptions) => Paginated<Version>;
+        /** Attach an uploaded image (`assets.upload`) to version `number` as its thumbnail. */
+        setThumbnail: (chart: string, number: number, body: SetThumbnail, options?: CallOptions) => Promise<Version>;
+        /** Who holds the editing lock (07 §9): `lock`, or `null`. */
+        getLock: (chart: string, options?: CallOptions) => Promise<ChartLockState>;
+        /** Take or renew the editing lock for 60 s (renew every 20); held by
+         * another, `chart_locked` unless `take_over`. While another holds it,
+         * saving the draft and publishing are `chart_locked`. */
+        lock: (chart: string, body?: LockChart, options?: CallOptions) => Promise<ChartLock>;
+        /** Release this key's lock; another's is left. Idempotent. */
+        unlock: (chart: string, options?: CallOptions) => Promise<void>;
     };
     readonly events: {
         /** Every event, archived ones included, oldest first; `chart` keeps one
          * chart's. */
-        list: (options?: PageOptions & {
-            chart?: string;
-        }) => Paginated<Event>;
+        list: (options?: PageOptions & EventFilters) => Paginated<Event>;
         create: (body: CreateEvent, options?: CallOptions) => Promise<Event>;
         /** The event with its counts. */
         get: (event: string, options?: CallOptions) => Promise<Event>;
@@ -1095,6 +1288,8 @@ export declare class Cavea {
         create: (body: CreateKey, options?: CallOptions) => Promise<KeyCreated>;
         /** Revoke a key by its id. Idempotent; a key cannot revoke itself. */
         revoke: (id: string, options?: CallOptions) => Promise<Key>;
+        /** Replace a publishable key's origin allow-list (`null`: every origin). */
+        updateOrigins: (id: string, body: UpdateKey, options?: CallOptions) => Promise<Key>;
     };
     readonly assets: {
         /** Upload a PNG, JPEG or WebP image. `created` is false when the

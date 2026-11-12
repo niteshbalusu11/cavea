@@ -417,6 +417,16 @@ describe("errors", () => {
       expect([error.code, error.status]).toEqual(["unexpected", 200]);
       expect(sent).toHaveLength(1);
     }
+    // Binary frames are bytes, as sent; a documented empty answer is nothing.
+    const frame = Uint8Array.of(0, 1, 0xff, 0x80, 10);
+    const { cavea: c3 } = world((req) =>
+      req.url.pathname.endsWith("/state")
+        ? new Response(frame, { headers: { "Content-Type": "application/vnd.cavea.frame" } })
+        : new Response(null, { status: 204 }),
+    );
+    const bytes = await c3.call("eventState", { path: { event: "e" } });
+    expect(bytes instanceof ArrayBuffer ? [...new Uint8Array(bytes)] : bytes).toEqual([...frame]);
+    expect(await c3.charts.unlock("c")).toBeUndefined();
     // `metrics` answers text.
     const { cavea } = world(
       () => new Response("cavea_up 1\n", { headers: { "Content-Type": "text/plain" } }),

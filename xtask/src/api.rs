@@ -15,8 +15,9 @@
 //!   a secret key or the admin key may call, and only the schemas those
 //!   reach; its table gives each operation's credential, whether it takes an
 //!   `Idempotency-Key` (the SDK's core sets that header itself, so it is not
-//!   an input), whether it is a page (`after`) and whether its successes are
-//!   JSON.
+//!   an input), whether it is a page (`after`), and the body its successes
+//!   answer (`json`, `text`, or `bytes`, typed `ArrayBuffer`) and whether
+//!   one may be empty.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -221,7 +222,8 @@ fn render(doc: &Value, client: Client) -> Result<String> {
             "/** Each operation's method and path; its credential (`admin` where the\n \
              * admin key may call it, else `secret`); whether it takes an\n \
              * `Idempotency-Key`, which the client sets; whether it is a page of a\n \
-             * list (`after`); whether every success answers JSON. */\n"
+             * list (`after`); the body its successes answer (`json`, `text` or\n \
+             * `bytes`) and whether one may be empty. */\n"
         }
     };
     let _ = write!(
@@ -339,18 +341,38 @@ fn operation(
     }
 
     // The reply: every success status, a JSON body by its schema, another
-    // body as text, none as `undefined`.
+    // body as text (for the SDK, text as text and anything else as bytes),
+    // none as `undefined`.
     let mut replies: Vec<String> = Vec::new();
-    // Whether every success answers JSON: the SDK refuses anything else.
-    let mut json = true;
+    // For the SDK: the body its successes answer (`json`, `text`, `bytes`),
+    // and whether one may be empty; it refuses any other answer.
+    let mut kind = "json";
+    let mut empty = false;
     for (status, response) in object(op.get("responses"), "responses")? {
         if !(status.starts_with('1') || status.starts_with('2')) {
             continue;
         }
         let response = resolve(doc, response)?;
-        json &= response.pointer("/content/application~1json").is_some();
-        let ty =
-            content(response.get("content"), "string")?.unwrap_or_else(|| "undefined".to_owned());
+        let media: Vec<&str> = response
+            .get("content")
+            .and_then(Value::as_object)
+            .map(|c| c.keys().map(String::as_str).collect())
+            .unwrap_or_default();
+        empty |= media.is_empty();
+        let bytes = media
+            .iter()
+            .any(|m| *m != "application/json" && !m.starts_with("text/"));
+        if bytes {
+            kind = "bytes";
+        } else if kind == "json" && media.iter().any(|m| m.starts_with("text/")) {
+            kind = "text";
+        }
+        let other = if client == Client::Sdk && bytes {
+            "ArrayBuffer"
+        } else {
+            "string"
+        };
+        let ty = content(response.get("content"), other)?.unwrap_or_else(|| "undefined".to_owned());
         if !replies.contains(&ty) {
             replies.push(ty);
         }
@@ -372,10 +394,11 @@ fn operation(
             let credential = credential(op).ok_or_else(|| anyhow!("no SDK credential"))?;
             let _ = writeln!(
                 table,
-                "  {id}: {{ method: {}, path: {}, credential: {}, idempotencyKey: {idempotency_key}, paginated: {paginated}, json: {json} }},",
+                "  {id}: {{ method: {}, path: {}, credential: {}, idempotencyKey: {idempotency_key}, paginated: {paginated}, reply: {}, empty: {empty} }},",
                 quote(&method.to_uppercase()),
                 quote(path),
                 quote(credential),
+                quote(kind),
             );
         }
     }
