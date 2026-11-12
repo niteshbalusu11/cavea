@@ -247,9 +247,13 @@ describe("idempotency keys", () => {
     expect(
       String(await rejection(cavea.events.book("e", { order_ref: "1" }, { idempotencyKey: "é" }))),
     ).toMatch(/printable/);
-    expect(
-      String(await rejection(cavea.events.book("e", { order_ref: "1" }, { idempotencyKey: "" }))),
-    ).toMatch(/printable/);
+    // Empty, or a space at either end, which a header value would lose:
+    // `"k "` would arrive as `"k"` and collide with it.
+    for (const idempotencyKey of ["", " ", "order-77 ", " order-77", "x".repeat(256)]) {
+      expect(
+        String(await rejection(cavea.events.book("e", { order_ref: "1" }, { idempotencyKey }))),
+      ).toMatch(/printable/);
+    }
     expect(
       String(await rejection(cavea.holdTokens.create({ event: "e" }, { idempotencyKey: "k" }))),
     ).toMatch(/takes no idempotency key/);
@@ -399,6 +403,25 @@ describe("errors", () => {
       retryAfter: 3,
       message: "hold: invalid_request, invalid_field, field objects (HTTP 400, req_1)",
     });
+  });
+
+  test("a success that is not the operation's JSON is unexpected, not a reply", async () => {
+    // A proxy's login page, or nothing: the booking did not reach Cavea.
+    for (const answer of [
+      () => new Response("<html>sign in</html>", { headers: { "Content-Type": "text/html" } }),
+      () => new Response(null, { status: 200 }),
+      () => new Response('{"seq":1}', { headers: { "Content-Type": "text/plain" } }),
+    ]) {
+      const { cavea, sent } = world(answer);
+      const error = (await rejection(cavea.events.book("e", { order_ref: "1" }))) as CaveaError;
+      expect([error.code, error.status]).toEqual(["unexpected", 200]);
+      expect(sent).toHaveLength(1);
+    }
+    // `metrics` answers text.
+    const { cavea } = world(
+      () => new Response("cavea_up 1\n", { headers: { "Content-Type": "text/plain" } }),
+    );
+    expect(await cavea.call("metrics", {})).toBe("cavea_up 1\n");
   });
 
   test("an answer that is not a problem of the API is unexpected", async () => {

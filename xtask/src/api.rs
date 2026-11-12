@@ -15,7 +15,8 @@
 //!   a secret key or the admin key may call, and only the schemas those
 //!   reach; its table gives each operation's credential, whether it takes an
 //!   `Idempotency-Key` (the SDK's core sets that header itself, so it is not
-//!   an input) and whether it is a page (`after`).
+//!   an input), whether it is a page (`after`) and whether its successes are
+//!   JSON.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -220,7 +221,7 @@ fn render(doc: &Value, client: Client) -> Result<String> {
             "/** Each operation's method and path; its credential (`admin` where the\n \
              * admin key may call it, else `secret`); whether it takes an\n \
              * `Idempotency-Key`, which the client sets; whether it is a page of a\n \
-             * list (`after`). */\n"
+             * list (`after`); whether every success answers JSON. */\n"
         }
     };
     let _ = write!(
@@ -340,11 +341,14 @@ fn operation(
     // The reply: every success status, a JSON body by its schema, another
     // body as text, none as `undefined`.
     let mut replies: Vec<String> = Vec::new();
+    // Whether every success answers JSON: the SDK refuses anything else.
+    let mut json = true;
     for (status, response) in object(op.get("responses"), "responses")? {
         if !(status.starts_with('1') || status.starts_with('2')) {
             continue;
         }
         let response = resolve(doc, response)?;
+        json &= response.pointer("/content/application~1json").is_some();
         let ty =
             content(response.get("content"), "string")?.unwrap_or_else(|| "undefined".to_owned());
         if !replies.contains(&ty) {
@@ -368,7 +372,7 @@ fn operation(
             let credential = credential(op).ok_or_else(|| anyhow!("no SDK credential"))?;
             let _ = writeln!(
                 table,
-                "  {id}: {{ method: {}, path: {}, credential: {}, idempotencyKey: {idempotency_key}, paginated: {paginated} }},",
+                "  {id}: {{ method: {}, path: {}, credential: {}, idempotencyKey: {idempotency_key}, paginated: {paginated}, json: {json} }},",
                 quote(&method.to_uppercase()),
                 quote(path),
                 quote(credential),

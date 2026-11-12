@@ -680,7 +680,7 @@ export type OperationId = keyof Operations;
 /** Each operation's method and path; its credential (`admin` where the
  * admin key may call it, else `secret`); whether it takes an
  * `Idempotency-Key`, which the client sets; whether it is a page of a
- * list (`after`). */
+ * list (`after`); whether every success answers JSON. */
 export declare const OPERATIONS: {
     readonly metrics: {
         readonly method: "GET";
@@ -688,6 +688,7 @@ export declare const OPERATIONS: {
         readonly credential: "admin";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: false;
     };
     readonly uploadAsset: {
         readonly method: "POST";
@@ -695,6 +696,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly listCharts: {
         readonly method: "GET";
@@ -702,6 +704,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: true;
+        readonly json: true;
     };
     readonly createChart: {
         readonly method: "POST";
@@ -709,6 +712,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly archiveChart: {
         readonly method: "DELETE";
@@ -716,6 +720,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly getChart: {
         readonly method: "GET";
@@ -723,6 +728,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly getDraft: {
         readonly method: "GET";
@@ -730,6 +736,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly saveDraft: {
         readonly method: "PUT";
@@ -737,6 +744,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly publishChart: {
         readonly method: "POST";
@@ -744,6 +752,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly validateDraft: {
         readonly method: "POST";
@@ -751,6 +760,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly listVersions: {
         readonly method: "GET";
@@ -758,6 +768,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: true;
+        readonly json: true;
     };
     readonly listEvents: {
         readonly method: "GET";
@@ -765,6 +776,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: true;
+        readonly json: true;
     };
     readonly createEvent: {
         readonly method: "POST";
@@ -772,6 +784,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly archiveEvent: {
         readonly method: "DELETE";
@@ -779,6 +792,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly getEvent: {
         readonly method: "GET";
@@ -786,6 +800,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly updateEvent: {
         readonly method: "PATCH";
@@ -793,6 +808,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly book: {
         readonly method: "POST";
@@ -800,6 +816,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: true;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly changeStatus: {
         readonly method: "POST";
@@ -807,6 +824,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: true;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly hold: {
         readonly method: "POST";
@@ -814,6 +832,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: true;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly listObjects: {
         readonly method: "GET";
@@ -821,6 +840,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: true;
+        readonly json: true;
     };
     readonly release: {
         readonly method: "POST";
@@ -828,6 +848,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: true;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly createHoldToken: {
         readonly method: "POST";
@@ -835,6 +856,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly releaseHoldToken: {
         readonly method: "DELETE";
@@ -842,6 +864,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: true;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly getHoldToken: {
         readonly method: "GET";
@@ -849,6 +872,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly extendHoldToken: {
         readonly method: "POST";
@@ -856,6 +880,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: true;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly listKeys: {
         readonly method: "GET";
@@ -863,6 +888,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: true;
+        readonly json: true;
     };
     readonly createKey: {
         readonly method: "POST";
@@ -870,6 +896,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly revokeKey: {
         readonly method: "DELETE";
@@ -877,6 +904,7 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly listWorkspaces: {
         readonly method: "GET";
@@ -884,6 +912,7 @@ export declare const OPERATIONS: {
         readonly credential: "admin";
         readonly idempotencyKey: false;
         readonly paginated: true;
+        readonly json: true;
     };
     readonly createWorkspace: {
         readonly method: "POST";
@@ -891,6 +920,7 @@ export declare const OPERATIONS: {
         readonly credential: "admin";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly inviteWorkspaceOwner: {
         readonly method: "POST";
@@ -898,6 +928,7 @@ export declare const OPERATIONS: {
         readonly credential: "admin";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
     readonly mintWorkspaceKey: {
         readonly method: "POST";
@@ -905,6 +936,7 @@ export declare const OPERATIONS: {
         readonly credential: "admin";
         readonly idempotencyKey: false;
         readonly paginated: false;
+        readonly json: true;
     };
 };
 ```

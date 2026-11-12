@@ -75,7 +75,9 @@ interface Parts {
   body?: unknown;
 }
 
-const PRINTABLE = /^[\x20-\x7e]{1,255}$/;
+/** Printable ASCII, 1 to 255 characters (08 §6.1), without a space at either
+ * end: a header value loses those, so two keys would become one. */
+const IDEMPOTENCY_KEY = /^[\x21-\x7e](?:[\x20-\x7e]{0,253}[\x21-\x7e])?$/;
 const REQUEST_ID = /^[A-Za-z0-9._-]{1,64}$/;
 /** Statuses a retry may cure: rate limited (08 §12), and the server or a
  * proxy in front of it failing or overloaded. */
@@ -182,8 +184,10 @@ export function transport(options: TransportOptions): Send {
     }
     if (info.idempotencyKey) {
       const idempotencyKey = call.idempotencyKey ?? crypto.randomUUID();
-      if (!PRINTABLE.test(idempotencyKey)) {
-        throw new TypeError("idempotencyKey must be 1 to 255 printable ASCII characters");
+      if (!IDEMPOTENCY_KEY.test(idempotencyKey)) {
+        throw new TypeError(
+          "idempotencyKey must be 1 to 255 printable ASCII characters, without a space at either end",
+        );
       }
       headers.set("Idempotency-Key", idempotencyKey);
     } else if (call.idempotencyKey !== undefined) {
@@ -224,13 +228,14 @@ export function transport(options: TransportOptions): Send {
         });
         const text = await response.text();
         if (response.ok) {
-          let reply: unknown;
-          if (text === "") {
-            reply = undefined;
-          } else if (!isJson(response)) {
-            reply = text;
-          } else {
+          let reply: unknown = text;
+          if (info.json) {
+            // A proxy's page or an empty answer is not the operation's reply:
+            // a booking must never look done when it did not reach Cavea.
             try {
+              if (!isJson(response)) {
+                throw new TypeError("not JSON");
+              }
               reply = JSON.parse(text);
             } catch {
               throw new CaveaError({
@@ -238,7 +243,7 @@ export function transport(options: TransportOptions): Send {
                 status: response.status,
                 code: "unexpected",
                 requestId: response.headers.get("Cavea-Request-Id"),
-                message: `${op}: HTTP ${response.status} with a body that is not JSON`,
+                message: `${op}: HTTP ${response.status} without the JSON reply the operation answers`,
               });
             }
           }
