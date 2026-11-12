@@ -173,9 +173,13 @@ fn full_labels_agree_with_the_compiler_for_every_seat() {
     }
     // Every scheme took part, and the odd cases.
     let all: Vec<&String> = expected.values().collect();
-    for needle in ["/s", "!", " @{x}", "/x", "/c", "/II", "L1/s8! @{x}"] {
+    for needle in ["/s", "!", "{x}", "/x", "/c", "/II", "L1/s8!{x}"] {
         assert!(all.iter().any(|l| l.contains(needle)), "{needle}");
     }
+    // Seats without a section label leave out ` @` with the empty part
+    // (D-96); the others keep it.
+    assert!(all.iter().all(|l| !l.contains(" @{x}")));
+    assert!(all.iter().any(|l| l.contains(" @")));
     assert_eq!(index.find(&chart, "nope"), None);
     assert_eq!(index.find(&chart, ""), None);
     assert!(full_label(&chart, chart.meta.seat_count).is_err());

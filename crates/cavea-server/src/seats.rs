@@ -414,7 +414,7 @@ mod tests {
     #![allow(clippy::unwrap_used, reason = "tests")]
 
     use cavea_compiler::document::{ChartDocument, Node};
-    use cavea_format::full_label::compose;
+    use cavea_compiler::write_full_label as compose;
     use cavea_format::{Bounds, Object, Point};
 
     use super::*;
@@ -481,8 +481,9 @@ mod tests {
         let document = stadium();
         check_seats(&chart(&document), &document, true);
 
-        // No sections: one block at the top level, `standard`; labels
-        // compose with a leading dash (`-A-1`), and `section` is null.
+        // No sections: one block at the top level, `standard`; labels leave
+        // the empty section out with its dash (`A-1`, D-96), and `section`
+        // is null.
         let mut flat = stadium();
         flat.nodes = flat
             .nodes
@@ -501,7 +502,9 @@ mod tests {
             })
             .collect();
         let flat_chart = chart(&flat);
-        assert!(flat_chart.label(0).unwrap().starts_with('-'));
+        let d = flat_chart.details(0).unwrap();
+        let (row, seat) = (d.row.unwrap(), d.seat.unwrap());
+        assert_eq!(flat_chart.label(0), Some(format!("{row}-{seat}").as_str()));
         check_seats(&flat_chart, &flat, false);
     }
 
