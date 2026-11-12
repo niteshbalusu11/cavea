@@ -27,6 +27,7 @@ import {
   type AutosaveStart,
   type LocalStore,
   type LockInfo,
+  type LockReply,
   type LockState,
   type SaveReply,
   type SaveState,
@@ -87,6 +88,9 @@ export interface ServerChart {
   phase: Accessor<Phase>;
   chart: Accessor<Chart | null>;
   readOnly: Accessor<boolean>;
+  /** Why it is read-only, for a refusal: the role, the archive, or who
+   * holds the editing lock. */
+  whyReadOnly(): string;
   load(designer: Designer): Promise<void>;
   /** A session opened from a file over the draft: saved over it. */
   adopt(session: Session): Promise<void>;
@@ -297,22 +301,27 @@ export function serverChart(props: {
     const mine = ++generation;
     designer = d;
     setPhase({ kind: "loading" });
-    // The lock first, so the draft read is the one the lock's holder left.
-    const taken = canWrite ? await takeLock(ref) : null;
+    // The lock before the draft, so the draft read is the one the lock's
+    // last holder left; none for a role that only reads or an archived chart.
+    let taken: LockReply | null = null;
+    let opened;
+    try {
+      opened = await openChart(ref, signal, async (c) => {
+        if (canWrite && c.archived_at === null && !stale(mine)) taken = await takeLock(ref);
+      });
+    } catch (e) {
+      return void fail(e);
+    }
     if (stale(mine)) return;
-    if (taken?.kind === "offline") {
+    // Assigned in the callback: TypeScript cannot follow it there.
+    const lockReply = taken as LockReply | null;
+    if (lockReply?.kind === "offline") {
       return void setPhase({
         kind: "failed",
         title: msg("serverChart.failed"),
         detail: msg("lock.unreachable"),
         retry: true,
       });
-    }
-    let opened;
-    try {
-      opened = await openChart(ref, signal);
-    } catch (e) {
-      return void fail(e);
     }
     if (stale(mine)) return;
     const session = open(opened.draft);
@@ -340,12 +349,12 @@ export function serverChart(props: {
       setAccess({ kind: "archived" });
       return void setPhase({ kind: "ready" });
     }
-    if (taken?.kind === "locked") {
+    if (lockReply?.kind === "locked") {
       // Someone else is editing: read-only, with Take over. Changes kept
       // here before stay in the store, offered once this page edits.
-      makeReadOnly(session, msg("lock.refused", { who: who(taken.lock) }));
+      makeReadOnly(session, msg("lock.refused", { who: who(lockReply.lock) }));
       attach(session, null);
-      setAccess({ kind: "elsewhere", lock: taken.lock, takenOver: false, kept: false });
+      setAccess({ kind: "elsewhere", lock: lockReply.lock, takenOver: false, kept: false });
       return void setPhase({ kind: "ready" });
     }
     // Changes kept by earlier editors: offered unless they are what the
@@ -357,7 +366,7 @@ export function serverChart(props: {
     attach(session, {
       etag: opened.etag,
       revision: session.status().revision,
-      ...(taken?.kind === "held" ? { lock: taken.lock } : {}),
+      ...(lockReply?.kind === "held" ? { lock: lockReply.lock } : {}),
     });
     setPhase({ kind: "ready" });
   };
@@ -764,6 +773,12 @@ export function serverChart(props: {
     phase,
     chart,
     readOnly: () => access().kind !== "editing",
+    whyReadOnly() {
+      const a = access();
+      if (a.kind === "archived") return msg("lock.archivedRefused");
+      if (a.kind === "elsewhere") return msg("lock.refused", { who: who(a.lock) });
+      return msg("readOnly.refused");
+    },
     load,
     async adopt(session) {
       // Read-only: nothing replaces the draft (the page refuses first).
@@ -872,7 +887,8 @@ function SaveIndicator(props: {
       case "saving":
         return props.unrenewed ? msg("lock.unrenewed") : msg("save.saving");
       case "offline":
-        return props.localFailed ? msg("save.offlineNotKept") : msg("save.offline");
+        if (props.localFailed) return msg("save.offlineNotKept");
+        return props.unrenewed ? msg("lock.unrenewed") : msg("save.offline");
       case "conflict":
         return msg("save.conflict");
       case "signedOut":

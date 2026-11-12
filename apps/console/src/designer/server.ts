@@ -26,10 +26,16 @@ export interface OpenedChart {
 }
 
 /** The chart and its draft. The etag is the draft answer's own `ETag`, so
- * it names exactly the draft read. */
-export async function openChart(ref: ChartRef, signal: AbortSignal): Promise<OpenedChart> {
+ * it names exactly the draft read. `between` runs once the chart is read,
+ * before the draft is (taking the editing lock). */
+export async function openChart(
+  ref: ChartRef,
+  signal: AbortSignal,
+  between: (chart: Chart) => Promise<void> = () => Promise.resolve(),
+): Promise<OpenedChart> {
   const options = { workspace: ref.workspace };
   const chart = await call("getChart", { path: { chart: ref.key } }, signal, options);
+  await between(chart);
   const got = await callWithHeaders("getDraft", { path: { chart: ref.key } }, signal, options);
   const etag = got.headers.get("ETag");
   if (etag === null || typeof got.reply !== "object" || got.reply === null) {

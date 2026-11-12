@@ -69,11 +69,15 @@ export async function renderThumbnail(
   });
   try {
     canvas.showBuyer(editor ?? undefined);
-    const base: View = { centre: [0, 0], zoom: 1, ...THUMBNAIL, dpr: 1 };
+    // The first draw merges the scene, to learn its bounds; at a zoom that
+    // shows it as a dot, so it costs the GPU next to nothing. The fitted
+    // draw comes in a task of its own, so neither is a long one.
+    const base: View = { centre: [0, 0], zoom: 1e-6, ...THUMBNAIL, dpr: 1 };
     canvas.setView(base);
     canvas.draw();
     const box = canvas.sceneBounds() ?? session.fit();
     if (box === null) return null;
+    await later(FRAME_MS);
     canvas.setView(fitView(base, grown(box, 0.1), PADDING));
     const start = performance.now();
     let quiet = start;

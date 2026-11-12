@@ -62,7 +62,7 @@ As built (CON-001 to CON-004, SEC-003): the server side below, and the console's
 
 ### 3.1 List
 
-- Grid of cards: thumbnail, name, seat count, published version, last edited, number of events.
+- Grid of cards: thumbnail, name, seat count, published version, last edited, number of events. The thumbnail is the published version's, made by the designer as it publishes (07 §11, DSN-040); a version without one shows a placeholder. The chart page's versions show each version's thumbnail beside its number.
 - Search by name or key; filter by archived; sort by name or last edited.
 - Card menu: open, duplicate, export, archive.
 - Empty state: "Draw your first chart" with the three starting points from `07-designer.md` §16.

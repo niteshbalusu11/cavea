@@ -167,7 +167,7 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
    * waits for it. */
   const request = async (text: string, file: string) => {
     // A read-only chart takes no file over it (dropped, or opened).
-    if (server?.readOnly() === true) return notify(msg("readOnly.refused"), "error");
+    if (server?.readOnly() === true) return notify(server.whyReadOnly(), "error");
     const d = await loading.catch(() => undefined);
     if (d === undefined || gone || panic() !== null) return;
     let session: Session;
