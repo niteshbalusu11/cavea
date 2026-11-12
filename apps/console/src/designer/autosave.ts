@@ -47,8 +47,9 @@ export type LockReply =
   | { kind: "locked"; lock: LockInfo }
   | { kind: "offline" }
   | { kind: "signedOut" }
-  /** Refused for a reason retrying will not change (an archived chart). */
-  | { kind: "refused" };
+  /** Refused for a reason retrying will not change (an archived chart, or
+   * the licence expired since `me` was read: `licence`). */
+  | { kind: "refused"; licence?: true };
 
 export type LockState =
   /** No lock: a machine started without one, or the page let it go. */

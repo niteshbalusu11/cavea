@@ -25,8 +25,12 @@ export type Standing =
 
 /** The largest licence file read, as the server's (`cavea_licence::MAX_BYTES`). */
 const MAX_BYTES = 16 * 1024;
-/** Domain patterns read from a server's answer, and the longest. */
-const MAX_DOMAINS = 256;
+/**
+ * More domain patterns than a 16 KiB licence can hold (each takes at least
+ * four bytes, `"a",`): a longer list is not a licence's, and says nothing;
+ * a pattern longer than any valid one (253 characters and `*.`) is dropped.
+ */
+const MAX_DOMAINS = 4096;
 const MAX_DOMAIN = 255;
 const DAY_MS = 86_400_000;
 /** What every licence signature covers before the payload. */
@@ -77,12 +81,10 @@ export function fromServer(field: unknown): Standing {
   if (status === "unlicensed") {
     return { kind: "invalid", reason: "the server has no valid licence" };
   }
-  if (status === "licensed" && Array.isArray(domains)) {
+  if (status === "licensed" && Array.isArray(domains) && domains.length <= MAX_DOMAINS) {
     return {
       kind: "licensed",
-      domains: domains
-        .slice(0, MAX_DOMAINS)
-        .filter((d): d is string => typeof d === "string" && d.length <= MAX_DOMAIN),
+      domains: domains.filter((d): d is string => typeof d === "string" && d.length <= MAX_DOMAIN),
     };
   }
   return { kind: "unknown", reason: "unreadable" };

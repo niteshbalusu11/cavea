@@ -229,7 +229,7 @@ Never refused in any state: every seat operation (holds, releases, bookings, sta
 | `caveaServer`, `licensed` (valid or grace) | none | "Development licence" | none |
 | `caveaServer`, `expired` | "Powered by Cavea" | "Powered by Cavea" | "Powered by Cavea" |
 | `caveaServer`, `unlicensed` (missing or invalid) | "Development licence" | "Development licence" | "Development licence" |
-| `caveaServer`, no `licence` field (a server older than licensing), or one this version cannot read (not an object, an unknown `status`, `domains` not a list) | none | none | none |
+| `caveaServer`, no `licence` field (a server older than licensing), or one this version cannot read (not an object, an unknown `status`, `domains` not a list or longer than a 16 KiB licence can hold) | none | none | none |
 | A custom adapter, `licence` option verified: valid or grace | none | "Development licence" | none |
 | …verified and expired | "Powered by Cavea" | "Powered by Cavea" | "Powered by Cavea" |
 | …not a licence, or one that does not verify (today: every licence, `unknown_key`, since no key is trusted) | "Development licence" | "Development licence" | "Development licence" |

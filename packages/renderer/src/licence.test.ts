@@ -62,9 +62,14 @@ describe("the mark", () => {
       expect(fromServer(field).kind).toBe("unknown");
     }
     // Hostile domains: other types dropped, the list and each entry bounded.
-    const many = Array.from({ length: 10_000 }, (_, i) => `h${i}.example`);
+    // Every domain a licence can hold counts (a 16 KiB file holds a few thousand);
+    // a list longer than any licence's says nothing.
+    const many = Array.from({ length: 3_000 }, (_, i) => `h${i}.example`);
     const read = fromServer({ status: "licensed", domains: [...many, 7, {}, "x".repeat(10_000)] });
-    expect(read.kind === "licensed" && read.domains.length).toBe(256);
+    expect(read.kind === "licensed" && read.domains.length).toBe(3_000);
+    expect(decide(read, "h2999.example").mark).toBeNull();
+    const absurd = Array.from({ length: 5_000 }, (_, i) => `h${i}.example`);
+    expect(fromServer({ status: "licensed", domains: absurd }).kind).toBe("unknown");
     const odd = fromServer({ status: "licensed", domains: [7, null, { a: 1 }, "ok.example"] });
     expect(odd).toEqual(licensed("ok.example"));
   });
