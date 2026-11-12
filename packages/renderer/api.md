@@ -96,12 +96,15 @@ export interface StateAdapter {
     connect(ctx: AdapterContext): Promise<Snapshot>;
     /** Hold-on-select. Without `hold` and `release` the map runs in manual session mode. */
     hold?(labels: string[]): Promise<HoldResult>;
+    /** Release these labels, held by this buyer; with `hold`. */
     release?(labels: string[]): Promise<void>;
     /** The engine saw a gap in the deltas: send a new snapshot through the context. */
     resync?(): void;
-    /** The page was hidden; and shown again. */
+    /** The page was hidden: an adapter may drop its live connection. */
     pause?(): void;
+    /** The page was shown again after `pause`. */
     resume?(): void;
+    /** The map is gone: close every connection. Called once, last. */
     disconnect(): void;
 }
 /** Fixed state: `unavailable` labels, everything else available. No holds. */
@@ -606,17 +609,22 @@ export interface SeatObject {
     label: string;
     /** Only seats are selectable today. */
     kind: "seat" | "table" | "booth" | "area";
+    /** Section label; left out when the chart has no sections. */
     section?: string;
+    /** Row label; left out when the object has none. */
     row?: string;
+    /** Seat label within the row; left out when the object has none. */
     seat?: string;
     /** Floor name. */
     floor: string;
+    /** The object's category: its key in the chart and its name. */
     category: {
         key: string;
         label: string;
     };
     /** The ticket type chosen in the tooltip, for a selected object whose category has types (default the first). */
     ticketType?: string;
+    /** The seat's flags, as set in the designer. */
     flags: {
         accessible: boolean;
         companion: boolean;
@@ -627,7 +635,9 @@ export interface SeatObject {
     price?: number;
 }
 export interface Selection {
+    /** The selected objects, in the order they were selected. */
     objects: SeatObject[];
+    /** The hold token holding them, to book with from the host's backend; `null` while there is none. */
     holdToken: string | null;
     /** The selection meets `selection.min`. */
     valid: boolean;
@@ -635,11 +645,13 @@ export interface Selection {
     expiresAt: number | null;
 }
 export interface ReadyInfo {
+    /** The chart's name, its seats, and its bookable objects (seats, and later tables, booths and areas). */
     chart: {
         name: string;
         seats: number;
         objects: number;
     };
+    /** What draws the map: WebGL2, the only backend today. */
     backend: "webgl2";
     /** Milliseconds since `createSeatMap` was called (04 §24). */
     marks: Record<string, number>;
@@ -705,15 +717,23 @@ export interface SeatMapOptions {
          */
         image?: ImageSource;
     };
+    /** The chart is decoded and the first state applied (a hidden container has not drawn yet); just before `createSeatMap` resolves. */
     onReady?: (info: ReadyInfo) => void;
+    /** The selection changed, or the buyer chose another ticket type. */
     onSelectionChange?: (selection: Selection) => void;
+    /** One object was added to the selection. */
     onObjectSelect?: (object: SeatObject) => void;
+    /** One object left the selection. */
     onObjectDeselect?: (object: SeatObject) => void;
     /** `rule` `min`: below the minimum (`objects`: the selection). Otherwise `objects` were refused. */
     onSelectionInvalid?: (rule: string, objects: SeatObject[]) => void;
+    /** The selection meets `selection.min` again. */
     onSelectionValid?: () => void;
+    /** The first of a run of hold requests started: disable checkout until `onHoldSettled`. */
     onHoldPending?: () => void;
+    /** The last hold request of a run was answered. */
     onHoldSettled?: () => void;
+    /** A hold was refused: each object with its reason, such as `not_free`, or the request's code (`hold_limit_exceeded`, `hold_failed`). */
     onHoldFailed?: (failed: Array<{
         object: SeatObject;
         reason: string;
@@ -724,10 +744,13 @@ export interface SeatMapOptions {
     onHoldExpiring?: (secondsLeft: number) => void;
     /** The buyer's holds expired; they have left the selection (after `onHoldLost`). */
     onHoldExpired?: () => void;
+    /** A selected object was taken by someone else; it has left the selection. */
     onObjectUnavailable?: (object: SeatObject) => void;
     /** `at`: the object's centre in CSS pixels on the map. */
     onObjectHover?: (object: SeatObject | null, at: [number, number] | null) => void;
+    /** The keyboard focus moved to an object, or was hidden (`null`); `at` as `onObjectHover`'s. */
     onObjectFocus?: (object: SeatObject | null, at: [number, number] | null) => void;
+    /** The camera moved (at most once a frame, throughout a pan, a zoom or an animation) or the level of detail changed: the chart point at the centre, the zoom in CSS pixels per chart unit, the level. */
     onCameraChange?: (camera: {
         centre: [number, number];
         zoom: number;
@@ -735,6 +758,7 @@ export interface SeatMapOptions {
     }) => void;
     /** Frame statistics and timing marks, at most once a second while frames are drawn (04 §24). */
     onMetrics?: (metrics: Metrics) => void;
+    /** Any error after `createSeatMap` resolved, and a recoverable one before. Given, no development warning is printed for errors. */
     onError?: (error: CaveaError) => void;
 }
 /** `onMetrics`' payload (05 §5, 04 §24). */
@@ -751,7 +775,9 @@ export interface Metrics {
     drawCalls: number;
     /** Seats in the ranges the last frame drew. */
     visibleSeats: number;
+    /** The level of detail of the last frame drawn: `overview`, `crossFade`, `seats` or `detail`. */
     level: Lod | null;
+    /** What draws the map: WebGL2, the only backend today. */
     backend: "webgl2";
     /** The device pixel ratio rendered at. */
     pixelRatio: number;
@@ -868,11 +894,15 @@ export interface Mounted {
 export type ObjectStatus = "available" | "unavailable" | "selected";
 /** The map `createSeatMap` resolves with (05 §6). Methods never throw; after `destroy` they do nothing. */
 export interface SeatMap {
+    /** The selection now, as `onSelectionChange` reports it. */
     getSelection(): Selection;
     /** As taps, all or nothing; unknown labels are reported through `onError`. */
     select(labels: string[]): void;
+    /** Removes these objects from the selection, releasing any holds on them; unknown labels are reported through `onError`. */
     deselect(labels: string[]): void;
+    /** Empties the selection, releasing any holds on it. */
     clearSelection(): void;
+    /** Another theme, as the `theme` option takes; an invalid one is reported through `onError`. */
     setTheme(theme: Theme): void;
     /** Reads the `--cavea-*` custom properties again, after a change the map cannot see (05 §8). */
     refreshTheme(): void;
@@ -884,8 +914,11 @@ export interface SeatMap {
     zoomTo(target: "fit" | string | Bounds, options?: {
         animate?: boolean;
     }): void;
+    /** Twice the zoom, about the centre. */
     zoomIn(): void;
+    /** Half the zoom, about the centre. */
     zoomOut(): void;
+    /** An object and its status now, or `null` for an unknown label. */
     findObject(label: string): (SeatObject & {
         status: ObjectStatus;
     }) | null;
@@ -918,6 +951,7 @@ import type { StateAdapter } from "./adapter.js";
 export interface CaveaServerOptions {
     /** Where `cavea-server` answers, such as `https://tickets.example.com/cavea`. */
     baseUrl: string;
+    /** A publishable key of the event's workspace (`pk_…`). */
     publishableKey: string;
     /** The event key. */
     event: string;
@@ -927,6 +961,7 @@ export interface CaveaServerOptions {
      * `manual`: nothing is held, the host holds at checkout; `none`: state only.
      */
     session?: "start" | "continue" | "manual" | "none";
+    /** The hold token to continue with: required with `session: "continue"`, refused otherwise. */
     holdToken?: string;
     /** Sent as `Cavea-Session`; a function is called at the first hold, and once more when the token expired. */
     sessionToken?: string | (() => Promise<string>);
@@ -965,10 +1000,13 @@ export type TooltipObject = SeatObject & {
 };
 export type TooltipRenderer = (object: TooltipObject) => HTMLElement | string | null | undefined;
 export interface UiOptions {
+    /** Zoom in, zoom out and show-the-whole-map buttons. */
     zoomControls?: boolean;
+    /** The key: each category with its colour and price, and the seat states. */
     legend?: boolean;
     /** `false`, or a function that renders the content itself. */
     tooltip?: boolean | TooltipRenderer;
+    /** Short notices: a seat taken, a hold refused, lost or expired, the live connection interrupted. */
     toasts?: boolean;
     /** The loading skeleton and the error state with its retry. */
     loading?: boolean;

@@ -82,11 +82,15 @@ export type ObjectStatus = "available" | "unavailable" | "selected";
 
 /** The map `createSeatMap` resolves with (05 §6). Methods never throw; after `destroy` they do nothing. */
 export interface SeatMap {
+  /** The selection now, as `onSelectionChange` reports it. */
   getSelection(): Selection;
   /** As taps, all or nothing; unknown labels are reported through `onError`. */
   select(labels: string[]): void;
+  /** Removes these objects from the selection, releasing any holds on them; unknown labels are reported through `onError`. */
   deselect(labels: string[]): void;
+  /** Empties the selection, releasing any holds on it. */
   clearSelection(): void;
+  /** Another theme, as the `theme` option takes; an invalid one is reported through `onError`. */
   setTheme(theme: Theme): void;
   /** Reads the `--cavea-*` custom properties again, after a change the map cannot see (05 §8). */
   refreshTheme(): void;
@@ -96,8 +100,11 @@ export interface SeatMap {
   setLocale(locale: string): void;
   /** `fit`, a section label, a seat label, or bounds. Animated unless `animate` is false. */
   zoomTo(target: "fit" | string | Bounds, options?: { animate?: boolean }): void;
+  /** Twice the zoom, about the centre. */
   zoomIn(): void;
+  /** Half the zoom, about the centre. */
   zoomOut(): void;
+  /** An object and its status now, or `null` for an unknown label. */
   findObject(label: string): (SeatObject & { status: ObjectStatus }) | null;
   /** `available`: seats not drawn unavailable (free, or selected by this buyer). */
   listSections(): Array<{ label: string; floor: string; seats: number; available: number }>;

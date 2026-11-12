@@ -21,7 +21,7 @@ docker buildx build -f deploy/Dockerfile -t cavea-server:local --load .
 
 In the quick start's `compose.yaml`, use that image:
 
-```yaml
+```yaml check=run:quickstart
   server:
     image: cavea-server:local
 ```
@@ -46,7 +46,7 @@ cp packages/renderer/dist/cavea.min.js packages/renderer/dist/cavea_web_bg.wasm 
 
 In the quick start's `public/index.html`, load the script from there:
 
-```html
+```html check=run:quickstart
 <script src="cavea/cavea.min.js"></script>
 ```
 

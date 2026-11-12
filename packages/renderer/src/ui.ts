@@ -13,10 +13,13 @@ export type TooltipObject = SeatObject & { status: ObjectStatus };
 export type TooltipRenderer = (object: TooltipObject) => HTMLElement | string | null | undefined;
 
 export interface UiOptions {
+  /** Zoom in, zoom out and show-the-whole-map buttons. */
   zoomControls?: boolean;
+  /** The key: each category with its colour and price, and the seat states. */
   legend?: boolean;
   /** `false`, or a function that renders the content itself. */
   tooltip?: boolean | TooltipRenderer;
+  /** Short notices: a seat taken, a hold refused, lost or expired, the live connection interrupted. */
   toasts?: boolean;
   /** The loading skeleton and the error state with its retry. */
   loading?: boolean;

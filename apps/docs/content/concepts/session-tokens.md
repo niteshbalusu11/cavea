@@ -26,8 +26,9 @@ The whole token is at most 1,024 bytes. Other claims, such as `iat`, are ignored
 
 With the Node server SDK, `{{server_sdk_package}}`, given the secret key and its id:
 
-```ts
+```ts check=types
 import { Cavea } from "{{server_sdk_package}}";
+#hide declare const buyer: { id: string };
 
 const cavea = new Cavea({
   baseUrl: "https://seats.example.com",
@@ -43,7 +44,9 @@ In another language, any JWT library does it: sign `{"sub", "event", "exp"}` wit
 
 The page passes it to the seat map, which sends it in the `Cavea-Session` header with hold-token creation, hold and release:
 
-```js
+```js check=types
+#hide import * as Cavea from "{{renderer_package}}";
+#hide declare const baseUrl: string, publishableKey: string, sessionToken: string;
 Cavea.caveaServer({ baseUrl, publishableKey, event: "opening-night", sessionToken });
 ```
 

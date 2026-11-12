@@ -377,6 +377,12 @@ th code {
   overflow-wrap: normal;
 }
 
+/* A type under its name in a generated reference table wraps, so the description keeps its room. */
+td br + code {
+  white-space: normal;
+  color: var(--muted);
+}
+
 .code {
   position: relative;
   margin: 0 0 1rem;

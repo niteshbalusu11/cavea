@@ -46,6 +46,7 @@ export function fenceMeta(info: string): { lang: string; meta: Record<string, st
 
 /** Every fenced block of a Markdown source, with its info string's words. */
 export function fences(source: string): Fence[] {
+  // The `#hide ` lines are part of the code (src/samples.ts compiles them).
   const out: Fence[] = [];
   const lines = source.split("\n");
   for (let i = 0; i < lines.length; i++) {
@@ -122,6 +123,8 @@ function captions(source: string): string {
     if (open !== null && line.trim().startsWith(open) && line.trim().replace(/[`~]/g, "") === "") {
       open = null;
     }
+    // A sample's hidden lines: compiled by the check, not shown.
+    if (open !== null && /^\s*#hide( |$)/.test(line)) continue;
     out.push(line);
   }
   return out.join("\n");
@@ -166,6 +169,18 @@ export function render(source: string, page: string): Rendered {
       return `<h${n} id="${id}">${inner}<a class="anchor" href="#${id}" aria-label="Link to this section">#</a></h${n}>`;
     },
   );
+
+  // A table row whose first cell starts with a code span (an option, a
+  // setting, a token) is linkable and found by search on its own: its id is that name.
+  const ids = new Set(headings.map((h) => h.id));
+  html = html.replace(/<tr><td><code>([^<]+)<\/code>(?=<\/td>|<br)/g, (row, name: string) => {
+    const id = plain(name)
+      .replace(/\?$/, "")
+      .replace(/[^A-Za-z0-9_.-]+/g, "-");
+    if (id === "" || ids.has(id)) return row;
+    ids.add(id);
+    return `<tr id="${id}"><td><code>${name}</code>`;
+  });
 
   const h1 = headings.find((h) => h.level === 1);
   if (h1 === undefined) throw new Error(`${page}: no level-1 heading`);

@@ -26,3 +26,6 @@ dist/
 
 # benchmark results from development machines (bench/collect.ts)
 /bench/local-results/
+
+# the docs' code samples, written for the type check (apps/docs/src/samples.ts)
+/apps/docs/samples/

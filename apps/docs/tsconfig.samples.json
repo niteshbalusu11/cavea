@@ -1,0 +1,16 @@
+{
+  "//": "The pages' code samples (src/samples.ts writes them to samples/), compiled as a customer's project would be: strict, without the repository's extra flags.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["bun"]
+  },
+  "include": ["samples"]
+}

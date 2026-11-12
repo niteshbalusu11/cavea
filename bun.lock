@@ -44,7 +44,12 @@
       "name": "@cavea/docs",
       "version": "0.0.0",
       "devDependencies": {
+        "@cavea/react": "workspace:*",
+        "@cavea/renderer": "workspace:*",
+        "@cavea/server-sdk": "workspace:*",
         "@types/bun": "1.4.4",
+        "@types/react": "19.3.0",
+        "react": "19.3.1",
         "typescript": "7.0.2",
       },
     },

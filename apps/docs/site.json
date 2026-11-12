@@ -50,19 +50,43 @@
     },
     {
       "section": "Renderer",
-      "planned": "Options, callbacks and methods; theming; state adapters; React (DOC-004)"
+      "pages": [
+        "renderer/index.md",
+        "renderer/options.md",
+        "renderer/callbacks.md",
+        "renderer/methods.md",
+        "renderer/adapters.md",
+        "renderer/theming.md",
+        "renderer/errors.md",
+        "renderer/performance.md",
+        "renderer/accessibility.md"
+      ]
     },
     {
       "section": "Guides",
-      "planned": "Hold, pay, book; bring your own backend; bot protection (DOC-007, DOC-011)"
+      "pages": [
+        "guides/hold-pay-book.md",
+        "guides/own-backend.md",
+        "guides/react.md",
+        "guides/bot-protection.md"
+      ]
     },
     {
       "section": "Deployment",
-      "planned": "Sizing, PostgreSQL, TLS and WebSocket, backups, upgrades, monitoring (DOC-006)"
+      "pages": [
+        "deployment/index.md",
+        "deployment/settings.md",
+        "deployment/proxy.md",
+        "deployment/monitoring.md",
+        "deployment/backups.md",
+        "deployment/upgrades.md",
+        "deployment/licence.md"
+      ]
     },
     {
       "section": "Designer",
-      "planned": "User guide for venue staff (DOC-008)"
+      "planned": "User guide for venue staff (DOC-008)",
+      "pages": ["designer/shortcuts.md"]
     },
     {
       "section": "Examples",
