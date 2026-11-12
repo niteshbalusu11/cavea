@@ -648,7 +648,15 @@ export const TASKS: Task[] = [
       await status(t, "124 seats again", (x) => x.includes(msg("status.seats", { n: 124 })));
       await t.clickAt(...a1);
       await t.click({ role: "tab", name: msg("panel.categories") });
-      await t.click({ role: "button", name: `Wheelchair space: ${msg("categories.makeActive")}` });
+      await t.click({
+        role: "button",
+        name: `Wheelchair space: ${msg("categories.makeActive")}, ${msg("categories.accessible")}`,
+      });
+      // Announced as the current one, and named at the top of the list.
+      await t.find({
+        role: "button",
+        name: `Wheelchair space: ${msg("categories.active")}, ${msg("categories.accessible")}`,
+      });
       await t.click({ role: "button", name: msg("tool.brush") });
       for (const x of ends) await t.clickAt(...at(x, y));
       await until("the wheelchair category to count 2 seats", async () => {
@@ -696,12 +704,11 @@ export const TASKS: Task[] = [
       await t.click({ role: "button", name: msg("tool.focal") });
       await t.clickAt(...at(0, -480));
       await t.click({ role: "button", name: msg("tool.select") });
-      await Bun.sleep(500);
-      const floors = (await draft(t))["floors"] as Array<{ focalPoint?: unknown }>;
-      check(
-        floors.length === 1 && floors[0]?.focalPoint !== undefined,
-        `the focal point set on the chart's one floor, not ${JSON.stringify(floors)}`,
-      );
+      // Saved two seconds after the change: the server's draft has it.
+      await until("the focal point on the chart's one floor in the saved draft", async () => {
+        const floors = (await draft(t))["floors"] as Array<{ focalPoint?: unknown }>;
+        return floors.length === 1 && floors[0]?.focalPoint !== undefined;
+      });
       // A second box: Box A duplicated, moved across, its own label.
       await t.click({ role: "tab", name: msg("panel.layers") });
       const tree = await t.find({ role: "tree", name: msg("layers.label") });
@@ -1149,6 +1156,18 @@ export const TASKS: Task[] = [
       check(
         events.length === 1 && events[0]?.version.number === 1,
         `the event still on version 1 after version 2: ${JSON.stringify(events)}`,
+      );
+      // Leaving waits for version 2's picture, which the top bar says is
+      // being made (publishing.md): as a person would, wait for it.
+      await until(
+        "version 2's picture to be made",
+        async () =>
+          (await t.text(await t.find({ role: "banner" }))).includes(
+            msg("thumbnail.making", { version: 2 }),
+          )
+            ? undefined
+            : true,
+        30_000,
       );
     },
   },
