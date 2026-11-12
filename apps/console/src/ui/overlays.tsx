@@ -14,7 +14,7 @@ import {
   Title as DialogTitle,
 } from "@kobalte/core/dialog";
 import { Toast, toaster } from "@kobalte/core/toast";
-import { Show, type JSX, type ParentProps } from "solid-js";
+import { createComputed, on, Show, type JSX, type ParentProps } from "solid-js";
 import { documentPage, focusOn, opener, replacement, type Opener } from "./focus.ts";
 import { msg } from "../i18n/messages.ts";
 import { Button, type Variant } from "./controls.tsx";
@@ -27,30 +27,49 @@ export const menuItem =
 export const menuSeparator = "my-1 h-px border-0 bg-line";
 export const menuKeys = "ml-auto pl-4 text-sm text-faint";
 
-/** A menu item's action that opens a dialog: run once the menu has closed
- * and put focus back on its trigger, so the dialog takes focus and returns
- * it there. */
-export const afterMenu = (run: () => void) => () => void setTimeout(run, 0);
+/** The trigger of the menu whose item opened the next dialog: that dialog's
+ * opener, taken by `focusReturn` (while the menu closes, the page around
+ * it is still inert, so the trigger cannot simply be focused). */
+let menuOpener: HTMLElement | null = null;
+
+/** A menu item's action that opens a dialog: run once the menu has closed;
+ * the dialog returns focus to the menu's trigger. */
+export const afterMenu = (run: () => void) => () => {
+  const item = document.activeElement;
+  const menu = item instanceof HTMLElement ? item.closest("[role=menu]") : null;
+  const by = menu?.getAttribute("aria-labelledby");
+  const trigger = by == null ? null : document.getElementById(by);
+  setTimeout(() => {
+    menuOpener = trigger;
+    run();
+    menuOpener = null;
+  }, 0);
+};
 
 /** A dialog's focus on open and close: back to the element that opened it,
  * or, when that is gone (its row drawn again or deleted), to what took its
- * place or the page's heading, never to the page's body. */
-function focusReturn(initial?: () => HTMLElement | undefined) {
+ * place or the page's heading, never to the page's body. The opener is
+ * read when `open` turns true, before the dialog mounts and takes focus. */
+function focusReturn(open: () => boolean, initial?: () => HTMLElement | undefined) {
   let from: Opener<HTMLElement> | null = null;
+  createComputed(
+    on(open, (now) => {
+      if (now) from = opener(menuOpener);
+    }),
+  );
   return {
     onOpenAutoFocus: (e: Event) => {
-      from = opener();
       const el = initial?.();
       if (el === undefined) return;
       e.preventDefault();
       el.focus();
     },
     onCloseAutoFocus: (e: Event) => {
-      const instead = replacement(from, documentPage);
+      const back = from;
       from = null;
-      if (instead === null) return;
       e.preventDefault();
-      focusOn(instead);
+      const target = replacement(back, documentPage) ?? back?.el ?? null;
+      if (target !== null) focusOn(target);
     },
   };
 }
@@ -85,7 +104,7 @@ export function Confirm(
         <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
           <AlertDialog.Content
             class="w-full max-w-md rounded-lg bg-raised p-5 shadow-menu outline-none"
-            {...focusReturn()}
+            {...focusReturn(() => props.open)}
           >
             <AlertDialog.Title class="text-lg font-semibold text-fg">
               {props.title}
@@ -152,7 +171,10 @@ export function Dialog(
         >
           <DialogContent
             class={`flex max-h-full w-full flex-col rounded-lg bg-raised shadow-menu outline-none ${props.class ?? "max-w-md"}`}
-            {...focusReturn(() => props.initial?.())}
+            {...focusReturn(
+              () => props.open,
+              () => props.initial?.(),
+            )}
           >
             <DialogTitle
               class={

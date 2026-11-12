@@ -41,9 +41,9 @@ export const documentPage: Page<HTMLElement> = {
     document.querySelector<HTMLElement>("main h1, h1") ?? document.querySelector("main"),
 };
 
-/** What to remember of the element focused now. */
-export function opener(): Opener<HTMLElement> | null {
-  const el = document.activeElement;
+/** What to remember of `given`, else of the element focused now. */
+export function opener(given: HTMLElement | null = null): Opener<HTMLElement> | null {
+  const el = given ?? document.activeElement;
   if (!(el instanceof HTMLElement) || el === document.body) return null;
   const owner = el.closest<HTMLElement>("[data-focus-id]");
   return { el, focusId: owner?.dataset["focusId"] ?? null };
@@ -53,4 +53,45 @@ export function opener(): Opener<HTMLElement> | null {
 export function focusOn(el: HTMLElement): void {
   if (el.tabIndex < 0 && !el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
   el.focus({ preventScroll: el.tagName !== "H1" });
+}
+
+/**
+ * After a route change, focus on the new page's heading when the element
+ * that had it went with the old page (a link followed from a list, the
+ * event page's back link). Polled for a second: a page may load its code
+ * or its data first. Focus a person moved meanwhile is left alone.
+ */
+export function focusNewPage(): void {
+  const start = performance.now();
+  const step = () => {
+    const now = document.activeElement;
+    if (now !== null && now !== document.body) return;
+    const heading = documentPage.heading();
+    if (heading !== null && heading.tagName === "H1") focusOn(heading);
+    else if (performance.now() - start < 1_000) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+/**
+ * Every form: a submit its own checks refused moves focus to the first
+ * field marked invalid, whose error is then read with it (its
+ * `aria-describedby`), instead of leaving it on the button. Runs after the
+ * form's handler has checked its fields.
+ */
+export function watchForms(): void {
+  document.addEventListener("submit", (e) => {
+    const form = e.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    queueMicrotask(() => {
+      const bad = form.querySelector<HTMLElement>('[aria-invalid="true"]');
+      const now = document.activeElement;
+      if (
+        bad === null ||
+        (now instanceof HTMLElement && now.getAttribute("aria-invalid") === "true")
+      )
+        return;
+      bad.focus();
+    });
+  });
 }

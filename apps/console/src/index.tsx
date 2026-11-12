@@ -1,5 +1,5 @@
-import { Navigate, Route, Router } from "@solidjs/router";
-import { For, lazy, type JSX } from "solid-js";
+import { Navigate, Route, Router, useLocation, type RouteSectionProps } from "@solidjs/router";
+import { createEffect, For, lazy, on, type JSX } from "solid-js";
 import { render } from "solid-js/web";
 import { Account } from "./console/Account.tsx";
 import { ChartDetail } from "./console/ChartDetail.tsx";
@@ -19,6 +19,7 @@ import { DesignerPage } from "./designer/Designer.tsx";
 import { localSource } from "./designer/source.ts";
 import { loadSession, watchSession } from "./session.ts";
 import { followTheme } from "./theme.ts";
+import { focusNewPage, watchForms } from "./ui/focus.ts";
 import { ToastRegion } from "./ui/overlays.tsx";
 
 followTheme();
@@ -28,6 +29,7 @@ takeInviteToken();
 takeSetupToken();
 void loadSession();
 watchSession();
+watchForms();
 const root = document.getElementById("root");
 if (root === null) {
   throw new Error("#root element is missing from index.html");
@@ -50,10 +52,17 @@ const SCREENS: Record<string, () => JSX.Element> = {
   "/developers": Developers,
   "/settings": Settings,
 };
+/** Every route: focus follows a change of page (not of its parameters). */
+function Root(props: RouteSectionProps) {
+  const location = useLocation();
+  createEffect(on(() => location.pathname, focusNewPage, { defer: true }));
+  return <>{props.children}</>;
+}
+
 render(
   () => (
     <>
-      <Router base={BASE}>
+      <Router base={BASE} root={Root}>
         <Route path="/" component={() => <Navigate href="/charts" />} />
         <Route path={BASE === "" ? ["/setup", "/console/setup"] : "/setup"} component={Setup} />
         <Route path="/sign-in" component={SignIn} />

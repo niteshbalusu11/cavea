@@ -144,7 +144,9 @@ export function LoadMore<T>(props: { pages: Pages<T> }) {
 
 /**
  * A button for an action the role may lack: enabled, or shown disabled and
- * still focusable with the reason in its name and a tooltip.
+ * still focusable with the reason in its name and a tooltip. One element
+ * either way, so focus stays on it when it becomes unavailable (the
+ * manager's Block, once the selection it took is cleared).
  */
 export function Action(props: {
   label: string;
@@ -156,34 +158,21 @@ export function Action(props: {
   class?: string;
 }) {
   return (
-    <Show
-      when={props.blocked}
-      fallback={
-        <Button
-          variant={props.variant ?? "secondary"}
-          {...(props.icon === undefined ? {} : { icon: props.icon })}
-          class={props.class ?? "h-8"}
-          onClick={() => props.onClick()}
-        >
-          {props.label}
-        </Button>
-      }
-    >
-      {(reason) => (
-        <Tip label={reason()}>
-          <Tooltip.Trigger
-            as="button"
-            type="button"
-            aria-disabled="true"
-            aria-label={`${props.label}: ${reason()}`}
-            class={buttonClass(props.variant ?? "secondary", props.class ?? "h-8")}
-          >
-            <Show when={props.icon}>{(name) => <Icon name={name()} />}</Show>
-            {props.label}
-          </Tooltip.Trigger>
-        </Tip>
-      )}
-    </Show>
+    <Tip label={props.blocked ?? props.label} open={props.blocked === null ? false : undefined}>
+      <Tooltip.Trigger
+        as="button"
+        type="button"
+        aria-disabled={props.blocked === null ? undefined : "true"}
+        aria-label={props.blocked === null ? undefined : `${props.label}: ${props.blocked}`}
+        class={buttonClass(props.variant ?? "secondary", props.class ?? "h-8")}
+        onClick={() => {
+          if (props.blocked === null) props.onClick();
+        }}
+      >
+        <Show when={props.icon}>{(name) => <Icon name={name()} />}</Show>
+        {props.label}
+      </Tooltip.Trigger>
+    </Tip>
   );
 }
 
