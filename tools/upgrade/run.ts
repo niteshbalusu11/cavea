@@ -751,6 +751,10 @@ async function upgrade(): Promise<void> {
 
 // -------------------------------------------------------------- renderer
 
+/** The page's expression for a seat's status as the map shows it. */
+const status = (seat: string | undefined): string =>
+  `window.page.map.findObject(${JSON.stringify(seat)})?.status`;
+
 async function renderer(): Promise<void> {
   const url = await database();
   const port = freePort();
@@ -841,10 +845,7 @@ async function renderer(): Promise<void> {
   check(failed === null, `the old renderer loaded the new server's event (${failed})`);
   say(`the renderer of ${label} is drawing the new server's event`);
 
-  // A seat the backend holds shows as taken on the page.
   // A seat the backend holds goes from available to unavailable on the page.
-  const status = (label: string | undefined): string =>
-    `window.page.map.findObject(${JSON.stringify(label)})?.status`;
   const first = await tab.evaluate<string | undefined>(status(free[0]));
   check(first === "available", `${free[0]} shows as available first (${first})`);
   const token = str(
