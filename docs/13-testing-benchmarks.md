@@ -184,6 +184,8 @@ The timed run, on the final code of the target (local, AMD Ryzen 9 7900X shared 
 |---|---|---|---|---|---|---|
 | `http_api` | 1,802 s | 26,657 | 14 | 16,844 → 22,177 | 62 → 2,561 | Ended at its time limit; no crash, panic, `5xx`, document disagreement, credential or isolation failure, timeout or out-of-memory (peak RSS 1,210 MB) |
 
+A second run of 600 s on the same target after rebasing onto the server's newer routes (the editing lock, thumbnails, key origins, the staff state route, events search, which the target picked up from the document unchanged) also ended clean: 8,787 executions (14 a second), coverage 16,966 → 21,068, corpus 62 → 1,634, peak RSS 518 MB.
+
 Each execution is up to 12 requests after the world's 34 (two workspaces), so the run sent roughly 1.2 million requests. A clean 5-minute run before the plants: 5,564 executions, coverage 20,048.
 
 Findings (release blockers by the rule above):
