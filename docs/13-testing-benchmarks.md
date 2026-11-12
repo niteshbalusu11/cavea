@@ -178,6 +178,14 @@ CAVEA_FUZZ_DATABASE_URL=postgres://cavea:cavea@127.0.0.1:5432/cavea \
 
 It can fail: three bugs were planted in turn, each found and then removed (5-minute budget each, from the seeds, one core): an `unwrap` on an empty `order_ref` in the booking handler, 239 s (3,697 executions; the first two attempts found the two real findings below first, and a third did not reach it in 300 s until the generator was made to produce text at the API's bounds); the key revocation route answering `202`, which the document does not list, on the first input (world seeding revokes a key); the key lookup accepting revoked keys, 30 s (548 executions: `POST /v1/keys` succeeded with a revoked key).
 
+The timed run, on the final code of the target (local, AMD Ryzen 9 7900X shared with other builders, one core, the shared PostgreSQL 18 in Docker), started 2026-11-11 from the seeds alone:
+
+| Target | Duration | Executions | Executions/s | Coverage, start → end | Corpus, start → end | Result |
+|---|---|---|---|---|---|---|
+| `http_api` | 1,802 s | 26,657 | 14 | 16,844 → 22,177 | 62 → 2,561 | Ended at its time limit; no crash, panic, `5xx`, document disagreement, credential or isolation failure, timeout or out-of-memory (peak RSS 1,210 MB) |
+
+Each execution is up to 12 requests after the world's 34 (two workspaces), so the run sent roughly 1.2 million requests. A clean 5-minute run before the plants: 5,564 executions, coverage 20,048.
+
 Findings (release blockers by the rule above):
 
 - **Fixed:** a path or query holding U+0000 answered `500` (`GET /v1/events/q%06%00q%00/objects`): the key reached PostgreSQL, whose text cannot hold it. The server's `Path` and `Query` extractors now answer `404` and `400` (`reason: "query"`), 08 §6.4. Its input is the seed `seed-found-nul-in-path`.
