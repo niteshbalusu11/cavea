@@ -138,6 +138,29 @@ export function seatStatus(
   return fromState();
 }
 
+/**
+ * A details answer for `labels` (`objects`: those of them not free), sent
+ * as read number `at`, into `details` and `readAt` in place: a seat whose
+ * details came from a later read keeps them, so an answer that arrives
+ * late (sent before a hold was extended) cannot restore what it replaced.
+ */
+export function takeDetails(
+  details: Map<string, EventObject>,
+  readAt: Map<string, number>,
+  labels: readonly string[],
+  objects: readonly EventObject[],
+  at: number,
+): void {
+  const given = new Map(objects.map((o) => [o.label, o]));
+  for (const label of labels) {
+    if ((readAt.get(label) ?? 0) > at) continue;
+    readAt.set(label, at);
+    const o = given.get(label);
+    if (o === undefined) details.delete(label);
+    else details.set(label, o);
+  }
+}
+
 /** At most this many labels named in a list ("A-1, A-2 and 6 more"). */
 export const NAMED = 8;
 

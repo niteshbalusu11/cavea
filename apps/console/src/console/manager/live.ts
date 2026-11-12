@@ -26,6 +26,7 @@ import {
   refusedSeats,
   seatStatus,
   statusOf,
+  takeDetails,
   type Action,
   type Pending,
   type Refusal,
@@ -158,15 +159,35 @@ export function createLive(options: {
     return out;
   };
 
+  /** Details reads are numbered as they are sent: an answer older than
+   * the one last taken for a seat leaves that seat alone. */
+  let readClock = 0;
+  const readAt = new Map<string, number>();
+  /** Watched seats whose last details read failed: read again at every
+   * poll, the failure shown, until one succeeds. */
+  const unread = new Set<string>();
+  let detailsFailed: ApiError | null = null;
+
   async function read(wanted: readonly string[]): Promise<void> {
     const unique = [...new Set(wanted)].filter((l) => index.has(l));
     for (let i = 0; i < unique.length; i += LABELS_PER_READ) {
       const chunk = unique.slice(i, i + LABELS_PER_READ);
-      const answer = checkObjectsByLabel(
-        await call("listObjects", { path: { event }, query: { label: chunk } }, conn.signal),
-      );
-      for (const l of chunk) details.delete(l);
-      for (const o of answer.data) details.set(o.label, o);
+      const at = ++readClock;
+      let answer;
+      try {
+        answer = checkObjectsByLabel(
+          await call("listObjects", { path: { event }, query: { label: chunk } }, conn.signal),
+        );
+      } catch (e) {
+        if (!isAbort(e) && !conn.signal.aborted) {
+          for (const l of chunk) unread.add(l);
+          detailsFailed = asApiError(e);
+        }
+        throw e;
+      }
+      for (const l of chunk) unread.delete(l);
+      takeDetails(details, readAt, chunk, answer.data, at);
+      if (unread.size === 0) detailsFailed = null;
     }
     bump();
   }
@@ -190,7 +211,8 @@ export function createLive(options: {
     return chart;
   }
 
-  /** Applies a step to the state; returns the labels whose status changed. */
+  /** Applies a step to the state; returns the seats it names (a delta's,
+   * changed or not) or whose status changed (a snapshot's). */
   function apply(s: Step): string[] {
     lastKind = s.kind;
     if (s.kind === "snapshot") {
@@ -209,7 +231,9 @@ export function createLive(options: {
       for (let k = 0; k < s.idx.length; k++) {
         const i = s.idx[k] ?? 0;
         const c = s.codes[k] ?? 0;
-        if (codes[i] !== c) changed.push(labels[i] ?? "");
+        // Every seat the delta names, its code changed or not: a seat
+        // released and booked again under another order keeps `booked`.
+        changed.push(labels[i] ?? "");
         codes[i] = c;
       }
       seq = s.to;
@@ -299,7 +323,12 @@ export function createLive(options: {
           stateChanged([...moved, ...waiting], s.kind === "snapshot");
         }
       }
-      setHealth({ checkedAt: Date.now(), error: null });
+      // Watched seats whose details could not be read: again now.
+      const retry = watched().filter((l) => unread.has(l));
+      for (const l of unread) if (!retry.includes(l)) unread.delete(l);
+      if (unread.size === 0) detailsFailed = null;
+      readQuietly(retry);
+      setHealth({ checkedAt: Date.now(), error: detailsFailed });
     } catch (e) {
       delay = Math.max(delay, failed(e) ?? 0);
     } finally {
@@ -342,6 +371,9 @@ export function createLive(options: {
       lastKind = null;
       pending.clear();
       details.clear();
+      readAt.clear();
+      unread.clear();
+      detailsFailed = null;
       drawn.clear();
       selected = new Set();
       const s = await poll(loadChart(conn.signal));

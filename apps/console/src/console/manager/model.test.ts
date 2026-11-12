@@ -3,6 +3,7 @@
 // the operator's own action shows until the state catches up.
 import { expect, test } from "bun:test";
 import { ApiError } from "../../api/client.ts";
+import type { EventObject } from "../../api/generated.ts";
 import {
   ACTIONS,
   blockers,
@@ -12,6 +13,7 @@ import {
   refusedSeats,
   seatStatus,
   statusOf,
+  takeDetails,
   type Status,
 } from "./model.ts";
 
@@ -125,4 +127,25 @@ test("counts come from the codes, custom statuses by code", () => {
     custom: { "7": 2, "15": 1 },
   });
   expect([0, 1, 2, 3, 9].map(statusOf)).toEqual(["free", "held", "booked", "blocked", 9]);
+});
+
+/** A1 booked under `ref`. */
+const booked = (ref: string): EventObject => ({
+  label: "A-1",
+  oid: 1,
+  status: "booked",
+  order_ref: ref,
+});
+
+test("a late details answer does not undo a newer one; a seat gone free loses its details", () => {
+  const details = new Map<string, EventObject>();
+  const readAt = new Map<string, number>();
+  // Read 2 (sent later) answers first with the new order; read 1's answer,
+  // sent before the seat was booked again, arrives after it.
+  takeDetails(details, readAt, ["A-1"], [booked("new-order")], 2);
+  takeDetails(details, readAt, ["A-1"], [booked("old-order")], 1);
+  expect(details.get("A-1")?.order_ref).toBe("new-order");
+  // A newer answer without the seat: it is free, its details go.
+  takeDetails(details, readAt, ["A-1"], [], 3);
+  expect(details.has("A-1")).toBe(false);
 });
