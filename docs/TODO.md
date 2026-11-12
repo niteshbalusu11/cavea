@@ -275,9 +275,9 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **DSN-016** Single row tool with optional bend (07 §4)
 - [x] **DSN-017** Section tool and automatic outline; convert to polygon (07 §5.5)
 - [x] **DSN-018** Shape tools: rectangle, ellipse, polygon, line (07 §4)
-- [x] **DSN-019** Text tool (07 §4)
+- [x] **DSN-019** Text tool (07 §4). The shell's field on the canvas, turned and sized with the text, Enter on the canvas for the keyboard (`TextOnCanvas.tsx`, `Session::text_field`); before it the tool showed no field and made nothing
 - [x] **DSN-020** Image tool: upload, reference or background role, opacity, lock (07 §4). Placing (file picker, I, drop, the new-chart screen), checks before upload, the content hash in the browser, upload in the background with saves waiting for it, refusals, scale handles, the reference role drawn but never compiled, the preview's background images, a local file's session-only pictures (07 §4 Image, D-74)
-- [x] **DSN-021** Focal point tool (07 §4)
+- [x] **DSN-021** Focal point tool (07 §4). On a chart that lists no floors (every new chart) it lists the implicit floor in the same gesture; before it W102 stayed for ever
 - [x] **DSN-022** Category brush (07 §4)
 
 ### Panels and editing
@@ -299,7 +299,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 - [x] **DSN-035** Autosave with etag and save-state indicator (07 §9). The server chart's route, read-only for a role that cannot write, the save machine and its indicator, conflicts, a session ending mid-edit, the leave warnings (07 §9 "On a server draft", D-69). Compressing the upload (07 §14) waits for the server to take `Content-Encoding` on a draft
 - [x] **DSN-036** IndexedDB safety net and recovery prompt (07 §9)
-- [x] **DSN-037** Single-editor lock with take-over (07 §9). Owed to the server first: a lock per chart draft, such as `POST /v1/charts/{chart}/lock` (take or renew; `{holder: {user, email}, expires_at}`, `409` naming the holder unless `{take_over: true}`), `DELETE` to release, a short lease renewed while the designer is open, and the holder's id required on `PUT …/draft` so a taken-over editor's late save is refused; the shell then shows who is editing and switches the first editor to read-only with its work kept (the conflict path of DSN-035 covers two editors until then). Server side built (D-73; contract in 07 §9): `GET`/`POST`/`DELETE /v1/charts/{chart}/lock`, a 60 s lease renewed every 20 s, `take_over`, `409 chart_locked` with the holder, and saves and publishes by anyone else refused with `chart_locked` while it is live (the holder is the signed-in caller, so no header is needed). The designer's side built (07 §9, D-78): the lock taken before the draft is read, read-only with who is editing and Take over (confirmed, naming who loses it), the taken-over editor switched to read-only with its work in the store, renewal while the page is in use, a lapse checked against the draft's etag, release on leaving unless another tab of the same person holds it
+- [x] **DSN-037** Single-editor lock with take-over (07 §9). One person's two browsers are two holders (`?editor=`, D-96). Owed to the server first: a lock per chart draft, such as `POST /v1/charts/{chart}/lock` (take or renew; `{holder: {user, email}, expires_at}`, `409` naming the holder unless `{take_over: true}`), `DELETE` to release, a short lease renewed while the designer is open, and the holder's id required on `PUT …/draft` so a taken-over editor's late save is refused; the shell then shows who is editing and switches the first editor to read-only with its work kept (the conflict path of DSN-035 covers two editors until then). Server side built (D-73; contract in 07 §9): `GET`/`POST`/`DELETE /v1/charts/{chart}/lock`, a 60 s lease renewed every 20 s, `take_over`, `409 chart_locked` with the holder, and saves and publishes by anyone else refused with `chart_locked` while it is live (the holder is the signed-in caller, so no header is needed). The designer's side built (07 §9, D-78): the lock taken before the draft is read, read-only with who is editing and Take over (confirmed, naming who loses it), the taken-over editor switched to read-only with its work in the store, renewal while the page is in use, a lapse checked against the draft's etag, release on leaving unless another tab of the same person holds it
 - [x] **DSN-038** Continuous validation, panel, canvas markers (07 §10). The edit core: `Session::validate`, `validation`, `focus`, the overlay's `markers` (07 §2.3, §10); the shell: the idle-time loop, the status-bar summary and disabling Publish (`loop.ts`, `Rails.tsx`, `TopBar.tsx`), the panel (`ValidationPanel.tsx`: a virtual list, errors then warnings under headings with their counts, stale marked, a finding focuses, reveals and frames its node), the markers drawn on the canvas
 - [x] **DSN-039** Preview with the buyer renderer, device widths and sample states (07 §11)
 - [ ] **DSN-040** Publish flow: compile, diff, thumbnail upload (07 §11). Built: compile on the server with `If-Match` after saving, disabled while not `publishable`, the server's findings on refusal, the new version (or "nothing changed") with its seats against the previous one (07 §11 "As built"). Owed, each waiting on the server: the diff (`GET /v1/charts/{chart}/versions/{number}/diff`, SRV-036), the impact on events and typed confirmation, the upgrade offer. The thumbnail is built (D-79): the buyer's view drawn on a canvas of its own after the publish, uploaded and attached, shown on the charts list and the chart page
@@ -313,6 +313,12 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **TST-030** Command inverse property tests (13 §9)
 - [x] **TST-031** End-to-end: draw, number, publish, create event, hold a seat (13 §9; `cargo xtask e2e`, 13 §9.1)
 - [ ] **TST-032** Usability test: three new users draw the reference theatre; record times (ROADMAP M3)
+
+### Found while fixing the designer guide's findings, not fixed
+
+- [ ] **DSN-061** A pasted or duplicated object keeps its original's name, so two objects can both be "Row block 1"; name copies as new objects are named (07 §5.1)
+- [ ] **DSN-062** The publish dialog lists the server's findings (a refused publish) in the compiler's words, with internal ids; give them the validation panel's sentences (07 §10, §11)
+- [ ] **DSN-063** Charts saved before new objects were named keep "Row block 123" (kind and id) for unnamed objects in the layers panel and the findings; offer to name them, or name them by kind and number on display
 
 ---
 
