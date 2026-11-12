@@ -6,7 +6,7 @@
 // ends when it closes, on Escape, when the tool changes (it closes) and
 // when the selection changes (the edit core ends it too; the panel starts
 // again from the new selection).
-import type { AlphaOverflow, NumberedNode, Preview } from "@cavea/designer-core";
+import type { AlphaOverflow, Preview } from "@cavea/designer-core";
 import {
   createEffect,
   createMemo,
@@ -56,9 +56,6 @@ const startOf = (s: { same: number | string | null } | "mixed" | undefined) => {
   const x = same(s);
   return x === null ? (s === "mixed" ? null : "") : String(x);
 };
-
-export const nodeName = (n: NumberedNode): string =>
-  msg("layers.unnamed", { kind: msg(n.block ? "kind.rowBlock" : "kind.row"), id: String(n.id) });
 
 export function NumberingPanel(props: { editor: Editor; onClose: () => void }) {
   const editor = props.editor;
@@ -229,7 +226,7 @@ export function NumberingPanel(props: { editor: Editor; onClose: () => void }) {
                         class={`mt-px size-3.5 shrink-0 ${n.facing === "forward" && !n.mirrored ? "text-faint" : "text-warning"}`}
                       />
                       <span>
-                        <span class="text-fg">{nodeName(n)}</span>
+                        <span class="text-fg">{n.name}</span>
                         {": "}
                         {[
                           n.facing === "reversed" ? msg("numbering.reversed") : null,
@@ -411,7 +408,7 @@ export function NumberingPanel(props: { editor: Editor; onClose: () => void }) {
                             draggable="true"
                             aria-label={msg("numbering.orderItem", {
                               n: i() + 1,
-                              name: byId(id) ? nodeName(byId(id) as NumberedNode) : String(id),
+                              name: byId(id)?.name ?? msg("finding.something"),
                             })}
                             class="flex h-6 items-center gap-1.5 border-b border-line bg-control px-1.5 text-sm text-fg last:border-b-0 focus-visible:-outline-offset-2"
                             onDragStart={(e) => {
@@ -443,7 +440,7 @@ export function NumberingPanel(props: { editor: Editor; onClose: () => void }) {
                             <Icon name="grip" class="size-3.5 text-faint" />
                             <span class="w-4 text-faint tabular-nums">{i() + 1}</span>
                             <span class="truncate">
-                              {byId(id) ? nodeName(byId(id) as NumberedNode) : id}
+                              {byId(id)?.name ?? msg("finding.something")}
                             </span>
                           </li>
                         )}

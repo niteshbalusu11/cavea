@@ -105,6 +105,8 @@ pub struct NumberingView {
 #[serde(rename_all = "camelCase")]
 pub struct NumberedNode {
     pub id: u32,
+    /// As the layers panel names it.
+    pub name: String,
     /// A row block (`true`) or a free-form row.
     pub block: bool,
     pub facing: Facing,
@@ -335,6 +337,7 @@ pub(crate) fn view(view: &View<'_>, sel: &Selection) -> NumberingView {
             });
             NumberedNode {
                 id,
+                name: crate::naming::shown(doc, id).unwrap_or_default(),
                 block: matches!(node, Node::RowBlock(_)),
                 facing,
                 mirrored: unmirrored && facing == Facing::Reversed,

@@ -658,6 +658,16 @@ impl Session {
         validation::place(self.document(), node, row, seat)
     }
 
+    /// Node `id` as the layers panel names it (never by its id), with its
+    /// kind; `None` for an id the chart does not hold.
+    pub fn node_name(&self, id: u32) -> Option<crate::views::NamedNode> {
+        let doc = self.document();
+        Some(crate::views::NamedNode {
+            kind: crate::views::NodeKind::of(doc.node(id)?),
+            name: crate::naming::shown(doc, id)?,
+        })
+    }
+
     /// Selects what a finding names, on its floor (shown if it is not), and
     /// returns the world box to frame: a seat, a block's row, or the node.
     pub fn focus(&mut self, node: u32, row: Option<u32>, seat: Option<u32>) -> Option<Rect> {

@@ -359,9 +359,8 @@ pub struct FindingView {
     pub seat: Option<u32>,
     /// From the last full pass, which the document has changed since.
     pub stale: bool,
-    /// `node` as the layers panel names it: its name, label or text, or
-    /// `None` and its kind (the shell then shows the kind, as the layers
-    /// panel does).
+    /// `node` as the layers panel names it (`naming.rs`, never an id);
+    /// `None` without a node.
     pub name: Option<String>,
     pub kind: Option<NodeKind>,
     /// The same for `related`.
@@ -510,8 +509,8 @@ pub struct FindingPlace {
 
 /// The layers panel's name of node `id` and its kind.
 fn named(doc: &Document, id: Option<u32>) -> (Option<String>, Option<NodeKind>) {
-    match id.and_then(|id| doc.node(id)) {
-        Some(n) => (crate::layers::name(n), Some(NodeKind::of(n))),
+    match id.and_then(|id| Some((id, doc.node(id)?))) {
+        Some((id, n)) => (crate::naming::shown(doc, id), Some(NodeKind::of(n))),
         None => (None, None),
     }
 }

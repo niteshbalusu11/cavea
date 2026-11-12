@@ -310,6 +310,18 @@
         "ref": "Applied"
       }
     },
+    "nodeName": {
+      "call": "node_name",
+      "returns": {
+        "union": [
+          {
+            "args": [],
+            "ref": "NamedNode"
+          },
+          "null"
+        ]
+      }
+    },
     "number": {
       "call": "number",
       "returns": {
@@ -5804,12 +5816,7 @@
           {
             "name": "name",
             "optional": false,
-            "type": {
-              "union": [
-                "string",
-                "null"
-              ]
-            }
+            "type": "string"
           },
           {
             "name": "locked",
@@ -5985,6 +5992,26 @@
             "name": "ctrl",
             "optional": false,
             "type": "boolean"
+          }
+        ]
+      }
+    },
+    "NamedNode": {
+      "params": [],
+      "type": {
+        "object": [
+          {
+            "name": "name",
+            "optional": false,
+            "type": "string"
+          },
+          {
+            "name": "kind",
+            "optional": false,
+            "type": {
+              "args": [],
+              "ref": "NodeKind"
+            }
           }
         ]
       }
@@ -6293,6 +6320,11 @@
             "name": "id",
             "optional": false,
             "type": "number"
+          },
+          {
+            "name": "name",
+            "optional": false,
+            "type": "string"
           },
           {
             "name": "block",

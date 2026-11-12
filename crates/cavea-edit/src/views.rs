@@ -129,9 +129,17 @@ pub struct SelectionView {
     /// selection" frames.
     pub bounds: Option<Rect>,
     /// Inside a section (`level` names it): its name as the layers panel
-    /// shows it, `null` when it has none, so the status bar can say where
-    /// a new object went.
+    /// shows it, so the status bar can say where a new object went.
     pub within: Option<String>,
+}
+
+/// A node as the layers panel names it, with its kind: for what knows the
+/// node by its id alone (a finding the server gives, a form's choice).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NamedNode {
+    pub name: String,
+    pub kind: NodeKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

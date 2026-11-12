@@ -2,7 +2,8 @@
 // stored by the server as a new version (`POST …/publish` with `If-Match`,
 // so what is published is what the person saw saved). The dialog shows the
 // version published now and this draft's seats before, and the new version
-// after; a refusal shows the server's findings. Not shown yet, for want of
+// after; a refusal shows the server's findings as the validation panel says
+// them (`findings.ts`, `refused`). Not shown yet, for want of
 // server endpoints: the diff against the previous version and the impact
 // on events (SRV-036), and a thumbnail (no version holds one).
 import { createSignal, For, Match, Show, Switch } from "solid-js";
@@ -10,7 +11,9 @@ import type { Chart, Finding } from "../api/generated.ts";
 import { describe } from "../console/errors.ts";
 import { formatNumber, msg } from "../i18n/messages.ts";
 import { Button } from "../ui/controls.tsx";
+import { Icon } from "../ui/Icon.tsx";
 import { Dialog } from "../ui/overlays.tsx";
+import type { Said } from "./findings.ts";
 import { holderName, type PublishOutcome } from "./ServerChart.tsx";
 
 type Step =
@@ -25,6 +28,8 @@ export function PublishDialog(props: {
   /** Seats in the draft as the editor has it. */
   seats: number;
   run: () => Promise<PublishOutcome>;
+  /** A refusal's findings in the validation panel's words. */
+  say: (findings: Finding[]) => Said[];
   onClose: () => void;
 }) {
   const [step, setStep] = createSignal<Step>({ kind: "ready" });
@@ -55,7 +60,9 @@ export function PublishDialog(props: {
     >
       <div class="space-y-3 px-5 pb-5 text-base">
         <Switch>
-          <Match when={done()}>{(d) => <Result outcome={d().outcome} before={d().before} />}</Match>
+          <Match when={done()}>
+            {(d) => <Result outcome={d().outcome} before={d().before} say={props.say} />}
+          </Match>
           <Match when={true}>
             <p class="text-muted">{msg("publish.body")}</p>
             <ul class="space-y-1 text-fg">
@@ -109,7 +116,11 @@ export function PublishDialog(props: {
   );
 }
 
-function Result(props: { outcome: PublishOutcome; before: Chart["published_version"] }) {
+function Result(props: {
+  outcome: PublishOutcome;
+  before: Chart["published_version"];
+  say: (findings: Finding[]) => Said[];
+}) {
   const o = props.outcome;
   switch (o.kind) {
     case "published": {
@@ -136,7 +147,7 @@ function Result(props: { outcome: PublishOutcome; before: Chart["published_versi
       );
     }
     case "invalid":
-      return <Findings findings={o.findings} />;
+      return <Findings said={props.say(o.findings)} />;
     case "notSaved":
       return <p role="alert">{msg("publish.notSaved")}</p>;
     case "conflict":
@@ -150,16 +161,26 @@ function Result(props: { outcome: PublishOutcome; before: Chart["published_versi
   }
 }
 
-function Findings(props: { findings: Finding[] }) {
-  const errors = () => props.findings.filter((f) => f.severity === "error");
+/** Each error under its code's title, in the validation panel's words. */
+function Findings(props: { said: Said[] }) {
+  const n = () => props.said.length;
   return (
     <div role="alert">
-      <p class="text-fg">{msg("publish.invalid")}</p>
-      <ul class="mt-2 max-h-60 space-y-1 overflow-y-auto text-sm">
-        <For each={errors()}>
+      <p class="text-fg">
+        {n() === 1 ? msg("publish.invalidOne") : msg("publish.invalid", { n: n() })}
+      </p>
+      <ul class="mt-2 max-h-60 space-y-2 overflow-y-auto text-sm">
+        <For each={props.said}>
           {(f) => (
-            <li class="text-danger">
-              <span class="font-mono">{f.code}</span> {f.message}
+            <li class="flex items-start gap-2">
+              <Icon name="error" class="mt-0.5 size-3.5 shrink-0 text-danger" />
+              <span class="min-w-0 flex-1">
+                <span class="flex items-baseline gap-1.5">
+                  <span class="font-medium text-fg">{f.title}</span>
+                  <span class="font-mono text-2xs text-faint">{f.code}</span>
+                </span>
+                <span class="block text-muted">{f.text}</span>
+              </span>
             </li>
           )}
         </For>

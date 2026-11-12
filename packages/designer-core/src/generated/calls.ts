@@ -1024,9 +1024,8 @@ export type FindingView = {
   /** From the last full pass, which the document has changed since. */
   stale: boolean;
   /**
-   * `node` as the layers panel names it: its name, label or text, or
-   * `None` and its kind (the shell then shows the kind, as the layers
-   * panel does).
+   * `node` as the layers panel names it (`naming.rs`, never an id);
+   * `None` without a node.
    */
   name: string | null;
   kind: NodeKind | null;
@@ -1357,11 +1356,11 @@ export type LayerRow = {
   id: number;
   kind: NodeKind;
   /**
-   * The node's `name`, else its label, else a text's string; `null`
-   * when it has none, and the shell shows its kind and id ("Row block
-   * 12"), translated.
+   * The node's name on display (`naming.rs`): its `name`, else its
+   * label, else a text's string, else its kind and a number ("Row block
+   * 2"), never its id.
    */
-  name: string | null;
+  name: string;
   locked: boolean;
   hidden: boolean;
   selected: boolean;
@@ -1418,6 +1417,15 @@ export type Modifiers = {
   ctrl: boolean;
 };
 
+/**
+ * A node as the layers panel names it, with its kind: for what knows the
+ * node by its id alone (a finding the server gives, a form's choice).
+ */
+export type NamedNode = {
+  name: string;
+  kind: NodeKind;
+};
+
 /** A node of the scene tree, tagged by `type`. */
 export type Node =
   | { type: "section" } & Section
@@ -1463,6 +1471,8 @@ export type Num = {
 
 export type NumberedNode = {
   id: number;
+  /** As the layers panel names it. */
+  name: string;
   /** A row block (`true`) or a free-form row. */
   block: boolean;
   facing: Facing;
@@ -1997,8 +2007,7 @@ export type SelectionView = {
   bounds: Rect | null;
   /**
    * Inside a section (`level` names it): its name as the layers panel
-   * shows it, `null` when it has none, so the status bar can say where
-   * a new object went.
+   * shows it, so the status bar can say where a new object went.
    */
   within: string | null;
 };
@@ -2265,6 +2274,7 @@ export interface CallTable {
   numbering_preview: { args: []; returns: Preview | null; error: never };
   validation: { args: []; returns: ValidationView; error: never };
   finding_place: { args: [node: number, row: number | null, seat: number | null]; returns: FindingPlace; error: never };
+  node_name: { args: [id: number]; returns: NamedNode | null; error: never };
   overlay: { args: []; returns: Overlay; error: never };
   text_field: { args: []; returns: TextField | null; error: never };
   cursor: { args: []; returns: Cursor; error: never };
@@ -2438,6 +2448,11 @@ export abstract class Calls {
   /** The labels of the row and seat a finding names, for a finding shown. */
   findingPlace(node: number, row: number | null, seat: number | null): FindingPlace {
     return this.call("finding_place", [node, row, seat]);
+  }
+
+  /** A node as the layers panel names it, with its kind, by its id. */
+  nodeName(id: number): NamedNode | null {
+    return this.call("node_name", [id]);
   }
 
   /** What the canvas draws over the chart now, in chart units. */
