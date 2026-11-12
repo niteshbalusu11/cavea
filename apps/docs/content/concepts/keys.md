@@ -6,7 +6,7 @@ The server API has three kinds of key, each for one place. This page says which 
 |---|---|---|---|
 | [Secret key](#secret-keys) | `sk_` and 64 hex digits | Your backend only | Everything in its workspace |
 | [Publishable key](#publishable-keys) | `pk_` and 64 hex digits | The buyer's page or app | Read an event's public seat state, create hold tokens, hold and release with them |
-| [Admin key](#the-admin-key) | Whatever the operator sets | The operator's tools only | Create and list workspaces |
+| [Admin key](#the-admin-key) | Whatever the operator sets | The operator's tools only | Create and list workspaces; read the server's metrics |
 
 Send a key as `Authorization: Bearer <key>`. A key of the wrong kind for a route is `403 forbidden` (`reason` `key_kind`); an unknown or revoked key is `401 unauthorized`.
 
@@ -24,7 +24,7 @@ A publishable key may list **allowed origins**, up to 50, such as `https://ticke
 
 ## The admin key
 
-The admin key belongs to whoever runs the server, set in its environment as `CAVEA_ADMIN_KEY` (32 to 512 printable characters). It can only manage workspaces: create one with its first secret key, list them, mint a new secret key for a workspace that lost its keys, and invite a workspace's first owner. A server without it refuses those routes. Platforms with one workspace per customer use it to set each one up.
+The admin key belongs to whoever runs the server, set in its environment as `CAVEA_ADMIN_KEY` (32 to 512 printable characters). It manages workspaces (create one with its first secret key, list them, mint a new secret key for a workspace that lost its keys, invite a workspace's first owner) and reads the server's Prometheus metrics at `GET /metrics`, and nothing else. A server without it refuses those routes. Platforms with one workspace per customer use it to set each one up.
 
 ## Rotating and revoking
 

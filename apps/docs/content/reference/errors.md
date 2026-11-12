@@ -24,7 +24,7 @@ An error is a JSON body with the content type `application/problem+json`, always
 | `details` | An object, empty when there is nothing to add. Many codes put a `reason` here, and some add the objects, field or limit at fault. |
 | `request_id` | The same value as the `Cavea-Request-Id` response header. Quote it when you report a problem: the server logs every request under it. |
 
-A seat command is all or nothing: when it fails, nothing changed.
+A seat command is all or nothing: when the server refuses it (a `4xx` status), nothing changed. After a `500` or `503` the outcome of a seat command is not known: the change may have been stored while the reply was lost. Send seat commands from your backend with an `Idempotency-Key` and retry with the same key, which returns the first outcome, or read the seats before trying again.
 
 Retry only where this page says to. `429` and `503` carry a `Retry-After` header with the seconds to wait when the server knows them.
 
@@ -227,4 +227,4 @@ The server is busy: the event's queue of commands is full, or a chart could not 
 
 ### `unavailable`
 
-The server cannot reach PostgreSQL, or has run out of database connections. Nothing was changed. Retry with backoff; if it lasts, the operator checks the database.
+The server cannot reach PostgreSQL, has run out of database connections, or lost the database's reply to a commit. For a seat command the outcome is not known: the change may have been stored. Retry with the same `Idempotency-Key`, which returns the first outcome if there was one, or read the seats first; back off between retries. If it lasts, the operator checks the database.
