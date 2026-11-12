@@ -19,6 +19,7 @@ const PARTS: [&str; 3] = ["{section}", "{row}", "{seat}"];
 
 /// The literal text before the next placeholder in `rest`, that placeholder's
 /// index in [`PARTS`] and the text after it; `None` when no placeholder is left.
+#[inline]
 fn next_part(rest: &str) -> Option<(&str, usize, &str)> {
     let mut from = 0;
     while let Some(open) = rest.get(from..)?.find('{') {

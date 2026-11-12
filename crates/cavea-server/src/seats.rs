@@ -565,4 +565,30 @@ mod tests {
         }
         assert_eq!(chart.details(first + 3), None);
     }
+
+    /// What loading a chart version costs the provider at 100,000 seats
+    /// (decode and every full label): `cargo test --release -p cavea-server
+    /// measure_chart_load -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement"]
+    fn measure_chart_load() {
+        use cavea_testkit::presets::{DEFAULT_SEED, find};
+        let doc = find("stadium-100k").unwrap().generate(DEFAULT_SEED);
+        let compiled = cavea_compiler::compile(&doc).unwrap();
+        let mut times: Vec<_> = (0..15)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                let chart = build(&compiled.full, compiled.public_hash).unwrap();
+                let took = start.elapsed();
+                assert!(chart.view.len() >= 100_000);
+                took
+            })
+            .collect();
+        times.sort();
+        println!(
+            "chart load, stadium-100k: median {:?}, min {:?}",
+            times[times.len() / 2],
+            times[0]
+        );
+    }
 }

@@ -14,7 +14,7 @@
 //! no hash-map iteration, and every sort has a total order.
 
 use std::collections::BTreeMap;
-use std::fmt::{self, Write};
+use std::fmt;
 use std::ops::Range;
 
 use cavea_core::label::{LabelBuf, Scheme, SeatDirection};

@@ -93,7 +93,7 @@ const VALUES: [&str; 8] = ["A", "Stalls", "10", "Ω", "x-y", "{row}", "Box 1", "
 fn template(r: &mut Rng) -> String {
     let n = r.next() % 6;
     let mut t = String::new();
-    if r.next() % 3 == 0 {
+    if r.next().is_multiple_of(3) {
         t.push_str(r.pick(&LITERALS));
     }
     for i in 0..n {
@@ -102,7 +102,7 @@ fn template(r: &mut Rng) -> String {
         }
         t.push_str(r.pick(&PLACEHOLDERS));
     }
-    if r.next() % 3 == 0 {
+    if r.next().is_multiple_of(3) {
         t.push_str(r.pick(&LITERALS));
     }
     t
@@ -110,7 +110,7 @@ fn template(r: &mut Rng) -> String {
 
 fn values(r: &mut Rng, empty_one_in: u64) -> [&'static str; 3] {
     let mut v = || {
-        if empty_one_in > 0 && r.next() % empty_one_in == 0 {
+        if empty_one_in > 0 && r.next().is_multiple_of(empty_one_in) {
             ""
         } else {
             r.pick(&VALUES)
@@ -235,7 +235,7 @@ fn hostile_templates_never_panic() {
         for _ in 0..r.next() % 12 {
             t.push_str(r.pick(&pieces));
         }
-        if r.next() % 10 == 0 {
+        if r.next().is_multiple_of(10) {
             t.push_str(&long);
         }
         let v = values(&mut r, 2);
