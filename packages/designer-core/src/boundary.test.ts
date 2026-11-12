@@ -456,7 +456,10 @@ describe("the designer module", () => {
     const firstNode = (JSON.parse(s.export()) as { nodes: { id: number }[] }).nodes[0];
     if (firstNode !== undefined) {
       expect(s.findingPlace(firstNode.id, null, null).seat).toBeNull();
+      // Every node has a name on display (07 §5.1).
+      expect(s.nodeName(firstNode.id)?.name.length).toBeGreaterThan(0);
     }
+    expect(s.nodeName(2 ** 31)).toBeNull();
     expect(s.textField()).toBeNull();
 
     // Undo everything, then redo it: the same documents, byte for byte.
