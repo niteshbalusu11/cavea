@@ -226,8 +226,9 @@ export class Uploads {
       if (s.kind === "sending") sending++;
       if (s.kind === "waiting") {
         waiting++;
-        retryAt = retryAt === null ? s.at : Math.min(retryAt, s.at);
         signedOut ||= s.signedOut;
+        // Signed out waits for sign-in, not for the clock.
+        if (!s.signedOut) retryAt = retryAt === null ? s.at : Math.min(retryAt, s.at);
       }
     }
     return { sending, waiting, retryAt, signedOut };

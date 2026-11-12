@@ -111,11 +111,10 @@ function rig() {
   });
   const advance = async (ms: number) => {
     now += ms;
-    for (const [id, t] of [...timers]) {
-      if (t.at <= now) {
-        timers.delete(id);
-        t.run();
-      }
+    const due = Array.from(timers).filter(([, t]) => t.at <= now);
+    for (const [id, t] of due) {
+      timers.delete(id);
+      t.run();
     }
     await Promise.resolve();
   };
