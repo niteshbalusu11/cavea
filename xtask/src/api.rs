@@ -15,9 +15,9 @@
 //!   a secret key or the admin key may call, and only the schemas those
 //!   reach; its table gives each operation's credential, whether it takes an
 //!   `Idempotency-Key` (the SDK's core sets that header itself, so it is not
-//!   an input), whether it is a page (`after`), and the body its successes
-//!   answer (`json`, `text`, or `bytes`, typed `ArrayBuffer`) and whether
-//!   one may be empty.
+//!   an input), whether it is a page (`after`), and each success status with
+//!   the one media type it answers (`null` for no body; a body neither JSON
+//!   nor text is typed `ArrayBuffer`).
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -222,8 +222,8 @@ fn render(doc: &Value, client: Client) -> Result<String> {
             "/** Each operation's method and path; its credential (`admin` where the\n \
              * admin key may call it, else `secret`); whether it takes an\n \
              * `Idempotency-Key`, which the client sets; whether it is a page of a\n \
-             * list (`after`); the body its successes answer (`json`, `text` or\n \
-             * `bytes`) and whether one may be empty. */\n"
+             * list (`after`); each success status and the media type it answers,\n \
+             * `null` for no body. */\n"
         }
     };
     let _ = write!(
@@ -344,10 +344,9 @@ fn operation(
     // body as text (for the SDK, text as text and anything else as bytes),
     // none as `undefined`.
     let mut replies: Vec<String> = Vec::new();
-    // For the SDK: the body its successes answer (`json`, `text`, `bytes`),
-    // and whether one may be empty; it refuses any other answer.
-    let mut kind = "json";
-    let mut empty = false;
+    // For the SDK: each success status and the one media type it answers,
+    // `null` for none; it refuses any other answer.
+    let mut statuses: Vec<String> = Vec::new();
     for (status, response) in object(op.get("responses"), "responses")? {
         if !(status.starts_with('1') || status.starts_with('2')) {
             continue;
@@ -358,15 +357,17 @@ fn operation(
             .and_then(Value::as_object)
             .map(|c| c.keys().map(String::as_str).collect())
             .unwrap_or_default();
-        empty |= media.is_empty();
+        if client == Client::Sdk {
+            let answered = match media.as_slice() {
+                [] => "null".to_owned(),
+                [one] => quote(one),
+                _ => bail!("status {status} answers more than one media type"),
+            };
+            statuses.push(format!("{}: {answered}", quote(status)));
+        }
         let bytes = media
             .iter()
             .any(|m| *m != "application/json" && !m.starts_with("text/"));
-        if bytes {
-            kind = "bytes";
-        } else if kind == "json" && media.iter().any(|m| m.starts_with("text/")) {
-            kind = "text";
-        }
         let other = if client == Client::Sdk && bytes {
             "ArrayBuffer"
         } else {
@@ -394,11 +395,11 @@ fn operation(
             let credential = credential(op).ok_or_else(|| anyhow!("no SDK credential"))?;
             let _ = writeln!(
                 table,
-                "  {id}: {{ method: {}, path: {}, credential: {}, idempotencyKey: {idempotency_key}, paginated: {paginated}, reply: {}, empty: {empty} }},",
+                "  {id}: {{ method: {}, path: {}, credential: {}, idempotencyKey: {idempotency_key}, paginated: {paginated}, replies: {{ {} }} }},",
                 quote(&method.to_uppercase()),
                 quote(path),
                 quote(credential),
-                quote(kind),
+                statuses.join(", "),
             );
         }
     }

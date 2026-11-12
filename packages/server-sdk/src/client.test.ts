@@ -427,6 +427,26 @@ describe("errors", () => {
     const bytes = await c3.call("eventState", { path: { event: "e" } });
     expect(bytes instanceof ArrayBuffer ? [...new Uint8Array(bytes)] : bytes).toEqual([...frame]);
     expect(await c3.charts.unlock("c")).toBeUndefined();
+    // Only the documented status and media type: a login page on 200, an
+    // empty 200 (as if nothing changed), frames on an undocumented 202.
+    for (const answer of [
+      () => new Response("<html>sign in</html>", { headers: { "Content-Type": "text/html" } }),
+      () => new Response(null, { status: 200 }),
+      () =>
+        new Response(frame, {
+          status: 202,
+          headers: { "Content-Type": "application/vnd.cavea.frame" },
+        }),
+    ]) {
+      const { cavea: c4 } = world(answer);
+      const error = (await rejection(
+        c4.call("eventState", { path: { event: "e" } }),
+      )) as CaveaError;
+      expect(error.code).toBe("unexpected");
+    }
+    // A 204 with a body is not the documented empty answer either.
+    const { cavea: c5 } = world(() => new Response(new Uint8Array([1]), { status: 204 }));
+    expect(((await rejection(c5.charts.unlock("c"))) as CaveaError).code).toBe("unexpected");
     // `metrics` answers text.
     const { cavea } = world(
       () => new Response("cavea_up 1\n", { headers: { "Content-Type": "text/plain" } }),

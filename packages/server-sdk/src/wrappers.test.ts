@@ -32,16 +32,15 @@ const ARGS: Record<string, unknown[]> = {
 
 test("every wrapped operation sends its own method and path", async () => {
   const seen: Array<{ method: string; path: string }> = [];
+  // Each answer is the operation's first documented success.
+  let answer: (() => Response) | undefined;
   const cavea = new Cavea({
     baseUrl: "https://seats.example",
     secretKey: KEY,
     adminKey: "admin-".padEnd(32, "x"),
     fetch: async (input, init) => {
       seen.push({ method: init.method ?? "GET", path: new URL(input).pathname });
-      const page = { data: [], next: null };
-      return new Response(JSON.stringify(page), {
-        headers: { "Content-Type": "application/json" },
-      });
+      return answer?.() ?? new Response(null, { status: 500 });
     },
   });
   const wrapped: Array<[OperationId, string]> = [];
@@ -59,6 +58,15 @@ test("every wrapped operation sends its own method and path", async () => {
     ]?.[method];
     expect(typeof fn).toBe("function");
     seen.length = 0;
+    const [status = "200", media = null] =
+      Object.entries(OPERATIONS[op].replies as Record<string, string | null>)[0] ?? [];
+    answer = () =>
+      media === null
+        ? new Response(null, { status: Number(status) })
+        : new Response(JSON.stringify({ data: [], next: null }), {
+            status: Number(status),
+            headers: { "Content-Type": media },
+          });
     const out = fn?.(...(ARGS[name] ?? ["p"]));
     if (out !== null && typeof out === "object" && Symbol.asyncIterator in out) {
       for await (const _ of out as AsyncIterable<unknown>) {

@@ -106,9 +106,6 @@ function target(base: string, template: string, parts: Parts): string {
   return `${base}${path}${search === "" ? "" : `?${search}`}`;
 }
 
-const isJson = (response: Response): boolean =>
-  /^application\/([\w.+-]+\+)?json\b/i.test(response.headers.get("Content-Type") ?? "");
-
 /**
  * Whether repeating `op` cannot do anything twice: a read; an archive or a
  * revocation (`DELETE`, idempotent by the API, 08 §6.2); a draft saved over
@@ -266,40 +263,45 @@ export function transport(options: TransportOptions): Send {
 }
 
 /**
- * A success's body as the operation answers it: JSON parsed, text, or bytes;
- * `undefined` for an empty answer where the operation may give one. Anything
- * else, such as a proxy's page or nothing where a reply is due, is
- * `unexpected`: a booking must never look done when it did not reach Cavea.
+ * A success's body as the operation answers it: exactly a status and media
+ * type the document lists for it, JSON parsed, text as text, anything else
+ * as bytes, and `undefined` for a status without a body. Any other answer,
+ * such as a proxy's page or nothing where a reply is due, is `unexpected`: a
+ * booking must never look done, nor a state unchanged, when the request did
+ * not reach Cavea.
  */
 async function reply(op: OperationId, response: Response): Promise<unknown> {
-  const info = OPERATIONS[op];
+  const replies: Readonly<Record<string, string | null>> = OPERATIONS[op].replies;
   const unexpected = (): CaveaError =>
     new CaveaError({
       operation: op,
       status: response.status,
       code: "unexpected",
       requestId: response.headers.get("Cavea-Request-Id"),
-      message: `${op}: HTTP ${response.status} without the reply the operation answers`,
+      message: `${op}: HTTP ${response.status} without a reply the operation answers`,
     });
-  if (info.reply === "bytes") {
-    const bytes = await response.arrayBuffer();
-    return bytes.byteLength === 0 && info.empty ? undefined : bytes;
+  const media = replies[String(response.status)];
+  if (media === undefined) {
+    throw unexpected();
   }
-  const text = await response.text();
-  if (text === "" && info.empty) {
+  if (media === null) {
+    if ((await response.arrayBuffer()).byteLength !== 0) {
+      throw unexpected();
+    }
     return undefined;
   }
-  if (info.reply === "text") {
-    return text;
-  }
-  if (!isJson(response)) {
+  const type = (response.headers.get("Content-Type") ?? "").split(";")[0]?.trim().toLowerCase();
+  if (type !== media) {
     throw unexpected();
   }
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    throw unexpected();
+  if (media === "application/json") {
+    try {
+      return JSON.parse(await response.text()) as unknown;
+    } catch {
+      throw unexpected();
+    }
   }
+  return media.startsWith("text/") ? response.text() : response.arrayBuffer();
 }
 
 /** A network failure's system code (`ECONNREFUSED`), never its message,

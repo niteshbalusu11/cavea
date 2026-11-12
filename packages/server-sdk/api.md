@@ -775,8 +775,8 @@ export type OperationId = keyof Operations;
 /** Each operation's method and path; its credential (`admin` where the
  * admin key may call it, else `secret`); whether it takes an
  * `Idempotency-Key`, which the client sets; whether it is a page of a
- * list (`after`); the body its successes answer (`json`, `text` or
- * `bytes`) and whether one may be empty. */
+ * list (`after`); each success status and the media type it answers,
+ * `null` for no body. */
 export declare const OPERATIONS: {
     readonly metrics: {
         readonly method: "GET";
@@ -784,8 +784,9 @@ export declare const OPERATIONS: {
         readonly credential: "admin";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "text";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "text/plain";
+        };
     };
     readonly uploadAsset: {
         readonly method: "POST";
@@ -793,8 +794,10 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+            readonly "201": "application/json";
+        };
     };
     readonly listCharts: {
         readonly method: "GET";
@@ -802,8 +805,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: true;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly createChart: {
         readonly method: "POST";
@@ -811,8 +815,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "201": "application/json";
+        };
     };
     readonly archiveChart: {
         readonly method: "DELETE";
@@ -820,8 +825,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly getChart: {
         readonly method: "GET";
@@ -829,8 +835,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly getDraft: {
         readonly method: "GET";
@@ -838,8 +845,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly saveDraft: {
         readonly method: "PUT";
@@ -847,8 +855,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly unlockChart: {
         readonly method: "DELETE";
@@ -856,8 +865,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: true;
+        readonly replies: {
+            readonly "204": null;
+        };
     };
     readonly getChartLock: {
         readonly method: "GET";
@@ -865,8 +875,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly lockChart: {
         readonly method: "POST";
@@ -874,8 +885,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly publishChart: {
         readonly method: "POST";
@@ -883,8 +895,10 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+            readonly "201": "application/json";
+        };
     };
     readonly validateDraft: {
         readonly method: "POST";
@@ -892,8 +906,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly listVersions: {
         readonly method: "GET";
@@ -901,8 +916,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: true;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly setVersionThumbnail: {
         readonly method: "PUT";
@@ -910,8 +926,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly listEvents: {
         readonly method: "GET";
@@ -919,8 +936,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: true;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly createEvent: {
         readonly method: "POST";
@@ -928,8 +946,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "201": "application/json";
+        };
     };
     readonly archiveEvent: {
         readonly method: "DELETE";
@@ -937,8 +956,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly getEvent: {
         readonly method: "GET";
@@ -946,8 +966,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly updateEvent: {
         readonly method: "PATCH";
@@ -955,8 +976,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly book: {
         readonly method: "POST";
@@ -964,8 +986,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: true;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly changeStatus: {
         readonly method: "POST";
@@ -973,8 +996,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: true;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly hold: {
         readonly method: "POST";
@@ -982,8 +1006,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: true;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly listObjects: {
         readonly method: "GET";
@@ -991,8 +1016,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: true;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly release: {
         readonly method: "POST";
@@ -1000,8 +1026,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: true;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly eventState: {
         readonly method: "GET";
@@ -1009,8 +1036,10 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "bytes";
-        readonly empty: true;
+        readonly replies: {
+            readonly "200": "application/vnd.cavea.frame";
+            readonly "204": null;
+        };
     };
     readonly createHoldToken: {
         readonly method: "POST";
@@ -1018,8 +1047,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "201": "application/json";
+        };
     };
     readonly releaseHoldToken: {
         readonly method: "DELETE";
@@ -1027,8 +1057,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: true;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly getHoldToken: {
         readonly method: "GET";
@@ -1036,8 +1067,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly extendHoldToken: {
         readonly method: "POST";
@@ -1045,8 +1077,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: true;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly listKeys: {
         readonly method: "GET";
@@ -1054,8 +1087,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: true;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly createKey: {
         readonly method: "POST";
@@ -1063,8 +1097,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "201": "application/json";
+        };
     };
     readonly revokeKey: {
         readonly method: "DELETE";
@@ -1072,8 +1107,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly updateKeyOrigins: {
         readonly method: "PATCH";
@@ -1081,8 +1117,9 @@ export declare const OPERATIONS: {
         readonly credential: "secret";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly listWorkspaces: {
         readonly method: "GET";
@@ -1090,8 +1127,9 @@ export declare const OPERATIONS: {
         readonly credential: "admin";
         readonly idempotencyKey: false;
         readonly paginated: true;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "200": "application/json";
+        };
     };
     readonly createWorkspace: {
         readonly method: "POST";
@@ -1099,8 +1137,9 @@ export declare const OPERATIONS: {
         readonly credential: "admin";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "201": "application/json";
+        };
     };
     readonly inviteWorkspaceOwner: {
         readonly method: "POST";
@@ -1108,8 +1147,9 @@ export declare const OPERATIONS: {
         readonly credential: "admin";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "201": "application/json";
+        };
     };
     readonly mintWorkspaceKey: {
         readonly method: "POST";
@@ -1117,8 +1157,9 @@ export declare const OPERATIONS: {
         readonly credential: "admin";
         readonly idempotencyKey: false;
         readonly paginated: false;
-        readonly reply: "json";
-        readonly empty: false;
+        readonly replies: {
+            readonly "201": "application/json";
+        };
     };
 };
 ```
