@@ -58,7 +58,7 @@ export function Tip(
       openDelay={500}
       closeDelay={0}
       gutter={6}
-      open={props.open}
+      {...(props.open === false ? { open: false } : {})}
     >
       {props.children}
       <Tooltip.Portal>

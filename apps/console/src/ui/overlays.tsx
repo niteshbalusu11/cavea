@@ -38,7 +38,7 @@ export const afterMenu = (run: () => void) => () => {
   const item = document.activeElement;
   const menu = item instanceof HTMLElement ? item.closest("[role=menu]") : null;
   const by = menu?.getAttribute("aria-labelledby");
-  const trigger = by == null ? null : document.getElementById(by);
+  const trigger = by === null || by === undefined ? null : document.getElementById(by);
   setTimeout(() => {
     menuOpener = trigger;
     run();
