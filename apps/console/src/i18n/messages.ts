@@ -1209,7 +1209,7 @@ const eventScreens = {
   "manager.how":
     "Free seats are drawn available; held, booked and blocked seats are drawn unavailable, alike. Hover a seat for its status. Click any seat to select it or to deselect it; the details show the last seat clicked.",
   "manager.liveEvery":
-    "Checked {time}. The counts and the selected seats are read every 3 seconds; the whole map when the counts change, and every minute.",
+    "Checked {time}. The seats are checked every 2 seconds, and shown as they change.",
   "manager.liveStarting": "Reading the seats…",
   "manager.stale": "Not current: {problem} Last checked {time}.",
   "manager.staleNever": "Not current: {problem}",

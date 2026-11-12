@@ -81,6 +81,8 @@ export interface Live {
   act(action: Action, labels: readonly string[], orderRef?: string): Promise<Outcome>;
   /** The last 50 polls, for measurement. */
   polls(): readonly Poll[];
+  /** The label of object `idx`, for measurement. */
+  labelAt(idx: number): string | undefined;
 }
 
 /** Labels per read by label: the server takes at most 1,000. */
@@ -166,10 +168,12 @@ export function createLive(options: {
     if (wanted.length > 0) void read(wanted).catch(failed);
   };
 
-  function loadChart(): Promise<Uint8Array> {
+  /** The chart, fetched once for the map and the labels; `abort` is the
+   * map's signal (the adapter's `chart`) or the connection's. */
+  function loadChart(abort: AbortSignal): Promise<Uint8Array> {
     // `/v1/public/charts/{file}`: the version's own URL names the file.
     const file = decodeURIComponent(options.chartUrl.split("/").pop() ?? "");
-    chart ??= callBytes("publicChart", { path: { file } }, conn.signal).then(({ bytes }) => {
+    chart ??= callBytes("publicChart", { path: { file } }, abort).then(({ bytes }) => {
       if (bytes === null) throw badFrame("chart", null);
       labels = chartLabels(bytes);
       index = new Map(labels.map((l, i) => [l, i]));
@@ -208,14 +212,15 @@ export function createLive(options: {
     return [];
   }
 
-  async function poll(): Promise<Step> {
+  /** One poll; `ready` (the chart's labels) is awaited after the request
+   * is sent, so the first snapshot is fetched beside the chart. */
+  async function poll(ready: Promise<unknown> = Promise.resolve()): Promise<Step> {
     const after = nextAfter(seq, lastKind);
     const started = performance.now();
-    const answer = await callBytes(
-      "eventState",
-      { path: { event }, query: { after_seq: after } },
-      conn.signal,
-    );
+    const [answer] = await Promise.all([
+      callBytes("eventState", { path: { event }, query: { after_seq: after } }, conn.signal),
+      ready,
+    ]);
     const s =
       answer.bytes === null
         ? step(seq, labels.length, { status: 204 })
@@ -228,7 +233,11 @@ export function createLive(options: {
       at: Date.now(),
     });
     if (history.length > 50) history.shift();
-    if (s.kind === "bad") throw badFrame(s.rule, answer.requestId);
+    if (s.kind === "bad") {
+      // Nothing of it is applied; the next poll asks for a snapshot.
+      lastKind = "bad";
+      throw badFrame(s.rule, answer.requestId);
+    }
     if (s.kind === "gap") lastKind = "gap";
     return s;
   }
@@ -256,7 +265,6 @@ export function createLive(options: {
   const failed = (e: unknown): number | null => {
     if (isAbort(e) || conn.signal.aborted) return null;
     const error = asApiError(e);
-    if (error.code === "unexpected") lastKind = "bad";
     setHealth((h) => ({ ...h, error }));
     return error.retryAfter === null ? null : error.retryAfter * 1000;
   };
@@ -313,7 +321,7 @@ export function createLive(options: {
   signal.addEventListener("abort", stop, { once: true });
 
   const adapter: StateAdapter = {
-    chart: async () => ({ bytes: await loadChart() }),
+    chart: async (abort) => ({ bytes: await loadChart(abort) }),
     async connect(context) {
       // A fresh start: after a map that failed to start, Retry connects again.
       conn.abort();
@@ -329,8 +337,7 @@ export function createLive(options: {
       details.clear();
       drawn.clear();
       selected = new Set();
-      await loadChart();
-      const s = await poll();
+      const s = await poll(loadChart(conn.signal));
       if (s.kind !== "snapshot") throw badFrame("first state", null);
       apply(s);
       // The first state fills `drawn` without telling the map: the snapshot
@@ -433,5 +440,6 @@ export function createLive(options: {
       }
     },
     polls: () => history,
+    labelAt: (idx) => labels[idx],
   };
 }
