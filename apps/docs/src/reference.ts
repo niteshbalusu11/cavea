@@ -11,12 +11,14 @@
 //   <!-- messages -->                          the renderer's English messages
 //   <!-- theme-defaults -->                    the built-in schemes' colours
 //   <!-- shortcuts -->                         the designer's keyboard shortcuts
+//   <!-- metrics -->                           the server's Prometheus metrics
 //
 // The build fails when a member or union member printed here has no doc
 // comment, when a name the renderer's entry module exports is printed by no
 // page, when the theming page's token table differs from the tokens the
 // renderer reads, or when the deployment page's settings table differs from
-// the settings the server reads.
+// the settings the server reads, or when a page names a metric (`cavea_…` in
+// code) that the server does not have.
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -30,6 +32,8 @@ import { Declarations, members, type Member } from "./declarations.ts";
 export interface Sources {
   renderer: Declarations;
   react: Declarations;
+  /** The server's metrics: name, type, help, from the Rust that writes them. */
+  metrics: Array<{ name: string; kind: string; help: string }>;
   /** Names a page has printed, renderer's and React's (`react:` prefixed). */
   claimed: Set<string>;
   problems: string[];
@@ -38,7 +42,21 @@ export interface Sources {
 export async function sources(root: string): Promise<Sources> {
   const api = await readFile(join(root, "packages/renderer/api.md"), "utf8");
   const react = await readFile(join(root, "packages/react/src/index.ts"), "utf8");
+  const metrics: Sources["metrics"] = [];
+  for (const file of ["crates/cavea-engine/src/metrics.rs", "crates/cavea-server/src/metrics.rs"]) {
+    const rust = await readFile(join(root, file), "utf8");
+    // `out.family(name, kind, help)`, `out.gauge(name, help, …)`, `out.counter(…)`, `out.histogram_family(name, help, …)`.
+    for (const m of rust.matchAll(
+      /\.(family|gauge|counter|histogram_family)\(\s*"(cavea_\w+)",\s*"([^"]*)"(?:,\s*"([^"]*)")?/g,
+    )) {
+      const [, call = "", name = "", second = "", third] = m;
+      const kind = call === "family" ? second : call === "histogram_family" ? "histogram" : call;
+      const help = call === "family" ? (third ?? "") : second;
+      metrics.push({ name, kind, help });
+    }
+  }
   return {
+    metrics,
     renderer: Declarations.fromApiMarkdown(api, "packages/renderer/api.md"),
     react: new Declarations(new Map([["index.ts", react]]), "packages/react/src/index.ts"),
     claimed: new Set(),
@@ -188,8 +206,36 @@ function shortcuts(): string {
   return out.join("\n").trim();
 }
 
+function metricsTable(s: Sources): string {
+  if (s.metrics.length < 15) {
+    s.problems.push(
+      `found only ${s.metrics.length} metrics in the server's source: the scan in reference.ts needs updating`,
+    );
+  }
+  const rows = s.metrics.map((m) => {
+    if (m.help === "")
+      s.problems.push(`the metric ${m.name} has no help text in the server's source`);
+    return `| ${code(m.name)} | ${m.kind} | ${cell(m.help)} |`;
+  });
+  return ["| Metric | Type | What it measures |", "|---|---|---|", ...rows].join("\n");
+}
+
+/** Metric names a page quotes (`cavea_…_total`, with or without labels) that the server does not have. */
+export function unknownMetrics(s: Sources, page: string, source: string): string[] {
+  const known = new Set(s.metrics.map((m) => m.name));
+  const out: string[] = [];
+  for (const m of source.matchAll(/`(cavea_[a-z_]+)(?:\{[^`]*\})?`/g)) {
+    const name = m[1] ?? "";
+    const metric = /_(total|seconds|size|depth|loaded|active|subscribers|connections|in_use)$/;
+    if (metric.test(name) && !known.has(name)) {
+      out.push(`${page}: names the metric ${name}, which the server does not have`);
+    }
+  }
+  return out;
+}
+
 const DIRECTIVE =
-  /^<!-- (members|union|declaration|messages|theme-defaults|shortcuts)(?::\s*([\w:]+)(?:\s+(\w+))?)?\s*-->$/gm;
+  /^<!-- (members|union|declaration|messages|theme-defaults|shortcuts|metrics)(?::\s*([\w:]+)(?:\s+(\w+))?)?\s*-->$/gm;
 
 /** `source` with every directive line replaced by what it asks for. */
 export function expand(source: string, page: string, s: Sources): string {
@@ -209,6 +255,8 @@ export function expand(source: string, page: string, s: Sources): string {
           return messages(s);
         case "theme-defaults":
           return themeDefaults();
+        case "metrics":
+          return metricsTable(s);
         default:
           return shortcuts();
       }

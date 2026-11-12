@@ -12,11 +12,7 @@
   "nav": [
     {
       "section": "Start here",
-      "pages": [
-        "index.md",
-        "quick-start.md",
-        "before-release.md"
-      ]
+      "pages": ["index.md", "quick-start.md", "before-release.md"]
     },
     {
       "section": "Concepts",
@@ -50,11 +46,7 @@
     },
     {
       "section": "Reference",
-      "pages": [
-        "reference/errors.md",
-        "reference/limits.md",
-        "reference/changelog.md"
-      ]
+      "pages": ["reference/errors.md", "reference/limits.md", "reference/changelog.md"]
     },
     {
       "section": "Renderer",
@@ -81,7 +73,15 @@
     },
     {
       "section": "Deployment",
-      "planned": "Sizing, PostgreSQL, TLS and WebSocket, backups, upgrades, monitoring (DOC-006)"
+      "pages": [
+        "deployment/index.md",
+        "deployment/settings.md",
+        "deployment/proxy.md",
+        "deployment/monitoring.md",
+        "deployment/backups.md",
+        "deployment/upgrades.md",
+        "deployment/licence.md"
+      ]
     },
     {
       "section": "Designer",

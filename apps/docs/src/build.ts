@@ -18,7 +18,7 @@ import { apiPages, problemCodes, type Doc } from "./api.ts";
 import { compare, parseCatalogue, scanReasons } from "./errors.ts";
 import { layout, type NavSection } from "./layout.ts";
 import { fences, plain, render, substitute, type Heading } from "./markdown.ts";
-import { expand, settings, sources, themeTokens, unclaimed } from "./reference.ts";
+import { expand, settings, sources, themeTokens, unclaimed, unknownMetrics } from "./reference.ts";
 
 const HERE = join(import.meta.dir, "..");
 const ROOT = join(HERE, "../..");
@@ -149,6 +149,7 @@ export async function build(
   for (const page of pages.filter((p) => !p.generated)) {
     // The samples as written; the declarations a directive prints are the package's own.
     refs.problems.push(...(await sampleMarks(page.path, page.source, vars)));
+    refs.problems.push(...unknownMetrics(refs, page.path, page.source));
     page.source = expand(page.source, page.path, refs);
   }
   refs.problems.push(...unclaimed(refs));
