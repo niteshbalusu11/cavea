@@ -891,6 +891,133 @@ async fn the_pool_opens_what_it_can_at_start_and_recovers() {
     .await;
 }
 
+/// The start waits for PostgreSQL (D-98): a database that is not up yet is
+/// tried again until the wait runs out, then the start fails naming why.
+#[tokio::test]
+async fn the_start_gives_up_on_an_absent_database_when_the_wait_runs_out() {
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = closed.local_addr().unwrap().port();
+    drop(closed);
+    let options = PgConnectOptions::new()
+        .host("127.0.0.1")
+        .port(port)
+        .username("cavea");
+    let started = std::time::Instant::now();
+    let Err(MigrationError::Connect(gave_up)) =
+        store::migrate_waiting(&options, Duration::from_millis(1_500)).await
+    else {
+        panic!("migrated without a database");
+    };
+    let took = started.elapsed();
+    assert_eq!(gave_up.reason, store::reach::Unreachable::Refused);
+    assert!(gave_up.attempts >= 3, "{gave_up:?}");
+    assert!(
+        took >= Duration::from_millis(1_000) && took < Duration::from_secs(4),
+        "{took:?}"
+    );
+    // No wait: one attempt.
+    let Err(MigrationError::Connect(once)) = store::migrate_waiting(&options, Duration::ZERO).await
+    else {
+        panic!("migrated without a database");
+    };
+    assert_eq!(once.attempts, 1);
+}
+
+/// An address that never answers costs the wait, not five seconds an attempt
+/// past it; an authentication method this client cannot use is not waited out.
+#[tokio::test]
+async fn the_start_keeps_to_its_wait_and_does_not_wait_out_what_it_cannot_cure() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    // Accepted by the kernel, never answered.
+    let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let options = PgConnectOptions::new().host("127.0.0.1").username("cavea");
+    let started = std::time::Instant::now();
+    let Err(MigrationError::Connect(gave_up)) = store::migrate_waiting(
+        &options.clone().port(silent.local_addr().unwrap().port()),
+        Duration::from_secs(1),
+    )
+    .await
+    else {
+        panic!("migrated without a database");
+    };
+    assert_eq!(gave_up.reason, store::reach::Unreachable::TimedOut);
+    assert!(
+        started.elapsed() < Duration::from_millis(2_500),
+        "{gave_up:?}"
+    );
+
+    // Declines TLS, then asks for GSSAPI, which sqlx does not support.
+    let gss = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = gss.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let (mut s, _) = gss.accept().await.unwrap();
+            let mut request = [0; 8];
+            s.read_exact(&mut request).await.unwrap();
+            s.write_all(b"N").await.unwrap();
+            let mut len = [0; 4];
+            s.read_exact(&mut len).await.unwrap();
+            let mut startup = vec![0; u32::from_be_bytes(len) as usize - 4];
+            s.read_exact(&mut startup).await.unwrap();
+            s.write_all(&[b'R', 0, 0, 0, 8, 0, 0, 0, 7]).await.unwrap();
+        }
+    });
+    let Err(MigrationError::Connect(gave_up)) =
+        store::migrate_waiting(&options.port(port), Duration::from_secs(10)).await
+    else {
+        panic!("migrated without a database");
+    };
+    assert_eq!(gave_up.reason, store::reach::Unreachable::Unsupported);
+    assert_eq!(gave_up.attempts, 1);
+}
+
+/// A database that comes up during the wait is migrated; a wrong password is
+/// not tried again, and is reported without being quoted.
+#[tokio::test]
+#[ignore = "needs PostgreSQL: set CAVEA_TEST_DATABASE_URL, pass --include-ignored"]
+async fn the_start_waits_for_the_database_but_not_for_a_wrong_password() {
+    with_db(|options| async move {
+        // Down: connections are accepted and closed at once, as a container
+        // port with nothing behind it yet does.
+        let target = (options.get_host().to_owned(), options.get_port());
+        let (port, up, _) = proxy(target, 4).await;
+        up.send_replace(false);
+        let local = options.clone().host("127.0.0.1").port(port);
+        let (migrated, ()) = tokio::join!(
+            store::migrate_waiting(&local, Duration::from_secs(20)),
+            async {
+                tokio::time::sleep(Duration::from_millis(1_200)).await;
+                up.send_replace(true);
+            }
+        );
+        migrated.unwrap();
+        let pool = store::connect(options.clone(), 1).await.unwrap();
+        assert!(!migration_rows(&pool).await.is_empty(), "migrated");
+
+        let wrong = format!("not-the-password-{}", std::process::id());
+        let started = std::time::Instant::now();
+        let Err(error) =
+            store::migrate_waiting(&options.clone().password(&wrong), Duration::from_secs(20))
+                .await
+        else {
+            panic!("connected with a wrong password");
+        };
+        let MigrationError::Connect(gave_up) = &error else {
+            panic!("{error}");
+        };
+        assert!(
+            matches!(gave_up.reason, store::reach::Unreachable::Authentication(_)),
+            "{gave_up:?}"
+        );
+        assert_eq!(gave_up.attempts, 1);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let text = error.to_string();
+        assert!(text.contains("password in CAVEA_DATABASE_URL"), "{text}");
+        assert!(!text.contains(&wrong), "{text}");
+    })
+    .await;
+}
+
 #[tokio::test]
 #[ignore = "needs PostgreSQL: set CAVEA_TEST_DATABASE_URL, pass --include-ignored"]
 async fn migrations_apply_once_and_refuse_an_unknown_schema() {

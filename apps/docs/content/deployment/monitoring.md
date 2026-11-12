@@ -9,7 +9,7 @@ How to tell that the server is healthy, what it measures, what to alert on, what
 | `GET /healthz` | `200 ok` while the process serves HTTP | Liveness: restart the container if it fails |
 | `GET /readyz` | `200 ready`, or `503` with `database unreachable` or `shutting down` | Readiness: send traffic only while it is `200` |
 
-Neither takes a credential, and neither says anything about a workspace. `/readyz` reads a database check the server makes once a second, so probing it often costs nothing; it turns `503` within about a second of PostgreSQL becoming unreachable, and from the moment the server is told to stop. The server applies its database migrations before it listens, so a server that answers is migrated. The image's health check runs `cavea-server probe`, which asks `/readyz` inside the container.
+Neither takes a credential, and neither says anything about a workspace. `/readyz` reads a database check the server makes once a second, so probing it often costs nothing; it turns `503` within about a second of PostgreSQL becoming unreachable, and from the moment the server is told to stop. The server applies its database migrations before it listens, so a server that answers is migrated. At start it waits up to 30 s (`CAVEA_DB_WAIT_SECS`) for PostgreSQL to accept a connection, logging `PostgreSQL is not reachable yet` with the reason once a try, and answers neither route until it does: a probe counts that as not ready. If the database is still not there, or refuses the password, the server stops with a message saying why. The image's health check runs `cavea-server probe`, which asks `/readyz` inside the container.
 
 ## Metrics
 

@@ -63,9 +63,21 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn run(config: Config, streams: tokio::runtime::Handle) -> anyhow::Result<()> {
+    // From the start, not only once serving: in a container the server is
+    // process 1, which a signal without a handler does not stop, so a stop
+    // during the wait below would otherwise last until the kill.
+    let mut stop = std::pin::pin!(shutdown_signal());
     // Never print the URL: it carries the password.
     let options = config.database_url.options();
-    store::migrate(&options).await?;
+    // Before listening: a server that answers has migrated (08 §15). Until
+    // PostgreSQL accepts a connection, nothing listens and the image's probe
+    // fails, as `/readyz` would (D-98). A stop meanwhile ends the start; a
+    // migration it cuts short is rolled back with its transaction.
+    let wait = std::time::Duration::from_secs(config.db_wait_secs.into());
+    tokio::select! {
+        migrated = store::migrate_waiting(&options, wait) => migrated?,
+        () = &mut stop => return Ok(()),
+    }
     let db = store::connect(options, config.db_pool.get())
         .await
         .context("cannot connect to PostgreSQL (CAVEA_DATABASE_URL)")?;
@@ -122,7 +134,7 @@ async fn run(config: Config, streams: tokio::runtime::Handle) -> anyhow::Result<
         health: cavea_server::http::Health::default(),
         licences,
     };
-    cavea_server::serve(listener, state, shutdown_signal()).await?;
+    cavea_server::serve(listener, state, stop).await?;
     Ok(())
 }
 

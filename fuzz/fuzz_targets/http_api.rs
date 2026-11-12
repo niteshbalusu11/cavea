@@ -340,6 +340,7 @@ fn setup() -> Harness {
         log_format: cavea_telemetry::LogFormat::Json,
         database_url: url.parse().expect("the URL parses"),
         db_pool: std::num::NonZeroU32::new(4).expect("not zero"),
+        db_wait_secs: 0,
         node_id: "fuzz".to_owned(),
         lease_secs: std::num::NonZeroU32::new(15).expect("not zero"),
         heartbeat_secs: std::num::NonZeroU32::new(5).expect("not zero"),

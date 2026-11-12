@@ -55,7 +55,9 @@ This runs the server, PostgreSQL and Caddy, which gets a certificate for your ho
        volumes:
          - postgres-data:/var/lib/postgresql
        healthcheck:
-         test: ["CMD-SHELL", "pg_isready -U cavea -d cavea"]
+         # Over TCP, as the server connects: on its first start PostgreSQL runs
+         # a set-up server that answers on its socket only, then restarts.
+         test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U cavea -d cavea"]
          interval: 2s
          timeout: 5s
          retries: 30
@@ -132,6 +134,8 @@ This runs the server, PostgreSQL and Caddy, which gets a certificate for your ho
 
    It returns when PostgreSQL, the server and Caddy are up. The server creates its tables on first start.
 
+   The order matters: the server starts once PostgreSQL's health check passes, and that check connects over TCP, as the server does, because on its very first start PostgreSQL sets itself up on a private socket and restarts before it takes network connections. If the server does start first, it waits up to 30 s for the database, then stops with a message saying why, and `restart: unless-stopped` starts it again.
+
 5. Print the one-time **setup link** and open it in your browser to create the owner account:
 
    ```sh check=run:deployment
@@ -146,7 +150,7 @@ The server warns in its log at start about any setting that is unsafe in product
 
 The server is one container and one environment: any platform that runs containers runs it (Kubernetes, ECS, Nomad, a systemd unit running Docker). What it needs:
 
-- `CAVEA_DATABASE_URL`, and a PostgreSQL 15 or later it can create tables in. A managed PostgreSQL works; leave `synchronous_commit` on.
+- `CAVEA_DATABASE_URL`, and a PostgreSQL 15 or later it can create tables in. A managed PostgreSQL works; leave `synchronous_commit` on. Start order does not matter: the server waits up to 30 s for the database (`CAVEA_DB_WAIT_SECS`, [settings](settings.md)), and answers nothing until it has connected and migrated, so a liveness probe needs a start period at least that long.
 - A TLS proxy or load balancer in front, which passes WebSocket upgrades ([the reverse proxy](proxy.md)).
 - A readiness probe on `GET /readyz`, and 30 s to stop ([monitoring](monitoring.md#health-and-readiness), [shutdown](upgrades.md#stopping)). The image's own health check runs `cavea-server probe`, which asks `/readyz` inside the container.
 - One server per database ([why](upgrades.md#one-server-per-database)).

@@ -19,6 +19,10 @@ use sqlx::postgres::PgConnectOptions;
 /// before it is stored.
 const MAX_ASSET_BYTES: u32 = 256 << 20;
 
+/// The highest `CAVEA_DB_WAIT_SECS`, an hour: the wait is bounded, and a
+/// platform that should wait longer restarts the server instead.
+const MAX_DB_WAIT_SECS: u32 = 3_600;
+
 #[derive(Debug, Clone)]
 pub struct Config {
     /// `CAVEA_LISTEN`: the socket address to bind.
@@ -32,6 +36,9 @@ pub struct Config {
     pub database_url: DatabaseUrl,
     /// `CAVEA_DB_POOL`: the most connections the pool opens.
     pub db_pool: NonZeroU32,
+    /// `CAVEA_DB_WAIT_SECS`: how long the start waits for PostgreSQL to accept
+    /// its first connection, at most [`MAX_DB_WAIT_SECS`]; 0 tries once.
+    pub db_wait_secs: u32,
     /// `CAVEA_NODE_ID`: this node's name in `events.owner_node`. Defaults to
     /// the host name; two nodes on one database must differ.
     pub node_id: String,
@@ -99,6 +106,7 @@ impl Config {
                     .to_owned(),
             })?,
             db_pool: setting("CAVEA_DB_POOL", || NonZeroU32::MIN.saturating_add(15))?,
+            db_wait_secs: setting("CAVEA_DB_WAIT_SECS", || 30)?,
             node_id: match optional("CAVEA_NODE_ID")? {
                 Some(id) => id,
                 None => hostname().ok_or(ConfigError {
@@ -143,6 +151,12 @@ impl Config {
             return Err(ConfigError {
                 var: "CAVEA_ASSET_MAX_BYTES",
                 reason: "is invalid: must be at most 268435456 (256 MiB)".to_owned(),
+            });
+        }
+        if self.db_wait_secs > MAX_DB_WAIT_SECS {
+            return Err(ConfigError {
+                var: "CAVEA_DB_WAIT_SECS",
+                reason: "is invalid: must be at most 3600 (an hour)".to_owned(),
             });
         }
         if self.node_id.is_empty() {
