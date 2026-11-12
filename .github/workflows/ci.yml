@@ -39,7 +39,7 @@ jobs:
       # The fuzz crate (fuzz/: its own workspace and lockfile, fuzzed on
       # nightly with cargo-fuzz) type-checks on the pinned stable toolchain:
       # a change to an API its targets use fails here, not at the next run
-      # (docs/13-testing-benchmarks.md §5, D-79).
+      # (docs/13-testing-benchmarks.md §5, D-81).
       - run: cargo check --manifest-path fuzz/Cargo.toml --all-targets --locked --target-dir target/fuzz
       - run: cargo xtask check-deps
       # wasm-opt for build-web's payload gate: binaryen 132, the version

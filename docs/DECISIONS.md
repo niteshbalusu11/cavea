@@ -625,7 +625,7 @@ Each entry records what was decided, what was rejected and what would make us re
 - **Cost:** About 18 executions a second, bounded by the database: each input makes two workspaces and publishes two charts. Results depend on the database's clock and timing; the shared PostgreSQL container is a dependency of the run. Console sessions and the password routes are not fuzzed.
 - **Revisit if:** the server gains a store trait for its HTTP layer, or the console routes need fuzzing (a cheap password hasher behind the same feature).
 
-## D-79 · CI type-checks the fuzz crate on the stable toolchain (2026-11-11)
+## D-81 · CI type-checks the fuzz crate on the stable toolchain (2026-11-11)
 
 - **Decision:** CI's Rust job runs `cargo check --manifest-path fuzz/Cargo.toml --all-targets --locked` on the pinned stable toolchain, after the workspace build. Fuzzing itself, and `cargo fuzz build` (nightly, sanitizer instrumentation), stay local (13 §5).
 - **Why:** `fuzz/` is its own workspace, so nothing built it: it stopped compiling when the renderer's backend trait gained `restore` and then image textures (#75), and nobody noticed until the M1 run of the chart decoder could not start. The breakage that matters is a type error (a trait method, a struct field, a setting of the server's `Config` the HTTP target names), which a type check finds without nightly or `cargo-fuzz`. It is a build check, the kind CI runs (AGENTS.md "Continuous integration").
