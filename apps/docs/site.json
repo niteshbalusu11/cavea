@@ -1,0 +1,72 @@
+{
+  "title": "Cavea documentation",
+  "published": false,
+  "vars": {
+    "version": "0.1.0",
+    "image": "registry.example.com/cavea/cavea-server:0.1.0",
+    "renderer_package": "@cavea/renderer",
+    "renderer_script": "https://cdn.jsdelivr.net/npm/@cavea/renderer@0.1.0/cavea.min.js",
+    "server_sdk_package": "@cavea/server-sdk",
+    "repository": "https://github.com/niteshbalusu11/cavea"
+  },
+  "nav": [
+    {
+      "section": "Start here",
+      "pages": ["index.md", "quick-start.md", "before-release.md"]
+    },
+    {
+      "section": "Concepts",
+      "pages": [
+        "concepts/index.md",
+        "concepts/charts.md",
+        "concepts/events.md",
+        "concepts/objects.md",
+        "concepts/holds.md",
+        "concepts/bookings.md",
+        "concepts/session-tokens.md",
+        "concepts/keys.md",
+        "concepts/workspaces.md",
+        "concepts/realtime.md"
+      ]
+    },
+    {
+      "section": "Server API",
+      "pages": [
+        "api/index.md",
+        "api/buyers.md",
+        "api/seats.md",
+        "api/events.md",
+        "api/charts.md",
+        "api/keys.md",
+        "api/workspaces.md",
+        "api/console.md",
+        "api/system.md",
+        "api/schemas.md"
+      ]
+    },
+    {
+      "section": "Reference",
+      "pages": ["reference/errors.md", "reference/limits.md", "reference/changelog.md"]
+    },
+    {
+      "section": "Renderer",
+      "planned": "Options, callbacks and methods; theming; state adapters; React (DOC-004)"
+    },
+    {
+      "section": "Guides",
+      "planned": "Hold, pay, book; bring your own backend; bot protection (DOC-007, DOC-011)"
+    },
+    {
+      "section": "Deployment",
+      "planned": "Sizing, PostgreSQL, TLS and WebSocket, backups, upgrades, monitoring (DOC-006)"
+    },
+    {
+      "section": "Designer",
+      "planned": "User guide for venue staff (DOC-008)"
+    },
+    {
+      "section": "Examples",
+      "planned": "Plain page, React, Next.js, Node backend (DOC-009)"
+    }
+  ]
+}
