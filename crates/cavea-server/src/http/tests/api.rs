@@ -1686,8 +1686,9 @@ const NESTED: &[(Method, &str, &str)] = &[
 /// on every route), with the credential it accepts, refuses an array (empty,
 /// and the row's own values in order, which serde would take as the struct's
 /// fields by position), a string, a number and `null` as `400
-/// invalid_request`, `reason: "json_data"`; and so does each object nested
-/// in a row's body, or in [`NESTED`], replaced by an array of its values. A
+/// invalid_request`, `reason: "json_data"` (`"document"` for a chart
+/// document); and so does each object nested in a row's body, or in
+/// [`NESTED`], replaced by an array of its values. A
 /// route added later is driven through its row; the rows' bodies are checked
 /// against the document, so none is missed.
 #[tokio::test]
@@ -1757,13 +1758,15 @@ async fn object_bodies_refuse_other_json() {
             let body: Value = serde_json::from_str(&body).unwrap();
             let fields = body.as_object().unwrap();
             let values = |o: &serde_json::Map<String, Value>| Value::from_iter(o.values().cloned());
+            // A draft is a chart document: one that is not an object is
+            // `reason: "document"`, as any other that is not a document, and
+            // its own fields are the compiler's to parse (03 §2).
+            let draft = template.ends_with("/draft");
+            let top = if draft { "document" } else { "json_data" };
             let mut bad: Vec<_> = [json!([]), values(fields), json!("x"), json!(1), Value::Null]
                 .into_iter()
-                .map(|b| (b, "json_data"))
+                .map(|b| (b, top))
                 .collect();
-            // A chart document's own fields are the compiler's to parse (03
-            // §2); a document that is not an object is `reason: "document"`.
-            let draft = template.ends_with("/draft");
             for (name, value) in fields.iter().filter(|_| !draft) {
                 if let Some(nested) = value.as_object() {
                     let mut changed = fields.clone();

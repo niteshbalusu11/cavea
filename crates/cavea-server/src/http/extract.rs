@@ -52,6 +52,19 @@ where
 
     async fn from_request(request: Request, state: &S) -> Result<Self, ApiError> {
         let RawJson(bytes) = RawJson::from_request(request, state).await?;
+        // Every JSON body of the API is an object (08 §6.4). serde's derived
+        // `Deserialize` also takes a struct from an array, its fields by
+        // position, so anything else is refused before `T` is parsed: valid
+        // JSON as `json_data`, the rest as `json_syntax`.
+        if bytes.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{') {
+            return Err(
+                if serde_json::from_slice::<serde::de::IgnoredAny>(&bytes).is_ok() {
+                    invalid("json_data", "The body must be a JSON object.")
+                } else {
+                    invalid("json_syntax", "The body is not JSON.")
+                },
+            );
+        }
         match axum::Json::<T>::from_bytes(&bytes) {
             Ok(axum::Json(value)) => Ok(Self(value)),
             Err(rejection) => Err(json_rejection(&rejection)),
@@ -60,8 +73,8 @@ where
 }
 
 /// A JSON request body as bytes, not yet parsed: the checks of [`Json`]
-/// (content type, the route's size limit, nesting depth, an object at the top)
-/// without the parse.
+/// (content type, the route's size limit, nesting depth) without the parse.
+/// Whatever parses it checks that it is an object.
 #[derive(Debug, Clone, Default)]
 pub struct RawJson(pub Bytes);
 
@@ -92,19 +105,6 @@ where
                 "The body nests arrays and objects too deeply.",
             )
             .with_detail("limit", MAX_JSON_DEPTH));
-        }
-        // Every JSON body of the API is an object (08 §6.4). serde's derived
-        // `Deserialize` also takes a struct from an array, its fields by
-        // position, so anything else is refused here, before a route parses
-        // it: valid JSON as `json_data`, the rest as `json_syntax`.
-        if bytes.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{') {
-            return Err(
-                if serde_json::from_slice::<serde::de::IgnoredAny>(&bytes).is_ok() {
-                    invalid("json_data", "The body must be a JSON object.")
-                } else {
-                    invalid("json_syntax", "The body is not JSON.")
-                },
-            );
         }
         Ok(Self(bytes))
     }

@@ -716,9 +716,11 @@ async fn actor_work_is_tied_to_its_request_in_logs() {
 /// nothing.
 #[tokio::test]
 async fn body_size_and_json_depth_limits() {
-    use super::extract::{DEFAULT_BODY_LIMIT, MAX_JSON_DEPTH};
+    use super::extract::{DEFAULT_BODY_LIMIT, MAX_JSON_DEPTH, RawJson};
     let _serial = serial();
-    let echo = |Json(v): Json<Value>| async move { axum::Json(v) };
+    // The limits are `RawJson`'s, under `Json` too; `Json` also wants an
+    // object, which these bodies are not.
+    let echo = |RawJson(_): RawJson| async { StatusCode::OK };
     let app = app(Router::new()
         .route("/default", post(echo))
         .route("/large", post(echo).layer(DefaultBodyLimit::max(2 << 20))));
