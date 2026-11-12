@@ -218,7 +218,12 @@ export function NumberField(props: {
               take(clamp(props.value + by));
             }
           }}
-          onBlur={commit}
+          onBlur={() => {
+            // A blur as the field is removed (the selection changed under
+            // it) commits nothing: its value would go to what is selected
+            // now, and reading it reads a `<Show>` that is already gone.
+            if (input.isConnected) commit();
+          }}
         />
         <span class="pointer-events-none absolute inset-y-0 right-1.5 flex items-center text-xs text-faint">
           {props.unit}
@@ -405,7 +410,9 @@ export function ColorField(props: {
               e.currentTarget.blur();
             }
           }}
-          onBlur={() => {
+          onBlur={(e) => {
+            // As for a number field: nothing when the field is being removed.
+            if (!e.currentTarget.isConnected) return;
             if (text() !== null) commit(shown() === "" && props.nullable === true ? null : shown());
           }}
         />

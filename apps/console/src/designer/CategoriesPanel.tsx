@@ -84,7 +84,19 @@ export function CategoriesPanel(props: { editor: Editor }) {
   return (
     <div class="flex min-h-0 flex-1 flex-col">
       <div class="flex h-9 shrink-0 items-center justify-between border-b border-line px-2">
-        <span class="text-sm text-muted">{msg("categories.count", { n: list().length })}</span>
+        <span class="min-w-0 truncate text-sm text-muted">
+          <Show
+            when={list().find((c) => c.active)}
+            fallback={msg("categories.count", { n: list().length })}
+          >
+            {(a) => (
+              <>
+                {msg("categories.activeIs")}{" "}
+                <span class="font-medium text-fg">{a().label}</span>
+              </>
+            )}
+          </Show>
+        </span>
         <Button icon="plus" variant="ghost" class="h-6 px-2 text-sm" onClick={add}>
           {msg("categories.add")}
         </Button>
@@ -124,8 +136,11 @@ export function CategoriesPanel(props: { editor: Editor }) {
                 />
               </Show>
               <div
-                class="group flex h-9 items-center gap-1.5 pr-1 pl-0.5"
-                classList={{ "bg-accent-soft": cat.active }}
+                class="group flex h-9 items-center gap-1.5 border-l-[3px] pr-1"
+                classList={{
+                  "bg-accent-soft border-accent-fill": cat.active,
+                  "border-transparent": !cat.active,
+                }}
               >
                 <span
                   draggable="true"
@@ -156,8 +171,9 @@ export function CategoriesPanel(props: { editor: Editor }) {
                     // The row re-renders in its new place: keep focus on it.
                     requestAnimationFrame(() => el.isConnected && el.focus());
                   }}
-                  aria-pressed={cat.active}
-                  aria-label={`${cat.label}: ${cat.active ? msg("categories.active") : msg("categories.makeActive")}`}
+                  aria-current={cat.active ? "true" : undefined}
+                  aria-label={`${cat.label}: ${cat.active ? msg("categories.active") : msg("categories.makeActive")}${cat.accessible ? `, ${msg("categories.accessible")}` : ""}`}
+                  title={cat.active ? msg("categories.activeHint") : msg("categories.makeActive")}
                   class="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1 text-left"
                   onClick={() => editor.run((s) => s.setCategory(cat.key))}
                 >
@@ -165,12 +181,29 @@ export function CategoriesPanel(props: { editor: Editor }) {
                     class="size-3.5 shrink-0 rounded-full border border-line-strong"
                     style={{ background: cat.color }}
                   />
-                  <span class="min-w-0 truncate text-base text-fg">{cat.label}</span>
-                  <span class="min-w-0 truncate font-mono text-xs text-faint">{cat.key}</span>
+                  <span
+                    class="min-w-0 truncate text-base text-fg"
+                    classList={{ "font-semibold": cat.active }}
+                  >
+                    {cat.label}
+                  </span>
+                  <Show
+                    when={cat.active}
+                    fallback={
+                      <span class="min-w-0 truncate font-mono text-xs text-faint">{cat.key}</span>
+                    }
+                  >
+                    <span class="shrink-0 rounded-sm bg-accent-fill px-1 text-2xs font-semibold text-on-accent">
+                      {msg("categories.activeBadge")}
+                    </span>
+                  </Show>
                   <Show when={cat.accessible}>
-                    <span class="text-accent" title={msg("categories.accessibleHint")}>
-                      <Icon name="check" class="size-3.5" />
-                      <span class="sr-only">{msg("categories.accessible")}</span>
+                    <span
+                      class="flex shrink-0 items-center gap-0.5 text-xs text-muted"
+                      title={msg("categories.accessibleHint")}
+                    >
+                      <Icon name="accessible" class="size-3.5" />
+                      {msg("categories.accessibleShort")}
                     </span>
                   </Show>
                   <Show when={cat.contrast?.weak === true || cat.similar.length > 0}>
