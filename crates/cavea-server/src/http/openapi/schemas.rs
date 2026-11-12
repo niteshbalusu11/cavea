@@ -214,7 +214,7 @@ pub(super) fn all() -> Map<String, Value> {
             "CreateChart",
             object(
                 &[("key", string()), ("name", string())],
-                &[("document", r("ChartDocument"))],
+                &[("document", nullable(r("ChartDocument")))],
             ),
         ),
         (
@@ -389,10 +389,10 @@ otherwise `null`.",
             object(
                 &[],
                 &[
-                    ("hold_ttl_seconds", hold_ttl()),
-                    ("max_objects", range(1, 100)),
-                    ("require_session", boolean()),
-                    ("max_tokens_per_sub", range(1, 10)),
+                    ("hold_ttl_seconds", nullable(hold_ttl())),
+                    ("max_objects", nullable(range(1, 100))),
+                    ("require_session", nullable(boolean())),
+                    ("max_tokens_per_sub", nullable(range(1, 10))),
                 ],
             ),
         ),
@@ -446,7 +446,10 @@ otherwise `null`.",
                 &[
                     (
                         "version",
-                        described(integer(), "A version number; the published one by default."),
+                        nullable(described(
+                            integer(),
+                            "A version number; the published one by default.",
+                        )),
                     ),
                     ("name", nullable(string())),
                     ("settings", r("EventSettingsInput")),
@@ -459,7 +462,7 @@ otherwise `null`.",
                 &[],
                 &[
                     ("name", nullable(string())),
-                    ("settings", r("EventSettingsInput")),
+                    ("settings", nullable(r("EventSettingsInput"))),
                 ],
             ),
         ),
@@ -488,10 +491,10 @@ otherwise `null`.",
             object(
                 &[("event", text("The event's key."))],
                 &[
-                    ("ttl_seconds", hold_ttl()),
+                    ("ttl_seconds", nullable(hold_ttl())),
                     (
                         "max_objects",
-                        described(range(1, 1_000_000), "Unlimited by default."),
+                        nullable(described(range(1, 1_000_000), "Unlimited by default.")),
                     ),
                 ],
             ),
@@ -502,7 +505,10 @@ otherwise `null`.",
                 &[("event", text("The event's key."))],
                 &[(
                     "max_objects",
-                    described(range(1, 100), "The event's by default, and at most it."),
+                    nullable(described(
+                        range(1, 100),
+                        "The event's by default, and at most it.",
+                    )),
                 )],
             ),
         ),
@@ -536,7 +542,7 @@ otherwise `null`.",
         ),
         (
             "ExtendHoldToken",
-            object(&[], &[("ttl_seconds", hold_ttl())]),
+            object(&[], &[("ttl_seconds", nullable(hold_ttl()))]),
         ),
         (
             "ExtendReply",
@@ -565,7 +571,10 @@ otherwise `null`.",
             described(
                 object(
                     &[],
-                    &[("hold_token", string()), ("objects", r("ObjectRefs"))],
+                    &[
+                        ("hold_token", nullable(string())),
+                        ("objects", nullable(r("ObjectRefs"))),
+                    ],
                 ),
                 "With `hold_token`: held objects, all of the token's if `objects` is left out. \
 Without: booked objects.",
@@ -573,15 +582,18 @@ Without: booked objects.",
         ),
         (
             "PublicRelease",
-            object(&[("hold_token", string())], &[("objects", r("ObjectRefs"))]),
+            object(
+                &[("hold_token", string())],
+                &[("objects", nullable(r("ObjectRefs")))],
+            ),
         ),
         (
             "Book",
             object(
                 &[("order_ref", string())],
                 &[
-                    ("hold_token", string()),
-                    ("objects", r("ObjectRefs")),
+                    ("hold_token", nullable(string())),
+                    ("objects", nullable(r("ObjectRefs"))),
                     (
                         "ticket_types",
                         described(
@@ -786,11 +798,11 @@ days of grace.",
                 ],
                 &[(
                     "workspace",
-                    described(
+                    nullable(described(
                         object(&[("key", string()), ("name", string())], &[]),
                         "The first workspace, created only when none exists (default key \
 `main`, name `Main`). Existing workspaces all get the owner.",
-                    ),
+                    )),
                 )],
             ),
         ),
@@ -933,10 +945,10 @@ only here: give it to the person invited. The console's page posts the token to 
                 &[("token", text("The 64 hex digits of the link's fragment."))],
                 &[(
                     "password",
-                    described(
+                    nullable(described(
                         json!({ "type": "string", "minLength": 15, "maxLength": 128 }),
                         "Not signed in, for an email with no account: the new user's password.",
-                    ),
+                    )),
                 )],
             ),
         ),
