@@ -382,8 +382,7 @@ export function Charts() {
           <ChartForm
             draft={draft}
             onClose={() => setForm(null)}
-            onCreated={(chart) => {
-              const start = draft.from === "empty" ? draft.start : "blank";
+            onCreated={(chart, start) => {
               setForm(null);
               notify(msg("charts.created", { name: chart.name }));
               // A reference image is placed in the designer, which offers it on the new chart.
@@ -524,7 +523,12 @@ function ChartCard(props: {
 
 /** The form for a new chart: empty, from an imported document, or a copy
  * of another chart's draft. The key follows the name until it is edited. */
-function ChartForm(props: { draft: Draft; onClose: () => void; onCreated: (c: Chart) => void }) {
+function ChartForm(props: {
+  draft: Draft;
+  onClose: () => void;
+  /** With the starting point chosen in the form. */
+  onCreated: (c: Chart, start: Start) => void;
+}) {
   const signal = componentSignal();
   const initial =
     props.draft.from === "file"
@@ -581,7 +585,7 @@ function ChartForm(props: { draft: Draft; onClose: () => void; onCreated: (c: Ch
         document === undefined
           ? { key: key().trim(), name: name().trim() }
           : { key: key().trim(), name: name().trim(), document };
-      props.onCreated(await call("createChart", { body }, signal));
+      props.onCreated(await call("createChart", { body }, signal), start());
     } catch (err) {
       const error = asApiError(err);
       if (signal.aborted || error.sessionLost) return;
