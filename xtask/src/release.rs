@@ -993,7 +993,7 @@ fn suites(list: &mut Checklist, previous: Option<&str>, minors: &[String]) -> Re
     };
     list.step(
         "rust-checks",
-        "cargo fmt, clippy, build; check-deps; types --check",
+        "cargo fmt, clippy, build; the fuzz crate's check; check-deps; types --check",
         || {
             cmd(
                 "rust-checks",
@@ -1010,6 +1010,16 @@ fn suites(list: &mut Checklist, previous: Option<&str>, minors: &[String]) -> Re
                         "warnings",
                     ],
                     &["cargo", "build", "--workspace", "--locked"],
+                    // As CI runs it (D-86): not --locked, see ci.yml.
+                    &[
+                        "cargo",
+                        "check",
+                        "--manifest-path",
+                        "fuzz/Cargo.toml",
+                        "--all-targets",
+                        "--target-dir",
+                        "target/fuzz",
+                    ],
                     &["cargo", "xtask", "check-deps"],
                     &["cargo", "xtask", "types", "--check"],
                 ],
