@@ -756,7 +756,8 @@ const consoleScreens = {
   "signIn.wait": "Too many attempts. Try again in {seconds} seconds.",
   "signIn.busy": "The server is busy checking passwords. Try again in a moment.",
   "signIn.ended": "Your session has ended. Sign in again to continue where you were.",
-  "signIn.forgot": "Forgotten your password? Ask an owner of your workspace for help.",
+  "signIn.forgot":
+    "Forgotten your password or lost your phone? Ask an owner or admin of your workspace for a reset link.",
 
   "setup.title": "Set up Cavea",
   "setup.body":
@@ -1200,6 +1201,135 @@ const consoleScreens = {
   "audit.kind.publishable": "publishable key",
 };
 
+/** Account security (CON-003): two-step sign-in, recovery codes, reset
+ * links and the reset page. */
+const accountSecurity = {
+  "signIn.codeBody":
+    "Enter the six-digit code from your authenticator app, or one of your recovery codes.",
+  "signIn.code": "Code",
+  "signIn.codeHint": "Six digits, or a recovery code such as abcde-fghij.",
+  "signIn.codeMissing": "Enter a code.",
+  "signIn.codeWrong":
+    "That code is not right, or it has been used. Enter the code your app shows now.",
+  "signIn.codeSubmit": "Verify",
+  "signIn.codeSubmitting": "Verifying…",
+  "signIn.challengeEnded":
+    "Signing in took too long or had too many wrong codes. Enter your password again.",
+  "signIn.restart": "Start again",
+  "account.twoStepTitle": "Two-step sign-in",
+  "account.twoStepOn":
+    "On. Signing in asks for a code from your authenticator app after your password.",
+  "account.twoStepOff":
+    "Off. Signing in asks only for your password. Turn it on to also ask for a code from an authenticator app on your phone.",
+  "account.twoStepTurnOn": "Turn on…",
+  "account.twoStepTurnOff": "Turn off…",
+  "account.twoStepNewCodes": "For new recovery codes, turn two-step sign-in off and on again.",
+  "totp.title": "Turn on two-step sign-in",
+  "totp.passwordBody":
+    "Enter your password to begin. Nothing changes until you enter a code from your app.",
+  "totp.password": "Password",
+  "totp.passwordMissing": "Enter your password.",
+  "totp.passwordWrong": "That is not your password.",
+  "totp.start": "Continue",
+  "totp.starting": "Checking…",
+  "totp.scanBody":
+    "Scan this QR code with an authenticator app, then enter the six-digit code it shows. Two-step sign-in stays off until you do.",
+  "totp.qrLabel": "QR code for your authenticator app. The same key is shown as text below.",
+  "totp.qrTooLong": "This account’s QR code would be too large: type the key into your app instead.",
+  "totp.manual": "Or type this key into your app",
+  "totp.secret": "Setup key",
+  "totp.details": "Time-based, {digits} digits, a new code every {period} seconds ({algorithm}).",
+  "totp.code": "Code from your app",
+  "totp.codeMissing": "Enter the six-digit code from your app.",
+  "totp.codeWrong":
+    "That code is not right. Check that your phone’s clock is right and enter the code it shows now.",
+  "totp.confirm": "Turn on",
+  "totp.confirming": "Turning on…",
+  "totp.notStarted":
+    "This setup has ended: it was started again somewhere else. Close this and start again.",
+  "totp.alreadyOn": "Two-step sign-in is already on for your account.",
+  "totp.closedEarly": "Two-step sign-in is still off. Start again whenever you are ready.",
+  "codes.title": "Save your recovery codes",
+  "codes.body":
+    "Two-step sign-in is on. If you lose your phone, each of these codes signs you in once in place of a code from the app. They are shown only now.",
+  "codes.list": "Recovery codes",
+  "codes.copy": "Copy codes",
+  "codes.copied": "Copied",
+  "codes.copyFailed": "The codes could not be copied: select them and copy them yourself.",
+  "codes.download": "Download as text",
+  "codes.print": "Print",
+  "codes.saved": "I have saved these codes somewhere safe",
+  "codes.done": "Done",
+  "codes.leaveWarning":
+    "These codes will not be shown again. Save them and tick the box, or close without them.",
+  "codes.leave": "Close without saving",
+  "codes.fileTitle": "Cavea recovery codes for {email}",
+  "codes.fileBody":
+    "Each code signs you in once in place of a code from your authenticator app. Made {date}.",
+  "codes.turnedOn": "Two-step sign-in is on.",
+  "totpOff.title": "Turn off two-step sign-in",
+  "totpOff.body":
+    "Enter your password and a code from your app, or a recovery code. You stay signed in.",
+  "totpOff.code": "Code from your app, or a recovery code",
+  "totpOff.codeWrong": "That code is not right, or it has been used.",
+  "totpOff.submit": "Turn off",
+  "totpOff.submitting": "Turning off…",
+  "totpOff.done": "Two-step sign-in is off.",
+  "totpOff.notOn": "Two-step sign-in was already off for your account.",
+  "members.accountMenu": "Sign-in help for {email}",
+  "members.resetLink": "Make a password reset link…",
+  "members.resetTwoStep": "Reset two-step sign-in…",
+  "members.otherWorkspaces":
+    "This person is also a member of a workspace where you cannot manage them: an owner there must do this.",
+  "members.ownAccount": "Change your own sign-in on your account page.",
+  "members.ownerAccounts": "Only an owner can reset an owner’s sign-in.",
+  "resetTwoStep.title": "Reset two-step sign-in for {email}?",
+  "resetTwoStep.body":
+    "They will sign in with their password alone, and can turn two-step sign-in on again from their account page. Do this only when you are sure the request comes from them.",
+  "resetTwoStep.confirm": "Reset",
+  "resetTwoStep.done": "{email} now signs in with a password alone.",
+  "resetLink.title": "Password reset link for {email}",
+  "resetLink.body":
+    "Make a link that lets {email} choose a new password. It works once, for an hour, and replaces any earlier link. Their sessions end when they use it.",
+  "resetLink.clear": "Also remove their two-step sign-in",
+  "resetLink.clearHint":
+    "Only if they have lost their authenticator app and recovery codes as well. Otherwise they still need a code to sign in.",
+  "resetLink.create": "Make link",
+  "resetLink.creating": "Making…",
+  "resetLink.shownTitle": "Reset link for {email}",
+  "resetLink.shownBody":
+    "Give this link to {email} yourself: nothing is sent. It works once, until {expires}, and is shown only now.",
+  "resetLink.shownCleared": "When they use it, their two-step sign-in is removed.",
+  "resetLink.link": "Reset link",
+  "reset.title": "Choose a new password",
+  "reset.body": "Choose a new password for your account. Your other sessions end when you save it.",
+  "reset.noToken":
+    "This page needs the reset link an owner or admin of your workspace gave you. Open that link in full.",
+  "reset.malformed": "This reset link is incomplete. Copy the whole link and open it again.",
+  "reset.spent":
+    "This reset link has been used, has expired or was replaced by a newer one. Ask an owner or admin of your workspace for a new link.",
+  "reset.signedInNote":
+    "You are signed in as {email}. Saving signs you in as the person this link was made for.",
+  "reset.password": "New password",
+  "reset.confirm": "Repeat the new password",
+  "reset.submit": "Save password",
+  "reset.submitting": "Saving…",
+  "reset.codeBody":
+    "Your password is saved. Your account has two-step sign-in: enter a code to finish signing in.",
+  "reset.challengeEnded":
+    "Your password is saved, but signing in took too long or had too many wrong codes. Sign in with your new password.",
+  "reset.toSignIn": "Go to sign-in",
+  "events.createdFrom": "Created from",
+  "events.createdUntil": "Created until",
+  "events.dateZone": "Days in your time zone ({zone}).",
+  "events.dateInverted": "The end is before the start.",
+  "audit.remaining": "{n} recovery codes left",
+  "audit.cleared": "two-step sign-in removed",
+  "audit.byApp": "with a code from the app",
+  "audit.byRecovery": "with a recovery code",
+};
+
+
 /** The event page: the manager and the settings tab (09 §4.2, §4.3;
  * CON-008, CON-009). */
 const eventScreens = {
@@ -1573,6 +1703,7 @@ export const catalogue = {
   ...ui,
   ...designerLock,
   ...consoleScreens,
+  ...accountSecurity,
   ...eventScreens,
   ...group("audit.action", auditActions),
   ...licence,

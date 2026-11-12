@@ -8,6 +8,8 @@ import type {
   ChartList,
   ConsoleLicence,
   ConsoleMe,
+  ConsoleSecondFactor,
+  ConsoleTotpSecret,
   ConsoleWorkspace,
   Event,
   EventList,
@@ -18,6 +20,7 @@ import type {
   KeyCreated,
   KeyList,
   MemberList,
+  PasswordResetCreated,
   VersionList,
   WorkspaceMember,
 } from "./generated.ts";
@@ -50,6 +53,7 @@ export function checkMe(v: unknown): ConsoleMe {
     isRecord(v["user"]) &&
     isText(v["user"]["id"]) &&
     isText(v["user"]["email"]) &&
+    typeof v["user"]["second_factor"] === "boolean" &&
     Array.isArray(v["workspaces"]) &&
     v["workspaces"].every(isWorkspace) &&
     isText(v["csrf_token"]) &&
@@ -279,4 +283,54 @@ export const checkSeatReply = (v: unknown) =>
       isNumber(r["seq"]) &&
       Array.isArray(r["objects"]) &&
       r["objects"].every((o) => isRecord(o) && isText(o["label"])),
+  );
+
+const isFilled = (v: unknown): v is string => isText(v) && v !== "";
+
+/** A sign-in's `202`: a code is needed (D-89). */
+export const checkChallenge = (v: unknown) =>
+  checkOne<ConsoleSecondFactor>(
+    v,
+    (c) => isRecord(c) && isFilled(c["challenge"]) && isText(c["expires_at"]),
+  );
+
+/** A second factor's secret, to show once. */
+export const checkTotpSecret = (v: unknown) =>
+  checkOne<ConsoleTotpSecret>(
+    v,
+    (t) =>
+      isRecord(t) &&
+      isText(t["secret"]) &&
+      /^[A-Z2-7]+=*$/.test(t["secret"]) &&
+      isText(t["uri"]) &&
+      t["uri"].startsWith("otpauth://totp/") &&
+      isFilled(t["algorithm"]) &&
+      Number.isInteger(t["digits"]) &&
+      Number.isInteger(t["period"]),
+  );
+
+/** The recovery codes, to show once. */
+export const checkRecoveryCodes = (v: unknown): string[] =>
+  checkOne<{ recovery_codes: string[] }>(
+    v,
+    (r) =>
+      isRecord(r) &&
+      Array.isArray(r["recovery_codes"]) &&
+      r["recovery_codes"].length > 0 &&
+      r["recovery_codes"].length <= 100 &&
+      r["recovery_codes"].every(isFilled),
+  ).recovery_codes;
+
+/** A member's reset link, to show once. */
+export const checkPasswordResetCreated = (v: unknown) =>
+  checkOne<PasswordResetCreated>(
+    v,
+    (c) =>
+      isRecord(c) &&
+      isFilled(c["link"]) &&
+      isRecord(c["reset"]) &&
+      isText(c["reset"]["id"]) &&
+      isText(c["reset"]["user"]) &&
+      isText(c["reset"]["expires_at"]) &&
+      typeof c["reset"]["clear_second_factor"] === "boolean",
   );

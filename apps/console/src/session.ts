@@ -3,9 +3,14 @@
 // A `401` that ends the session anywhere lands here through the request
 // layer; the console's frame then sends the person to sign-in and back.
 import { createMemo, createRoot, createSignal } from "solid-js";
-import { ApiError, call, configure } from "./api/client.ts";
-import type { ConsoleLicence, ConsoleMe } from "./api/generated.ts";
-import { checkMe } from "./api/check.ts";
+import { ApiError, call, callWithHeaders, configure } from "./api/client.ts";
+import type { ConsoleLicence, ConsoleMe, ConsoleTotpSecret } from "./api/generated.ts";
+import {
+  checkChallenge,
+  checkMe,
+  checkRecoveryCodes,
+  checkTotpSecret,
+} from "./api/check.ts";
 import { followLicence, type MeWorkspace } from "./api/permissions.ts";
 import { asApiError } from "./api/query.ts";
 import { load as loadStored, save } from "./storage.ts";
@@ -126,9 +131,81 @@ function adoptNew(answer: unknown): void {
   adopt(answer);
 }
 
-export async function signIn(email: string, password: string, signal: AbortSignal) {
+/** What a right password leads to: a session, or (D-89) a code to ask
+ * for, with the challenge that ties it to the password. The challenge is a
+ * secret: it lives in the page's memory until it is used or dropped. */
+export type Signed = { kind: "signedIn" } | { kind: "code"; challenge: string };
+
+/** Signs in, or answers that a code is needed (`202`). */
+export async function signIn(
+  email: string,
+  password: string,
+  signal: AbortSignal,
+): Promise<Signed> {
   settle();
-  adoptNew(await call("consoleSignIn", { body: { email, password } }, signal));
+  const { reply, status } = await callWithHeaders(
+    "consoleSignIn",
+    { body: { email, password } },
+    signal,
+  );
+  return signedOr(reply, status);
+}
+
+function signedOr(reply: unknown, status: number): Signed {
+  if (status === 202) return { kind: "code", challenge: checkChallenge(reply).challenge };
+  adoptNew(reply);
+  return { kind: "signedIn" };
+}
+
+/** Sign-in's second step: the challenge and a code from the app or a
+ * recovery code. */
+export async function signInWithCode(challenge: string, code: string, signal: AbortSignal) {
+  settle();
+  adoptNew(await call("consoleSignInSecondFactor", { body: { challenge, code } }, signal));
+}
+
+/** Uses a reset link (D-90): the new password is set, and the person is
+ * signed in, or asked for a code when they still have a second factor. */
+export async function useResetLink(
+  token: string,
+  password: string,
+  signal: AbortSignal,
+): Promise<Signed> {
+  settle();
+  const { reply, status } = await callWithHeaders(
+    "consolePasswordReset",
+    { body: { token, password } },
+    signal,
+  );
+  return signedOr(reply, status);
+}
+
+/** Starts turning the second factor on: its secret, shown once. Nothing is
+ * on until `confirmTotp`; starting again replaces the secret. */
+export async function startTotp(password: string, signal: AbortSignal): Promise<ConsoleTotpSecret> {
+  return checkTotpSecret(await call("consoleTotpEnrol", { body: { password } }, signal));
+}
+
+/** Turns the second factor on with a current code: the recovery codes,
+ * shown once. */
+export async function confirmTotp(code: string, signal: AbortSignal): Promise<string[]> {
+  const codes = checkRecoveryCodes(await call("consoleTotpConfirm", { body: { code } }, signal));
+  adoptSecondFactor(true);
+  return codes;
+}
+
+/** Turns the second factor off; the session stays. */
+export async function disableTotp(password: string, code: string, signal: AbortSignal) {
+  settle();
+  adoptNew(await call("consoleTotpDisable", { body: { password, code } }, signal));
+}
+
+/** Shows whether signing in asks for a code, once it changed (or the
+ * server said it already had). */
+export function adoptSecondFactor(on: boolean): void {
+  const s = session();
+  if (s.kind !== "signedIn") return;
+  setSession({ kind: "signedIn", me: { ...s.me, user: { ...s.me.user, second_factor: on } } });
 }
 
 export async function setUp(token: string, email: string, password: string, signal: AbortSignal) {

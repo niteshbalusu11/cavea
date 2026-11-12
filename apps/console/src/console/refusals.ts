@@ -209,3 +209,79 @@ export function acceptRefusal(e: ApiError): AcceptRefusal {
   if (e.reason === "password_hashing") return { kind: "busy" };
   return null;
 }
+
+/** Why turning a second factor on or off was refused (CON-003, D-89): on a
+ * field (`password` or `code`), or a state the page follows. */
+export type TotpRefusal =
+  | { kind: "field"; field: "password" | "code"; message: string }
+  /** On already (turned on elsewhere): the page shows it on. */
+  | { kind: "alreadyOn" }
+  /** Confirming, nothing started (started again elsewhere, or reset). */
+  | { kind: "notStarted" }
+  /** Turning off, it is not on. */
+  | { kind: "notOn" }
+  | { kind: "wait"; seconds: number }
+  | { kind: "busy" }
+  | null;
+
+export function totpRefusal(e: ApiError, turningOff = false): TotpRefusal {
+  if (e.status === 403 && e.reason === "credentials") {
+    return { kind: "field", field: "password", message: msg("totp.passwordWrong") };
+  }
+  if (e.status === 403 && e.reason === "second_factor") {
+    const message = turningOff ? msg("totpOff.codeWrong") : msg("totp.codeWrong");
+    return { kind: "field", field: "code", message };
+  }
+  if (e.code === "already_exists") return { kind: "alreadyOn" };
+  if (e.reason === "no_second_factor") return turningOff ? { kind: "notOn" } : { kind: "notStarted" };
+  if (e.status === 429) return { kind: "wait", seconds: e.retryAfter ?? 60 };
+  if (e.reason === "password_hashing") return { kind: "busy" };
+  return null;
+}
+
+/** Why an owner's or admin's reset of a member's second factor, or a reset
+ * link for them, was refused (D-90). `gone`: no longer a member (read the
+ * list again); `stale`: the caller's role may have changed (read `me`). */
+export function accountHelpRefusal(
+  e: ApiError,
+): { message: string; gone: boolean; stale: boolean } | null {
+  if (ownershipRefusal(e)) return { message: msg("members.ownerAccounts"), gone: false, stale: true };
+  if (e.status === 403 && e.reason === "own_account") {
+    return { message: msg("members.ownAccount"), gone: false, stale: false };
+  }
+  if (e.status === 403 && e.reason === "other_workspaces") {
+    return { message: msg("members.otherWorkspaces"), gone: false, stale: false };
+  }
+  if (e.code === "not_found") return { message: msg("members.gone"), gone: true, stale: false };
+  return null;
+}
+
+/** Why a reset link could not be used. */
+export type ResetRefusal =
+  /** Wrong, expired, used or replaced: ask for a new link. */
+  | { kind: "spent" }
+  | { kind: "password" }
+  | { kind: "wait"; seconds: number }
+  | { kind: "busy" }
+  | null;
+
+export function resetRefusal(e: ApiError): ResetRefusal {
+  if (e.status === 401 && e.reason === "reset_token") return { kind: "spent" };
+  if (namedField(e) === "password") return { kind: "password" };
+  if (e.status === 429) return { kind: "wait", seconds: e.retryAfter ?? 60 };
+  if (e.reason === "password_hashing") return { kind: "busy" };
+  return null;
+}
+
+/** Who may be offered a member's sign-in help: not oneself (the account
+ * page), and an owner only by an owner. The server decides the rest (a
+ * person who is also in a workspace the caller cannot manage). */
+export function accountHelpLock(
+  permissions: readonly Permission[],
+  role: Role,
+  self: boolean,
+): "self" | "ownership" | null {
+  if (self) return "self";
+  if (role === "owner" && !permissions.includes("ownership")) return "ownership";
+  return null;
+}

@@ -4,7 +4,7 @@ import { ApiError } from "./client.ts";
 import { checkChartList, checkMe } from "./check.ts";
 
 const good = {
-  user: { id: "usr_1", email: "a@example.org" },
+  user: { id: "usr_1", email: "a@example.org", second_factor: false },
   workspaces: [
     { id: "ws_1", key: "main", name: "Main", role: "owner", permissions: ["charts.read"] },
   ],
@@ -39,6 +39,7 @@ test("a well-formed answer is taken; anything else is `unexpected`", () => {
     { ...good, workspaces: [{ id: "ws_1" }] },
     { ...good, csrf_token: "" },
     { ...good, user: { id: "usr_1" } },
+    { ...good, user: { id: "usr_1", email: "a@example.org" } },
   ]) {
     expect(() => checkMe(bad)).toThrow(ApiError);
   }

@@ -3,6 +3,8 @@
 // once at start, keeps it in memory only and removes it from the address
 // bar, so it is not left in the history or a screenshot.
 
+import { BASE } from "./paths.ts";
+
 const TOKEN = /^[0-9a-f]{64}$/;
 
 /** The token in a URL fragment such as `#token=…`: `null` when there is
@@ -32,4 +34,31 @@ export function setupToken(): string | null | "malformed" {
 /** Forgets the token once it has been used. */
 export function dropSetupToken(): void {
   taken = null;
+}
+
+/** A token that arrives in the fragment of one page's link (an
+ * invitation's, a reset's): taken, when the address is one of `paths`,
+ * before the router starts and before `takeSetupToken` (which would take
+ * it as a setup token), removed from the address bar, kept in memory. */
+export function pageToken(paths: readonly string[]) {
+  let held: string | null | "malformed" = null;
+  return {
+    take(): void {
+      const { pathname, search, hash } = window.location;
+      const path =
+        BASE !== "" && pathname.startsWith(BASE) ? pathname.slice(BASE.length) : pathname;
+      if (!paths.includes(path.replace(/\/+$/, ""))) return;
+      const found = readSetupToken(hash);
+      if (found === null) return;
+      held = found;
+      window.history.replaceState(window.history.state, "", pathname + search);
+    },
+    get(): string | null | "malformed" {
+      return held;
+    },
+    /** Forgets the token: used, or refused as spent. */
+    drop(): void {
+      held = null;
+    },
+  };
 }

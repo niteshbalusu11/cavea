@@ -6,7 +6,7 @@ import { configure } from "./api/client.ts";
 import { changePassword, loadSession, session, signIn, signOut } from "./session.ts";
 
 const me = (csrf: string) => ({
-  user: { id: "usr_1", email: "a@example.org" },
+  user: { id: "usr_1", email: "a@example.org", second_factor: false },
   workspaces: [],
   csrf_token: csrf,
   session: { expires_at: "2026-11-11T00:00:00Z", absolute_expires_at: "2026-11-18T00:00:00Z" },
