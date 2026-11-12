@@ -934,7 +934,7 @@ export const TASKS: Task[] = [
           return r.json();
         })()`);
       const held = await lockNow();
-      // The same person in a second browser is another holder (D-96): it
+      // The same person in a second browser is another holder (D-97): it
       // opens read-only, saying so, and closing it leaves this one's lock.
       const same = await signIn("same-person", owner);
       // Its lock requests are refused while this one holds it.

@@ -57,7 +57,7 @@ export async function currentEtag(ref: ChartRef, signal: AbortSignal): Promise<s
 export const saveReplyOf = (e: unknown): SaveReply => saveReply(e, describe);
 
 /** Takes or renews the editing lock (07 §9), or takes it over, as this
- * browser's editor (D-96). Never rejects; an archived chart is `refused`. */
+ * browser's editor (D-97). Never rejects; an archived chart is `refused`. */
 export async function takeLock(ref: ChartRef, takeOver = false): Promise<LockReply> {
   try {
     const lock = await call(

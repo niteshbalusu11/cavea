@@ -1,6 +1,6 @@
 // Two tabs of one person on one chart, in one browser, are one holder of
 // its editing lock (D-73): every tab names the server the same editor, this
-// browser's (`browserEditor`, D-96), so the server cannot tell them apart,
+// browser's (`browserEditor`, D-97), so the server cannot tell them apart,
 // and releasing it from one tab would free it under the other. Two
 // browsers are two editors: the server keeps them apart itself, and one
 // releases only its own lock. So a tab that is left releases the lock
@@ -90,7 +90,7 @@ export function lockPeers(user: string, workspace: string, chart: string): LockP
 const EDITOR_KEY = "cavea.designer.editor";
 let editor: string | null = null;
 
-/** This browser's editor id (D-96): one random id for every tab of this
+/** This browser's editor id (D-97): one random id for every tab of this
  * browser profile, kept in its storage, so that the server tells this
  * browser's lock from another browser's of the same person. Where storage
  * is refused, the page's own (each such tab is then an editor apart). */
