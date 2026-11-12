@@ -63,12 +63,12 @@ Start it:
 docker compose up -d --wait
 ```
 
-The first run downloads the images. When the command returns, every container is up:
+The first run downloads the three images, about 400 MB once unpacked. The command returns once every container is up; its last lines say so:
 
 ```text
- ✔ Container cavea-quickstart-postgres-1  Healthy
- ✔ Container cavea-quickstart-server-1    Healthy
- ✔ Container cavea-quickstart-web-1       Healthy
+ Container cavea-quickstart-web-1  Healthy
+ Container cavea-quickstart-postgres-1  Healthy
+ Container cavea-quickstart-server-1  Healthy
 ```
 
 The console and the API are now at `http://localhost:8080`, and the web server at `http://localhost:8000`. If either port is taken on your machine, change the first number of its `ports` line, and the same number everywhere else on this page.
@@ -89,7 +89,7 @@ http://localhost:8080/console/setup#token=0123456789abcdef…
 
 On Windows PowerShell, use `docker compose logs server | Select-String setup_link` and copy the link from the line it prints.
 
-**Copy the link into your browser.** It is valid for an hour; restarting the server makes a new one. Use `localhost`, as in the link, not `127.0.0.1`.
+**Copy the link into your browser.** It is valid for an hour; restarting the server makes a new one while it has no user.
 
 On **Set up Cavea**, enter an email and a password of at least 15 characters, and choose **Create the owner account**. You are signed in, as the owner of a workspace named Main, and the console shows **Charts**.
 
