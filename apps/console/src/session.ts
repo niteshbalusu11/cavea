@@ -5,12 +5,7 @@
 import { createMemo, createRoot, createSignal } from "solid-js";
 import { ApiError, call, callWithHeaders, configure } from "./api/client.ts";
 import type { ConsoleLicence, ConsoleMe, ConsoleTotpSecret } from "./api/generated.ts";
-import {
-  checkChallenge,
-  checkMe,
-  checkRecoveryCodes,
-  checkTotpSecret,
-} from "./api/check.ts";
+import { checkChallenge, checkMe, checkRecoveryCodes, checkTotpSecret } from "./api/check.ts";
 import { followLicence, type MeWorkspace } from "./api/permissions.ts";
 import { asApiError } from "./api/query.ts";
 import { load as loadStored, save } from "./storage.ts";

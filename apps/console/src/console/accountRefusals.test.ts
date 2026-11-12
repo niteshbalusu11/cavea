@@ -186,7 +186,10 @@ const problem = (pair: Pair): ApiError => {
 };
 
 const doc = document as unknown as {
-  paths: Record<string, Record<string, { operationId?: string; responses: Record<string, unknown> }>>;
+  paths: Record<
+    string,
+    Record<string, { operationId?: string; responses: Record<string, unknown> }>
+  >;
   components: {
     responses: Record<string, { description: string }>;
     schemas: { Problem: { "x-cavea-reasons": Record<string, string[]> } };

@@ -233,7 +233,8 @@ export function totpRefusal(e: ApiError, turningOff = false): TotpRefusal {
     return { kind: "field", field: "code", message };
   }
   if (e.code === "already_exists") return { kind: "alreadyOn" };
-  if (e.reason === "no_second_factor") return turningOff ? { kind: "notOn" } : { kind: "notStarted" };
+  if (e.reason === "no_second_factor")
+    return turningOff ? { kind: "notOn" } : { kind: "notStarted" };
   if (e.status === 429) return { kind: "wait", seconds: e.retryAfter ?? 60 };
   if (e.reason === "password_hashing") return { kind: "busy" };
   return null;
@@ -245,7 +246,8 @@ export function totpRefusal(e: ApiError, turningOff = false): TotpRefusal {
 export function accountHelpRefusal(
   e: ApiError,
 ): { message: string; gone: boolean; stale: boolean } | null {
-  if (ownershipRefusal(e)) return { message: msg("members.ownerAccounts"), gone: false, stale: true };
+  if (ownershipRefusal(e))
+    return { message: msg("members.ownerAccounts"), gone: false, stale: true };
   if (e.status === 403 && e.reason === "own_account") {
     return { message: msg("members.ownAccount"), gone: false, stale: false };
   }

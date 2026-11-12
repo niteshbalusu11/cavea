@@ -60,7 +60,7 @@ function multiply(x: number, y: number): number {
 }
 
 function divisor(degree: number): number[] {
-  const result: number[] = new Array<number>(degree).fill(0);
+  const result: number[] = Array.from({ length: degree }, () => 0);
   result[degree - 1] = 1;
   let root = 1;
   for (let i = 0; i < degree; i++) {
@@ -149,8 +149,8 @@ class Grid {
   readonly modules: boolean[];
   readonly fixed: boolean[];
   constructor(readonly size: number) {
-    this.modules = new Array<boolean>(size * size).fill(false);
-    this.fixed = new Array<boolean>(size * size).fill(false);
+    this.modules = Array.from({ length: size * size }, () => false);
+    this.fixed = Array.from({ length: size * size }, () => false);
   }
   get(x: number, y: number): boolean {
     return this.modules[y * this.size + x] === true;
@@ -277,6 +277,17 @@ function applyMask(grid: Grid, mask: number): void {
   }
 }
 
+/** Finder-like patterns (1:1:3:1:1 with light on either side) ending a
+ * run history, for the penalty. */
+function countFinders(h: readonly number[]): number {
+  const n = at(h, 1);
+  const core = n > 0 && h[2] === n && h[3] === n * 3 && h[4] === n && h[5] === n;
+  return (
+    (core && at(h, 0) >= n * 4 && at(h, 6) >= n ? 1 : 0) +
+    (core && at(h, 6) >= n * 4 && at(h, 0) >= n ? 1 : 0)
+  );
+}
+
 /** The standard's penalty for a masked symbol (lower is better). */
 function penalty(grid: Grid): number {
   const size = grid.size;
@@ -285,14 +296,6 @@ function penalty(grid: Grid): number {
     if (history[0] === 0) run += size;
     history.pop();
     history.unshift(run);
-  };
-  const countFinders = (h: number[]): number => {
-    const n = at(h, 1);
-    const core = n > 0 && h[2] === n && h[3] === n * 3 && h[4] === n && h[5] === n;
-    return (
-      (core && at(h, 0) >= n * 4 && at(h, 6) >= n ? 1 : 0) +
-      (core && at(h, 6) >= n * 4 && at(h, 0) >= n ? 1 : 0)
-    );
   };
   const line = (get: (i: number) => boolean) => {
     let color = false;

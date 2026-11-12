@@ -1235,7 +1235,8 @@ const accountSecurity = {
   "totp.scanBody":
     "Scan this QR code with an authenticator app, then enter the six-digit code it shows. Two-step sign-in stays off until you do.",
   "totp.qrLabel": "QR code for your authenticator app. The same key is shown as text below.",
-  "totp.qrTooLong": "This account’s QR code would be too large: type the key into your app instead.",
+  "totp.qrTooLong":
+    "This account’s QR code would be too large: type the key into your app instead.",
   "totp.manual": "Or type this key into your app",
   "totp.secret": "Setup key",
   "totp.details": "Time-based, {digits} digits, a new code every {period} seconds ({algorithm}).",
@@ -1328,7 +1329,6 @@ const accountSecurity = {
   "audit.byApp": "with a code from the app",
   "audit.byRecovery": "with a recovery code",
 };
-
 
 /** The event page: the manager and the settings tab (09 §4.2, §4.3;
  * CON-008, CON-009). */

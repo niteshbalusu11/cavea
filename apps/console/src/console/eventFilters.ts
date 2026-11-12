@@ -117,9 +117,7 @@ export function day(text: string): string {
   // 0 to 99 as 1900 to 1999).
   if (y < 1000) return "";
   const t = new Date(Date.UTC(y, mo - 1, d));
-  return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d
-    ? text
-    : "";
+  return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d ? text : "";
 }
 
 /** Why a range cannot be applied, or `null`: its end before its start. */
@@ -127,9 +125,9 @@ export function rangeProblem(from: string, to: string): string | null {
   return from !== "" && to !== "" && to < from ? msg("events.dateInverted") : null;
 }
 
-/** The day after `day` (`YYYY-MM-DD`). */
-export function dayAfter(day: string): string {
-  const [y = 0, m = 1, d = 1] = day.split("-").map(Number);
+/** The day after `date` (`YYYY-MM-DD`). */
+export function dayAfter(date: string): string {
+  const [y = 0, m = 1, d = 1] = date.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
 }
 
@@ -164,13 +162,13 @@ function wall(t: number, zone: string): number {
 }
 
 /**
- * The first instant of `day` in `zone`: its midnight, or, where the clocks
+ * The first instant of `date` in `zone`: its midnight, or, where the clocks
  * skip midnight (a change to summer time at 00:00), the instant they skip
  * to; where midnight comes twice, the first. Found from the zone's offsets
  * around the day, so a change that day is taken into account.
  */
-export function dayStart(day: string, zone: string): Date {
-  const [y = 0, m = 1, d = 1] = day.split("-").map(Number);
+export function dayStart(date: string, zone: string): Date {
+  const [y = 0, m = 1, d = 1] = date.split("-").map(Number);
   const midnight = Date.UTC(y, m - 1, d);
   const H = 3_600_000;
   const offsets = new Set<number>();
@@ -180,9 +178,8 @@ export function dayStart(day: string, zone: string): Date {
   }
   const starts = [...offsets]
     .map((o) => midnight - o)
-    .filter((t) => new Date(wall(t, zone)).toISOString().slice(0, 10) === day)
-    .sort((a, b) => a - b);
-  return new Date(starts[0] ?? midnight);
+    .filter((t) => new Date(wall(t, zone)).toISOString().slice(0, 10) === date);
+  return new Date(starts.length === 0 ? midnight : Math.min(...starts));
 }
 
 /** An instant as the server takes it: `YYYY-MM-DDTHH:MM:SSZ`. */
