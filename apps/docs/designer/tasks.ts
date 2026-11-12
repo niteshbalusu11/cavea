@@ -129,6 +129,12 @@ async function select(t: Tab, id: number, option: string): Promise<void> {
   );
 }
 
+/** A status bar test: it reads `n` seats. */
+const counts =
+  (n: string) =>
+  (text: string): boolean =>
+    text.includes(msg("status.seats", { n }));
+
 /** Closes the notices in the corner, so pictures show only the designer. */
 async function quiet(t: Tab): Promise<void> {
   const region = (await t.all({ role: "region", name: "Cavea" }))[0];
@@ -1212,8 +1218,7 @@ export const TASKS: Task[] = [
       await t.click({ role: "link", name });
       await t.click({ role: "link", name: msg("charts.open") });
       await t.find({ role: "application", name: msg("canvas.label", { name }) }, undefined, 30_000);
-      const seats = (n: string) => (text: string) => text.includes(msg("status.seats", { n }));
-      await status(t, "561 seats", seats("561"));
+      await status(t, "561 seats", counts("561"));
       check(
         !(await t.has({ role: "region", name: msg("start.title") })),
         "no starting points over a template",
@@ -1229,9 +1234,9 @@ export const TASKS: Task[] = [
         name: msg("start.replaceTitle", { name, template: msg("template.banquet") }),
       });
       await t.click({ role: "button", name: msg("start.replace") }, ask);
-      await status(t, "156 seats", seats("156"));
+      await status(t, "156 seats", counts("156"));
       await chord(t, "z", CTRL);
-      await status(t, "561 seats again", seats("561"));
+      await status(t, "561 seats again", counts("561"));
       await saveState(t, msg("save.saved"));
       // Export chart file from the chart's menu on Charts: what the browser saves.
       await t.click({ role: "button", name: msg("menu.label") }, banner);
