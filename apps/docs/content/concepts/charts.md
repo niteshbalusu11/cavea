@@ -32,7 +32,7 @@ Archiving a chart hides it from lists and stops new events on it. Its versions k
 
 ## Labels
 
-Every seat gets a **label** from the chart's label template, by default `{section}-{row}-{seat}`, such as `Stalls-C-12`. A seat not in a section has no section part, and the dash that would follow it goes too: `C-12`. Any part that is empty is left out with its separator, so a label never starts or ends with one. Labels are unique in a version, and the API names seats by label. See [Objects and statuses](objects.md).
+Every seat gets a **label** from the chart's label template, by default `{section}-{row}-{seat}`, such as `Stalls-C-12`. A seat not in a section has no section part, and the dash that would follow it goes too: `C-12`. Any part that is empty is left out with its separator, so an empty part never leaves a separator at the start or end of a label, or two side by side. Labels are unique in a version, and the API names seats by label. See [Objects and statuses](objects.md).
 
 ## In the API
 
