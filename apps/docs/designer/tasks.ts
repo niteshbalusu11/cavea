@@ -374,7 +374,10 @@ export const TASKS: Task[] = [
       await chord(t, "2", CTRL);
       await Bun.sleep(500);
       await quiet(t);
-      await shoot(t, "block", undefined, 0.5);
+      // The whole plan, to see the block on it.
+      await t.click({ role: "button", name: /^Zoom to fit/ }, await statusBar(t));
+      await Bun.sleep(500);
+      await shoot(t, "block", { x: 60, y: 40, width: 1080, height: 830 }, 0.5);
       // numbering.md's warning: outside a section, labels start with a dash,
       // and a Seat label without {section} drops it.
       const first = async (): Promise<string> => {
@@ -492,7 +495,7 @@ export const TASKS: Task[] = [
       await Bun.sleep(500);
       await quiet(t);
       await look(t, "numbering");
-      await shoot(t, "numbering");
+      await shoot(t, "numbering", { x: 240, y: 40, width: 1200, height: 620 }, 0.7);
       await t.click({ role: "button", name: msg("numbering.apply") }, panel);
       await until("the box's labels to be the applied ones", async () =>
         /J 1 3 5 7 9 11/.test(await t.text(panel)) && (await t.text(panel)).includes(msg("numbering.untouched")),
@@ -594,15 +597,16 @@ export const TASKS: Task[] = [
       });
       await t.click({ role: "button", name: msg("tool.select") });
       await quiet(t);
-      await shoot(t, "brush");
+      await shoot(t, "brush", undefined, 0.6);
     },
   },
   {
     name: "arranging.md: the stage, the focal point, a second box by duplicating, align, layers, guides, snapping",
     async run({ t, look, shoot }) {
-      await t.key("Escape");
-      await t.key("Escape");
-      await t.key("Escape");
+      // Out of the seats, the row, the block and the section, as the guide
+      // says before drawing: inside a section, a shape drawn on it joins it.
+      await t.call((await canvas(t)).id, "function () { this.focus(); }");
+      for (let i = 0; i < 4; i++) await t.key("Escape");
       await chord(t, "0", CTRL);
       await Bun.sleep(500);
       const at = await calibrate(t);
@@ -610,6 +614,12 @@ export const TASKS: Task[] = [
       await t.click({ role: "button", name: msg("tool.rect") });
       await t.drag(at(-400, -570), at(400, -390), 10);
       await status(t, "the stage as a sixth object", (x) => x.includes(msg("status.nodes", { n: 6 })));
+      await t.click({ role: "tab", name: msg("panel.layers") });
+      check(
+        (await t.has({ role: "treeitem", name: /^Box A 1/ })) &&
+          (await t.has({ role: "treeitem", name: /^Stalls 1/ })),
+        "the stage was drawn at the top level, not into a section",
+      );
       // Two product gaps the guide states: the Text tool opens no field to
       // type in, and a chart started from scratch has no floor to hold a
       // focal point. Once either works, this fails: update arranging.md.
@@ -673,7 +683,7 @@ export const TASKS: Task[] = [
       await chord(t, "h", CTRL);
       await t.find({ role: "button", name: msg("layers.show") }, picture);
       await quiet(t);
-      await shoot(t, "arranged");
+      await shoot(t, "arranged", undefined, 0.6);
       await chord(t, "h", CTRL);
       // A guide from the left ruler, by the keyboard.
       const ruler = await t.find({ role: "Canvas", name: msg("ruler.left") });
@@ -984,7 +994,9 @@ export const TASKS: Task[] = [
       const theatre = await t.find({ role: "button", name: new RegExp(`^${msg("template.theatre")} `) }, undefined, 30_000);
       const empty = await t.find({ role: "button", name: new RegExp(`^${msg("new.empty")}`) });
       const heading = await t.find({ role: "heading", name: msg("new.title") });
-      await shoot(t, "start", await around(t, [heading, empty, theatre], 16), 0.75);
+      const banquet = await t.find({ role: "button", name: new RegExp(`^${msg("template.banquet")} `) });
+      const image = await t.find({ role: "button", name: new RegExp(`^${msg("new.image")}`) });
+      await shoot(t, "start", await around(t, [heading, empty, image, theatre, banquet], 16), 0.75);
       await t.click({ role: "button", name: new RegExp(`^${msg("template.theatre")} `) });
       await t.find({ role: "application", name: msg("canvas.label", { name: msg("template.theatre") }) }, undefined, 30_000);
       await t.click({ role: "button", name: msg("tour.skip") }).catch(() => undefined);

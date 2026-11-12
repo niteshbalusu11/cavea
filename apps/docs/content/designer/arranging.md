@@ -12,7 +12,7 @@ A section is a part of the house with a name buyers know: "Stalls", "Circle", "B
 
 To put several blocks in one section, select them all first (hold `Shift` and click each in the list), then right-click one of them. Or choose the **Section** tool (`S`) and drag a box around the blocks on the canvas: every block wholly inside the box goes into the new section.
 
-![The layers list with the picture, two sections and their blocks](../images/designer-arranged.webp)
+![The chart with its stalls and two boxes lined up; in the layers list, each block in its section and the floor plan locked and hidden](../images/designer-arranged.webp)
 
 The section's other fields:
 
@@ -49,6 +49,8 @@ Select two or more objects, press `Ctrl`+`K` and type "align" or "distribute":
 ## Landmarks
 
 The stage, the mixing desk, a pillar, the exits: draw them with **Rectangle** (`U`), **Ellipse**, **Polygon** (click each corner, then the first again) or **Line**, and set their **Fill** and **Stroke** colours in the inspector. Buyers see them on the map.
+
+Press `Escape` until nothing is selected before you draw one. While you are working inside a section (after double-clicking it), what you draw on it goes into that section; the **Layers** list shows where it went.
 
 > **Not yet** The **Text** tool does nothing yet, so the stage cannot be named on the chart.
 
