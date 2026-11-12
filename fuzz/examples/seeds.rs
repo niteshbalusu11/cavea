@@ -308,4 +308,30 @@ fn main() {
             &cavea_fuzz::http::seed(&ops, ids),
         );
     }
+    // What the target found (13 §5), by operation, so that they follow the
+    // document as the other seeds do. The choices are read in the order of
+    // `fuzz_targets/http_api.rs`'s `build`.
+    let found: [(&str, &str, &[u8]); 2] = [
+        // The right key; the event from the input's bytes, `q\x06\0q\0`.
+        (
+            "nul-in-path",
+            "listObjects",
+            &[0, 7, 5, b'q', 6, 0, b'q', 0],
+        ),
+        // The right key, `e1`, the method kept, no extra query, the two
+        // console headers left out, no request id or origin; then raw body
+        // bytes: `[]`.
+        (
+            "array-for-object",
+            "updateEvent",
+            &[0, 0, 0, 0, 0, 0, 0, 0, 15, 2, b'[', b']'],
+        ),
+    ];
+    for (name, id, choices) in found {
+        write(
+            "http_api",
+            &format!("found-{name}"),
+            &cavea_fuzz::http::record(&ops, id, choices),
+        );
+    }
 }

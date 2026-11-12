@@ -129,13 +129,19 @@ pub fn operations(doc: &Value) -> Vec<Operation> {
 
 /// A record for each operation id in `ids`, with no further choices: a seed.
 pub fn seed(ops: &[Operation], ids: &[&str]) -> Vec<u8> {
-    let mut out = Vec::new();
-    for id in ids {
-        let index = ops
-            .iter()
-            .position(|op| op.id == *id)
-            .unwrap_or_else(|| panic!("no operation {id}"));
-        out.extend([2, u8::try_from(index).expect("under 256 operations"), 0]);
-    }
+    ids.iter().flat_map(|id| record(ops, id, &[0])).collect()
+}
+
+/// One record: operation `id`, then `choices` (the input format above).
+pub fn record(ops: &[Operation], id: &str, choices: &[u8]) -> Vec<u8> {
+    let index = ops
+        .iter()
+        .position(|op| op.id == id)
+        .unwrap_or_else(|| panic!("no operation {id}"));
+    let mut out = vec![
+        u8::try_from(choices.len() + 1).expect("a record under 256 bytes"),
+        u8::try_from(index).expect("under 256 operations"),
+    ];
+    out.extend(choices);
     out
 }
