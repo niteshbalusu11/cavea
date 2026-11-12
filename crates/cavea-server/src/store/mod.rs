@@ -7,6 +7,7 @@
 //! (and a date-time crate) out of the build.
 
 mod migrations;
+pub mod reach;
 pub mod reply;
 
 use std::fmt::Write as _;
@@ -21,7 +22,7 @@ use cavea_engine::{
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use tracing::Instrument as _;
 
-pub use migrations::{MigrationError, migrate};
+pub use migrations::{MigrationError, migrate, migrate_waiting};
 
 /// The longest a commit may take, from waiting for a connection to the reply,
 /// before it fails as `unavailable`. Well under the engine's one-minute

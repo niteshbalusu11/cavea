@@ -8,10 +8,13 @@
 
 use std::borrow::Cow;
 use std::fmt;
+use std::time::Duration;
 
 use sqlx::migrate::{MigrateError, Migration, MigrationType, Migrator};
 use sqlx::postgres::{PgConnectOptions, PgConnection};
 use sqlx::{Connection as _, SqlSafeStr as _};
+
+use super::reach::{self, GaveUp};
 use tracing::Instrument as _;
 
 /// `(version, description, sql)`, in version order.
@@ -73,8 +76,8 @@ const TABLE: &str = "cavea_migrations";
 
 #[derive(Debug)]
 pub enum MigrationError {
-    /// PostgreSQL could not be reached.
-    Connect(sqlx::Error),
+    /// PostgreSQL could not be reached, within the wait if there was one.
+    Connect(GaveUp),
     /// The database has a migration this binary does not have: it was
     /// migrated by a newer `cavea-server`.
     Newer(i64),
@@ -86,7 +89,7 @@ pub enum MigrationError {
 impl fmt::Display for MigrationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Connect(e) => write!(f, "cannot connect to PostgreSQL: {e}"),
+            Self::Connect(e) => write!(f, "{e}"),
             Self::Newer(v) => write!(
                 f,
                 "the database has migration {v}, which this cavea-server does not know: it was \
@@ -106,12 +109,22 @@ impl std::error::Error for MigrationError {}
 
 /// Bring the database's schema up to date. Concurrent callers, in this
 /// process or another, serialise on the advisory lock; all but the first find
-/// nothing to do.
+/// nothing to do. One connection attempt: [`migrate_waiting`] tries again.
 pub async fn migrate(options: &PgConnectOptions) -> Result<(), MigrationError> {
+    migrate_waiting(options, Duration::ZERO).await
+}
+
+/// [`migrate`], its connection tried again for up to `wait` while PostgreSQL
+/// is not reachable yet ([`reach::connect`]): the server's start, which
+/// orchestrators may begin before the database is up (D-98). Only the
+/// connection waits; a migration that fails is never run again.
+pub async fn migrate_waiting(
+    options: &PgConnectOptions,
+    wait: Duration,
+) -> Result<(), MigrationError> {
     // A connection of its own, closed afterwards: the advisory lock is held
     // for the session, so it must never go back to a pool still held.
-    let mut conn = PgConnection::connect_with(options)
-        .instrument(cavea_telemetry::db_span("connect"))
+    let mut conn = reach::connect(options, wait)
         .await
         .map_err(MigrationError::Connect)?;
     let before = applied(&mut conn).await;

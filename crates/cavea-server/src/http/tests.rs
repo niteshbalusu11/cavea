@@ -48,6 +48,7 @@ fn state() -> AppState {
         log_format: LogFormat::Json,
         database_url: "postgres://localhost/unused".parse().unwrap(),
         db_pool: std::num::NonZeroU32::MIN,
+        db_wait_secs: 0,
         node_id: "test".to_owned(),
         lease_secs: std::num::NonZeroU32::MIN.saturating_add(14),
         heartbeat_secs: std::num::NonZeroU32::MIN.saturating_add(4),
