@@ -204,7 +204,7 @@ test("a refused publish's findings are said as the panel says them, none dropped
       nodes: [
         block(10, "Stalls left", 0, [{ rid: 100 }]),
         block(20, null, 1000, [{ rid: 200 }]),
-        { id: 50, type: "image", asset: "f".repeat(64), size: [10, 10], role: "background" },
+        { id: 50, type: "image", asset: "f".repeat(32), size: [10, 10], role: "background" },
       ],
     }),
   );
