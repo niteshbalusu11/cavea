@@ -415,10 +415,9 @@ enum Session {
     /// Signed by the credential's workspace with a live key, unexpired, for
     /// this event.
     For(String),
-    /// Expired, signed by a revoked key or another workspace's, or garbage.
+    /// Expired, signed by a revoked key or another workspace's, or garbage
+    /// (an empty value too).
     Invalid,
-    /// Not known to be either (an empty header).
-    Unknown,
 }
 
 impl Built {
@@ -615,7 +614,6 @@ async fn send(h: &Harness, world: &World, req: Built) -> Answer {
                 }
                 Session::For(e) => target.is_none_or(|target| target == e),
                 Session::Invalid => false,
-                Session::Unknown => true,
             };
             assert!(
                 ok,
@@ -1312,15 +1310,8 @@ fn build(h: &Harness, doc: &Value, world: &World, bytes: &[u8]) -> Option<Built>
                         world.sessions[1 - t].first().map(|s| s.0.clone()),
                         Session::Invalid,
                     ),
-                    _ => {
-                        let text = c.text();
-                        let session = if text.is_empty() {
-                            Session::Unknown
-                        } else {
-                            Session::Invalid
-                        };
-                        (Some(text), session)
-                    }
+                    // Garbage, an empty value included: no session token.
+                    _ => (Some(c.text()), Session::Invalid),
                 };
                 req.session = session;
                 value
@@ -1366,23 +1357,32 @@ fn build(h: &Harness, doc: &Value, world: &World, bytes: &[u8]) -> Option<Built>
                     .to_vec(),
                 "application/json",
             ),
-            _ => {
-                let mut body = generate(&mut c, doc, world, t, "", schema, 0);
-                // Workspace keys are global: a workspace the admin key makes
-                // is this world's own, so that an input does the same alone
-                // as after others (two in one input still collide).
-                if op.id == "createWorkspace"
-                    && let Some(Value::String(key)) = body.get_mut("key")
-                    && !key.is_empty()
-                {
-                    key.push_str(&format!("-w{}", world.tag));
-                }
-                if let Some(Value::String(e)) = body.get("event") {
-                    req.event = Some(e.clone());
-                }
-                (body.to_string().into_bytes(), "application/json")
-            }
+            _ => (
+                generate(&mut c, doc, world, t, "", schema, 0)
+                    .to_string()
+                    .into_bytes(),
+                "application/json",
+            ),
         });
+        // Whichever way the body was made, if it is a JSON object: the event
+        // it names, for the session oracle; and a workspace key made the
+        // world's own, since workspace keys are global, so that an input
+        // does the same alone as after others (two in one input still
+        // collide). Only that operation's body is written again.
+        if let Some((bytes, _)) = &mut req.body
+            && let Ok(Value::Object(mut fields)) = serde_json::from_slice::<Value>(bytes)
+        {
+            if let Some(Value::String(e)) = fields.get("event") {
+                req.event = Some(e.clone());
+            }
+            if op.id == "createWorkspace"
+                && let Some(Value::String(key)) = fields.get_mut("key")
+                && !key.is_empty()
+            {
+                key.push_str(&format!("-w{}", world.tag));
+                *bytes = Value::Object(fields).to_string().into_bytes();
+            }
+        }
     } else if c.rare(37) {
         req.body = Some((c.raw(), "application/json"));
     }
