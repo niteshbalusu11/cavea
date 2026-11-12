@@ -448,8 +448,10 @@ fn prepare(version: &str) -> Result<()> {
         )?;
     }
     // The docs site: the version, the image's tag, the script's URL, published.
+    // Each value replaced where it stands, so the file keeps its order and
+    // its formatting (oxfmt checks it).
     let path = root.join("apps/docs/site.json");
-    let mut site = read_json(&path)?;
+    let site = read_json(&path)?;
     let (repository, _) = image_name(&site)?;
     let script = site_var(&site, "renderer_script")?;
     let package = site_var(&site, "renderer_package")?;
@@ -457,12 +459,29 @@ fn prepare(version: &str) -> Result<()> {
         .split_once(&format!("{package}@"))
         .context("vars.renderer_script does not name vars.renderer_package@version")?;
     let rest = after.split_once('/').map_or("", |(_, r)| r);
-    let vars = &mut site["vars"];
-    vars["version"] = version.into();
-    vars["image"] = format!("{repository}:{version}").into();
-    vars["renderer_script"] = format!("{before}{package}@{version}/{rest}").into();
-    site["published"] = true.into();
-    fs::write(&path, format!("{}\n", serde_json::to_string_pretty(&site)?))?;
+    let mut text = fs::read_to_string(&path)?;
+    for (key, value) in [
+        ("version", Value::from(version)),
+        ("image", format!("{repository}:{version}").into()),
+        (
+            "renderer_script",
+            format!("{before}{package}@{version}/{rest}").into(),
+        ),
+        ("published", true.into()),
+    ] {
+        let old = if key == "published" {
+            &site[key]
+        } else {
+            &site["vars"][key]
+        };
+        let from = format!("\"{key}\": {old}");
+        ensure!(
+            text.matches(&from).count() == 1,
+            "apps/docs/site.json: expected one `{from}`"
+        );
+        text = text.replacen(&from, &format!("\"{key}\": {value}"), 1);
+    }
+    fs::write(&path, text)?;
     let openapi = capture(cargo().current_dir(&root).args([
         "run",
         "-q",
