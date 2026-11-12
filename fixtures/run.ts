@@ -19,6 +19,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
+import { Browser, type Message } from "../tools/chromium.ts";
 
 const ROOT = join(import.meta.dir, "..");
 const WORK = join(ROOT, "target/tmp/compat");
@@ -187,197 +188,118 @@ interface Visit {
   logs: string[];
 }
 
-type Message = {
-  id?: number;
-  method?: string;
-  params?: Record<string, unknown>;
-  sessionId?: string;
-  result?: Record<string, unknown>;
-  error?: { message: string };
-};
-
-class Browser {
-  private id = 0;
-  private readonly pending = new Map<number, (m: Message) => void>();
-  private readonly listeners = new Set<(m: Message) => void>();
-  private constructor(private readonly ws: WebSocket) {
-    ws.addEventListener("message", (event) => {
-      const message = JSON.parse(String(event.data)) as Message;
-      if (message.id !== undefined) {
-        this.pending.get(message.id)?.(message);
-        this.pending.delete(message.id);
-      } else {
-        for (const listener of this.listeners) {
-          listener(message);
-        }
-      }
-    });
-  }
-
-  static async launch(): Promise<Browser> {
-    const chromium = await tool("chromium", "chromium");
-    // Chromium's socket path must be short; the worktree's is not.
-    const sockets = `/tmp/cavea-compat-${process.pid}`;
-    await mkdir(sockets, { recursive: true });
-    cleanup.push(() => rm(sockets, { recursive: true, force: true }));
-    const proc = start(
-      [
-        chromium,
-        "--headless",
-        "--no-sandbox",
-        "--remote-debugging-port=0",
-        `--user-data-dir=${join(WORK, "profile")}`,
-        "--use-angle=swiftshader",
-        "--enable-unsafe-swiftshader",
-        "--no-first-run",
-        "about:blank",
-      ],
-      { env: { TMPDIR: sockets } },
-    );
-    const [, url] = await waitFor(proc, /DevTools listening on (ws:\/\/\S+)/, 30_000);
-    const ws = new WebSocket(url ?? "");
-    await new Promise((resolve, reject) => {
-      ws.addEventListener("open", resolve);
-      ws.addEventListener("error", reject);
-    });
-    return new Browser(ws);
-  }
-
-  send(
-    method: string,
-    params: Record<string, unknown> = {},
-    sessionId?: string,
-  ): Promise<Record<string, unknown>> {
-    const id = ++this.id;
-    this.ws.send(
-      JSON.stringify({ id, method, params, ...(sessionId === undefined ? {} : { sessionId }) }),
-    );
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, (m) =>
-        m.error === undefined
-          ? resolve(m.result ?? {})
-          : reject(new Error(`${method}: ${m.error.message}`)),
-      );
-    });
-  }
-
-  version(): Promise<string> {
-    return this.send("Browser.getVersion").then((v) => String(v["product"]));
-  }
-
-  /**
-   * Opens `url` in a fresh context (a cold cache) and waits until the page's
-   * `window.compat` has `firstFrame` or `failed`, or `ms` pass.
-   */
-  async visit(url: string, ms = 30_000): Promise<Visit> {
-    const { browserContextId } = await this.send("Target.createBrowserContext");
-    const { targetId } = await this.send("Target.createTarget", {
-      url: "about:blank",
-      browserContextId,
-    });
-    const { sessionId } = await this.send("Target.attachToTarget", { targetId, flatten: true });
-    const session = String(sessionId);
-    const origin = new URL(url).origin;
-    const visit: Visit = {
-      errors: [],
-      fetched: [],
-      blocked: [],
-      wsFrames: 0,
-      sseMessages: 0,
-      logs: [],
-    };
-    const urls = new Map<string, string>();
-    const short = (u: string): string => (u.startsWith(origin) ? u.slice(origin.length) : u);
-    const listener = (m: Message): void => {
-      if (m.sessionId !== session || m.params === undefined) {
-        return;
-      }
-      const p = m.params as Record<string, unknown>;
-      const id = String(p["requestId"]);
-      switch (m.method) {
-        case "Network.requestWillBeSent":
-          urls.set(id, (p["request"] as { url: string }).url);
-          break;
-        case "Network.responseReceived": {
-          const response = p["response"] as { url: string; status: number };
-          visit.fetched.push({ url: short(response.url), status: response.status });
-          break;
-        }
-        case "Network.loadingFailed":
-          visit.blocked.push(
-            `${short(urls.get(id) ?? "?")} ${p["blockedReason"] ?? p["errorText"]}`,
-          );
-          break;
-        case "Network.webSocketFrameReceived":
-          visit.wsFrames++;
-          break;
-        case "Network.eventSourceMessageReceived":
-          visit.sseMessages++;
-          break;
-        case "Runtime.exceptionThrown":
-          visit.logs.push(`exception: ${JSON.stringify(p["exceptionDetails"]).slice(0, 300)}`);
-          break;
-        case "Runtime.consoleAPICalled":
-          if (p["type"] === "error" || p["type"] === "warning") {
-            const args = p["args"] as Array<{ value?: unknown; description?: string }>;
-            visit.logs.push(
-              `${p["type"]}: ${args
-                .map((a) => a.value ?? a.description)
-                .join(" ")
-                .slice(0, 300)}`,
-            );
-          }
-          break;
-        default:
-      }
-    };
-    this.listeners.add(listener);
-    try {
-      await this.send("Network.enable", {}, session);
-      await this.send("Runtime.enable", {}, session);
-      await this.send("Page.enable", {}, session);
-      await this.send("Page.navigate", { url }, session);
-      const deadline = Date.now() + ms;
-      while (Date.now() < deadline) {
-        await Bun.sleep(200);
-        const { result } = await this.send(
-          "Runtime.evaluate",
-          { expression: "JSON.stringify(window.compat ?? null)", returnByValue: true },
-          session,
-        );
-        const compat = JSON.parse(
-          String((result as { value?: string }).value ?? "null"),
-        ) as Partial<Visit> | null;
-        if (compat !== null) {
-          visit.errors = compat.errors ?? [];
-          if (compat.firstFrame !== undefined || compat.failed !== undefined) {
-            Object.assign(visit, { firstFrame: compat.firstFrame, failed: compat.failed });
-            // Let a realtime stream deliver its first frames (or fall back:
-            // 05 §4.1), then read the errors again: one reported meanwhile fails the check.
-            await Bun.sleep(3_000);
-            const { result: after } = await this.send(
-              "Runtime.evaluate",
-              { expression: "JSON.stringify(window.compat?.errors ?? [])", returnByValue: true },
-              session,
-            );
-            visit.errors = JSON.parse(
-              String((after as { value?: string }).value ?? "[]"),
-            ) as string[];
-            break;
-          }
-        }
-      }
-      return visit;
-    } finally {
-      this.listeners.delete(listener);
-      await this.send("Target.disposeBrowserContext", { browserContextId });
+/**
+ * Opens `url` in a fresh context (a cold cache) and waits until the page's
+ * `window.compat` has `firstFrame` or `failed`, or `ms` pass.
+ */
+async function visitWith(browser: Browser, url: string, ms = 30_000): Promise<Visit> {
+  const { session, context } = await browser.context();
+  const origin = new URL(url).origin;
+  const visit: Visit = {
+    errors: [],
+    fetched: [],
+    blocked: [],
+    wsFrames: 0,
+    sseMessages: 0,
+    logs: [],
+  };
+  const urls = new Map<string, string>();
+  const short = (u: string): string => (u.startsWith(origin) ? u.slice(origin.length) : u);
+  const listener = (m: Message): void => {
+    if (m.sessionId !== session || m.params === undefined) {
+      return;
     }
+    const p = m.params as Record<string, unknown>;
+    const id = String(p["requestId"]);
+    switch (m.method) {
+      case "Network.requestWillBeSent":
+        urls.set(id, (p["request"] as { url: string }).url);
+        break;
+      case "Network.responseReceived": {
+        const response = p["response"] as { url: string; status: number };
+        visit.fetched.push({ url: short(response.url), status: response.status });
+        break;
+      }
+      case "Network.loadingFailed":
+        visit.blocked.push(`${short(urls.get(id) ?? "?")} ${p["blockedReason"] ?? p["errorText"]}`);
+        break;
+      case "Network.webSocketFrameReceived":
+        visit.wsFrames++;
+        break;
+      case "Network.eventSourceMessageReceived":
+        visit.sseMessages++;
+        break;
+      case "Runtime.exceptionThrown":
+        visit.logs.push(`exception: ${JSON.stringify(p["exceptionDetails"]).slice(0, 300)}`);
+        break;
+      case "Runtime.consoleAPICalled":
+        if (p["type"] === "error" || p["type"] === "warning") {
+          const args = p["args"] as Array<{ value?: unknown; description?: string }>;
+          visit.logs.push(
+            `${p["type"]}: ${args
+              .map((a) => a.value ?? a.description)
+              .join(" ")
+              .slice(0, 300)}`,
+          );
+        }
+        break;
+      default:
+    }
+  };
+  const off = browser.on(listener);
+  try {
+    await browser.send("Network.enable", {}, session);
+    await browser.send("Runtime.enable", {}, session);
+    await browser.send("Page.enable", {}, session);
+    await browser.send("Page.navigate", { url }, session);
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      await Bun.sleep(200);
+      const { result } = await browser.send(
+        "Runtime.evaluate",
+        { expression: "JSON.stringify(window.compat ?? null)", returnByValue: true },
+        session,
+      );
+      const compat = JSON.parse(
+        String((result as { value?: string }).value ?? "null"),
+      ) as Partial<Visit> | null;
+      if (compat !== null) {
+        visit.errors = compat.errors ?? [];
+        if (compat.firstFrame !== undefined || compat.failed !== undefined) {
+          Object.assign(visit, { firstFrame: compat.firstFrame, failed: compat.failed });
+          // Let a realtime stream deliver its first frames (or fall back:
+          // 05 §4.1), then read the errors again: one reported meanwhile fails the check.
+          await Bun.sleep(3_000);
+          const { result: after } = await browser.send(
+            "Runtime.evaluate",
+            { expression: "JSON.stringify(window.compat?.errors ?? [])", returnByValue: true },
+            session,
+          );
+          visit.errors = JSON.parse(
+            String((after as { value?: string }).value ?? "[]"),
+          ) as string[];
+          break;
+        }
+      }
+    }
+    return visit;
+  } finally {
+    off();
+    await browser.send("Target.disposeBrowserContext", { browserContextId: context });
   }
 }
 
 let browser: Browser | undefined;
 const chromium = async (): Promise<Browser> => {
-  browser ??= await Browser.launch();
+  if (browser === undefined) {
+    const launched = await Browser.launch({
+      chromium: await tool("chromium", "chromium"),
+      name: "cavea-compat",
+      profile: join(WORK, "profile"),
+    });
+    cleanup.push(() => launched.close());
+    browser = launched;
+  }
   return browser;
 };
 
@@ -516,7 +438,7 @@ async function bundler(name: string, pkg: string, out: string, html: boolean): P
   }
   await cp(chartFile, join(dist, "chart.ccf"));
   const inlined = await notInlined(dist);
-  const v = await (await chromium()).visit(`${serve([{ prefix: "/", dir: dist }])}/`);
+  const v = await visitWith(await chromium(), `${serve([{ prefix: "/", dir: dist }])}/`);
   rows.push({
     check: name,
     tool: await versionOf(dir, pkg),
@@ -534,7 +456,7 @@ async function viteDev(): Promise<void> {
     env: await node(dir),
   });
   await waitFor(proc, /ready in|Local:/, 60_000);
-  const v = await (await chromium()).visit(`http://127.0.0.1:${port}/`);
+  const v = await visitWith(await chromium(), `http://127.0.0.1:${port}/`);
   rows.push({
     check: "vite-dev",
     tool: await versionOf(dir, "vite"),
@@ -558,7 +480,7 @@ async function next(): Promise<void> {
   for (const page of ["/", "/direct"]) {
     const html = await (await fetch(`${base}${page}`)).text();
     const container = html.includes('id="map"');
-    const v = await (await chromium()).visit(`${base}${page}`);
+    const v = await visitWith(await chromium(), `${base}${page}`);
     rows.push({
       check: `next ${page}`,
       tool: await versionOf(dir, "next"),
@@ -619,7 +541,7 @@ async function scriptTag(): Promise<void> {
       ],
       { html: (t) => t.replace("{{script}}", src).replace("{{integrity}}", sri) },
     );
-    const v = await (await chromium()).visit(`${origin}/page/${query}`);
+    const v = await visitWith(await chromium(), `${origin}/page/${query}`);
     rows.push({
       check,
       tool: "cavea.min.js",
@@ -657,7 +579,7 @@ async function csp(
 ): Promise<void> {
   const b = await chromium();
   const full = header(policy.directives);
-  const v = await b.visit(`${serveWith(full)}${path}`);
+  const v = await visitWith(b, `${serveWith(full)}${path}`);
   const failure = pass(v);
   rows.push({
     check,
@@ -670,7 +592,7 @@ async function csp(
       ...policy.directives,
       [t.directive]: (policy.directives[t.directive] ?? []).filter((s) => s !== t.source),
     };
-    const tight = await b.visit(`${serveWith(header(directives))}${path}`);
+    const tight = await visitWith(b, `${serveWith(header(directives))}${path}`);
     rows.push({
       check: `${check} without ${t.source} in ${t.directive}`,
       tool: "Content-Security-Policy",
@@ -787,7 +709,7 @@ async function cspCdn(): Promise<void> {
     host: "localhost",
     html: (t) => t.replace("{{script}}", evilScript).replace("{{integrity}}", sri),
   });
-  const v = await (await chromium()).visit(`${o}/`);
+  const v = await visitWith(await chromium(), `${o}/`);
   rows.push({
     check: "csp-cdn, WASM changed on the CDN",
     tool: "cavea.min.js integrity",
@@ -992,9 +914,7 @@ try {
     }
   }
   if (browser !== undefined) {
-    console.log(
-      `\n${await browser.version()}, headless, WebGL2 on SwiftShader (software rendering)\n`,
-    );
+    console.log(`\n${browser.version}, headless, WebGL2 on SwiftShader (software rendering)\n`);
   }
 } finally {
   while (cleanup.length > 0) {

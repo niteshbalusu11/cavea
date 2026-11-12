@@ -25,9 +25,14 @@
 //!   the payload gate) and the CLI, then draw the renderer's golden images
 //!   in the flake's headless Chromium and compare them with the stored ones
 //!   (`tools/golden/run.ts`, `docs/13-testing-benchmarks.md` §6.1).
+//! - `e2e [--keep] [--headed] [--to n]`: build the server with the console
+//!   and the renderer's package, then drive the product's first path end to
+//!   end in the flake's headless Chromium (`e2e.rs`, `tools/e2e/run.ts`,
+//!   `docs/13-testing-benchmarks.md` §9).
 
 mod api;
 mod determinism;
+mod e2e;
 mod server;
 mod types;
 
@@ -78,18 +83,19 @@ fn main() -> Result<()> {
         ["build-web", "--update-baseline"] => build_web(Mode::UpdateBaseline),
         ["build-web", "--demo"] => build_web(Mode::Demo),
         ["build-designer"] => build_designer(),
-        ["build-server"] => server::build_server(None),
-        ["build-server", "--target", target] => server::build_server(Some(target)),
+        ["build-server"] => server::build_server(None).map(drop),
+        ["build-server", "--target", target] => server::build_server(Some(target)).map(drop),
         ["types"] => types::write(false),
         ["types", "--check"] => types::write(true),
         ["check-deps"] => check_deps(),
         ["determinism"] => determinism::determinism(),
         ["golden", rest @ ..] => golden(rest),
+        ["e2e", rest @ ..] => e2e::e2e(rest),
         _ => {
             eprintln!(
                 "usage: cargo xtask <build-web [--demo | --update-baseline] | build-designer | \
                  build-server [--target <triple>] | types [--check] | check-deps | determinism | \
-                 golden [--update] [--runs n] [case…]>"
+                 golden [--update] [--runs n] [case…] | e2e [--keep] [--headed] [--to n]>"
             );
             std::process::exit(2);
         }

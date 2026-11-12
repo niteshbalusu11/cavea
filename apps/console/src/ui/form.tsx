@@ -89,12 +89,12 @@ export function Card(props: { title: string; children: JSX.Element }) {
   return (
     <main class="flex min-h-full items-center justify-center bg-app p-4">
       <div class="w-full max-w-sm rounded-lg bg-surface p-6 shadow-menu">
-        <div class="mb-4 flex items-center gap-2 text-lg font-semibold text-fg">
+        <h1 class="mb-4 flex items-center gap-2 text-lg font-semibold text-fg">
           <span class="flex size-6 items-center justify-center rounded-md bg-accent-fill text-on-accent">
             <Icon name="section" class="size-3.5" />
           </span>
           {props.title}
-        </div>
+        </h1>
         {props.children}
       </div>
     </main>
