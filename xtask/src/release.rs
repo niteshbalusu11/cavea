@@ -1175,6 +1175,11 @@ fn artefacts(
             images.insert(arch.to_owned(), tag);
         }
     }
+    list.step(
+        "packages",
+        "npm packages packed and their contents checked",
+        || packages(&out, version, &repository),
+    )?;
     let amd64 = images.get("amd64").cloned();
     list.step("smoke", "deploy/smoke.ts against the x86-64 image", || {
         let tag = amd64.as_deref().context("no x86-64 image")?;
@@ -1195,20 +1200,10 @@ fn artefacts(
             logged(
                 &out,
                 "quickstart",
-                &mut sh(&["bun", "run", "--cwd", "packages/renderer", "build"]),
-            )?;
-            logged(
-                &out,
-                "quickstart",
                 &mut sh(&["bun", "apps/docs/quickstart/check.ts", "--image", tag]),
             )?;
             Ok(Outcome::Pass("console and API paths".to_owned()))
         },
-    )?;
-    list.step(
-        "packages",
-        "npm packages packed and their contents checked",
-        || packages(&out, version, &repository),
     )?;
     list.step(
         "sbom",
@@ -1320,7 +1315,11 @@ fn packages(out: &Path, version: &str, repository: &str) -> Result<Outcome> {
     // the renderer's package for their own purposes.
     logged(out, "packages", &mut sh(&["cargo", "xtask", "build-web"]))?;
     for (_, path) in PACKAGES {
-        logged(out, "packages", sh(&["bun", "run", "build"]).current_dir(root.join(path)))?;
+        logged(
+            out,
+            "packages",
+            sh(&["bun", "run", "build"]).current_dir(root.join(path)),
+        )?;
     }
     let mut report = String::new();
     let mut problems = Vec::new();
