@@ -77,6 +77,9 @@ libc = { version = "0.2.191", default-features = false }
 # `--release` it fails to compile; `cargo xtask build-server`, the image and
 # CI build without it.
 trust-test-key = []
+# Exposes `http::openapi::check` to the HTTP fuzz target (`fuzz/`,
+# docs/13-testing-benchmarks.md §5). Off in every build of the server.
+fuzzing = []
 
 [dev-dependencies]
 # Tests sign their own licences with keys made at run time.

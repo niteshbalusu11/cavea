@@ -116,8 +116,8 @@ export interface Asset {
 export interface Book {
     /** A JSON object per label, stored as sent. */
     extra?: Record<string, Record<string, unknown>>;
-    hold_token?: string;
-    objects?: ObjectRefs;
+    hold_token?: string | null;
+    objects?: ObjectRefs | null;
     order_ref: string;
     /** A ticket type per label. */
     ticket_types?: Record<string, string>;
@@ -163,7 +163,7 @@ export interface Counts {
     held: number;
 }
 export interface CreateChart {
-    document?: ChartDocument;
+    document?: ChartDocument | null;
     key: string;
     name: string;
 }
@@ -174,15 +174,15 @@ export interface CreateEvent {
     name?: string | null;
     settings?: EventSettingsInput;
     /** A version number; the published one by default. */
-    version?: number;
+    version?: number | null;
 }
 export interface CreateHoldToken {
     /** The event's key. */
     event: string;
     /** Unlimited by default. */
-    max_objects?: number;
+    max_objects?: number | null;
     /** Seconds. */
-    ttl_seconds?: number;
+    ttl_seconds?: number | null;
 }
 export interface CreateKey {
     /** Publishable keys only: origins such as `https://tickets.example.com`. */
@@ -230,14 +230,14 @@ export interface EventSettings {
 }
 export interface EventSettingsInput {
     /** Seconds. */
-    hold_ttl_seconds?: number;
-    max_objects?: number;
-    max_tokens_per_sub?: number;
-    require_session?: boolean;
+    hold_ttl_seconds?: number | null;
+    max_objects?: number | null;
+    max_tokens_per_sub?: number | null;
+    require_session?: boolean | null;
 }
 export interface ExtendHoldToken {
     /** Seconds. */
-    ttl_seconds?: number;
+    ttl_seconds?: number | null;
 }
 export interface ExtendReply {
     expires_at: string;
@@ -359,8 +359,8 @@ export interface Problem {
 }
 /** With `hold_token`: held objects, all of the token's if `objects` is left out. Without: booked objects. */
 export interface Release {
-    hold_token?: string;
-    objects?: ObjectRefs;
+    hold_token?: string | null;
+    objects?: ObjectRefs | null;
 }
 export interface SeatReply {
     objects: ObjectLabel[];
@@ -382,7 +382,7 @@ export interface Stats {
 }
 export interface UpdateEvent {
     name?: string | null;
-    settings?: EventSettingsInput;
+    settings?: EventSettingsInput | null;
 }
 export interface UpdateKey {
     /** Origins such as `https://tickets.example.com`; `null` allows every origin. */

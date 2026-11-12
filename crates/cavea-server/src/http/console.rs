@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use tracing::Instrument as _;
 
 use super::auth::ClientIp;
-use super::extract::{Json, Secret, check_text, invalid_field};
+use super::extract::{Json, Secret, check_text, invalid_field, optional_object};
 use super::openapi::{Needs, Op, Routes};
 use super::staff::{ConsoleUser, clear_cookie, same_origin, session_cookie, set_cookie};
 use super::{ApiError, AppState, Code};
@@ -219,7 +219,7 @@ struct Setup {
     token: Secret,
     email: String,
     password: Secret,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_object")]
     workspace: Option<FirstWorkspace>,
 }
 

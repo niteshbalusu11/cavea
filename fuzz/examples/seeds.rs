@@ -237,4 +237,101 @@ fn main() {
         cavea_fuzz::run(ops);
         write("snapshot_apply", name, &bytes);
     }
+
+    // `http_api`: each operation alone, then ordinary flows (`cavea_fuzz::http`).
+    let doc: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/cavea-server/openapi.json"),
+        )
+        .expect("the OpenAPI document"),
+    )
+    .expect("the document parses");
+    let ops = cavea_fuzz::http::operations(&doc);
+    for op in &ops {
+        write(
+            "http_api",
+            &format!("op-{}", op.id),
+            &cavea_fuzz::http::seed(&ops, &[&op.id]),
+        );
+    }
+    let flows: [(&str, &[&str]); 6] = [
+        (
+            "hold-book",
+            &["createHoldToken", "hold", "book", "listObjects", "getEvent"],
+        ),
+        (
+            "release",
+            &[
+                "hold",
+                "releaseHoldToken",
+                "book",
+                "release",
+                "changeStatus",
+            ],
+        ),
+        (
+            "draft",
+            &[
+                "getDraft",
+                "saveDraft",
+                "validateDraft",
+                "publishChart",
+                "listVersions",
+            ],
+        ),
+        ("keys", &["createKey", "listKeys", "revokeKey", "listKeys"]),
+        (
+            "public",
+            &[
+                "publicEvent",
+                "publicCreateHoldToken",
+                "publicHold",
+                "publicGetHoldToken",
+                "publicRelease",
+            ],
+        ),
+        (
+            "events",
+            &[
+                "createEvent",
+                "updateEvent",
+                "listEvents",
+                "archiveEvent",
+                "getEvent",
+            ],
+        ),
+    ];
+    for (name, ids) in flows {
+        write(
+            "http_api",
+            &format!("flow-{name}"),
+            &cavea_fuzz::http::seed(&ops, ids),
+        );
+    }
+    // What the target found (13 §5), by operation, so that they follow the
+    // document as the other seeds do. The choices are read in the order of
+    // `fuzz_targets/http_api.rs`'s `build`.
+    let found: [(&str, &str, &[u8]); 2] = [
+        // The right key; the event from the input's bytes, `q\x06\0q\0`.
+        (
+            "nul-in-path",
+            "listObjects",
+            &[0, 7, 5, b'q', 6, 0, b'q', 0],
+        ),
+        // The right key, `e1`, the method kept, no extra query, the two
+        // console headers left out, no request id or origin; then raw body
+        // bytes: `[]`.
+        (
+            "array-for-object",
+            "updateEvent",
+            &[0, 0, 0, 0, 0, 0, 0, 0, 15, 2, b'[', b']'],
+        ),
+    ];
+    for (name, id, choices) in found {
+        write(
+            "http_api",
+            &format!("found-{name}"),
+            &cavea_fuzz::http::record(&ops, id, choices),
+        );
+    }
 }

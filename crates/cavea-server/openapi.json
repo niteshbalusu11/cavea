@@ -337,7 +337,10 @@
             "description": "Not signed in, for an email with no account: the new user's password.",
             "maxLength": 128,
             "minLength": 15,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "token": {
             "description": "The 64 hex digits of the link's fragment.",
@@ -492,10 +495,20 @@
             "type": "object"
           },
           "hold_token": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "objects": {
-            "$ref": "#/components/schemas/ObjectRefs"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ObjectRefs"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "order_ref": {
             "type": "string"
@@ -973,7 +986,10 @@
               "key",
               "name"
             ],
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1056,7 +1072,14 @@
         "additionalProperties": false,
         "properties": {
           "document": {
-            "$ref": "#/components/schemas/ChartDocument"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChartDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "key": {
             "type": "string"
@@ -1092,7 +1115,10 @@
           },
           "version": {
             "description": "A version number; the published one by default.",
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1112,13 +1138,19 @@
             "description": "Unlimited by default.",
             "maximum": 1000000,
             "minimum": 1,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "ttl_seconds": {
             "description": "Seconds.",
             "maximum": 7200,
             "minimum": 60,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1344,20 +1376,32 @@
             "description": "Seconds.",
             "maximum": 7200,
             "minimum": 60,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "max_objects": {
             "maximum": 100,
             "minimum": 1,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "max_tokens_per_sub": {
             "maximum": 10,
             "minimum": 1,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "require_session": {
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -1369,7 +1413,10 @@
             "description": "Seconds.",
             "maximum": 7200,
             "minimum": 60,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -2013,7 +2060,10 @@
             "description": "The event's by default, and at most it.",
             "maximum": 100,
             "minimum": 1,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -2098,7 +2148,14 @@
             "type": "string"
           },
           "objects": {
-            "$ref": "#/components/schemas/ObjectRefs"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ObjectRefs"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -2111,10 +2168,20 @@
         "description": "With `hold_token`: held objects, all of the token's if `objects` is left out. Without: booked objects.",
         "properties": {
           "hold_token": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "objects": {
-            "$ref": "#/components/schemas/ObjectRefs"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ObjectRefs"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object"
@@ -2216,7 +2283,14 @@
             ]
           },
           "settings": {
-            "$ref": "#/components/schemas/EventSettingsInput"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EventSettingsInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object"

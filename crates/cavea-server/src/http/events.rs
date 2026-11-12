@@ -10,7 +10,9 @@ use serde_json::{Map, Value, json};
 use tracing::Instrument as _;
 
 use super::charts::Version;
-use super::extract::{Json, Page, Path, Query, check_text, invalid, invalid_field};
+use super::extract::{
+    Json, Page, Path, Query, check_text, invalid, invalid_field, object, optional_object,
+};
 use super::openapi::{Needs, Op, Routes};
 use super::seats::{Find, target};
 use super::staff::Staff;
@@ -426,7 +428,7 @@ struct CreateEvent {
     version: Option<i32>,
     #[serde(default)]
     name: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "object")]
     settings: Settings,
 }
 
@@ -597,7 +599,7 @@ struct UpdateEvent {
     #[serde(default, deserialize_with = "present")]
     name: Option<Option<String>>,
     /// Replaces the settings as a whole: a field left out takes its default.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_object")]
     settings: Option<Settings>,
 }
 

@@ -4,7 +4,7 @@
 
 export interface AcceptInvitation {
   /** Not signed in, for an email with no account: the new user's password. */
-  password?: string;
+  password?: string | null;
   /** The 64 hex digits of the link's fragment. */
   token: string;
 }
@@ -43,8 +43,8 @@ export interface AuditList {
 export interface Book {
   /** A JSON object per label, stored as sent. */
   extra?: Record<string, Record<string, unknown>>;
-  hold_token?: string;
-  objects?: ObjectRefs;
+  hold_token?: string | null;
+  objects?: ObjectRefs | null;
   order_ref: string;
   /** A ticket type per label. */
   ticket_types?: Record<string, string>;
@@ -161,7 +161,7 @@ export interface ConsoleSetup {
   workspace?: {
     key: string;
     name: string;
-  };
+  } | null;
 }
 
 export interface ConsoleSignIn {
@@ -186,7 +186,7 @@ export interface Counts {
 }
 
 export interface CreateChart {
-  document?: ChartDocument;
+  document?: ChartDocument | null;
   key: string;
   name: string;
 }
@@ -198,16 +198,16 @@ export interface CreateEvent {
   name?: string | null;
   settings?: EventSettingsInput;
   /** A version number; the published one by default. */
-  version?: number;
+  version?: number | null;
 }
 
 export interface CreateHoldToken {
   /** The event's key. */
   event: string;
   /** Unlimited by default. */
-  max_objects?: number;
+  max_objects?: number | null;
   /** Seconds. */
-  ttl_seconds?: number;
+  ttl_seconds?: number | null;
 }
 
 export interface CreateKey {
@@ -262,15 +262,15 @@ export interface EventSettings {
 
 export interface EventSettingsInput {
   /** Seconds. */
-  hold_ttl_seconds?: number;
-  max_objects?: number;
-  max_tokens_per_sub?: number;
-  require_session?: boolean;
+  hold_ttl_seconds?: number | null;
+  max_objects?: number | null;
+  max_tokens_per_sub?: number | null;
+  require_session?: boolean | null;
 }
 
 export interface ExtendHoldToken {
   /** Seconds. */
-  ttl_seconds?: number;
+  ttl_seconds?: number | null;
 }
 
 export interface ExtendReply {
@@ -433,7 +433,7 @@ export interface PublicCreateHoldToken {
   /** The event's key. */
   event: string;
   /** The event's by default, and at most it. */
-  max_objects?: number;
+  max_objects?: number | null;
 }
 
 export interface PublicEvent {
@@ -457,13 +457,13 @@ export interface PublicLicence {
 
 export interface PublicRelease {
   hold_token: string;
-  objects?: ObjectRefs;
+  objects?: ObjectRefs | null;
 }
 
 /** With `hold_token`: held objects, all of the token's if `objects` is left out. Without: booked objects. */
 export interface Release {
-  hold_token?: string;
-  objects?: ObjectRefs;
+  hold_token?: string | null;
+  objects?: ObjectRefs | null;
 }
 
 export interface RenameWorkspace {
@@ -493,7 +493,7 @@ export interface Stats {
 
 export interface UpdateEvent {
   name?: string | null;
-  settings?: EventSettingsInput;
+  settings?: EventSettingsInput | null;
 }
 
 export interface UpdateKey {

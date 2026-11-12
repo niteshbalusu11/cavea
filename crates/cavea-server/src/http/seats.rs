@@ -27,7 +27,7 @@ use tracing::Instrument as _;
 
 use super::auth::{Auth, PublishableKey, has_hex_tail, push_hex, sha256};
 use super::events::{Settings, archived};
-use super::extract::{Json, Path, Secret, check_object_count, invalid, invalid_field};
+use super::extract::{Json, Path, Secret, check_object_count, invalid, invalid_field, object};
 use super::openapi::{Needs, Op, Routes};
 use super::session::{self, Session};
 use super::staff::Staff;
@@ -562,7 +562,7 @@ fn respond(done: Done) -> Result<Response, ApiError> {
 #[serde(untagged)]
 enum Objects {
     Labels(Vec<String>),
-    Indices(Indices),
+    Indices(#[serde(deserialize_with = "object")] Indices),
 }
 
 #[derive(Debug, Deserialize, Serialize)]

@@ -36,6 +36,13 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo build --workspace --locked
+      # The fuzz crate (fuzz/: its own workspace and lockfile, fuzzed on
+      # nightly with cargo-fuzz) type-checks on the pinned stable toolchain:
+      # a change to an API its targets use fails here, not at the next run
+      # (docs/13-testing-benchmarks.md §5, D-86).
+      # Not --locked: a dependency the workspace adds is resolved here
+      # rather than failing every pull request until fuzz/Cargo.lock follows.
+      - run: cargo check --manifest-path fuzz/Cargo.toml --all-targets --target-dir target/fuzz
       - run: cargo xtask check-deps
       # wasm-opt for build-web's payload gate: binaryen 132, the version
       # flake.nix provides. The gate refuses a build without it or with
