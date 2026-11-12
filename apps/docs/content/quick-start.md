@@ -218,7 +218,7 @@ The seat is now held on the server under a [hold token](concepts/holds.md) that 
 
 The hold lasts 15 minutes, the event's hold lifetime, and then the seat is free again. In a real sale your backend takes payment and then books what the hold token holds, with a secret key: see [Bookings](concepts/bookings.md).
 
-> **Not yet** This server runs without a licence file, so it reports itself as unlicensed to the console and to the seat map. A coming version of the seat map then shows a small "Development licence" mark. Holding and booking work the same in every licence state.
+> **Note** This server runs without a licence file, so it reports itself as unlicensed: the console says so in one line, and the seat map shows a small "Development licence" mark in a corner. Holding and booking work the same in every licence state ([the licence](deployment/licence.md)).
 
 ## 9. Clean up
 

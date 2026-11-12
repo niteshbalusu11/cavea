@@ -6,7 +6,7 @@ How to make the seat map appear sooner, how to bundle it, and the Content Securi
 
 | File | What it is | Size, compressed with brotli |
 |---|---|---|
-| The package's JavaScript | The API, the built-in controls, the adapters | about 26 KB |
+| The package's JavaScript | The API, the built-in controls, the adapters | about 28 KB |
 | `cavea_web_bg.wasm` | The renderer | about 104 KB |
 | `glyphs.png` | The seat labels' font | about 9 KB |
 | The chart, `.ccf` | Your venue, compiled | Grows with the venue: about 7 KB for 2,000 seats, 54 KB for 20,000, 181 KB for 100,000 (the repository's synthetic venues) |

@@ -107,4 +107,18 @@ The [state adapter reference](../renderer/adapters.md#customState) has every met
 
 ## Licence
 
-Using the seat map without a Cavea server is licensed on its own. This version of the map has no licence option and shows no licence mark without a server; ask for the terms before going live.
+Using the seat map without a Cavea server is licensed on its own. Pass the licence file's text as the `licence` option:
+
+```ts check=types
+import { createSeatMap, staticState } from "{{renderer_package}}";
+#hide declare const container: HTMLElement;
+#hide declare const licenceText: string;
+
+await createSeatMap(container, {
+  chart: { url: "/charts/grand-hall.ccf" },
+  state: staticState(),
+  licence: licenceText, // the .json file you were sent, as text
+});
+```
+
+The map checks it in the browser, offline, after it has drawn; it never stops or delays the map. Without it, or when it does not verify, the map shows a small "Development licence" mark in a corner; an expired licence shows "Powered by Cavea"; a valid one shows nothing on the domains it names (and on `localhost`). A browser that cannot check the signature shows nothing. The file is signed, not encrypted: anyone who sees your page can read what it says (your company's name, the plan, the domains), and that is how it is meant to be used.
