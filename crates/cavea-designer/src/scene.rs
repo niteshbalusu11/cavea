@@ -32,6 +32,7 @@
 //!
 //! A *buyer's* live scene ([`LiveSync::for_buyer`], for a version's
 //! thumbnail, 07 §11) leaves out reference images, as the compiler does,
+//! and any numbering previewed and not applied,
 //! and starts from another sync's compiled pieces, so it compiles nothing
 //! the editor's canvas already has.
 
@@ -291,7 +292,10 @@ impl LiveSync {
         let doc = session.document();
         let revision = doc.revision();
         let gesture = session.editor().gesture_open();
-        let preview = session.numbering_nodes().map(|r| r.preview);
+        // A numbering previewed and not applied is the editor's only: a
+        // buyer's scene draws the document as it is.
+        let numbering = session.numbering_nodes().filter(|_| !self.buyer);
+        let preview = numbering.map(|r| r.preview);
         if self.revision == Some(revision)
             && self.floor == session.floor()
             && self.preview == preview
@@ -327,11 +331,10 @@ impl LiveSync {
         }
         self.floor = session.floor();
 
-        let previewed: BTreeMap<u32, &Node> = session
-            .numbering_nodes()
+        let previewed: BTreeMap<u32, &Node> = numbering
             .map(|r| r.nodes.iter().map(|(id, n)| (*id, n)).collect())
             .unwrap_or_default();
-        let overflow = session.numbering_nodes().map(|r| r.overflow);
+        let overflow = numbering.map(|r| r.overflow);
 
         // The pieces of the floor shown, in draw order, with what they are
         // compiled from and where they are now.

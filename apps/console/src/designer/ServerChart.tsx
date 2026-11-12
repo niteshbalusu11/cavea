@@ -450,6 +450,9 @@ export function serverChart(props: {
     if (gone) return;
     if (reply.kind === "offline") return notify(msg("lock.unreachable"), "error");
     if (reply.kind !== "held") return notify(msg("lock.takeOverFailed"), "error");
+    // Ours now: said at once, so another tab of this person closing while
+    // the chart reopens leaves it be (unsaid if the reopening fails).
+    if (peers !== null) peers.holding = true;
     // This editor's record is let go, so the reopened page can offer it.
     await autosave?.dispose();
     autosave = null;

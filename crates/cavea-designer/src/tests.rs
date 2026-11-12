@@ -1237,6 +1237,44 @@ fn the_buyers_view_has_no_overlay_and_no_reference_image() {
     assert_eq!(buyer.engine().overlay_batch().stats().texts, 0);
     assert_eq!(buyer.sync().compiled, 0, "the editor's pieces are reused");
 
+    // A numbering previewed and not applied: the editor shows it, the
+    // buyer's view does not (it is not in the draft).
+    let before = drawn(scene);
+    s.select_all();
+    let roman = cavea_edit::Numbering {
+        rows: Some(cavea_compiler::document::RowLabels {
+            scheme: cavea_compiler::document::LabelScheme::Roman,
+            ..cavea_compiler::document::RowLabels::default()
+        }),
+        seats: None,
+        after_z: None,
+        across: None,
+        keep_overrides: false,
+    };
+    // The first section's row blocks.
+    let doc = s.document();
+    let section = (doc.children(None).iter().copied())
+        .find(|&id| {
+            matches!(
+                doc.node(id),
+                Some(cavea_compiler::document::Node::Section(_))
+            )
+        })
+        .expect("a section");
+    let ids = doc.children(Some(section)).to_vec();
+    s.select(Level::Section(section), ids);
+    s.preview_numbering(&roman).expect("preview");
+    settle(&mut editor, &s);
+    settle(&mut buyer, &s);
+    assert_ne!(
+        drawn(editor.engine().scene().expect("scene")).rows,
+        before.rows,
+        "previewed"
+    );
+    assert_eq!(drawn(buyer.engine().scene().expect("scene")), before);
+    s.cancel_numbering();
+    let scene = buyer.engine().scene().expect("scene");
+
     // Without them, the same picture, compiled.
     let mut alone = painter(VIEW);
     alone.show_buyer(None);
