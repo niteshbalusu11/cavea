@@ -178,6 +178,11 @@ where
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
+        // No identifier holds U+0000, which PostgreSQL text cannot hold
+        // either: one in the path names nothing (08 §6.4).
+        if parts.uri.path().contains("%00") {
+            return Err(ApiError::new(Code::NotFound));
+        }
         match axum::extract::Path::<T>::from_request_parts(parts, state).await {
             Ok(axum::extract::Path(value)) => Ok(Self(value)),
             Err(rejection) => Err(ApiError::new(Code::InvalidRequest)
@@ -201,6 +206,13 @@ where
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
+        // U+0000 is in no key, label or cursor, and PostgreSQL text cannot
+        // hold it.
+        if parts.uri.query().is_some_and(|q| q.contains("%00")) {
+            return Err(ApiError::new(Code::InvalidRequest)
+                .with_message("The query holds U+0000.")
+                .with_detail("reason", "query"));
+        }
         match axum::extract::Query::<T>::from_request_parts(parts, state).await {
             Ok(axum::extract::Query(value)) => Ok(Self(value)),
             Err(rejection) => Err(query_rejection(&rejection)),
