@@ -64,8 +64,8 @@ import {
 import { optimisticRows } from "./optimistic.ts";
 import { by, rove, rowKeys } from "./tables.ts";
 
-/** Owner first: a role's rank, for sorting. */
-const rank = (r: Role) => ROLES.indexOf(r);
+/** A role's rank, for sorting: the owner highest. */
+const rank = (r: Role) => ROLES.length - ROLES.indexOf(r);
 
 type Tab = "workspace" | "members" | "audit" | "licence";
 const TABS: Tab[] = ["workspace", "members", "audit", "licence"];
