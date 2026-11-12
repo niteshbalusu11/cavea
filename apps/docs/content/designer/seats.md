@@ -54,9 +54,9 @@ Type a value and press `Enter` (or `Tab` to the next field). Each change can be 
 
 A block is one object. To work on one row or one seat in it, step in:
 
-1. Double-click the block: you are now working on its rows. The inspector says **Rows of a row block**.
+1. Double-click the block: you are now working on its rows. The inspector says **Rows of a row block**. (If the block is in a section, the first double-click selects the block inside the section; double-click again.)
 2. Double-click a row: you are now working on its seats. The inspector says **Seats**.
-3. Click a seat to select it, and press `Delete` to remove it, for a pillar or a gap. Its neighbours keep their places and their numbers.
+3. Click a seat to select it, and press `Delete` to remove it, for a pillar or a gap. Its neighbours stay where they are.
 4. Press `Escape` to step back out, once for each level.
 
 ## Type a block instead of drawing it

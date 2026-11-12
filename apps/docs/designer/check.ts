@@ -4,11 +4,13 @@
 // with the console compiled in, on a database of its own.
 //
 //   cargo xtask build-server
-//   nix develop -c bun apps/docs/designer/check.ts [--server <binary>] [--screenshots] [--keep]
+//   nix develop -c bun apps/docs/designer/check.ts [--server <binary>] [--screenshots] [--explore 1] [--keep]
 //
 // `--screenshots` retakes the guide's pictures (`static/images/designer-*.webp`,
-// light theme, cropped to what each shows). `--keep` leaves the server up
-// at the end with the owner's sign-in printed, to look around by hand.
+// light theme, cropped to what each shows). `--explore 1` writes them, and
+// the page's accessibility outline at each step, to `target/tmp/designer-guide/`
+// instead, for writing the guide. `--keep` leaves the server up at the end
+// with the owner's sign-in printed, to look around by hand.
 // Every bold phrase on the guide's pages is checked to be a label the
 // console shows (or one of the few call-outs listed below).
 //
@@ -16,11 +18,11 @@
 // the browser, the database (dropped).
 import { SQL } from "bun";
 import { randomBytes } from "node:crypto";
-import { mkdir, readdir, rm } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { Browser, pinned } from "../../../tools/chromium.ts";
 import { freePort, Server } from "../../../tools/e2e/server.ts";
-import { Tab, until } from "../../../tools/e2e/tab.ts";
+import { Tab } from "../../../tools/e2e/tab.ts";
 import { msg } from "../../console/src/i18n/messages.ts";
 import { boldLabels } from "../src/labels.ts";
 import { KNOWN, TASKS, type Guide } from "./tasks.ts";
@@ -44,7 +46,6 @@ const log = (text: string): void =>
   console.log(`[${((performance.now() - started) / 1000).toFixed(1)} s] ${text}`);
 const cleanup: Array<() => Promise<void>> = [];
 const OWNER = { email: "box-office@example.org", password: `designer guide ${hex(8)}` };
-const DIALOG = "dialog|alertdialog";
 const OUT = join(ROOT, "target/tmp/designer-guide");
 
 function check(ok: unknown, what: string): asserts ok {
@@ -53,15 +54,17 @@ function check(ok: unknown, what: string): asserts ok {
 
 // ------------------------------------------------------------ pictures
 
-/** A picture for the guide: the page, or the part of it `clip` names (CSS px). */
+/** A picture for the guide: the page, or the part of it `clip` names (CSS px), at `scale`. */
 async function shoot(
   t: Tab,
   name: string,
   clip?: { x: number; y: number; width: number; height: number },
+  scale = 1,
 ): Promise<void> {
   if (!screenshots && explore === undefined) return;
-  const params: Record<string, unknown> = { format: "webp", quality: 60 };
-  if (clip !== undefined) params["clip"] = { ...clip, scale: 1 };
+  const params: Record<string, unknown> = { format: "webp", quality: 70 };
+  const whole = { x: 0, y: 0, width: 1440, height: 900 };
+  params["clip"] = { ...(clip ?? whole), scale };
   const { data } = (await t.send("Page.captureScreenshot", params)) as { data: string };
   const bytes = Buffer.from(String(data), "base64");
   const to = screenshots
@@ -69,25 +72,6 @@ async function shoot(
     : join(OUT, `designer-${name}.webp`);
   await Bun.write(to, bytes);
   log(`picture ${name}: ${(bytes.byteLength / 1024).toFixed(0)} KiB`);
-}
-
-/** The box of an element, grown by `pad` px each side, kept within the page. */
-async function around(
-  t: Tab,
-  ids: number[],
-  pad = 8,
-): Promise<{ x: number; y: number; width: number; height: number }> {
-  let [l, tp, r, b] = [Infinity, Infinity, -Infinity, -Infinity];
-  for (const id of ids) {
-    const [x, y, w, h] = await t.box(id);
-    l = Math.min(l, x);
-    tp = Math.min(tp, y);
-    r = Math.max(r, x + w);
-    b = Math.max(b, y + h);
-  }
-  const x = Math.max(0, l - pad);
-  const y = Math.max(0, tp - pad);
-  return { x, y, width: r + pad - x, height: b + pad - y };
 }
 
 /** The accessibility outline of the page, while exploring. */
@@ -187,6 +171,4 @@ try {
   console.log(`designer guide check passed in ${((performance.now() - started) / 1000).toFixed(0)} s`);
 } finally {
   for (const c of cleanup.toReversed()) await c().catch((e: unknown) => console.error(String(e)));
-  void until;
-  void rm;
 }

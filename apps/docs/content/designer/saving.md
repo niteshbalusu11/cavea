@@ -13,7 +13,7 @@ Beside the undo arrows, the top bar says where your work is:
 | **Offline — changes kept locally** | The server cannot be reached. Your changes are kept in this browser and sent when the connection comes back | Keep working, or close the tab: the changes are offered when you open the chart again in this browser |
 | **Offline — this browser cannot keep the changes: keep this tab open** | As above, but this browser cannot store them (a private window, or a full disk) | Keep the tab open until it says **Saved** |
 | **Signed out — changes kept locally** | Your session ended | Sign in again; the changes are offered when the chart opens |
-| **Not saved: changed elsewhere** | Someone saved the chart since you opened it (see below) | Choose **Resolve…** |
+| **Not saved: changed elsewhere** | The chart was saved elsewhere since you opened it (see below) | Choose what to keep in the message that opens |
 | "Not saved" and a reason | The server refused the save | Read the reason; **Retry** tries again |
 | "Read-only" | You can look but not change: your role is viewer, or someone else is editing | See [someone else is editing](#someone-else-is-editing) |
 
@@ -52,6 +52,6 @@ Your colleague's designer turns read-only at once, and they are told who took ov
 
 Changes they had not saved are not lost: they stay in their browser, and are offered to them (as above) when they take over again. Agree with your colleague which version to keep before either of you restores anything.
 
-If your own designer says **Not saved: changed elsewhere**, someone saved the chart from another tab or browser while yours was not looking. Choose **Resolve…**, then **Keep mine (replaces theirs)**, **Open theirs (discards mine)**, or **Download mine** to decide later.
+If your own designer says **Not saved: changed elsewhere**, the chart was saved from another tab or browser since you opened it, and a message asks what to keep: **Keep mine (replaces theirs)**, **Open theirs (discards mine)**, or **Download mine** to decide later. **Resolve…** in the top bar opens it again.
 
-> **Note** The same person signed in on two computers counts as one person: the second computer is not made read-only, and whichever saves second gets **Not saved: changed elsewhere**. Close the chart on one computer before you open it on another.
+> **Warning** You, signed in on two computers (or in two browsers), count as one person: the second is not made read-only, and whichever saves second gets **Not saved: changed elsewhere**. Closing the chart on one of them also lets go of it on the other, so a colleague could then open it and edit at the same time as you. Open a chart in one place at a time; if you did open it twice, close one and reload the chart in the other.

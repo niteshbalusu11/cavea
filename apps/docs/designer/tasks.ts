@@ -11,7 +11,7 @@ export interface Guide {
   browser: Browser;
   base: string;
   out: string;
-  shoot: (t: Tab, name: string, clip?: Clip) => Promise<void>;
+  shoot: (t: Tab, name: string, clip?: Clip, scale?: number) => Promise<void>;
   look: (t: Tab, name: string) => Promise<void>;
   log: (text: string) => void;
   owner: { email: string; password: string };
@@ -42,14 +42,14 @@ function check(ok: unknown, what: string): asserts ok {
 
 /** Modifier bits of the DevTools protocol. */
 const CTRL = 2;
-const SHIFT = 8;
 
 /** A key with modifiers, as a person presses it: `chord(t, "2", CTRL)` is Ctrl+2. */
 export async function chord(t: Tab, key: string, modifiers = 0): Promise<void> {
   const upper = key.toUpperCase();
   const code = /^[a-z]$/i.test(key) ? `Key${upper}` : /^[0-9]$/.test(key) ? `Digit${key}` : key;
   const text = modifiers === 0 && key.length === 1 ? key : undefined;
-  const base = { key, code, modifiers, windowsVirtualKeyCode: upper.charCodeAt(0) };
+  const vk = key === "Delete" ? 46 : upper.charCodeAt(0);
+  const base = { key, code, modifiers, windowsVirtualKeyCode: vk };
   await t.send("Input.dispatchKeyEvent", {
     type: text === undefined ? "rawKeyDown" : "keyDown",
     ...base,
@@ -256,7 +256,7 @@ export const TASKS: Task[] = [
       await look(t, "reference");
       // Locked, so drawing over it never moves it.
       await t.click({ role: "checkbox", name: msg("field.locked") }, panel);
-      await shoot(t, "reference", { x: 0, y: 0, width: 1440, height: 900 });
+      await shoot(t, "reference", undefined, 0.5);
     },
   },
   {
@@ -314,7 +314,7 @@ export const TASKS: Task[] = [
       }
       // The whole screen, for the page that names its parts.
       await quiet(t);
-      await shoot(t, "screen");
+      await shoot(t, "screen", undefined, 0.5);
     },
   },
   {
@@ -374,7 +374,35 @@ export const TASKS: Task[] = [
       await chord(t, "2", CTRL);
       await Bun.sleep(500);
       await quiet(t);
-      await shoot(t, "block");
+      await shoot(t, "block", undefined, 0.5);
+      // numbering.md's warning: outside a section, labels start with a dash,
+      // and a Seat label without {section} drops it.
+      const first = async (): Promise<string> => {
+        await t.click({ role: "button", name: msg("inspector.numbering") }, await inspector(t));
+        const p = await inspector(t);
+        const text = await until("the numbering panel's full label", async () => {
+          const x = await t.text(p);
+          return x.includes(msg("numbering.fullLabel")) ? x : undefined;
+        });
+        await t.click({ role: "button", name: msg("panel.back") });
+        return text.split(msg("numbering.fullLabel"))[1]?.trim().split(/\s/)[0] ?? "";
+      };
+      const dash = await first();
+      check(dash === "-A-1", `a block outside a section labels its first seat -A-1, not ${dash}`);
+      KNOWN.push("a seat outside a section gets a label starting with a dash");
+      const template = async (value: string): Promise<void> => {
+        await t.call((await canvas(t)).id, "function () { this.focus(); }");
+        await t.key("Escape");
+        await until("the chart settings in the inspector", async () =>
+          (await t.text(await inspector(t))).includes(msg("inspector.settings")),
+        );
+        await field(t, msg("field.labelTemplate"), value);
+        await t.click({ role: "treeitem", name: /^Row block/ }, await t.find({ role: "tree", name: msg("layers.label") }));
+      };
+      await template("{row}-{seat}");
+      const plain = await first();
+      check(plain === "A-1", `with the Seat label {row}-{seat}, the first seat is A-1, not ${plain}`);
+      await template("{section}-{row}-{seat}");
     },
   },
   {
@@ -385,7 +413,6 @@ export const TASKS: Task[] = [
       await t.click({ role: "menuitem", name: msg("command.insertRowBlock") });
       const form = await t.find({ role: DIALOG, name: msg("insert.title") });
       // Its count of seats is the one it opened with: it does not follow the typing yet.
-      await shoot(t, "insert-form", await around(t, [form], 0));
       await t.enter({ role: "textbox", name: msg("field.rows") }, "2", form);
       await t.key("Tab");
       await t.enter({ role: "textbox", name: msg("field.seats") }, "6", form);
@@ -396,21 +423,27 @@ export const TASKS: Task[] = [
       await t.key("Tab");
       await t.enter({ role: "textbox", name: msg("field.rotation") }, "0", form);
       await t.key("Tab");
+      await shoot(t, "insert-form", await around(t, [form], 0));
+      // The guide's warning: the form's total stays at what it opened with.
+      check(
+        (await t.text(form)).includes(msg("insert.total", { n: 200 })),
+        "the Insert row block form's total now follows the fields: remove the warning in seats.md",
+      );
+      KNOWN.push("the Insert row block form's total does not follow the fields");
       await t.click({ role: "button", name: msg("insert.submit") }, form);
       await t.gone({ role: DIALOG });
       await status(t, "124 seats", (x) => x.includes(msg("status.seats", { n: 124 })));
-      // A product bug, written up in the guide: submitting the form stops the
-      // designer's canvas and panels following edits ("Stale read from
-      // <Show>") until the page is reloaded; the block is saved. Once it no
-      // longer happens, this reload and the guide's note go.
+      // A product bug, written up in the guide: submitting the form can stop
+      // the designer's canvas and panels following edits ("Stale read from
+      // <Show>") until the page is reloaded; the block is saved. It does not
+      // happen every time, so the page is reloaded either way, as the guide
+      // says to.
       await t.collect();
       const stale = t.problems.filter((p) => p.text.includes("Stale read from <Show>"));
-      check(
-        stale.length > 0,
-        "the Insert row block form no longer breaks the designer: remove the reload here and the note in seats.md",
-      );
       t.problems.splice(0);
-      KNOWN.push("Insert row block: the designer stops following edits until a reload");
+      KNOWN.push(
+        `Insert row block: the designer stops following edits until a reload (${stale.length > 0 ? "it happened" : "it did not happen"} this run)`,
+      );
       await saveState(t, msg("save.saved"));
       await t.goto(await t.evaluate<string>("location.href"));
       await t.find({ role: "application", name: msg("canvas.label", { name: CHART.name }) }, undefined, 30_000);
@@ -545,6 +578,12 @@ export const TASKS: Task[] = [
         );
         await Bun.sleep(350);
       }
+      // seats.md: Delete removes the selected seat; undone at once.
+      await chord(t, "Delete");
+      await status(t, "123 seats", (x) => x.includes(msg("status.seats", { n: 123 })));
+      await chord(t, "z", CTRL);
+      await status(t, "124 seats again", (x) => x.includes(msg("status.seats", { n: 124 })));
+      await t.clickAt(...a1);
       await t.click({ role: "tab", name: msg("panel.categories") });
       await t.click({ role: "button", name: `Wheelchair space: ${msg("categories.makeActive")}` });
       await t.click({ role: "button", name: msg("tool.brush") });
@@ -732,40 +771,132 @@ export const TASKS: Task[] = [
     },
   },
   {
-    name: "saving.md: someone else opens the chart; taking over",
-    async run({ t, browser, owner, shoot }) {
+    name: "saving.md: the same person in another browser; a colleague opens the chart; taking over",
+    async run(g) {
+      const { t, browser, owner, shoot, look } = g;
       const url = await t.evaluate<string>("location.href");
-      const other = await Tab.open(browser, "other", 1440, 900);
+      const base = new URL(url).origin;
+      const signIn = async (name: string, who: { email: string; password: string }): Promise<Tab> => {
+        const tab = await Tab.open(browser, name, 1440, 900);
+        tab.allow("GET", /^\/favicon\.ico$/, 404);
+        tab.expect("GET", /^\/console\/api\/me$/, 401);
+        await tab.goto(`${base}/charts`);
+        await tab.enter({ role: "textbox", name: msg("signIn.email") }, who.email);
+        await tab.enter({ role: "textbox", name: msg("signIn.password") }, who.password);
+        await tab.click({ role: "button", name: msg("signIn.submit") });
+        await tab.find({ role: "button", name: msg("user.menu", { email: who.email }) }, undefined, 30_000);
+        await tab.find({ role: "link", name: CHART.name }, undefined, 30_000);
+        return tab;
+      };
+      const nudge = async (tab: Tab): Promise<void> => {
+        await tab.click({ role: "tab", name: msg("panel.layers") });
+        await tab.click({ role: "treeitem", name: /^Box B/ }, await tab.find({ role: "tree", name: msg("layers.label") }));
+        const c = await canvas(tab);
+        await tab.call(c.id, "function () { this.focus(); }");
+        await tab.key("ArrowLeft");
+      };
+      // The same person in a second browser: not read-only, and whichever saves
+      // second is told the chart changed elsewhere (the guide's note).
+      const same = await signIn("same-person", owner);
+      try {
+        await same.goto(url);
+        await canvas(same);
+        await Bun.sleep(3000);
+
+        const bar = await same.text(await same.find({ role: "banner" }));
+        check(!bar.includes(msg("save.readOnly")), `the same person's second browser opens the chart to edit, not: ${bar}`);
+        await nudge(same);
+        await saveState(same, msg("save.saved"));
+        await t.send("Page.bringToFront");
+        await nudge(t);
+        await saveState(t, msg("save.conflict"));
+        await look(t, "conflict");
+        // The choice opens by itself; Resolve… in the top bar opens it again.
+        const resolve = await t.find({ role: DIALOG, name: msg("conflict.title") });
+        await t.click({ role: "button", name: msg("conflict.keepMine") }, resolve);
+        await t.gone({ role: DIALOG });
+        await saveState(t, msg("save.saved"));
+        KNOWN.push("one person in two browsers can edit a chart in both, and the second save is refused");
+      } finally {
+        await same.close();
+        await t.send("Page.bringToFront");
+      }
+      // Closing the chart in the second browser released the editing lock the
+      // two share (one person is one holder, D-73), under this one, which
+      // goes on saving without it: a colleague would now open the chart to
+      // edit too. Reopening the chart here takes the lock again.
+      const lockNow = (): Promise<{ lock: { email: string | null } | null }> =>
+        t.evaluate(`(async () => {
+          const me = await (await fetch("/console/api/me")).json();
+          const r = await fetch("/v1/charts/${CHART.key}/lock", { headers: { "cavea-workspace": me.workspaces[0].id } });
+          return r.json();
+        })()`);
+      check((await lockNow()).lock === null, "closing the second browser no longer frees the lock: update the note in saving.md");
+      KNOWN.push("closing a chart in one of a person's two browsers frees the editing lock under the other, which saves on without it");
+      await t.goto(url);
+      await canvas(t);
+      await until("the reopened chart to hold the lock", async () => ((await lockNow()).lock?.email === owner.email ? true : undefined));
+      // A colleague: an editor invited from the console's Settings.
+      const colleague = { email: "events@example.org", password: `colleague ${Math.random().toString(36).slice(2)}` };
+      const inviter = await signIn("inviter", owner);
+      let link = "";
+      try {
+        await inviter.click({ role: "link", name: msg("nav.settings") }, await inviter.find({ role: "navigation", name: msg("nav.label") }));
+        await inviter.click({ role: "tab", name: msg("settings.members") });
+        await inviter.click({ role: "button", name: msg("invite.new") });
+        const form = await inviter.find({ role: DIALOG, name: msg("invite.title") });
+        await inviter.enter({ role: "textbox", name: msg("invite.email") }, colleague.email, form);
+        await inviter.key("Tab");
+        await inviter.type(msg("role.editor").slice(0, 1).toLowerCase());
+        await inviter.click({ role: "button", name: msg("invite.create") }, form);
+        const shown = await inviter.find({ role: DIALOG, name: msg("invite.shownTitle", { email: colleague.email }) });
+        link = await inviter.value(await inviter.find({ role: "textbox", name: msg("invite.link") }, shown));
+      } finally {
+        await inviter.close();
+      }
+      const other = await Tab.open(browser, "colleague", 1440, 900);
       other.allow("GET", /^\/favicon\.ico$/, 404);
       other.expect("GET", /^\/console\/api\/me$/, 401);
       try {
-        await other.goto(url.replace(/\/designer\/.*$/, "/charts"));
-        await other.enter({ role: "textbox", name: msg("signIn.email") }, owner.email);
-        await other.enter({ role: "textbox", name: msg("signIn.password") }, owner.password);
-        await other.click({ role: "button", name: msg("signIn.submit") });
-        await other.find({ role: "link", name: CHART.name }, undefined, 30_000);
+        await other.goto(link);
+        await other.find({ role: "heading", name: msg("accept.title") });
+        await other.enter({ role: "textbox", name: msg("setup.password") }, colleague.password);
+        await other.enter({ role: "textbox", name: msg("setup.confirm") }, colleague.password);
+        await other.click({ role: "button", name: msg("accept.submit") });
+        await other.find({ role: "button", name: msg("user.menu", { email: colleague.email }) }, undefined, 30_000);
         await other.goto(url);
         const banner = await other.find({ role: "banner" }, undefined, 30_000);
-        const who = msg("lock.you");
-        await until("the other window to open read-only", async () =>
-          (await other.text(banner)).includes(`Read-only: ${who} is editing`),
+        const editing = `Read-only: ${owner.email} is editing`;
+        await until("the colleague's designer to open read-only", async () =>
+          (await other.text(banner)).includes(editing),
         );
         await quiet(other);
-        await shoot(other, "read-only", await around(other, [banner], 0));
+        await shoot(other, "read-only", { ...(await around(other, [banner], 0)), x: 0, width: 1440 }, 0.75);
         await other.click({ role: "button", name: msg("lock.takeOver") }, banner);
-        const confirm = await other.find({ role: DIALOG, name: msg("lock.confirmTitle", { who }) });
+        const confirm = await other.find({ role: DIALOG, name: msg("lock.confirmTitle", { who: owner.email }) });
         await other.click({ role: "button", name: msg("lock.takeOverConfirm") }, confirm);
         await other.gone({ role: DIALOG });
-        await saveState(other, msg("save.saved"));
-        // The first window is told, and is read-only now.
+        await until(
+          "the colleague's designer to be editable",
+          async () => ((await other.text(await other.find({ role: "banner" }))).includes("Read-only") ? undefined : true),
+          30_000,
+        ).catch(async (e: unknown) => {
+          await Bun.write(join(g.out, "takeover.fail.txt"), `${other.network.slice(-20).join("\n")}\n${await other.outline()}`);
+          throw e;
+        });
+        // The owner's designer is told, and is read-only now.
         await t.send("Page.bringToFront");
-        const told = await t.find({ role: DIALOG, name: msg("lock.lostTitle", { who }) }, undefined, 30_000);
+        const told = await t.find({ role: DIALOG, name: msg("lock.lostTitle", { who: colleague.email }) }, undefined, 30_000);
         await shoot(t, "taken-over", await around(t, [told], 0));
         await t.click({ role: "button", name: msg("lock.takeOver") }, told);
-        const back = await t.find({ role: DIALOG, name: msg("lock.confirmTitle", { who }) });
+        const back = await t.find({ role: DIALOG, name: msg("lock.confirmTitle", { who: colleague.email }) });
         await t.click({ role: "button", name: msg("lock.takeOverConfirm") }, back);
         await t.gone({ role: DIALOG });
-        await saveState(t, msg("save.saved"));
+        await until(
+          "the owner's designer to be editable again",
+          async () => ((await t.text(await t.find({ role: "banner" }))).includes("Read-only") ? undefined : true),
+          30_000,
+        );
       } finally {
         await other.close();
         await t.send("Page.bringToFront");
@@ -774,32 +905,51 @@ export const TASKS: Task[] = [
   },
   {
     name: "publishing.md: preview, publish, the version, an event, a second version",
-    async run({ t, shoot }) {
+    async run(g) {
+      const { t, shoot } = g;
       const banner = await t.find({ role: "banner" });
       await t.click({ role: "button", name: msg("topbar.preview") }, banner);
       const preview = await t.find({ role: DIALOG, name: msg("preview.title") });
-      await t.click({ role: "button", name: new RegExp(`^${msg("preview.phone")}`) }, preview);
-      await t.click({ role: "button", name: msg("preview.half") }, preview);
+      await t.click({ role: "radio", name: new RegExp(`^${msg("preview.phone")}`) }, preview);
+      await t.click({ role: "radio", name: msg("preview.half") }, preview);
       await Bun.sleep(2500);
-      await shoot(t, "preview");
+      await shoot(t, "preview", await around(t, [preview], 0), 0.6);
       await t.click({ role: "button", name: msg("action.close") }, preview);
       await t.gone({ role: DIALOG });
       const publish = async (version: number, seats: number): Promise<void> => {
-        await t.click({ role: "button", name: msg("topbar.publish") }, banner);
+        await t.click({ role: "button", name: msg("topbar.publish") }, await t.find({ role: "banner" })).catch(async (e: unknown) => {
+          g.log(`  publish refused: ${await t.text(await t.find({ role: "banner" }))} | ${await t.text(await statusBar(t))}`);
+          throw e;
+        });
         const dialog = await t.find({ role: DIALOG, name: msg("publish.title", { name: CHART.name }) });
         await t.click({ role: "button", name: msg("publish.action") }, dialog);
         const done = msg("publish.done", { version, seats: String(seats) });
         await until(`“${done}”`, async () => (await t.text(dialog)).includes(done), 30_000);
         if (version === 1) await shoot(t, "published", await around(t, [dialog], 0));
+        g.log(`  publish: ${await t.text(dialog)}`);
         await t.click({ role: "button", name: msg("action.close") }, dialog);
         await t.gone({ role: DIALOG });
       };
       await publish(1, 136);
+      // The charts list's picture is made in the background after publishing,
+      // by this page: leaving at once would leave the version without one.
+      await until("the thumbnail to be attached", async () =>
+        t.network.some((n) => /^200 \w+ .*\/versions\/1\/thumbnail/.test(n)) ? true : undefined,
+        30_000,
+      );
       // The console: the chart's picture in the list, its versions, an event on version 1.
       await t.click({ role: "button", name: msg("menu.label") }, banner);
       await t.click({ role: "menuitem", name: msg("menu.console") });
-      await t.find({ role: "img", name: msg("charts.thumbnail", { name: CHART.name }) }, undefined, 30_000);
+      const picture = { role: "image", name: msg("charts.thumbnail", { name: CHART.name }) } as const;
+      await t.find({ role: "heading", name: msg("charts.title") });
+      await Bun.sleep(2000);
+      if (!(await t.has(picture))) {
+        KNOWN.push("the charts list shows a chart's new picture only once the page is reloaded");
+        await t.goto(await t.evaluate<string>("location.href"));
+      }
+      await t.find(picture, undefined, 30_000);
       await t.click({ role: "link", name: CHART.name });
+      await t.find({ role: "tab", name: msg("chart.events") });
       const versions = await t.find({ role: "table", name: msg("chart.versions") });
       await shoot(t, "versions", await around(t, [versions], 8));
       await t.click({ role: "button", name: msg("chart.createEvent") }, versions);
@@ -826,6 +976,51 @@ export const TASKS: Task[] = [
       );
     },
   },
+  {
+    name: "start.md: from a template: Open the designer, Theatre, Export chart file, Import chart file",
+    async run({ t, shoot, out }) {
+      await t.goto(`${new URL(await t.evaluate<string>("location.href")).origin}/charts`);
+      await t.click({ role: "button", name: msg("charts.openDesigner") });
+      const theatre = await t.find({ role: "button", name: new RegExp(`^${msg("template.theatre")} `) }, undefined, 30_000);
+      const empty = await t.find({ role: "button", name: new RegExp(`^${msg("new.empty")}`) });
+      const heading = await t.find({ role: "heading", name: msg("new.title") });
+      await shoot(t, "start", await around(t, [heading, empty, theatre], 16), 0.75);
+      await t.click({ role: "button", name: new RegExp(`^${msg("template.theatre")} `) });
+      await t.find({ role: "application", name: msg("canvas.label", { name: msg("template.theatre") }) }, undefined, 30_000);
+      await t.click({ role: "button", name: msg("tour.skip") }).catch(() => undefined);
+      // What the browser saves, as the download would: the file's name and text.
+      await t.evaluate(`(() => {
+        const click = HTMLAnchorElement.prototype.click;
+        const make = URL.createObjectURL;
+        let blob = null;
+        URL.createObjectURL = (b) => { blob = b; return make.call(URL, b); };
+        HTMLAnchorElement.prototype.click = function () {
+          if (this.download && blob) blob.text().then((text) => (window.saved = { name: this.download, text }));
+          return click.call(this);
+        };
+      })()`);
+      const banner = await t.find({ role: "banner" });
+      await t.click({ role: "button", name: msg("menu.label") }, banner);
+      await t.click({ role: "menuitem", name: new RegExp(`^${msg("menu.export")}`) });
+      const saved = await until("the chart file to be saved", () =>
+        t.evaluate<{ name: string; text: string } | null>("window.saved ?? null").then((x) => x ?? undefined),
+      );
+      check(saved.name.endsWith(".json"), `the exported file ends in .json: ${saved.name}`);
+      const file = join(out, saved.name);
+      await Bun.write(file, saved.text);
+      await t.click({ role: "button", name: msg("menu.label") }, banner);
+      await t.click({ role: "menuitem", name: msg("menu.console") });
+      await t.find({ role: "heading", name: msg("charts.title") });
+      await t.send("Page.setInterceptFileChooserDialog", { enabled: true });
+      await t.click({ role: "button", name: msg("charts.import") });
+      await pick(t, 'input[type=file][accept=".json,application/json"]', file);
+      await t.send("Page.setInterceptFileChooserDialog", { enabled: false });
+      const form = await t.find({ role: DIALOG, name: msg("charts.importTitle") });
+      await t.enter({ role: "textbox", name: msg("charts.name") }, "Studio theatre", form);
+      await t.click({ role: "button", name: msg("charts.create") }, form);
+      await t.gone({ role: DIALOG });
+      await t.find({ role: "link", name: "Studio theatre" });
+    },
+  },
 ];
 
-void SHIFT;
