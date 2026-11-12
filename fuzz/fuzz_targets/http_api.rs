@@ -27,7 +27,10 @@
 //!   the request schema;
 //! - a `2xx` only with a credential the operation accepts: a live key of the
 //!   right kind, or the admin key; never with none, a malformed, unknown or
-//!   revoked one, the wrong kind, or a cookie route without its cookie;
+//!   revoked one, the wrong kind, or a cookie route without its cookie; on a
+//!   route that takes a session token, never with an expired one, one signed
+//!   by a revoked key or the other workspace's, garbage, one for another
+//!   event, or none for an event that requires one;
 //! - nothing of the other workspace in an answer to a workspace's credential:
 //!   its id, key ids, keys, hold tokens and names (each name carries the
 //!   workspace's marker), unless the request itself carried it;
@@ -96,7 +99,7 @@ impl Choices<'_> {
     /// True about once in `n` bytes, never on 0.
     fn rare(&mut self, n: u8) -> bool {
         let b = self.byte();
-        b != 0 && b % n == 0
+        b != 0 && b.is_multiple_of(n)
     }
 
     /// Up to 32 of the record's bytes, length first.
@@ -170,6 +173,9 @@ struct Tenant {
     /// A chart and an event only this workspace has.
     own_chart: String,
     own_event: String,
+    /// The events known to require a session token (08 §11): `e2`, and any
+    /// an answer has since shown with `require_session`.
+    requires_session: Vec<String>,
 }
 
 impl Tenant {
@@ -195,10 +201,13 @@ impl Tenant {
 }
 
 struct World {
+    /// The world's number in the run, which makes what the admin key
+    /// creates (workspaces, whose keys are global) its own.
+    tag: u32,
     t: [Tenant; 2],
     /// Session tokens of each workspace's secret key for its events: valid,
     /// expired, wrong event; then garbage.
-    sessions: [Vec<String>; 2],
+    sessions: [Vec<(String, Session)>; 2],
 }
 
 struct Harness {
@@ -206,6 +215,9 @@ struct Harness {
     app: Router,
     doc: Value,
     ops: Vec<Operation>,
+    /// A connection to the run's database for as long as the process
+    /// lives: while it is open, no other run takes the database for stale.
+    _owner: std::sync::Mutex<PgConnection>,
     next: AtomicU32,
     /// Worlds made ahead, each used by one input only.
     ready: std::sync::Mutex<Vec<World>>,
@@ -256,26 +268,35 @@ fn setup() -> Harness {
         .enable_all()
         .build()
         .expect("a runtime");
-    let pid = std::process::id();
-    let nanos = std::time::SystemTime::now()
+    let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.subsec_nanos());
-    let name = format!("cavea_fuzz_{pid}_{nanos}");
-    let pool = runtime.block_on(async {
+        .unwrap_or_default();
+    let name = format!(
+        "cavea_fuzz_{}_{}_{}",
+        now.as_secs(),
+        std::process::id(),
+        now.subsec_nanos()
+    );
+    let (pool, owner) = runtime.block_on(async {
         let mut conn = PgConnection::connect_with(&server)
             .await
             .expect("PostgreSQL answers");
-        // A crashed run leaves its database: drop those whose process is gone.
-        let stale: Vec<(String,)> =
-            sqlx::query_as("SELECT datname FROM pg_database WHERE datname LIKE 'cavea\\_fuzz\\_%'")
-                .fetch_all(&mut conn)
-                .await
-                .expect("databases listed");
-        for (db,) in stale {
-            let owner = db.split('_').nth(2).and_then(|p| p.parse::<u32>().ok());
-            if let Some(owner) = owner
-                && owner != pid
-                && !std::path::Path::new(&format!("/proc/{owner}")).exists()
+        // A run that ended without `exit` (a finding, a timeout, an
+        // interrupt) leaves its database. A live run keeps a connection to
+        // its own from a moment after creating it until it ends, so a
+        // database of this target's name that is over a minute old and that
+        // nothing is connected to is stale, whichever host or process
+        // namespace made it.
+        let unused: Vec<(String,)> = sqlx::query_as(
+            "SELECT datname FROM pg_database d WHERE datname LIKE 'cavea\\_fuzz\\_%'
+               AND NOT EXISTS (SELECT FROM pg_stat_activity a WHERE a.datname = d.datname)",
+        )
+        .fetch_all(&mut conn)
+        .await
+        .expect("databases listed");
+        for (db,) in unused {
+            let made = db.split('_').nth(2).and_then(|p| p.parse::<u64>().ok());
+            if made.is_some_and(|made| made + 60 < now.as_secs())
                 && db.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
             {
                 let _ = conn
@@ -288,6 +309,10 @@ fn setup() -> Harness {
         conn.execute(AssertSqlSafe(format!("CREATE DATABASE {name}")))
             .await
             .expect("database created");
+        // Held until the process ends: what marks the database as in use.
+        let owner = PgConnection::connect_with(&server.clone().database(&name))
+            .await
+            .expect("the run's database answers");
         // Commits need not wait for the disk: the run's data is thrown away.
         conn.execute(AssertSqlSafe(format!(
             "ALTER DATABASE {name} SET synchronous_commit = off"
@@ -304,9 +329,10 @@ fn setup() -> Harness {
         cavea_server::store::migrate(&options)
             .await
             .expect("migrations apply");
-        cavea_server::store::connect(options, 4)
+        let pool = cavea_server::store::connect(options, 4)
             .await
-            .expect("the pool connects")
+            .expect("the pool connects");
+        (pool, owner)
     });
     let config = cavea_server::config::Config {
         listen: ([127, 0, 0, 1], 0).into(),
@@ -358,6 +384,7 @@ fn setup() -> Harness {
         app: cavea_server::http::router(state),
         ops: operations(&doc),
         doc,
+        _owner: std::sync::Mutex::new(owner),
         next: AtomicU32::new(0),
         ready: std::sync::Mutex::default(),
     }
@@ -375,6 +402,23 @@ struct Built {
     /// The operation the request was built for, unless its method or path
     /// was changed.
     op: Option<usize>,
+    /// The `Cavea-Session` header sent, as the oracle sees it.
+    session: Session,
+    /// The event the request names, in its path or its body's `event`.
+    event: Option<String>,
+}
+
+/// A session token as sent (08 §11: verified whenever sent).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Session {
+    None,
+    /// Signed by the credential's workspace with a live key, unexpired, for
+    /// this event.
+    For(String),
+    /// Expired, signed by a revoked key or another workspace's, or garbage.
+    Invalid,
+    /// Not known to be either (an empty header).
+    Unknown,
 }
 
 impl Built {
@@ -386,6 +430,8 @@ impl Built {
             body: None,
             cred,
             op: None,
+            session: Session::None,
+            event: None,
         }
     }
 
@@ -449,6 +495,14 @@ struct Answer {
     body: Vec<u8>,
     json: Value,
     etag: Option<String>,
+}
+
+/// The workspace whose key a credential is.
+fn acting(cred: Cred) -> Option<usize> {
+    match cred {
+        Cred::Secret(t) | Cred::Publishable(t) => Some(t),
+        _ => None,
+    }
 }
 
 /// Sends `req` and checks the answer (module docs).
@@ -550,14 +604,29 @@ async fn send(h: &Harness, world: &World, req: Built) -> Answer {
         let allowed =
             alternatives.is_empty() || alternatives.iter().any(|a| a.iter().all(|s| met(s)));
         assert!(allowed, "{at}: {template} succeeded with {:?}", req.cred);
+        // A session token is verified whenever sent, and required by an
+        // event that sets `require_session` (08 §11).
+        let takes_session = alternatives.iter().flatten().any(|s| *s == "sessionToken");
+        if let (true, Some(t), Some(_)) = (takes_session, acting(req.cred), req.op) {
+            let target = req.event.as_deref();
+            let ok = match &req.session {
+                Session::None => {
+                    target.is_none_or(|e| !world.t[t].requires_session.iter().any(|r| r == e))
+                }
+                Session::For(e) => target.is_none_or(|target| target == e),
+                Session::Invalid => false,
+                Session::Unknown => true,
+            };
+            assert!(
+                ok,
+                "{at}: {template} succeeded with session {:?} for event {target:?}",
+                req.session
+            );
+        }
     }
 
     // Nothing of the other workspace.
-    let acting = match req.cred {
-        Cred::Secret(t) | Cred::Publishable(t) => Some(t),
-        _ => None,
-    };
-    if let Some(t) = acting
+    if let Some(t) = acting(req.cred)
         && matched.is_some_and(|(_, op)| {
             op.get("security")
                 .and_then(Value::as_array)
@@ -644,16 +713,18 @@ async fn world(h: &Harness) -> World {
     let n = h.next.fetch_add(1, Ordering::Relaxed);
     let (a, b) = tokio::join!(tenant(h, n, 0), tenant(h, n, 1));
     World {
+        tag: n,
         sessions: [a.1, b.1],
         t: [a.0, b.0],
     }
 }
 
 /// Workspace `t` of world `n`, and its session tokens.
-async fn tenant(h: &Harness, n: u32, t: usize) -> (Tenant, Vec<String>) {
+async fn tenant(h: &Harness, n: u32, t: usize) -> (Tenant, Vec<(String, Session)>) {
     // Seeding is checked like any request, but not for isolation: the other
     // workspace is being made at the same time.
     let none = World {
+        tag: n,
         t: [Tenant::default(), Tenant::default()],
         sessions: [Vec::new(), Vec::new()],
     };
@@ -772,15 +843,32 @@ async fn tenant(h: &Harness, n: u32, t: usize) -> (Tenant, Vec<String>) {
         tokens: vec![token],
         own_chart,
         own_event,
+        requires_session: vec!["e2".to_owned()],
         secret: secret.clone(),
     };
     let exp = now() + 600;
+    let valid = |event: &str| Session::For(event.to_owned());
     let sessions = vec![
-        session(&tenant.secret, &tenant.secret_id, "e2", exp),
-        session(&tenant.secret, &tenant.secret_id, "e1", exp),
-        session(&tenant.secret, &tenant.secret_id, "e2", now() - 3_600),
-        session(&tenant.secret, &tenant.secret_id, "nope", exp),
-        session(&tenant.revoked, &tenant.revoked_id, "e2", exp),
+        (
+            session(&tenant.secret, &tenant.secret_id, "e2", exp),
+            valid("e2"),
+        ),
+        (
+            session(&tenant.secret, &tenant.secret_id, "e1", exp),
+            valid("e1"),
+        ),
+        (
+            session(&tenant.secret, &tenant.secret_id, "e2", now() - 3_600),
+            Session::Invalid,
+        ),
+        (
+            session(&tenant.secret, &tenant.secret_id, "nope", exp),
+            valid("nope"),
+        ),
+        (
+            session(&tenant.revoked, &tenant.revoked_id, "e2", exp),
+            Session::Invalid,
+        ),
     ];
     (tenant, sessions)
 }
@@ -1105,10 +1193,17 @@ fn build(h: &Harness, doc: &Value, world: &World, bytes: &[u8]) -> Option<Built>
 
     // The path.
     let mut path = String::new();
+    let mut event = None;
     for segment in op.template.split('/').skip(1) {
         path.push('/');
         match segment.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
-            Some(name) => path.push_str(&encode(&path_value(&mut c, world, t, name))),
+            Some(name) => {
+                let value = path_value(&mut c, world, t, name);
+                path.push_str(&encode(&value));
+                if name == "event" {
+                    event = Some(value);
+                }
+            }
             None => path.push_str(segment),
         }
     }
@@ -1161,6 +1256,7 @@ fn build(h: &Harness, doc: &Value, world: &World, bytes: &[u8]) -> Option<Built>
 
     let mut req = Built::new(&method, uri, cred);
     req.op = (!changed).then_some(index);
+    req.event = event;
 
     // Headers.
     match (cred, key) {
@@ -1205,12 +1301,29 @@ fn build(h: &Harness, doc: &Value, world: &World, bytes: &[u8]) -> Option<Built>
             },
             "Cavea-Session" => {
                 let sessions = &world.sessions[t];
-                match c.pick(sessions.len() + 3) {
-                    i if i < sessions.len() => sessions.get(i).cloned(),
-                    i if i == sessions.len() => None,
-                    i if i == sessions.len() + 1 => world.sessions[1 - t].first().cloned(),
-                    _ => Some(c.text()),
-                }
+                let (value, session) = match c.pick(sessions.len() + 3) {
+                    i if i < sessions.len() => match sessions.get(i) {
+                        Some((token, session)) => (Some(token.clone()), session.clone()),
+                        None => (None, Session::None),
+                    },
+                    i if i == sessions.len() => (None, Session::None),
+                    // Signed by the other workspace's key.
+                    i if i == sessions.len() + 1 => (
+                        world.sessions[1 - t].first().map(|s| s.0.clone()),
+                        Session::Invalid,
+                    ),
+                    _ => {
+                        let text = c.text();
+                        let session = if text.is_empty() {
+                            Session::Unknown
+                        } else {
+                            Session::Invalid
+                        };
+                        (Some(text), session)
+                    }
+                };
+                req.session = session;
+                value
             }
             "Cavea-Hold-Token" => {
                 let tokens = &world.t[t].tokens;
@@ -1253,12 +1366,22 @@ fn build(h: &Harness, doc: &Value, world: &World, bytes: &[u8]) -> Option<Built>
                     .to_vec(),
                 "application/json",
             ),
-            _ => (
-                generate(&mut c, doc, world, t, "", schema, 0)
-                    .to_string()
-                    .into_bytes(),
-                "application/json",
-            ),
+            _ => {
+                let mut body = generate(&mut c, doc, world, t, "", schema, 0);
+                // Workspace keys are global: a workspace the admin key makes
+                // is this world's own, so that an input does the same alone
+                // as after others (two in one input still collide).
+                if op.id == "createWorkspace"
+                    && let Some(Value::String(key)) = body.get_mut("key")
+                    && !key.is_empty()
+                {
+                    key.push_str(&format!("-w{}", world.tag));
+                }
+                if let Some(Value::String(e)) = body.get("event") {
+                    req.event = Some(e.clone());
+                }
+                (body.to_string().into_bytes(), "application/json")
+            }
         });
     } else if c.rare(37) {
         req.body = Some((c.raw(), "application/json"));
@@ -1288,6 +1411,21 @@ fn learn(world: &mut World, cred: Cred, answer: &Answer) {
             && e.ends_with('"')
             && e[1..e.len() - 1].bytes().all(|b| b.is_ascii_digit())
     };
+    // An event as its workspace's key sees it: whether it requires a session.
+    if let (Cred::Secret(_), Some(key), Some(requires)) = (
+        cred,
+        answer.json.get("key").and_then(Value::as_str),
+        answer
+            .json
+            .pointer("/settings/require_session")
+            .and_then(Value::as_bool),
+    ) {
+        let list = &mut world.t[t].requires_session;
+        list.retain(|e| e != key);
+        if requires {
+            list.push(key.to_owned());
+        }
+    }
     if let Some(etag) = answer.json.get("draft_etag").and_then(Value::as_str) {
         world.t[t].etag = etag.to_owned();
     } else if let Some(etag) = answer.etag.as_deref().filter(|e| draft(e)) {
