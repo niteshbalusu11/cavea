@@ -1276,6 +1276,7 @@ const auditActions: Record<AuditEntry["action"], string> = {
   "workspace.renamed": "Workspace renamed",
   "api_key.created": "API key created",
   "api_key.revoked": "API key revoked",
+  "api_key.origins_changed": "API key origins changed",
   "chart.published": "Chart published",
   "chart.archived": "Chart archived",
   "event.created": "Event created",

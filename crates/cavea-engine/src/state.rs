@@ -76,7 +76,8 @@ struct Pending {
     holds: Vec<(HoldId, u32)>,
     /// Holds created in this batch.
     created: Vec<HoldId>,
-    objects: Vec<(Idx, u64)>,
+    /// `(idx, seq, status code before the change)`, one per change.
+    objects: Vec<(Idx, u64, u8)>,
     log: Vec<LogRecord>,
     idempotency: Vec<IdempotencyRecord>,
     /// Tokens whose hold a committed command changed, for PRIVATE frames.
@@ -415,15 +416,31 @@ impl EventState {
         }
 
         let mut objects = pending.objects;
-        objects.sort_unstable();
+        // By object, then in command order (a stable sort): an object's first
+        // change holds its status before the batch, its last the `seq` that
+        // set the final one.
+        objects.sort_by_key(|&(idx, seq, _)| (idx, seq));
         let mut objects_set = Vec::new();
         let mut objects_freed = Vec::new();
-        for (n, &(idx, obj_seq)) in objects.iter().enumerate() {
+        let mut counts = [0i32; 16];
+        let mut before = 0;
+        for (n, &(idx, obj_seq, old)) in objects.iter().enumerate() {
+            if n == 0 || objects.get(n - 1).is_none_or(|prev| prev.0 != idx) {
+                before = old;
+            }
             if objects.get(n + 1).is_some_and(|next| next.0 == idx) {
                 continue; // keep the last change per object
             }
             let oid = self.chart.oid(idx).ok_or(corrupt("idx outside chart"))?;
             let status = self.status(idx).ok_or(corrupt("bad status"))?;
+            if before != status.code() {
+                if let Some(was) = counts.get_mut(usize::from(before)) {
+                    *was -= 1;
+                }
+                if let Some(now) = counts.get_mut(usize::from(status.code())) {
+                    *now += 1;
+                }
+            }
             if let Some(sealed) = sealed.as_deref_mut() {
                 sealed.changes.push(Change {
                     idx,
@@ -489,6 +506,7 @@ impl EventState {
             holds_deleted,
             objects_set,
             objects_freed,
+            counts,
             log: pending.log,
             idempotency: pending.idempotency,
         }))
@@ -976,7 +994,8 @@ impl EventState {
         let (Some(s), Some(h)) = (self.status.get_mut(i), self.holder.get_mut(i)) else {
             return Err(corrupt("idx outside state"));
         };
-        let was_booked = *s == Status::BOOKED.code();
+        let was = *s;
+        let was_booked = was == Status::BOOKED.code();
         *s = status.code();
         *h = holder;
         match booking {
@@ -988,7 +1007,7 @@ impl EventState {
             }
             None => {}
         }
-        self.pending.objects.push((idx, seq));
+        self.pending.objects.push((idx, seq, was));
         Ok(())
     }
 }

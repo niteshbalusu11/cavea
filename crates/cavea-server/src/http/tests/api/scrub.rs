@@ -136,6 +136,7 @@ async fn secrets_never_reach_the_logs() {
                         .replace("{p}", "330")
                         .replace("o-1", &order_ref),
                 )
+                .replace("{asset}", &asset)
             });
             let build = |path: &str,
                          authorization: Option<String>,

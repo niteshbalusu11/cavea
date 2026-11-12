@@ -751,7 +751,7 @@ async fn event_rules() {
         let (_, page) = get(&app, sk, "/v1/events?limit=2&after=e2").await;
         assert_eq!(keys_of(&page), ["e1", "e3"]);
         assert_eq!(page["next"], Value::Null);
-        assert!(page["data"][0].get("counts").is_none());
+        assert_eq!(page["data"][1]["counts"]["free"], 2_000);
 
         // An archived event is read-only; its holds stay until they expire.
         let body = json!({ "hold_token": t.token, "objects": by_idx(&t, &[0]) });

@@ -185,6 +185,21 @@ pub(super) fn all() -> Map<String, Value> {
                 )],
             ),
         ),
+        (
+            "UpdateKey",
+            object(
+                &[(
+                    "allowed_origins",
+                    described(
+                        nullable(
+                            json!({ "type": "array", "items": string(), "minItems": 1, "maxItems": 50 }),
+                        ),
+                        "Origins such as `https://tickets.example.com`; `null` allows every origin.",
+                    ),
+                )],
+                &[],
+            ),
+        ),
         ("Key", key(false)),
         ("KeyCreated", key(true)),
         ("KeyList", list("Key")),
@@ -234,11 +249,88 @@ pub(super) fn all() -> Map<String, Value> {
                     ),
                     ("stats", r("Stats")),
                     ("created_at", time()),
+                    (
+                        "thumbnail",
+                        described(
+                            nullable(object(
+                                &[
+                                    ("hash", text("The asset's hash: 32 hex digits.")),
+                                    ("url", text("`/v1/public/assets/{hash}`.")),
+                                ],
+                                &[],
+                            )),
+                            "An image the publisher attached, or `null`.",
+                        ),
+                    ),
+                    (
+                        "created_by",
+                        described(
+                            nullable(string()),
+                            "Who published it: `usr_…` or `key_…`; `null` if not recorded \
+(published with a key before this was).",
+                        ),
+                    ),
+                ],
+                &[(
+                    "created_by_email",
+                    described(
+                        nullable(string()),
+                        "In the versions list only: the publisher's email, for a console \
+member whose role may see members, while the publisher is one; otherwise `null`.",
+                    ),
+                )],
+            ),
+        ),
+        ("VersionList", list("Version")),
+        (
+            "SetThumbnail",
+            object(
+                &[(
+                    "asset",
+                    text("An uploaded image's hash (`POST /v1/assets`): 32 hex digits."),
+                )],
+                &[],
+            ),
+        ),
+        (
+            "LockChart",
+            object(
+                &[],
+                &[(
+                    "take_over",
+                    described(
+                        boolean(),
+                        "Take the lock from another who holds a live one. Default false.",
+                    ),
+                )],
+            ),
+        ),
+        (
+            "ChartLock",
+            object(
+                &[
+                    ("holder", text("`usr_…`, or `key_…` for an API key.")),
+                    (
+                        "email",
+                        described(
+                            nullable(string()),
+                            "The holder's email, for a console member who may edit charts; \
+otherwise `null`.",
+                        ),
+                    ),
+                    ("since", time()),
+                    (
+                        "expires_at",
+                        described(time(), "The lock ends then unless renewed."),
+                    ),
                 ],
                 &[],
             ),
         ),
-        ("VersionList", list("Version")),
+        (
+            "ChartLockState",
+            object(&[("lock", nullable(r("ChartLock")))], &[]),
+        ),
         (
             "Chart",
             object(
@@ -334,8 +426,16 @@ pub(super) fn all() -> Map<String, Value> {
                     ("settings", r("EventSettings")),
                     ("archived_at", nullable(time())),
                     ("created_at", time()),
+                    (
+                        "seq",
+                        described(
+                            integer(),
+                            "The committed `seq`: it changes exactly when the seat state does.",
+                        ),
+                    ),
+                    ("counts", r("Counts")),
                 ],
-                &[("counts", r("Counts"))],
+                &[],
             ),
         ),
         ("EventList", list("Event")),

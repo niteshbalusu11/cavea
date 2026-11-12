@@ -268,14 +268,25 @@ async fn chart_lifecycle() {
             None,
         )
         .await;
-        assert_eq!(page["data"], json!([v1, v2]));
+        // Each with its publisher, whose email a key may not see.
+        let listed = |mut v: Value| {
+            v["created_by_email"] = Value::Null;
+            v
+        };
+        assert_eq!(
+            page["data"],
+            json!([listed(v1.clone()), listed(v2.clone())])
+        );
         assert_eq!(page["next"], v2["id"]);
         let uri = format!(
             "/v1/charts/royal/versions?after={}",
             v2["id"].as_str().unwrap()
         );
         let (_, page) = call(&app, Method::GET, &uri, Some(sk), None).await;
-        assert_eq!((&page["data"], &page["next"]), (&json!([v3]), &Value::Null));
+        assert_eq!(
+            (&page["data"], &page["next"]),
+            (&json!([listed(v3.clone())]), &Value::Null)
+        );
 
         // Charts list without drafts; the cursor is a chart key.
         let (_, list) = call(&app, Method::GET, "/v1/charts?limit=1", Some(sk), None).await;

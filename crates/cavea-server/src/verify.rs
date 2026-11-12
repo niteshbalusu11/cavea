@@ -313,8 +313,8 @@ pub async fn verify_event(
         .instrument(cavea_telemetry::db_span("verify_begin"))
         .await
         .map_err(db)?;
-    let head: Option<(i64, String, String, String)> = sqlx::query_as(
-        "SELECT e.seq, replace(e.chart_version_id::text, '-', ''), w.key, e.key
+    let head: Option<(i64, String, String, String, Vec<i32>)> = sqlx::query_as(
+        "SELECT e.seq, replace(e.chart_version_id::text, '-', ''), w.key, e.key, e.counts
            FROM events e JOIN workspaces w ON w.id = e.workspace_id
           WHERE e.id = $1::uuid",
     )
@@ -323,7 +323,8 @@ pub async fn verify_event(
     .instrument(cavea_telemetry::db_span("verify_event"))
     .await
     .map_err(db)?;
-    let (events_seq, version, workspace, key) = head.ok_or(VerifyError::UnknownEvent)?;
+    let (events_seq, version, workspace, key, stored_counts) =
+        head.ok_or(VerifyError::UnknownEvent)?;
     let version = u128::from_str_radix(&version, 16)
         .map(ChartVersionId)
         .map_err(|_| VerifyError::Chart("unreadable chart_version_id".into()))?;
@@ -480,6 +481,23 @@ pub async fn verify_event(
     .await
     .map_err(db)?;
     report.object_rows = rows.len() as u64;
+    // `events.counts` against the rows it counts (statuses 1 to 15).
+    let mut counted = vec![0i32; 15];
+    for (_, status, ..) in &rows {
+        let code = usize::try_from(*status).unwrap_or(0);
+        if let Some(n) = code.checked_sub(1).and_then(|i| counted.get_mut(i)) {
+            *n += 1;
+        }
+    }
+    if stored_counts != counted {
+        report.push(Finding {
+            check: "counts",
+            stored: Some(format!("{stored_counts:?}")),
+            replayed: Some(format!("{counted:?}")),
+            detail: Some("events.counts against object_state, statuses 1 to 15".into()),
+            ..Finding::default()
+        });
+    }
     let mut objects = Vec::with_capacity(rows.len());
     for (oid, status, hold, channel, order_ref, ticket_type, extra, seq) in rows {
         let oid = oid as u32; // the stored bits of a u32

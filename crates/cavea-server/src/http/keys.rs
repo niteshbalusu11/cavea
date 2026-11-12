@@ -32,6 +32,21 @@ pub(super) fn routes() -> Routes {
             create,
         )
         .add(
+            Op::patch(
+                "/v1/keys/{id}",
+                "updateKeyOrigins",
+                "Change a publishable key's origins",
+            )
+            .about(
+                "Replaces the origin allow-list of an unrevoked publishable key; `null` allows \
+every origin. It applies to the key's next request.",
+            )
+            .needs(Needs::Staff(Permission::Developers))
+            .body("UpdateKey")
+            .reply(200, "Key", "The key"),
+            update_origins,
+        )
+        .add(
             Op::delete("/v1/keys/{id}", "revokeKey", "Revoke an API key")
                 .about("Idempotent. A key may not revoke itself (`403`, `reason: \"self_revocation\"`).")
                 .needs(Needs::Staff(Permission::Developers))
@@ -162,6 +177,25 @@ struct CreateKey {
     allowed_origins: Option<Vec<String>>,
 }
 
+/// An allow-list as given, checked and normalised.
+fn origins(list: &[String]) -> Result<Vec<String>, ApiError> {
+    if list.is_empty() || list.len() > MAX_ORIGINS {
+        return Err(invalid_field(
+            "allowed_origins",
+            "must list 1 to 50 origins; omit it to allow every origin",
+        ));
+    }
+    list.iter()
+        .map(|o| normalise_origin(o))
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| {
+            invalid_field(
+                "allowed_origins",
+                "must hold origins such as https://tickets.example.com",
+            )
+        })
+}
+
 const CREATE: &str = concat!(
     "INSERT INTO api_keys (id, workspace_id, kind, prefix, hash, name, allowed_origins)
  VALUES (gen_random_uuid(), $1::uuid, $2, $3, $4, $5, $6)
@@ -183,25 +217,7 @@ async fn create(
                 "is only for publishable keys",
             ));
         }
-        (KeyKind::Publishable, Some(list)) => {
-            if list.is_empty() || list.len() > MAX_ORIGINS {
-                return Err(invalid_field(
-                    "allowed_origins",
-                    "must list 1 to 50 origins; omit it to allow every origin",
-                ));
-            }
-            let list = list
-                .iter()
-                .map(|o| normalise_origin(o))
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| {
-                    invalid_field(
-                        "allowed_origins",
-                        "must hold origins such as https://tickets.example.com",
-                    )
-                })?;
-            Some(list)
-        }
+        (KeyKind::Publishable, Some(list)) => Some(origins(&list)?),
     };
     let new = NewKey::generate(body.kind)?;
     let actor = auth.actor();
@@ -230,6 +246,78 @@ async fn create(
     let view = KeyView::new(row, Some(new.key))?;
     tracing::info!(key_id = %view.id, kind = body.kind.as_str(), by = %auth.actor(), "api key created");
     Ok((StatusCode::CREATED, axum::Json(view)))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateKey {
+    /// Required: `null` allows every origin, so leaving it out must not.
+    #[serde(deserialize_with = "present")]
+    allowed_origins: Option<Vec<String>>,
+}
+
+fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    d: D,
+) -> Result<Option<T>, D::Error> {
+    Option::deserialize(d)
+}
+
+const UPDATE_ORIGINS: &str = concat!(
+    "UPDATE api_keys SET allowed_origins = $3
+ WHERE id = $2::uuid AND workspace_id = $1::uuid AND kind = 'publishable' AND revoked_at IS NULL
+ RETURNING ",
+    key_columns!("api_keys")
+);
+
+/// Why a key's origins could not change: its kind and whether it is revoked.
+const KEY_STATE: &str = "SELECT kind, revoked_at IS NOT NULL FROM api_keys
+ WHERE id = $2::uuid AND workspace_id = $1::uuid";
+
+/// Replace a publishable key's origin allow-list (09 §6). Keys are read on
+/// every request, so the next one follows it.
+async fn update_origins(
+    Staff(auth): Staff,
+    Path(id): Path<String>,
+    state: axum::extract::State<AppState>,
+    Json(body): Json<UpdateKey>,
+) -> Result<axum::Json<KeyView>, ApiError> {
+    let id = KeyId::parse(&id).ok_or_else(|| ApiError::new(Code::NotFound))?;
+    let list = body.allowed_origins.as_deref().map(origins).transpose()?;
+    let count = list.as_ref().map(Vec::len);
+    let actor = auth.actor();
+    let update = async {
+        let mut tx = state.db.begin().await?;
+        let row: Option<KeyRow> = sqlx::query_as(UPDATE_ORIGINS)
+            .bind(auth.workspace().uuid())
+            .bind(id.uuid())
+            .bind(list)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let Some(row) = row else {
+            let found: Option<(String, bool)> = sqlx::query_as(KEY_STATE)
+                .bind(auth.workspace().uuid())
+                .bind(id.uuid())
+                .fetch_optional(&mut *tx)
+                .await?;
+            return Err(match found {
+                None => ApiError::new(Code::NotFound),
+                Some((_, true)) => super::extract::invalid("revoked", "The key is revoked."),
+                Some(_) => invalid_field("allowed_origins", "is only for publishable keys"),
+            });
+        };
+        let target = id.to_string();
+        let entry = Entry::by(&auth, &actor, "api_key.origins_changed")
+            .target(&target)
+            .detail(json!({ "origins": count }));
+        audit::record(&mut tx, entry).await?;
+        tx.commit().await?;
+        Ok(row)
+    };
+    let row = update
+        .instrument(cavea_telemetry::db_span("update_key_origins"))
+        .await?;
+    tracing::info!(key_id = %id, origins = ?count, by = %actor, "api key origins changed");
+    Ok(axum::Json(KeyView::new(row, None)?))
 }
 
 /// Serialises key changes in a workspace, so that two keys revoking each

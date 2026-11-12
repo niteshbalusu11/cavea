@@ -226,7 +226,10 @@ async fn owned(
 /// renews the lease, by the database clock.
 const COMMIT: &str = "
 WITH fence AS (                                                 -- 1
-  UPDATE events SET seq = $4, lease_until = now() + $34 * interval '1 millisecond'
+  UPDATE events SET seq = $4, lease_until = now() + $34 * interval '1 millisecond',
+         counts = CASE WHEN $35::int4[] = array_fill(0, ARRAY[15]) THEN counts ELSE
+           ARRAY(SELECT n + d FROM unnest(counts, $35::int4[]) WITH ORDINALITY AS u(n, d, i)
+                  ORDER BY i) END
    WHERE id = $1::uuid AND owner_epoch = $2 AND seq = $3
      AND (SELECT count(*) FROM holds
            WHERE event_id = $1::uuid AND id = ANY($9::int8[] || $11::int8[]))
@@ -325,6 +328,7 @@ async fn commit(pool: &PgPool, p: &Params, lease_ms: i64) -> Result<(), StoreErr
         .bind(&p.key_response)
         .bind(&p.key_created)
         .bind(lease_ms)
+        .bind(&p.counts)
         .fetch_one(pool)
         .await
         .map_err(store_error)?;
@@ -392,6 +396,8 @@ struct Params {
     key_status: Vec<i32>,
     key_response: Vec<String>,
     key_created: Vec<i64>,
+    /// The change in `events.counts`: statuses 1 to 15.
+    counts: Vec<i32>,
 }
 
 impl Params {
@@ -409,6 +415,7 @@ impl Params {
             epoch: int(b.epoch)?,
             prev_seq: int(prev)?,
             seq: int(b.seq)?,
+            counts: b.counts.get(1..).unwrap_or_default().to_vec(),
             ..Self::default()
         };
         for h in &b.holds_created {

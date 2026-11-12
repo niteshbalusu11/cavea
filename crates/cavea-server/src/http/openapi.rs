@@ -449,10 +449,11 @@ fn path_param_name(name: &str) -> String {
 }
 
 /// Path parameters: name, description.
-const PATH_PARAMS: [(&str, &str); 9] = [
+const PATH_PARAMS: [(&str, &str); 10] = [
     ("workspace", "A workspace id: `ws_` and 32 hex digits."),
     ("id", "An API key id: `key_` and 32 hex digits."),
     ("chart", "The customer's chart key (1 to 128 characters)."),
+    ("number", "A chart version's number, from 1."),
     ("event", "The customer's event key (1 to 128 characters)."),
     ("token", "A hold token: `ht_` and 64 lowercase hex digits."),
     (

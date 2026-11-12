@@ -203,6 +203,23 @@ fn only(report: &EventReport) -> &Finding {
     &report.findings[0]
 }
 
+/// A row's status changed behind the engine's back: its finding, and
+/// `events.counts` no longer the rows' count.
+fn with_counts(report: &EventReport) -> &Finding {
+    assert_eq!(report.findings.len(), 2, "{:#?}", report.findings);
+    let counts = report
+        .findings
+        .iter()
+        .filter(|f| f.check == "counts")
+        .count();
+    assert_eq!(counts, 1, "{:#?}", report.findings);
+    report
+        .findings
+        .iter()
+        .find(|f| f.check != "counts")
+        .unwrap()
+}
+
 #[tokio::test]
 #[ignore = "needs PostgreSQL: set CAVEA_TEST_DATABASE_URL, pass --include-ignored"]
 async fn verify_reports_each_corruption_precisely() {
@@ -212,10 +229,10 @@ async fn verify_reports_each_corruption_precisely() {
         seats.shutdown().await;
         let charts = PgCharts::new(pool.clone(), 10_000);
         // One event per corruption, each written by the same sequence.
-        const KINDS: [&str; 22] = [
+        const KINDS: [&str; 23] = [
             "clean", "gap", "repeat", "reorder", "flip", "unbook", "double", "expiry", "limit",
             "unhold", "orphan", "seq", "order", "rehold", "badop", "ghost", "tail", "negseq",
-            "zeroseq", "minus", "loose", "detail",
+            "zeroseq", "minus", "loose", "detail", "counts",
         ];
         let mut events = Vec::new();
         for kind in KINDS {
@@ -304,7 +321,7 @@ async fn verify_reports_each_corruption_precisely() {
             e("flip"),
         )
         .await;
-        let f = only(&verify(&pool, e("flip")).await).clone();
+        let f = with_counts(&verify(&pool, e("flip")).await).clone();
         assert_eq!((f.check, f.oid, f.field), ("object", Some(booked as u32), Some("status")));
         assert_eq!((f.stored.as_deref(), f.replayed.as_deref()), (Some("blocked"), Some("booked")));
         assert!(f.label.is_some());
@@ -317,7 +334,7 @@ async fn verify_reports_each_corruption_precisely() {
             e("unbook"),
         )
         .await;
-        let f = only(&verify(&pool, e("unbook")).await).clone();
+        let f = with_counts(&verify(&pool, e("unbook")).await).clone();
         assert_eq!((f.check, f.oid, f.field), ("object", Some(booked as u32), Some("missing")));
         assert_eq!(f.replayed.as_deref(), Some("booked"));
 
@@ -382,7 +399,7 @@ async fn verify_reports_each_corruption_precisely() {
             .execute(&pool)
             .await
             .unwrap();
-        let f = only(&verify(&pool, e("orphan")).await).clone();
+        let f = with_counts(&verify(&pool, e("orphan")).await).clone();
         assert_eq!((f.check, f.oid, f.field), ("object", Some(free), Some("unexpected")));
         assert_eq!(f.stored.as_deref(), Some("blocked"));
         sql(&pool, "UPDATE events SET seq = seq + 1 WHERE id = $1::uuid", e("seq")).await;
@@ -390,6 +407,18 @@ async fn verify_reports_each_corruption_precisely() {
         let f = only(&r);
         assert_eq!((f.check, f.invariant), ("events_seq", Some("INV-5")));
         assert_eq!(f.stored, Some((r.log_last_seq + 1).to_string()));
+
+        // `events.counts` off by one: the rows are right, the count is not.
+        sql(
+            &pool,
+            "UPDATE events SET counts[2] = counts[2] + 1 WHERE id = $1::uuid",
+            e("counts"),
+        )
+        .await;
+        let f = only(&verify(&pool, e("counts")).await).clone();
+        assert_eq!(f.check, "counts");
+        let (stored, counted) = (f.stored.unwrap(), f.replayed.unwrap());
+        assert_ne!(stored, counted);
 
         // An order reference changed: named, its values withheld unless asked.
         sql(

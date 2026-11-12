@@ -19,6 +19,7 @@ pub enum Code {
     ObjectNotHeldByToken,
     ObjectStatusConflict,
     VersionConflict,
+    ChartLocked,
     UpgradeConflict,
     IdempotencyMismatch,
     HoldTokenExpired,
@@ -35,7 +36,7 @@ pub enum Code {
 
 impl Code {
     /// Every code, in table order.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::InvalidRequest,
         Self::Unauthorized,
         Self::Forbidden,
@@ -45,6 +46,7 @@ impl Code {
         Self::ObjectNotHeldByToken,
         Self::ObjectStatusConflict,
         Self::VersionConflict,
+        Self::ChartLocked,
         Self::UpgradeConflict,
         Self::IdempotencyMismatch,
         Self::HoldTokenExpired,
@@ -83,6 +85,7 @@ impl Code {
                 "At least one object's status does not allow this change.",
             ),
             Self::VersionConflict => ("version_conflict", 409, "The draft has changed."),
+            Self::ChartLocked => ("chart_locked", 409, "Someone else is editing the chart."),
             Self::UpgradeConflict => (
                 "upgrade_conflict",
                 409,

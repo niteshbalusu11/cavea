@@ -752,6 +752,15 @@ pub fn public(replay: &Replay, objects: u32) -> Vec<u8> {
         .collect()
 }
 
+/// The domain status of every object of a replayed log, by `idx` (02 §4.1):
+/// what a manager view shows.
+#[must_use]
+pub fn domain(replay: &Replay, objects: u32) -> Vec<u8> {
+    (0..objects)
+        .map(|i| replay.objects.get(&oid(i)).map_or(0, |o| o.0.code()))
+        .collect()
+}
+
 /// INV-6 against memory: the same objects and holds (id, expiry, limit,
 /// objects) as the replayed log.
 pub fn diff_state(replay: &Replay, state: &EventState) -> Result<(), Violation> {

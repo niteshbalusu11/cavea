@@ -46,6 +46,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "members_audit",
         include_str!("../../migrations/0006_members_audit.sql"),
     ),
+    (
+        7,
+        "console_needs",
+        include_str!("../../migrations/0007_console_needs.sql"),
+    ),
 ];
 
 /// Where applied migrations are recorded, with each one's SHA-384.
