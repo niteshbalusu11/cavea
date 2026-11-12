@@ -311,7 +311,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 ### Testing
 
 - [x] **TST-030** Command inverse property tests (13 §9)
-- [ ] **TST-031** End-to-end: draw, number, publish, create event, hold a seat (13 §9)
+- [x] **TST-031** End-to-end: draw, number, publish, create event, hold a seat (13 §9; `cargo xtask e2e`, 13 §9.1)
 - [ ] **TST-032** Usability test: three new users draw the reference theatre; record times (ROADMAP M3)
 
 ---

@@ -289,6 +289,7 @@ export const STEPS: Step[] = [
       // The console asks who is signed in before anyone is: that answer is 401.
       t.expect("GET", /^\/console\/api\/me$/, 401);
       await t.goto(link);
+      await t.find({ role: "heading", name: msg("setup.title") });
       await t.enter({ role: "textbox", name: msg("setup.email") }, owner.email);
       await t.enter({ role: "textbox", name: msg("setup.password") }, owner.password);
       await t.enter({ role: "textbox", name: msg("setup.confirm") }, owner.password);
@@ -417,9 +418,10 @@ export const STEPS: Step[] = [
         },
         30_000,
       );
-      const problems = (await t.all({ role: "button", name: /./ }, bar)).find(
-        (b) => b.name === msg("status.noProblems") || /errors · .* warnings$/.test(b.name),
-      )?.name ?? "no summary in the status bar";
+      const problems =
+        (await t.all({ role: "button", name: /./ }, bar)).find(
+          (b) => b.name === msg("status.noProblems") || /errors · .* warnings$/.test(b.name),
+        )?.name ?? "no summary in the status bar";
       const noErrors = msg("status.problems", { errors: 0, warnings: 0 }).split(" · ")[0] ?? "";
       check(
         problems === msg("status.noProblems") || problems.startsWith(`${noErrors} · `),
@@ -786,6 +788,7 @@ export const STEPS: Step[] = [
       const v = await tab(r, "viewer");
       v.expect("GET", /^\/console\/api\/me$/, 401);
       await v.goto(link);
+      await v.find({ role: "heading", name: msg("accept.title") });
       await v.enter({ role: "textbox", name: msg("setup.password") }, viewer.password);
       await v.enter({ role: "textbox", name: msg("setup.confirm") }, viewer.password);
       await v.click({ role: "button", name: msg("accept.submit") });

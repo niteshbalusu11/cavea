@@ -57,7 +57,7 @@ export async function until<T>(
 ): Promise<T> {
   let last = "";
   lastRead = undefined;
-  for (const deadline = Date.now() + ms; ; ) {
+  for (const deadline = Date.now() + ms; ;) {
     try {
       const value = await probe();
       if (value !== undefined && value !== null && value !== false) {
@@ -67,7 +67,12 @@ export async function until<T>(
       last = error instanceof Error ? error.message : String(error);
     }
     if (Date.now() > deadline) {
-      const seen = last !== "" ? ` (${last})` : lastRead !== undefined ? `; the page showed “${lastRead.slice(0, 400)}”` : "";
+      const seen =
+        last !== ""
+          ? ` (${last})`
+          : lastRead !== undefined
+            ? `; the page showed “${lastRead.slice(0, 400)}”`
+            : "";
       throw new Error(`timed out after ${ms / 1000} s waiting for ${what}${seen}`);
     }
     await Bun.sleep(25);
