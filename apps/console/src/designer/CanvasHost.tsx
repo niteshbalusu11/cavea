@@ -203,6 +203,12 @@ export function CanvasHost(props: { editor: Editor; rulers: boolean }) {
       );
     }
     const c = canvas;
+    const unavailable = editor.images?.onAvailable(() => {
+      if (c.disposed) return;
+      c.retryImages();
+      painter?.invalidate();
+    });
+    if (unavailable !== undefined) onCleanup(unavailable);
     painter = new Painter(
       {
         draw(time, overlay) {

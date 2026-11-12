@@ -1135,11 +1135,21 @@ fn reference_images_are_drawn_but_never_compiled() {
         shown(&p),
         vec![(hash.to_owned(), [-8000, -6000, 8000, 6000])]
     );
-    let asked = p
-        .take_events()
-        .into_iter()
-        .any(|e| matches!(e, Event::ImageRequest { ref asset, .. } if asset == hash));
-    assert!(asked, "the picture is asked for");
+    let request = |p: &mut Painter<Recorder>| {
+        p.take_events().into_iter().find_map(|e| match e {
+            Event::ImageRequest { id, asset, .. } if asset == hash => Some(id),
+            _ => None,
+        })
+    };
+    let id = request(&mut p).expect("the picture is asked for");
+    // Not loaded (the bytes are not to be had): not asked again by the
+    // live scene, until the host has the bytes and says so.
+    p.set_image(id, None);
+    settle(&mut p, &s);
+    assert_eq!(request(&mut p), None);
+    assert!(p.retry_images());
+    settle(&mut p, &s);
+    assert!(request(&mut p).is_some(), "asked again once retried");
 
     let compiled = |s: &Session| {
         let bytes = crate::preview::chart(s).expect("compiles");

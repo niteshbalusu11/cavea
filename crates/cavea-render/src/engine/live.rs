@@ -178,6 +178,15 @@ fn view_of(camera: Camera, size: Size, a: &Affine) -> [[f32; 3]; 3] {
 }
 
 impl<B: GpuBackend> Engine<B> {
+    /// Asks again for the floor's images that could not be loaded (04 §25:
+    /// a live scene does not retry them by itself): the host has their
+    /// bytes now.
+    pub fn retry_images(&mut self) {
+        if self.images.retry_failed() {
+            self.redraw();
+        }
+    }
+
     /// Shows the live scene `scene` (04 §25), whose pieces are `pieces`:
     /// each one's id (the same id for the same compiled piece) and where it
     /// sits. Keeps the camera, theme, atlases and labels; uploads the seats

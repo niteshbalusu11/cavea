@@ -383,6 +383,13 @@ impl<B: GpuBackend> Painter<B> {
         self.drain()
     }
 
+    /// Asks again for images that could not be loaded. Returns whether a
+    /// frame is needed.
+    pub fn retry_images(&mut self) -> bool {
+        self.engine.retry_images();
+        self.drain()
+    }
+
     fn drain(&mut self) -> bool {
         let mut again = false;
         for event in self.engine.drain_events() {

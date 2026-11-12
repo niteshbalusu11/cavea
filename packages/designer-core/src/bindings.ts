@@ -43,6 +43,8 @@ export interface CanvasHandle {
   takeEvents(): string;
   /** The answer to an image request: whether a frame is needed. */
   setImage(id: number, image: ImageBitmap | undefined): boolean;
+  /** Asks again for images that failed: whether a frame is needed. */
+  retryImages(): boolean;
   setText(id: number, width: number, height: number, px: number, pixels: Uint8Array): boolean;
   setGlyphAtlas(rgba: Uint8Array): boolean;
   contextLost(): void;

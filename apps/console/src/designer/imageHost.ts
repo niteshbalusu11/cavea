@@ -40,6 +40,9 @@ export interface ImageHost {
   /** Pictures the canvas could not load. */
   failed: Accessor<ReadonlySet<string>>;
   markFailed(hash: string): void;
+  /** Calls `run` when a picture that failed has bytes again (placed
+   * again); returns the unsubscribe. */
+  onAvailable(run: () => void): () => void;
   /** Uploads in progress or waiting; `null` for a local chart. */
   uploads: Accessor<UploadSummary | null>;
   /** Whether the upload of `hash` is still to finish. */
@@ -110,6 +113,7 @@ export function createImageHost(props: {
   const blobs = new Map<string, Blob>();
   const [failed, setFailed] = createSignal<ReadonlySet<string>>(new Set());
   const [summary, setSummary] = createSignal<UploadSummary | null>(null);
+  const available = new Set<() => void>();
   const ref = props.server;
   const uploads =
     ref === null
@@ -151,6 +155,10 @@ export function createImageHost(props: {
     markFailed(hash) {
       setFailed((s) => new Set([...s, hash]));
     },
+    onAvailable(run) {
+      available.add(run);
+      return () => available.delete(run);
+    },
     uploads: () => (uploads === null ? null : summary()),
     pending(hash) {
       const s = uploads?.state(hash) ?? null;
@@ -165,11 +173,15 @@ export function createImageHost(props: {
       }
       const { blob, hash, width, height } = checked.ok;
       blobs.set(hash, blob);
-      setFailed((s) => {
-        const next = new Set(s);
-        next.delete(hash);
-        return next;
-      });
+      if (failed().has(hash)) {
+        setFailed((s) => {
+          const next = new Set(s);
+          next.delete(hash);
+          return next;
+        });
+        // The canvas asks for it again, from these bytes.
+        for (const run of available) run();
+      }
       const c = editor.camera();
       const id = editor.run((s) =>
         s.insert(null, {

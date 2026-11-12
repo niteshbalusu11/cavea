@@ -227,6 +227,19 @@ impl Images {
         px.sum()
     }
 
+    /// Asks again, after the next frame, for the images that could not be
+    /// had (the designer: a picture whose bytes the host has now). Returns
+    /// whether any had failed.
+    #[cfg(feature = "designer")]
+    pub fn retry_failed(&mut self) -> bool {
+        let mut any = false;
+        for entry in self.entries.iter_mut().filter(|e| e.state == State::Failed) {
+            entry.state = State::Wanted;
+            any = true;
+        }
+        any
+    }
+
     /// Bytes of image texture on the GPU.
     pub fn bytes(&self) -> u64 {
         self.loaded_px() * 4

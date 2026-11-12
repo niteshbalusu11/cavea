@@ -24,6 +24,11 @@ test("a read-only session can be looked at and not changed", async () => {
   ]) {
     expect(change).toThrow(ReadOnlyRefusal);
   }
+  // Guides are the viewer's own, beside the draft: kept and restored.
+  s.restoreGuides([{ floor: s.floors().shown, guides: [{ axis: "vertical", at: 5 }] }]);
+  s.addGuide({ axis: "horizontal", at: 7 });
+  expect(s.guides().length).toBe(2);
+  expect(s.export()).toBe(before);
   // A drag across the chart, and Delete: the hand tool pans, keys go nowhere.
   const fit = s.fit();
   if (fit === null) throw new Error("the theatre has no extent");

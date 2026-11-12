@@ -189,6 +189,13 @@ impl Canvas {
         self.painter.set_image(id, image.as_ref())
     }
 
+    /// Asks again for images that could not be loaded (the host has their
+    /// bytes now). Returns whether a frame is needed.
+    #[wasm_bindgen(js_name = retryImages)]
+    pub fn retry_images(&mut self) -> bool {
+        self.painter.retry_images()
+    }
+
     /// The glyph atlas's RGBA pixels (04 §12), for seat labels.
     #[wasm_bindgen(js_name = setGlyphAtlas)]
     pub fn set_glyph_atlas(&mut self, rgba: Vec<u8>) -> bool {

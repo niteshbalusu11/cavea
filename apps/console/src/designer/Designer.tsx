@@ -134,7 +134,14 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
       const file = imageForNew;
       imageForNew = null;
       if (file !== null) void images.place(e, file);
-    } else void server.adopt(session);
+    } else {
+      void server.adopt(session).then(() => {
+        const file = imageForNew;
+        imageForNew = null;
+        const e = editor();
+        if (file !== null && e !== null && e.session === session) void images.place(e, file);
+      });
+    }
   };
   /** Places a picked image file (07 §4): in a new chart when it was picked
    * from the new-chart screen, else in the open one. */
@@ -436,7 +443,10 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
  * closes). A record the session refuses is dropped. */
 function keepGuides(e: Editor, key: string): void {
   const saved = load(key, parseGuides, null);
-  if (saved !== null && !("ok" in e.attempt((s) => s.restoreGuides(saved)))) {
+  const restored = saved === null ? null : e.attempt((s) => s.restoreGuides(saved));
+  // Dropped only when the session judges the record itself (a guide out of
+  // its limits), never for another refusal.
+  if (restored !== null && "failure" in restored && restored.failure.kind === "command") {
     save(key, null);
   }
   const writer = throttledWriter((g) => save(key, g));

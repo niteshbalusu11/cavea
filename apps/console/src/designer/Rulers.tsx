@@ -10,7 +10,7 @@
 // view's centre, the arrows along the ruler move the current guide (1 unit,
 // Shift 10), the arrows across it choose another, Delete removes it.
 import { toChart, toScreen, type UserGuide, type View } from "@cavea/designer-core";
-import { createSignal, type Accessor } from "solid-js";
+import { createEffect, createSignal, on, type Accessor } from "solid-js";
 import { formatNumber, msg } from "../i18n/messages.ts";
 import type { Editor } from "./editor.ts";
 import { step, ticks } from "./ruler.ts";
@@ -103,6 +103,14 @@ export function Rulers(props: {
   const [current, setCurrent] = createSignal<{ axis: Axis; index: number } | null>(null);
   const [focused, setFocused] = createSignal<Axis | null>(null);
   const [said, setSaid] = createSignal("");
+  // Indices are the floor shown's: another floor's guides are others.
+  createEffect(
+    on(
+      () => editor.views.floors.shown,
+      () => setCurrent(null),
+      { defer: true },
+    ),
+  );
 
   const inside = (at: [number, number]): boolean => {
     const [w, h] = editor.size();
@@ -172,7 +180,7 @@ export function Rulers(props: {
     const along = axis === "vertical" ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"];
     const across = axis === "vertical" ? ["ArrowUp", "ArrowDown"] : ["ArrowLeft", "ArrowRight"];
     const c = current();
-    const mine = c !== null && c.axis === axis && props.guides()[c.index] !== undefined ? c : null;
+    const mine = c !== null && c.axis === axis && props.guides()[c.index]?.axis === axis ? c : null;
     if (e.key === "Enter" || e.key === "Insert") {
       const view = editor.view();
       const at = round(axis === "vertical" ? view.centre[0] : view.centre[1], view.zoom);

@@ -309,6 +309,14 @@ export class Canvas {
     return again;
   }
 
+  /**
+   * Asks again for the images that could not be loaded, once the source
+   * has their bytes (a picture placed again). Draw at the next frame.
+   */
+  retryImages(): void {
+    this.#call((h) => h.retryImages());
+  }
+
   /** The chart point under a canvas point, for the current view. */
   toChart(point: Point): Point {
     return toChart(this.#requireView(), point);

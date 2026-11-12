@@ -13,7 +13,9 @@ export class ReadOnlyRefusal extends Error {
   }
 }
 
-/** Calls that read, or change only what is shown, never the document. */
+/** Calls that read, or change only what is shown, never the document.
+ * User guides are editor state beside the draft (07 §5.2), not the
+ * document: a viewer may keep their own. */
 const LOOKING = new Set([
   "changed",
   "export",
@@ -34,6 +36,11 @@ const LOOKING = new Set([
   "cursor",
   "guides",
   "savedGuides",
+  "addGuide",
+  "moveGuide",
+  "removeGuide",
+  "clearGuides",
+  "restoreGuides",
   "select",
   "selectAll",
   "stepIn",
