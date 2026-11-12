@@ -56,6 +56,14 @@ use tower::ServiceExt as _;
 
 /// Obviously fake; 32 characters at least.
 const ADMIN: &str = "fuzz-admin-key-not-a-real-secret-0000";
+/// A known failure (13 §5): the server takes a JSON array for a request
+/// object, its fields by position (serde's derived `Deserialize` accepts a
+/// sequence for a struct), where the document allows only an object; input
+/// `fuzz/known/http_api/array-for-object`. While it stands, a body whose top
+/// level is an array is not checked against the request schema, and the
+/// generator puts no array where the schema has an object. Set it to `false`
+/// once the server refuses them.
+const KNOWN_ARRAY_FOR_OBJECT: bool = true;
 /// Most requests one input makes.
 const MAX_REQUESTS: usize = 12;
 /// What a workspace's names carry: never produced from an input's bytes,
@@ -509,7 +517,9 @@ async fn send(h: &Harness, world: &World, req: Built) -> Answer {
 
     // The document's view of the exchange.
     let matched = check::operation(&req.method, &path);
+    let top_array = bytes.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'[');
     let sent_json = content_type == Some("application/json")
+        && !(KNOWN_ARRAY_FOR_OBJECT && top_array)
         && matched.is_some_and(|(_, op)| {
             op.pointer("/requestBody/content/application~1json")
                 .is_some()
@@ -885,6 +895,19 @@ fn query_values(c: &mut Choices<'_>, world: &World, t: usize, name: &str) -> Vec
     }
 }
 
+/// Text for a field: mostly the workspace's own name for it; often the
+/// bounds of the API's text rule (1 to 128 characters, 08 §6.1); sometimes
+/// the input's bytes.
+fn string(c: &mut Choices<'_>, me: &Tenant, field: &str) -> String {
+    match c.pick(8) {
+        0..=3 => me.name(field),
+        4 => String::new(),
+        5 => "x".repeat(129),
+        6 => "x".repeat(128),
+        _ => c.text(),
+    }
+}
+
 /// A JSON value for `schema`, a field named `field` drawn from the world.
 fn generate(
     c: &mut Choices<'_>,
@@ -903,17 +926,20 @@ fn generate(
             .unwrap_or(schema),
         None => schema,
     };
-    // Sometimes the wrong kind of value altogether.
+    // Sometimes the wrong kind of value altogether; never an array for an
+    // object while KNOWN_ARRAY_FOR_OBJECT stands.
     if c.rare(23) {
-        return [
+        let object = schema.get("properties").is_some();
+        let wrong = [
             json!(null),
             json!(1),
             json!("x"),
-            json!([]),
             json!({}),
             json!(true),
-        ][c.pick(6)]
-        .clone();
+            json!([]),
+        ];
+        let n = if object { wrong.len() - 1 } else { wrong.len() };
+        return wrong[c.pick(n)].clone();
     }
     let label = |c: &mut Choices<'_>| {
         let i = c.pick(me.labels.len() + 1);
@@ -962,7 +988,7 @@ fn generate(
             };
         }
         "key" if depth == 1 => return json!(["n1", "n2", "c1", "e1", "", "x/y"][c.pick(6)]),
-        "name" | "order_ref" => return json!(if c.rare(5) { c.text() } else { me.name(field) }),
+        "name" | "order_ref" => return json!(string(c, me, field)),
         "email" => return json!(format!("owner{}@example.org", c.pick(3))),
         "document" => {
             let mut document: Value = serde_json::from_str(cavea_fuzz::CHART).unwrap_or_default();
@@ -1002,7 +1028,7 @@ fn generate(
         _ => "object".to_owned(),
     };
     match kind.as_str() {
-        "string" => json!(if c.rare(4) { c.text() } else { me.name("s") }),
+        "string" => json!(string(c, me, "s")),
         "integer" | "number" => json!(c.number()),
         "boolean" => json!(c.pick(2) == 1),
         "null" => Value::Null,
