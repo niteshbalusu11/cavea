@@ -214,7 +214,24 @@ async function main(): Promise<number> {
   cleanup.push({ what: "stop the buyer's page", run: async () => buyer.stop() });
 
   const { chromium, fonts } = await pinned(ROOT);
+  // Owned from the moment it is spawned: an interrupt during the launch
+  // stops it too (a finished launch is closed by the clean-up below).
+  let launching: Bun.Subprocess | undefined;
+  cleanup.push({
+    what: "stop Chromium if its launch did not finish",
+    run: async () => {
+      if (launching !== undefined && launching.exitCode === null) {
+        launching.kill("SIGKILL");
+        await launching.exited;
+      }
+      await rm(`/tmp/cavea-e2e-${process.pid}`, { recursive: true, force: true });
+      await rm(join(OUT, "profile"), { recursive: true, force: true });
+    },
+  });
   const browser = await Browser.launch({
+    spawned: (proc) => {
+      launching = proc;
+    },
     chromium,
     fonts,
     name: "cavea-e2e",
@@ -223,13 +240,8 @@ async function main(): Promise<number> {
     // `localhost` is the server's name and must reach its IPv4 listener.
     args: ["--host-resolver-rules=MAP localhost 127.0.0.1"],
   });
-  cleanup.push({
-    what: "close Chromium",
-    run: async () => {
-      await browser.close();
-      await rm(join(OUT, "profile"), { recursive: true, force: true });
-    },
-  });
+  launching = undefined;
+  cleanup.push({ what: "close Chromium", run: () => browser.close() });
 
   const run: Run = {
     root: ROOT,

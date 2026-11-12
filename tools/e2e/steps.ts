@@ -101,6 +101,13 @@ async function tap(r: Run, t: Tab, x: number, y: number): Promise<void> {
   lastTap = performance.now();
 }
 
+/** Whether the page has a WebSocket to the realtime route that was accepted (101), sends frames and is open. */
+function liveSocket(t: Tab): boolean {
+  return [...t.sockets.values()].some(
+    (w) => w.url.includes("/v1/public/rt") && w.status === 101 && w.frames > 0 && !w.closed,
+  );
+}
+
 /** A label's row and seat number: `-B-105` is row B, seat 105 (no section). */
 function place(label: string): [string, string] {
   const [, row = "", number = ""] = label.match(/^-([A-Z]+)-(\d+)$/) ?? [];
@@ -589,10 +596,11 @@ export const STEPS: Step[] = [
           30_000,
         );
       }
-      // Realtime over the WebSocket, as `caveaServer` prefers it (05 §4.1).
+      // Realtime over the WebSocket, as `caveaServer` prefers it (05 §4.1):
+      // each map's socket answered (101) and is sending frames.
       for (const b of [one, two]) {
-        await until(`${b.name}'s WebSocket to the server`, async () =>
-          b.sockets.some((u) => u.startsWith(`ws://localhost:`) && u.includes("/v1/public/rt")),
+        await until(`${b.name}'s WebSocket to the server, open and receiving`, async () =>
+          liveSocket(b),
         );
       }
       const free = await api<{ data: Array<{ label: string }> }>(
@@ -650,6 +658,31 @@ export const STEPS: Step[] = [
             );
           }
         }
+      }
+      // No fallback to EventSource or polling, and no reconnect but the one
+      // 05 §4.1 makes: buyer 1's socket follows its new hold token at once.
+      for (const [b, most] of [
+        [one, 2],
+        [two, 1],
+      ] as const) {
+        const sockets = [...b.sockets.values()].filter((w) => w.url.includes("/v1/public/rt"));
+        check(
+          sockets.length <= most && liveSocket(b) && sockets.filter((w) => !w.closed).length === 1,
+          `${b.name}: ${most === 1 ? "its one WebSocket" : "at most two WebSockets (the reconnect with the hold token)"}, one open`,
+          sockets.map(
+            (w) => `${w.status ?? "no answer"}, ${w.frames} frames${w.closed ? ", closed" : ""}`,
+          ),
+        );
+        // One state read at the start, then the socket: EventSource is
+        // `/stream`, polling more reads of `/state`.
+        const reads = b.network.filter((line) =>
+          /^\d+ GET \S+\/v1\/public\/events\/[^/]+\/(state|stream)\b/.test(line),
+        );
+        check(
+          reads.length === 1 && reads[0]?.includes("/state") === true,
+          `${b.name}: one state read and no EventSource or polling`,
+          reads,
+        );
       }
       r.latency.push(...holds);
       r.notes.push(
@@ -776,7 +809,8 @@ export const STEPS: Step[] = [
       const link = await t.value(
         await t.find({ role: "textbox", name: msg("invite.link") }, shown),
       );
-      r.secrets.set("invitation link", link.split("#")[1] ?? link);
+      // The token alone, as the page sends it to the server.
+      r.secrets.set("invitation token", link.split("#token=")[1] ?? link);
       check(
         link.startsWith(`${r.base}/`) && link.includes("#token="),
         `an invitation link on ${r.base}`,

@@ -62,6 +62,11 @@ export interface LaunchOptions {
   headed?: boolean;
   /** More command-line switches. */
   args?: string[];
+  /**
+   * Called with the process as soon as it is spawned, before the launch
+   * finishes, so a caller interrupted meanwhile can stop it by its id.
+   */
+  spawned?: (proc: Bun.Subprocess) => void;
 }
 
 export class Browser {
@@ -137,41 +142,52 @@ export class Browser {
       ],
       { env, stdin: "ignore", stdout: "ignore", stderr: "pipe" },
     );
-    let output = "";
-    const decoder = new TextDecoder();
-    const reader = proc.stderr.getReader();
-    let url: string | undefined;
-    for (const deadline = Date.now() + 30_000; url === undefined && Date.now() < deadline;) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
-      output += decoder.decode(value);
-      url = output.match(/DevTools listening on (ws:\/\/\S+)/)?.[1];
-    }
-    // Drained from here on, so a chatty browser never blocks on a full pipe.
-    void (async () => {
-      for (;;) {
-        const { done } = await reader.read();
-        if (done) {
+    options.spawned?.(proc);
+    try {
+      let output = "";
+      const decoder = new TextDecoder();
+      const reader = proc.stderr.getReader();
+      let url: string | undefined;
+      // A browser that stays up without announcing its endpoint must not
+      // hold the caller: each read is raced against the deadline.
+      const deadline = Date.now() + 30_000;
+      while (url === undefined) {
+        const left = deadline - Date.now();
+        const read =
+          left <= 0 ? null : await Promise.race([reader.read(), Bun.sleep(left).then(() => null)]);
+        if (read === null || read.done) {
           break;
         }
+        output += decoder.decode(read.value);
+        url = output.match(/DevTools listening on (ws:\/\/\S+)/)?.[1];
       }
-    })();
-    if (url === undefined) {
-      proc.kill();
+      // Drained from here on, so a chatty browser never blocks on a full pipe.
+      void (async () => {
+        for (;;) {
+          const { done } = await reader.read();
+          if (done) {
+            break;
+          }
+        }
+      })();
+      if (url === undefined) {
+        throw new Error(`Chromium did not start:\n${output.slice(-1000)}`);
+      }
+      const ws = new WebSocket(url);
+      await new Promise((resolve, reject) => {
+        ws.addEventListener("open", resolve);
+        ws.addEventListener("error", reject);
+      });
+      const browser = new Browser(ws, proc, scratch, "");
+      const version = String((await browser.send("Browser.getVersion"))["product"]);
+      return Object.assign(browser, { version });
+    } catch (error) {
+      // A launch that fails part-way leaves nothing running or behind.
+      proc.kill("SIGKILL");
       await proc.exited;
       await rm(scratch, { recursive: true, force: true });
-      throw new Error(`Chromium did not start:\n${output.slice(-1000)}`);
+      throw error;
     }
-    const ws = new WebSocket(url);
-    await new Promise((resolve, reject) => {
-      ws.addEventListener("open", resolve);
-      ws.addEventListener("error", reject);
-    });
-    const browser = new Browser(ws, proc, scratch, "");
-    const version = String((await browser.send("Browser.getVersion"))["product"]);
-    return Object.assign(browser, { version });
   }
 
   /** The browser's process id, for a caller that must stop it on an abrupt exit. */

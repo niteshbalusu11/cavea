@@ -51,6 +51,8 @@ export class Server {
       );
       if (ok) return;
       if (proc.exitCode !== null || Date.now() > deadline) {
+        // Stopped first: its output ends only when it does.
+        await this.stop();
         await this.drained;
         throw new Error(
           `cavea-server did not become ready (exit ${proc.exitCode}):\n${this.log.slice(-2000)}`,

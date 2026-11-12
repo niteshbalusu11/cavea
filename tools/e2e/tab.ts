@@ -117,8 +117,11 @@ export class Tab {
   readonly problems: Problem[] = [];
   /** Every request and its outcome, for the failure report. */
   readonly network: string[] = [];
-  /** WebSockets the page opened, by URL. */
-  readonly sockets: string[] = [];
+  /** WebSockets the page opened: the URL, the handshake's status, frames received, whether closed. */
+  readonly sockets = new Map<
+    string,
+    { url: string; status?: number; frames: number; closed: boolean }
+  >();
   /** Console messages of every level, for the failure report. */
   readonly console: string[] = [];
   /** Failed requests a step said to expect: `once` ones are taken off as they come. */
@@ -219,9 +222,28 @@ export class Tab {
         break;
       }
       case "Network.webSocketCreated":
-        this.sockets.push(String(p["url"]));
+        this.sockets.set(String(p["requestId"]), {
+          url: String(p["url"]),
+          frames: 0,
+          closed: false,
+        });
         this.network.push(`websocket ${String(p["url"])}`);
         break;
+      case "Network.webSocketHandshakeResponseReceived": {
+        const socket = this.sockets.get(String(p["requestId"]));
+        if (socket !== undefined) socket.status = (p["response"] as { status: number }).status;
+        break;
+      }
+      case "Network.webSocketFrameReceived": {
+        const socket = this.sockets.get(String(p["requestId"]));
+        if (socket !== undefined) socket.frames++;
+        break;
+      }
+      case "Network.webSocketClosed": {
+        const socket = this.sockets.get(String(p["requestId"]));
+        if (socket !== undefined) socket.closed = true;
+        break;
+      }
       case "Network.loadingFailed": {
         const r = this.requests.get(String(p["requestId"]));
         const why = String(p["blockedReason"] ?? p["errorText"]);
