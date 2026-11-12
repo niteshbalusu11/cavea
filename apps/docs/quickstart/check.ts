@@ -20,7 +20,8 @@
 // replaced with the key; the API path's secret key comes from the console's
 // API rather than its screen. Everything started is removed at the end.
 //
-// `--path console` (the page's steps 3 to 6 in the console), `api` (the
+// `--path console` (the page's steps 3 to 6 in the console: the theatre
+// template, published in the designer), `api` (the
 // "Prefer the API?" block instead), or `both` (default: one after the other,
 // each on its own server). `--screenshots` retakes the page's screenshots
 // (light theme, WebP) into `static/images/` during the console path.
@@ -280,51 +281,49 @@ async function owner(r: Run, link: string): Promise<Tab> {
 
 const DIALOG = "dialog|alertdialog";
 
+/** A native select's option by its text, chosen as a person's choice would be, with its events. */
+async function choose(t: Tab, select: number, choice: string): Promise<void> {
+  await t.call(
+    select,
+    `function () {
+      const o = [...this.options].find((o) => o.text === ${JSON.stringify(choice)});
+      if (!o) throw new Error(${JSON.stringify(`no option ${choice}`)});
+      this.value = o.value;
+      this.dispatchEvent(new Event("input", { bubbles: true }));
+      this.dispatchEvent(new Event("change", { bubbles: true }));
+    }`,
+  );
+}
+
 /** Steps 3 to 6 in the console, as the page says them. */
 async function consoleSteps(r: Run, t: Tab): Promise<void> {
-  // 3. Draw a chart.
+  // 3. Create a chart from the theatre template.
   await t.click({ role: "button", name: msg("charts.new"), nth: 0 });
   const form = await t.find({ role: DIALOG, name: msg("charts.newTitle") });
   await t.enter({ role: "textbox", name: msg("charts.name") }, "Grand Hall", form);
   const chartKey = await t.value(await t.find({ role: "textbox", name: msg("charts.key") }, form));
   check(chartKey === "grand-hall", `the chart's key fills in as grand-hall, not ${chartKey}`);
+  const theatre = msg("charts.startTemplate", { template: msg("template.theatre"), seats: "561" });
+  await choose(t, await t.find({ role: "combobox", name: msg("charts.start") }, form), theatre);
   await t.click({ role: "button", name: msg("charts.create") }, form);
   await t.gone({ role: DIALOG });
+
+  // 4. Open it in the designer and publish.
   await t.click({ role: "link", name: "Grand Hall" });
   await t.click({ role: "link", name: msg("charts.open") });
-  const canvas = await t.find(
+  await t.find(
     { role: "application", name: msg("canvas.label", { name: "Grand Hall" }) },
     undefined,
     30_000,
   );
   await t.click({ role: "button", name: msg("tour.skip") });
-  // The empty chart's starting points, which the page names, put away by the tool.
-  await t.find({ role: "region", name: msg("start.title") });
-  await t.click({ role: "button", name: msg("tool.rowBlock") });
-  await t.gone({ role: "region", name: msg("start.title") });
-  const [left, top, width, height] = await t.box(canvas);
-  await t.drag(
-    [left + width * 0.3, top + height * 0.35],
-    [left + width * 0.7, top + height * 0.6],
-    12,
-  );
-  const inspector = await t.find({ role: "region", name: msg("panel.inspector") });
-  await t.enter({ role: "textbox", name: msg("field.rows") }, "10", inspector);
-  await t.key("Enter");
-  await t.enter({ role: "textbox", name: msg("field.seats") }, "20", inspector);
-  await t.key("Enter");
   const bar = await t.find({ role: "contentinfo" });
-  await until("the status bar to read 200 seats", async () =>
-    (await t.text(bar)).includes(msg("status.seats", { n: "200" })),
+  await until("the status bar to read 561 seats", async () =>
+    (await t.text(bar)).includes(msg("status.seats", { n: "561" })),
   );
   const banner = await t.find({ role: "banner" });
-  await until(
-    "the top bar to say Saved",
-    async () => (await t.text(banner)).includes(msg("save.saved")),
-    30_000,
-  );
   if (screenshots) {
-    // The page's picture: no notice left over from creating the chart, the block filling the view.
+    // The page's picture: no notice left over from opening the chart, the theatre filling the view.
     for (const n of await t.all({ role: "button", name: msg("action.close") })) {
       await t.clickAt(...(await t.centre(n.id)));
     }
@@ -333,11 +332,10 @@ async function consoleSteps(r: Run, t: Tab): Promise<void> {
   }
   await shoot(t, "designer");
 
-  // 4. Publish.
   await t.click({ role: "button", name: msg("topbar.publish") }, banner);
   const dialog = await t.find({ role: DIALOG, name: msg("publish.title", { name: "Grand Hall" }) });
   await t.click({ role: "button", name: msg("publish.action") }, dialog);
-  const done = msg("publish.done", { version: 1, seats: "200" });
+  const done = msg("publish.done", { version: 1, seats: "561" });
   await until(
     `the dialog to say “${done}”`,
     async () => (await t.text(dialog)).includes(done),
@@ -359,18 +357,7 @@ async function consoleSteps(r: Run, t: Tab): Promise<void> {
   );
   check(eventKey === "opening-night", `the event's key fills in as opening-night, not ${eventKey}`);
   const select = await t.find({ role: "combobox", name: msg("events.chart") }, eventForm);
-  const choice = "Grand Hall (grand-hall)";
-  // A native select: chosen as a person's choice would be, with its events.
-  await t.call(
-    select,
-    `function () {
-      const o = [...this.options].find((o) => o.text === ${JSON.stringify(choice)});
-      if (!o) throw new Error("no option ${choice}");
-      this.value = o.value;
-      this.dispatchEvent(new Event("input", { bubbles: true }));
-      this.dispatchEvent(new Event("change", { bubbles: true }));
-    }`,
-  );
+  await choose(t, select, "Grand Hall (grand-hall)");
   await until(
     "version 1 to be the chosen chart version",
     async () =>
@@ -430,27 +417,44 @@ async function holdASeat(r: Run, staff: Tab | null): Promise<string> {
   const text = () => buyer.evaluate<string>("document.getElementById('selection').textContent");
   await until("the map to draw", async () => (await text()) === "Click a seat to hold it.", 30_000);
   await Bun.sleep(1000);
-  // A seat under the pointer: points near the map's centre, a double tap's
-  // window apart so that no two clicks make a zoom.
+  // "Zoom in with the + button": twice, about the map's centre, which is in
+  // the theatre's centre section.
+  for (let i = 0; i < 2; i++) {
+    await buyer.click({ role: "button", name: "Zoom in" });
+    await Bun.sleep(600);
+  }
+  // A seat under the pointer, found as a person finds one: the pointer
+  // moves near the map's centre until the tooltip names a seat, and clicks
+  // there (moving does not click, so no two clicks make a zoom).
   const [left, top, width, height] = await buyer.box(map);
-  let held = "";
-  let at: [number, number] = [0, 0];
-  search: for (let ring = 0; ring < 6; ring++) {
+  const tooltip = `(() => {
+    const t = document.getElementById("map").shadowRoot.querySelector('[part="tooltip"]');
+    return t !== null && !t.hidden;
+  })()`;
+  let at: [number, number] | undefined;
+  search: for (let ring = 0; ring < 8; ring++) {
     for (let dx = -ring; dx <= ring; dx++) {
       for (let dy = -ring; dy <= ring; dy++) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
-        at = [left + width / 2 + dx * 7, top + height * 0.4 + dy * 7];
-        await buyer.clickAt(...at);
-        await Bun.sleep(400);
-        const now = await text();
-        if (now.startsWith("Held for you: ")) {
-          held = now.slice("Held for you: ".length);
+        const point: [number, number] = [left + width / 2 + dx * 6, top + height / 2 + dy * 6];
+        await buyer.mouse("mouseMoved", ...point);
+        await Bun.sleep(50);
+        if (await buyer.evaluate<boolean>(tooltip)) {
+          at = point;
           break search;
         }
       }
     }
   }
+  check(at !== undefined, "the pointer near the map's centre is over a seat");
+  await buyer.clickAt(...at);
+  await until("the line under the map to name a held seat", async () =>
+    (await text()).startsWith("Held for you: "),
+  );
+  const held = (await text()).slice("Held for you: ".length);
   check(held !== "", "a click near the map's centre held a seat");
+  // Both paths make the theatre: section, row and seat, as the page says.
+  check(/^Stalls (Left|Centre|Right)-[A-Z]-\d+$/.test(held), `a theatre seat's label, not ${held}`);
   await until(
     `${held} to be held on the server`,
     async () => (await seatStatus(r, held)) === "held",
@@ -473,6 +477,8 @@ async function holdASeat(r: Run, staff: Tab | null): Promise<string> {
   }
 
   // "It changes back if you click it again in the first window, which releases it."
+  // A double tap's window after the first click, so the two are not a zoom.
+  await Bun.sleep(500);
   await buyer.clickAt(...at);
   await until(
     "the page to say no seat is held",

@@ -1,6 +1,6 @@
 # Quick start
 
-At the end of this page you will have the Cavea server running on your own machine, a seat map you drew in its console, and a web page on which clicking a seat holds it for you on the server. It takes about ten minutes.
+At the end of this page you will have the Cavea server running on your own machine, a theatre's seat map made in its console from a template, and a web page on which clicking a seat holds it for you on the server. It takes about ten minutes.
 
 You need Docker with Docker Compose, a terminal and a web browser. Everything runs in containers, and the last step removes them.
 
@@ -96,7 +96,7 @@ On **Set up Cavea**, enter an email and a password of at least 15 characters, an
 <details class="more">
 <summary>Prefer the API? Steps 3 to 6 with curl instead</summary>
 
-Do this instead of steps 3 to 6, then go on with step 7. It uses a sample chart document, a theatre of 561 seats, in place of the chart you would draw.
+Do this instead of steps 3 to 6, then go on with step 7. It uses a sample chart document, the console's theatre template as a file, so it makes the same chart of 561 seats.
 
 1. In the console, open **Developers**, choose **New API key**, name it `Quick start backend`, choose **Secret key** and **Create key**. Copy the key it shows (it starts `sk_`) and keep it in your terminal:
 
@@ -133,22 +133,23 @@ The calls are in the [server API reference](api/index.md): [create a chart](api/
 
 </details>
 
-## 3. Draw a chart
+## 3. Create a chart
 
-A [chart](concepts/charts.md) is a venue's seat map. Draw a small one:
+A [chart](concepts/charts.md) is a venue's seat map. Start one from the theatre template:
 
-1. On **Charts**, choose **New chart**. Enter the name `Grand Hall`; its key fills in as `grand-hall`. Choose **Create chart**.
-2. Choose **Grand Hall** in the list, then **Open in designer**. The designer opens with a short tour: choose **Skip tour**, or follow it. Over the empty canvas, **Start your chart** offers templates (a theatre, an arena bowl, a banquet) and a reference image to trace; this guide draws a small chart by hand instead.
-3. Choose the **Row block** tool in the toolbar on the left (or press R), which puts the starting points away, and drag across the canvas. A block of rows appears where you drag.
-4. In the **Inspector** on the right, set **Rows** to `10` and **Seats per row** to `20`, pressing Enter after each. The status bar at the bottom reads **200 seats**.
-
-![The designer with a block of 10 rows of 20 seats, selected, and its fields in the inspector](images/designer.webp)
-
-The designer saves as you go: the top bar says **Saved** and the time.
+1. On **Charts**, choose **New chart**. Enter the name `Grand Hall`; its key fills in as `grand-hall`.
+2. For **Start from**, choose **Theatre template (561 seats)**, then **Create chart**. The chart appears in the list.
 
 ## 4. Publish the chart
 
-Events are sold from a published version of a chart, which never changes once stored. Choose **Publish** at the top right, then **Publish** in the dialog. It reports **Published version 1: 200 seats.** Choose **Close**.
+Events are sold from a published version of a chart, which never changes once stored. You publish in the designer, where the chart is drawn and edited.
+
+1. Choose **Grand Hall** in the list, then **Open in designer**. The designer opens with a short tour: choose **Skip tour**, or follow it. The canvas shows the theatre: three sections of stalls facing a stage, and the status bar at the bottom reads **561 seats**.
+2. Choose **Publish** at the top right, then **Publish** in the dialog. It reports **Published version 1: 561 seats.** Choose **Close**.
+
+![The designer showing the theatre template: three sections of curved rows facing the stage](images/designer.webp)
+
+The template is an ordinary chart: anything in it can be changed in the designer, which saves as you go, and published again as version 2. See [Drawing a seating chart](designer/index.md).
 
 ## 5. Create an event
 
@@ -203,18 +204,18 @@ The script tag loads the seat map, `{{renderer_package}}`, which sets `window.Ca
 
 ## 8. Hold a seat
 
-Open `http://localhost:8000`. The map shows the event's 200 seats in rows A to J (or the sample theatre's 561, if you used the API). Click a seat: it changes to a check mark, and the line under the map says which seat is held for you, such as `Held for you: D-10`.
+Open `http://localhost:8000`. The map shows the event's 561 seats in their three sections, facing the stage. Zoom in with the + button at the map's top right (or the mouse wheel) until the seats are easy to point at, and click one: it changes to a check mark, and the line under the map says which seat is held for you, such as `Held for you: Stalls Centre-C-108`.
 
-![The buyer's page: one seat near the middle is selected and held, and the line under the map says which](images/buyer-map.webp)
+![The buyer's page, zoomed in: seat 108 in row C of Stalls Centre is selected and held, and the line under the map says which](images/buyer-map.webp)
 
-The label is the seat's name in the chart: section, row and seat, joined by `-`. This chart has no sections, so the label is the row and the seat alone.
+The label is the seat's name in the chart: section, row and seat, joined by `-`. The tooltip shows the same three parts.
 
 The seat is now held on the server under a [hold token](concepts/holds.md) that the map created for this browser tab. To see what others see:
 
 - Open the same address in a private window: the seat is drawn unavailable there, and it changes back if you click it again in the first window, which releases it.
 - In the console, open **Events** and choose **Opening Night**: the event manager counts the seat as held.
 
-![The event manager: 0 booked, 1 held, 0 blocked, 199 free, with the held seat drawn unavailable](images/event-manager.webp)
+![The event manager: 0 booked, 1 held, 0 blocked, 560 free, with the held seat drawn unavailable](images/event-manager.webp)
 
 The hold lasts 15 minutes, the event's hold lifetime, and then the seat is free again. In a real sale your backend takes payment and then books what the hold token holds, with a secret key: see [Bookings](concepts/bookings.md).
 
