@@ -4,6 +4,8 @@
 //! is the smallest that no object of the same kind's name uses. A node that
 //! has a name, or a label or text the layers panel shows, keeps it.
 
+use std::collections::BTreeSet;
+
 use cavea_compiler::document::{Node, ShapeKind};
 
 use crate::document::{Document, each_node};
@@ -55,6 +57,44 @@ pub(crate) fn fresh(doc: &Document, node: &Node) -> Option<String> {
     Some(format!("{word} {n}"))
 }
 
+/// Every name the nodes of `doc` have: what copies are named against.
+pub(crate) fn names(doc: &Document) -> BTreeSet<String> {
+    doc.ids()
+        .filter_map(|id| doc.node(id))
+        .filter_map(|n| each_node!(n, x => x.name.clone()))
+        .collect()
+}
+
+/// Names a pasted or duplicated `node` and its section's children: one
+/// whose name is an automatic one of its kind ("Row block 2") already in
+/// `taken` (the document's names, from [`names`], and earlier copies')
+/// gets the smallest free number, so a copy never shares its original's
+/// name. Any other name is a person's, and kept.
+pub(crate) fn rename_copy(node: &mut Node, taken: &mut BTreeSet<String>) {
+    if let Some(word) = word(node)
+        && let Some(name) = each_node!(&*node, n => n.name.clone())
+        && name
+            .strip_prefix(word)
+            .and_then(|r| r.strip_prefix(' '))
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        && taken.contains(&name)
+    {
+        let fresh = (1u32..)
+            .map(|n| format!("{word} {n}"))
+            .find(|c| !taken.contains(c))
+            .unwrap_or(name);
+        each_node!(node, x => x.name = Some(fresh));
+    }
+    if let Some(name) = each_node!(&*node, n => n.name.clone()) {
+        taken.insert(name);
+    }
+    if let Node::Section(sec) = node {
+        for child in &mut sec.children {
+            rename_copy(child, taken);
+        }
+    }
+}
+
 /// A node's id; 0 (not yet given) counts as none.
 fn node_id(node: &Node) -> Option<u32> {
     Some(each_node!(node, n => n.id)).filter(|&id| id != 0)
@@ -90,5 +130,31 @@ mod tests {
             (b.id, b.name) = (0, None);
         }
         assert_eq!(fresh(&doc, &block).as_deref(), Some("Row block 4"));
+    }
+
+    #[test]
+    fn copies_get_their_own_automatic_names() {
+        let doc = Document::load(
+            serde_json::from_value(serde_json::json!({
+                "schema": 1, "name": "n", "nextOid": 100,
+                "nodes": [
+                    { "id": 1, "type": "rowBlock", "name": "Row block 1", "rows": [] },
+                    { "id": 2, "type": "rowBlock", "name": "Balcony", "rows": [] }
+                ]
+            }))
+            .expect("chart"),
+        )
+        .expect("load");
+        let copy = |id: u32| doc.node(id).cloned().expect("node");
+        let mut taken = names(&doc);
+        let (mut a, mut b, mut c) = (copy(1), copy(1), copy(2));
+        for n in [&mut a, &mut b, &mut c] {
+            rename_copy(n, &mut taken);
+        }
+        let name = |n: &Node| each_node!(n, x => x.name.clone());
+        // Two copies of "Row block 1": 2, then 3; a person's name is kept.
+        assert_eq!(name(&a).as_deref(), Some("Row block 2"));
+        assert_eq!(name(&b).as_deref(), Some("Row block 3"));
+        assert_eq!(name(&c).as_deref(), Some("Balcony"));
     }
 }

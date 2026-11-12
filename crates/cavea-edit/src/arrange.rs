@@ -197,10 +197,12 @@ pub(crate) fn array(
     }
     let base = view.doc.children(parent).len();
     let mut commands = Vec::new();
+    let mut names = crate::naming::names(view.doc);
     for i in 1..=copies {
         let k = f64::from(i);
         for tree in &trees {
             let mut node = tree.clone();
+            crate::naming::rename_copy(&mut node, &mut names);
             each_node!(&mut node, x => match step {
                 ArrayStep::Offset(d) => {
                     let v = view.index.to_parent(parent, d);

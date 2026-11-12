@@ -181,28 +181,22 @@ export function CategoriesPanel(props: { editor: Editor }) {
                     style={{ background: cat.color }}
                   />
                   <span
-                    class="min-w-0 truncate text-base text-fg"
+                    class="min-w-12 truncate text-base text-fg"
                     classList={{ "font-semibold": cat.active }}
                   >
                     {cat.label}
                   </span>
-                  <Show
-                    when={cat.active}
-                    fallback={
-                      <span class="min-w-0 truncate font-mono text-xs text-faint">{cat.key}</span>
-                    }
-                  >
-                    <span class="shrink-0 rounded-sm bg-accent-fill px-1 text-2xs font-semibold text-on-accent">
-                      {msg("categories.activeBadge")}
-                    </span>
+                  <Show when={!cat.active}>
+                    <span class="min-w-0 truncate font-mono text-xs text-faint">{cat.key}</span>
                   </Show>
                   <Show when={cat.accessible}>
+                    {/* The wheelchair symbol, never a tick: a tick reads as
+                        "selected". Its words are the row's name and title. */}
                     <span
-                      class="flex shrink-0 items-center gap-0.5 text-xs text-muted"
-                      title={msg("categories.accessibleHint")}
+                      class="shrink-0 text-muted"
+                      title={`${msg("categories.accessible")}: ${msg("categories.accessibleHint")}`}
                     >
-                      <Icon name="accessible" class="size-3.5" />
-                      {msg("categories.accessibleShort")}
+                      <Icon name="accessible" class="size-4" />
                     </span>
                   </Show>
                   <Show when={cat.contrast?.weak === true || cat.similar.length > 0}>

@@ -316,9 +316,8 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 ### Found while fixing the designer guide's findings, not fixed
 
-- [ ] **DSN-061** A pasted or duplicated object keeps its original's name, so two objects can both be "Row block 1"; name copies as new objects are named (07 §5.1)
-- [ ] **DSN-062** The publish dialog lists the server's findings (a refused publish) in the compiler's words, with internal ids; give them the validation panel's sentences (07 §10, §11)
-- [ ] **DSN-063** Charts saved before new objects were named keep "Row block 123" (kind and id) for unnamed objects in the layers panel and the findings; offer to name them, or name them by kind and number on display
+- [ ] **DSN-061** The publish dialog lists the server's findings (a refused publish) in the compiler's words, with internal ids; give them the validation panel's sentences (07 §10, §11)
+- [ ] **DSN-062** Charts saved before new objects were named keep "Row block 123" (kind and id) for unnamed objects in the layers panel and the findings; offer to name them, or name them by kind and number on display
 
 ---
 

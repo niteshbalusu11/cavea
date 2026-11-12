@@ -239,7 +239,7 @@ Common to all tools:
 
 ### 5.1 Selection and transform
 
-- **Names of new objects** (`naming.rs`). A row block, row, shape, icon or image drawn, or inserted by the form, is named in the same undo entry as a person would name it, by its kind and the smallest number no object's name already uses with that word ("Row block 3", "Rectangle 1"), like a new section's label (§5.5). Texts and sections are named by their own words. Nothing a person named is renamed; a pasted copy keeps its original's name. The status bar names the section a selection is in ("1 selected in Stalls"), so an object drawn while stepped into a section is seen to have gone there.
+- **Names of new objects** (`naming.rs`). A row block, row, shape, icon or image drawn, or inserted by the form, is named in the same undo entry as a person would name it, by its kind and the smallest number no object's name already uses with that word ("Row block 3", "Rectangle 1"), like a new section's label (§5.5). Texts and sections are named by their own words. Nothing a person named is renamed. A pasted or duplicated copy whose name is an automatic one already in use gets the next free number in the same entry ("Row block 2" copied is "Row block 3"); a person's name is copied as it is. The status bar names the section a selection is in ("1 selected in Stalls"), so an object drawn while stepped into a section is seen to have gone there.
 
 - Click selects the top-level node (block, table, shape). Double-click enters it: first to rows, then to seats (**seat-edit mode**). Escape steps back out.
 - Drag box selects what it fully contains; with Alt held, what it touches.
@@ -422,7 +422,7 @@ Measured on `stadium-100k` with all 180 blocks (100,000 seats) selected: the vie
 
 ## 7. Categories
 
-- The Categories panel lists categories with colour, label, key, an "accessible" marker and the number of objects using each. Clicking one makes it the active category, marked by a bar, a bold label and an **Active** badge, named at the top of the list ("Active: Stalls") and announced as the current one (`aria-current`); the accessible marker is a wheelchair symbol with the word **Accessible**, never a tick. Reorder by dragging its handle or with Alt+↑/↓ (the list's order is the compiled order).
+- The Categories panel lists categories with colour, label, key, an "accessible" marker and the number of objects using each. Clicking one makes it the active category, marked by a bar, a tint and a bold label, named at the top of the list ("Active: Stalls") and announced as the current one (`aria-current`); the accessible marker is a wheelchair symbol, titled and announced as **Accessible**, never a tick (the word beside it left the active category's name no room in the column's default width). Reorder by dragging its handle or with Alt+↑/↓ (the list's order is the compiled order).
 - Add, rename, recolour, merge, delete (deleting requires reassigning its objects).
 - The colour picker shows a contrast warning when two categories are hard to tell apart or when a colour is weak against the canvas background.
 
