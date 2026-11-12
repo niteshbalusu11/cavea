@@ -28,4 +28,4 @@ dist/
 /bench/local-results/
 
 # the docs' code samples, written for the type check (apps/docs/src/samples.ts)
-/apps/docs/.samples/
+/apps/docs/samples/

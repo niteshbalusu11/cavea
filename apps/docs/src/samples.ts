@@ -1,18 +1,18 @@
 // Writes every code block marked `check=types` in `content/` to
-// `.samples/` (gitignored), with the site's variables filled in and its
+// `samples/` (gitignored), with the site's variables filled in and its
 // hidden `#hide ` lines shown, so that `tsc` (apps/docs' `typecheck`)
 // compiles each against the workspace's own packages: `@cavea/renderer`,
 // `@cavea/react` and `@cavea/server-sdk` as their declarations say. A `js`
 // or `ts` block is compiled as TypeScript, a `tsx` or `jsx` block as TSX.
 //
-//   bun apps/docs/src/samples.ts      (then tsc --noEmit -p apps/docs)
+//   bun apps/docs/src/samples.ts   (then tsc --noEmit -p apps/docs/tsconfig.samples.json)
 
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { fences, substitute } from "./markdown.ts";
 
 const HERE = join(import.meta.dir, "..");
-const OUT = join(HERE, ".samples");
+const OUT = join(HERE, "samples");
 
 async function pages(dir: string): Promise<string[]> {
   const out: string[] = [];

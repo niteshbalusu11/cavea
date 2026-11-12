@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "bun src/build.ts",
-    "typecheck": "bun src/samples.ts && tsc --noEmit -p ."
+    "typecheck": "tsc --noEmit -p . && bun src/samples.ts && tsc --noEmit -p tsconfig.samples.json"
   },
   "devDependencies": {
     "@cavea/react": "workspace:*",

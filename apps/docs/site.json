@@ -12,7 +12,11 @@
   "nav": [
     {
       "section": "Start here",
-      "pages": ["index.md", "quick-start.md", "before-release.md"]
+      "pages": [
+        "index.md",
+        "quick-start.md",
+        "before-release.md"
+      ]
     },
     {
       "section": "Concepts",
@@ -46,7 +50,11 @@
     },
     {
       "section": "Reference",
-      "pages": ["reference/errors.md", "reference/limits.md", "reference/changelog.md"]
+      "pages": [
+        "reference/errors.md",
+        "reference/limits.md",
+        "reference/changelog.md"
+      ]
     },
     {
       "section": "Renderer",
@@ -64,7 +72,12 @@
     },
     {
       "section": "Guides",
-      "planned": "Hold, pay, book; bring your own backend; bot protection (DOC-007, DOC-011)"
+      "pages": [
+        "guides/hold-pay-book.md",
+        "guides/own-backend.md",
+        "guides/react.md",
+        "guides/bot-protection.md"
+      ]
     },
     {
       "section": "Deployment",
