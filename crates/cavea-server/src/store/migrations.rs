@@ -69,6 +69,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "events_by_chart",
         include_str!("../../migrations/0010_events_by_chart.sql"),
     ),
+    (
+        11,
+        "lock_editor",
+        include_str!("../../migrations/0011_lock_editor.sql"),
+    ),
 ];
 
 /// Where applied migrations are recorded, with each one's SHA-384.

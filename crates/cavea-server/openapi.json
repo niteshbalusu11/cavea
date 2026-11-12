@@ -5208,6 +5208,17 @@
           },
           {
             "$ref": "#/components/parameters/IfMatchRequired"
+          },
+          {
+            "description": "An id the client makes for itself, the same on every request of one editing session (a browser, for the console's designer): letters, digits, `-` and `_`. With it, the lock is held by this actor *and* this editor: another editor of the same person or key is refused as another holder would be, and cannot release it. Without it, any editor of the actor holds it.",
+            "in": "query",
+            "name": "editor",
+            "required": false,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -5294,6 +5305,17 @@
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "description": "An id the client makes for itself, the same on every request of one editing session (a browser, for the console's designer): letters, digits, `-` and `_`. With it, the lock is held by this actor *and* this editor: another editor of the same person or key is refused as another holder would be, and cannot release it. Without it, any editor of the actor holds it.",
+            "in": "query",
+            "name": "editor",
+            "required": false,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -5422,6 +5444,17 @@
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "description": "An id the client makes for itself, the same on every request of one editing session (a browser, for the console's designer): letters, digits, `-` and `_`. With it, the lock is held by this actor *and* this editor: another editor of the same person or key is refused as another holder would be, and cannot release it. Without it, any editor of the actor holds it.",
+            "in": "query",
+            "name": "editor",
+            "required": false,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -5507,6 +5540,17 @@
           },
           {
             "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "description": "An id the client makes for itself, the same on every request of one editing session (a browser, for the console's designer): letters, digits, `-` and `_`. With it, the lock is held by this actor *and* this editor: another editor of the same person or key is refused as another holder would be, and cannot release it. Without it, any editor of the actor holds it.",
+            "in": "query",
+            "name": "editor",
+            "required": false,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            }
           }
         ],
         "responses": {

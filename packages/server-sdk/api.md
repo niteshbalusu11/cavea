@@ -554,6 +554,9 @@ export interface Operations {
             path: {
                 chart: string;
             };
+            query?: {
+                editor?: string;
+            };
             headers: {
                 "If-Match": string;
             };
@@ -565,6 +568,9 @@ export interface Operations {
         input: {
             path: {
                 chart: string;
+            };
+            query?: {
+                editor?: string;
             };
         };
         reply: undefined;
@@ -582,6 +588,9 @@ export interface Operations {
             path: {
                 chart: string;
             };
+            query?: {
+                editor?: string;
+            };
             body: LockChart;
         };
         reply: ChartLock;
@@ -590,6 +599,9 @@ export interface Operations {
         input: {
             path: {
                 chart: string;
+            };
+            query?: {
+                editor?: string;
             };
             headers?: {
                 "If-Match"?: string;
