@@ -217,6 +217,7 @@ const CODES: Record<Problem["code"], true> = {
   object_not_held_by_token: true,
   object_status_conflict: true,
   version_conflict: true,
+  chart_locked: true,
   upgrade_conflict: true,
   idempotency_mismatch: true,
   hold_token_expired: true,
