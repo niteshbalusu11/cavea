@@ -161,7 +161,7 @@ Ask only when a decision is genuinely the owner's and work cannot route around i
 
 ## 11. Slice plan and open notes
 
-The orchestrator keeps this section current so that the plan survives a context summary. Done work is whatever `docs/TODO.md` ticks on `main`; this lists only what is planned and what to remember. Last refreshed after pull request #96 (2026-11-12), at the end of M4.
+The orchestrator keeps this section current so that the plan survives a context summary. Done work is whatever `docs/TODO.md` ticks on `main`; this lists only what is planned and what to remember. Last refreshed after pull request #99 (2026-11-12), at the end of M4.
 
 **Where the work stands.** M1 to M4 are built as far as agents can take them; the milestone reports for M1, M2, M3 and M4 were posted in the orchestrator's thread. The owner's instruction is to stop after M4: do not start M5 or later without the owner saying so. No builder is running and no pull request is open, apart from any follow-up named below.
 
@@ -171,7 +171,7 @@ The orchestrator keeps this section current so that the plan survives a context 
 - **The owner's, by nature:** reference-device runs (`TST-016`), reference-hardware load runs (`TST-024`), usability sessions (`TST-032`), the manual accessibility matrix, every `VAL` task, `OPS-004`, `OPS-005`.
 - **Waiting for a later milestone's server work:** `DSN-040` and `CON-006` (a version diff, `SRV-036`), `CON-007` (two event settings), `SEC-002` (webhooks), `SRV-039` (the manager stream), the renderer's manager mode (`CON-020`).
 - **Waiting for hardware:** `DSN-044` (a GPU measurement), running the arm64 image.
-- **Small, agent-doable, not started:** `DSN-061` (the publish dialog shows server findings in the compiler's words), `DSN-062` (unnamed objects in older charts show an internal id), `DSN-034` (grouping: needs a chart-schema change the owner has not decided), making "Powered by Cavea" a link once there is a domain.
+- **Small, agent-doable, not started:** `DSN-034` (grouping: needs a chart-schema change the owner has not decided; 07 §5.1 gives the two designs, and the orchestrator recommended a `group` id on decoration nodes), making "Powered by Cavea" a link once there is a domain. `DSN-061` and `DSN-062` were done in pull request #99 (D-99).
 
 **How the work was run, for whoever continues it.** Up to three builders ran side by side, each on one chain of slices that edit the same files (renderer and SDK; designer; server; console; docs). When a builder split a slice, the next builder in that chain inherited the unreviewed branch. The lessons that cost time (§5 and §7 have the first two in full): a builder's final report sometimes never arrives (read the task's status); a builder can be cut off (rescue its worktree's uncommitted work to its branch, then start a continuation with the original brief); the secret scanner fails pull requests on test text that merely looks like a credential (briefs say how to write such tests); `bun test` scans scratch copies under `target/`; a long local run must be a `systemd-run --user` service, not a child of the session's shell; the owner's rule that breaking changes are free until a customer is live.
 
