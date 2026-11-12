@@ -54,7 +54,7 @@ Cavea.caveaServer({ baseUrl, publishableKey, event: "opening-night", sessionToke
 - **On an event with `require_session`**, creating a hold token, holding and releasing from a buyer's page need a valid session token. Without one: `401 unauthorized`, `reason` `session_token`, with `details.session` saying `missing`, `invalid`, `expired`, or `event` (signed for another event).
 - **On any event**, a session token that is sent is checked: an invalid one is refused, never ignored.
 - **A hold token created with a session token is tied to its `sub`.** Holding or releasing with it then needs a session token of the same buyer (`403 forbidden`, `reason` `session`), so a stolen hold token is useless alone.
-- **One buyer may have at most `max_tokens_per_sub` live hold tokens on an event**, 2 by default, so that making more tokens does not multiply their seat limit (`422 hold_limit_exceeded`, `reason` `tokens_per_sub`).
+- **One buyer may have at most `max_tokens_per_sub` live hold tokens on an event**, 2 by default (`422 hold_limit_exceeded`, `reason` `tokens_per_sub`). Each token has its own seat limit, so a buyer can hold up to that many times the event's seats per hold token: 20 with the defaults. The default 2 lets a buyer keep a second tab; set it to 1 where a buyer must never hold more than one token's worth.
 
 Realtime connections never need a session token: the public seat state shows only which seats are unavailable.
 

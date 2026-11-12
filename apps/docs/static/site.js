@@ -58,13 +58,17 @@ const snippet = (text, query) => {
   let index = null;
   let loading = null;
 
+  let failed = false;
+  /** Fetches the index once; a failure is shown, and retried at the next keystroke, never in a loop. */
   const load = () => {
     loading ??= fetch(`${root}search.json`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((entries) => {
         index = entries.map((e) => ({ ...e, k: `${e.t} ${e.s} ${e.x}`.toLowerCase() }));
+        failed = false;
       })
       .catch(() => {
+        failed = true;
         loading = null;
       });
     return loading;
@@ -108,10 +112,17 @@ const snippet = (text, query) => {
     results.hidden = false;
     if (index === null) {
       const p = document.createElement("p");
+      if (failed) {
+        // Shown once per keystroke; the next keystroke tries again.
+        failed = false;
+        p.textContent = "The search index could not be loaded. Type again to retry.";
+        results.append(p);
+        return;
+      }
       p.textContent = "Loading the search index…";
       results.append(p);
       void load().then(() => {
-        if (input.value === query) show();
+        if (input.value === query && (index !== null || failed)) show();
       });
       return;
     }

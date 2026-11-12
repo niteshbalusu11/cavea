@@ -42,12 +42,12 @@ The request is malformed: a body, header, path or query parameter the server can
 | `body_too_large` | The body is over the route's size limit; `limit` is the limit in bytes when the route says it. | Send less: see [Limits](limits.md#requests). |
 | `body_unreadable` | The body could not be read, for example because the connection broke. | Send it again. |
 | `json_depth` | Arrays and objects nest deeper than `limit` (32). | Flatten the body. |
-| `invalid_field` | A field's value is not allowed; `field` names it, and `message` says why. | Fix that field. |
+| `invalid_field` | A field's value is not allowed, such as a name over 128 characters or an event setting out of its range; `field` names it (`settings.hold_ttl_seconds`), and `message` says why. | Fix that field. |
 | `path` | A path parameter is malformed, such as a version number that is not a number. | Fix the URL. |
 | `query` | A query parameter or a list cursor is malformed, or `limit` is outside 1 to 100. | Fix the query; pass `next` back as `after` unchanged. |
 | `too_many_objects` | The request names more objects than one command takes (`limit`, 1,000). | Split it. |
 | `no_objects` | A hold, release, book or status change names no object. | Name at least one. |
-| `ttl_out_of_range` | A hold lifetime is outside 60 to 7,200 seconds. | Choose one in range. |
+| `ttl_out_of_range` | The `ttl_seconds` of a hold token your backend creates or extends is outside 60 to 7,200 seconds. (An event's hold lifetime out of range is `invalid_field`.) | Choose one in range. |
 | `zero_object_limit` | A hold token's object limit is 0. | Give it 1 or more. |
 | `token_already_exists` | The new hold token the server generated is already in use. With 256 random bits this does not happen in practice. | Create the token again. |
 | `order_ref_length` | `order_ref` is empty, longer than 128 characters, or contains U+0000. | Send 1 to 128 characters. |

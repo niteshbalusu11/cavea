@@ -19,10 +19,13 @@ Every limit of the Cavea server that a customer can reach, with its value, wheth
 
 | Limit | Value | Over it |
 |---|---|---|
-| Hold lifetime | 60 to 7,200 seconds; an event's default is 900 (15 minutes), set per event as **Hold lifetime** | `400 invalid_request`, `ttl_out_of_range` |
-| Seats per hold token from a buyer's page | 1 to 100; an event's default is 10, set per event as **Seats per hold token** | `422 hold_limit_exceeded` |
-| Seats per hold token from your backend (secret key) | Unlimited unless the token is created with `max_objects` | `422 hold_limit_exceeded` |
-| Live hold tokens per buyer (`sub` of a session token) on one event | 1 to 10; default 2 (`max_tokens_per_sub`) | `422 hold_limit_exceeded`, `tokens_per_sub` |
+| An event's **Hold lifetime** (`hold_ttl_seconds`) | 60 to 7,200 seconds; default 900 (15 minutes) | `400 invalid_request`, `invalid_field` |
+| An event's **Seats per hold token** (`max_objects`) | 1 to 100; default 10 | `400 invalid_request`, `invalid_field` |
+| An event's `max_tokens_per_sub` | 1 to 10; default 2 | `400 invalid_request`, `invalid_field` |
+| Lifetime of a hold token your backend creates or extends (`ttl_seconds`) | 60 to 7,200 seconds | `400 invalid_request`, `ttl_out_of_range` |
+| Seats held under one hold token from a buyer's page | The event's seats per hold token, or less if a session token says so | `422 hold_limit_exceeded` |
+| Seats held under one hold token from your backend (secret key) | Unlimited unless the token is created with `max_objects` | `422 hold_limit_exceeded` |
+| Live hold tokens per buyer (`sub` of a session token) on one event | The event's `max_tokens_per_sub` | `422 hold_limit_exceeded`, `tokens_per_sub` |
 | `order_ref` of a booking | 1 to 128 characters, without U+0000 | `400 invalid_request`, `order_ref_length` |
 | `ticket_type` of a booked object | 1 to 128 characters, without U+0000 | `400 invalid_request`, `ticket_type_length` |
 | `extra` data of a booked object | 2,048 bytes | `400 invalid_request`, `extra_too_large` |

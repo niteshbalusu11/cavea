@@ -37,7 +37,7 @@ A hold fails as a whole if any seat in it is not free (`409 object_not_free`), o
 
 ## Limiting what one buyer can take
 
-A buyer's page can hold at most the event's seats per hold token under one token, but nothing stops a script from making many tokens. To stop that, your backend signs a [session token](session-tokens.md) for each buyer it knows, and the event requires one: hold tokens are then tied to that buyer, at most two live tokens each by default. Rate limits per client address apply too: see [Limits](../reference/limits.md#rate-limits).
+A buyer's page can hold at most the event's seats per hold token under one token, but nothing stops a script from making many tokens. To stop that, your backend signs a [session token](session-tokens.md) for each buyer it knows, and the event requires one: hold tokens are then tied to that buyer, at most two live tokens each by default, so one buyer holds at most twice the seats per hold token (or once, with `max_tokens_per_sub` set to 1). Rate limits per client address apply too: see [Limits](../reference/limits.md#rate-limits).
 
 ## In the API
 

@@ -70,7 +70,7 @@ function enumArms(text: string, name: string): string[] {
   if (start < 0) return [];
   const end = text.indexOf("\n}\n", start);
   const block = text.slice(start, end < 0 ? undefined : end);
-  return [...block.matchAll(/Self::\w+(?:\s*\|\s*Self::\w+)*\s*=>\s*"([a-z_]+)"/g)].map(
+  return [...block.matchAll(/Self::\w+(?:\s*\|\s*Self::\w+)*\s*=>\s*"((?:[^"\\]|\\.)*)"/g)].map(
     (m) => m[1] ?? "",
   );
 }
@@ -104,10 +104,12 @@ export async function scanReasons(root: string): Promise<Scan> {
   for (const file of files) {
     const text = withoutTests(await readFile(file, "utf8"));
     const short = relative(server, file);
+    // Any string literal counts, whatever its spelling: one the page could
+    // not document (not `[a-z_]+`) then fails as undocumented, never silently.
     const literal = [
-      /with_detail\(\s*"reason",\s*"([a-z_]+)"/g,
-      /\b(?:invalid|unauthorized)\(\s*"([a-z_]+)"/g,
-      /JsonRejection::\w+\(_\)\s*=>\s*"([a-z_]+)"/g,
+      /with_detail\(\s*"reason",\s*"((?:[^"\\]|\\.)*)"/g,
+      /\b(?:invalid|unauthorized)\(\s*"((?:[^"\\]|\\.)*)"/g,
+      /JsonRejection::\w+\(_\)\s*=>\s*"((?:[^"\\]|\\.)*)"/g,
       /_\s*=>\s*"(body_unreadable)"/g,
     ];
     for (const pattern of literal) {
