@@ -166,6 +166,18 @@ async function saveState(t: Tab, what: string, ms = 30_000): Promise<string> {
   );
 }
 
+/** A small change to save: Box B nudged left by the keyboard. */
+async function nudgeBoxB(tab: Tab): Promise<void> {
+  await tab.click({ role: "tab", name: msg("panel.layers") });
+  await tab.click(
+    { role: "treeitem", name: /^Box B/ },
+    await tab.find({ role: "tree", name: msg("layers.label") }),
+  );
+  const c = await canvas(tab);
+  await tab.call(c.id, "function () { this.focus(); }");
+  await tab.key("ArrowLeft");
+}
+
 /** The chart's draft on the server, read with the console's own session. */
 async function draft(t: Tab): Promise<Record<string, unknown>> {
   return t.evaluate<Record<string, unknown>>(`(async () => {
@@ -915,16 +927,6 @@ export const TASKS: Task[] = [
         await tab.find({ role: "link", name: CHART.name }, undefined, 30_000);
         return tab;
       };
-      const nudge = async (tab: Tab): Promise<void> => {
-        await tab.click({ role: "tab", name: msg("panel.layers") });
-        await tab.click(
-          { role: "treeitem", name: /^Box B/ },
-          await tab.find({ role: "tree", name: msg("layers.label") }),
-        );
-        const c = await canvas(tab);
-        await tab.call(c.id, "function () { this.focus(); }");
-        await tab.key("ArrowLeft");
-      };
       const lockNow = (): Promise<{ lock: { email: string | null; since: string } | null }> =>
         t.evaluate(`(async () => {
           const me = await (await fetch("/console/api/me")).json();
@@ -950,7 +952,7 @@ export const TASKS: Task[] = [
         await same.close();
         await t.send("Page.bringToFront");
       }
-      await nudge(t);
+      await nudgeBoxB(t);
       await saveState(t, msg("save.saved"));
       check(
         (await lockNow()).lock?.since === held.lock?.since,
