@@ -86,9 +86,17 @@ render(
             {(s) => (
               <Route
                 path={s.path}
-                component={() => (
-                  <Gate section={s}>{SCREENS[s.path]?.() ?? <NotBuilt section={s.label} />}</Gate>
-                )}
+                component={() => {
+                  // As a component (untracked), not called: a screen that
+                  // reads a signal as it starts (its URL's parameters) must
+                  // not be made again when that signal changes.
+                  const Screen = SCREENS[s.path];
+                  return (
+                    <Gate section={s}>
+                      {Screen === undefined ? <NotBuilt section={s.label} /> : <Screen />}
+                    </Gate>
+                  );
+                }}
               />
             )}
           </For>

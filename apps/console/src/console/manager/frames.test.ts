@@ -48,7 +48,7 @@ test("every seat's label and status match what the server encoded, snapshot then
     expect(changes).toEqual(f.expected.delta.changes);
   }
   // Both snapshot encodings a manager frame may use are covered.
-  expect(NAMES.map((n) => fixture(n).expected.snapshot.encoding).toSorted()).toEqual([0, 1]);
+  expect(NAMES.map((n) => fixture(n).expected.snapshot.encoding)).toEqual([0, 1]);
 });
 
 /** A small deterministic generator, so a failure is reproducible. */
