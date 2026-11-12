@@ -170,7 +170,7 @@ export function compose(template: string, section: string, row: string, seat: st
   let out = "";
   let separator = "";
   let started = false;
-  let written = false;
+  let wrote = false;
   let afterWritten = false;
   let at = 0;
   for (const m of template.matchAll(placeholder)) {
@@ -184,9 +184,9 @@ export function compose(template: string, section: string, row: string, seat: st
     const value = values[m[1] ?? ""] ?? "";
     afterWritten = value !== "";
     if (afterWritten) {
-      if (written) out += separator;
+      if (wrote) out += separator;
       out += value;
-      written = true;
+      wrote = true;
     }
     at = m.index + m[0].length;
   }
