@@ -115,6 +115,20 @@ interface Outcome {
   seconds: number;
 }
 
+/**
+ * `text` with every value the run keeps secret (keys, passwords, tokens,
+ * session cookies, emails) replaced by its name: nothing the run prints or
+ * writes holds one. (Screenshots show what the page showed: a key in the
+ * dialog that shows it once, for example. They stay in target/e2e.)
+ */
+function redact(run: Run, text: string): string {
+  let out = text;
+  for (const [what, value] of run.secrets) {
+    if (value.length >= 8) out = out.replaceAll(value, `‹${what}›`);
+  }
+  return out;
+}
+
 async function report(run: Run, prefix: string): Promise<string[]> {
   const written: string[] = [];
   for (const tab of run.tabs.values()) {
@@ -127,12 +141,22 @@ async function report(run: Run, prefix: string): Promise<string[]> {
     }
     await writeFile(
       `${base}.tree.txt`,
-      `${await tab.outline().catch((e: unknown) => String(e))}\n`,
+      redact(run, `${await tab.outline().catch((e: unknown) => String(e))}\n`),
     );
-    await writeFile(`${base}.console.txt`, `${tab.console.join("\n")}\n`);
-    await writeFile(`${base}.network.txt`, `${tab.network.join("\n")}\n`);
+    await writeFile(`${base}.console.txt`, redact(run, `${tab.console.join("\n")}\n`));
+    await writeFile(`${base}.network.txt`, redact(run, `${tab.network.join("\n")}\n`));
   }
   return written;
+}
+
+/** What the open pages reported since the last look, taken off them. */
+async function pageProblems(run: Run): Promise<string[]> {
+  const problems: string[] = [];
+  for (const tab of run.tabs.values()) {
+    await tab.collect();
+    problems.push(...tab.problems.splice(0).map((p) => `${tab.name}: ${p.kind}: ${p.text}`));
+  }
+  return problems;
 }
 
 async function main(): Promise<number> {
@@ -236,11 +260,7 @@ async function main(): Promise<number> {
     try {
       await step.run(run);
       // Whatever the pages did besides: each must have nothing to show.
-      const problems: string[] = [];
-      for (const tab of run.tabs.values()) {
-        await tab.collect();
-        problems.push(...tab.problems.splice(0).map((p) => `${tab.name}: ${p.kind}: ${p.text}`));
-      }
+      const problems = await pageProblems(run);
       if (problems.length > 0) {
         throw new Error(`the pages reported problems no step expects:\n  ${problems.join("\n  ")}`);
       }
@@ -254,7 +274,10 @@ async function main(): Promise<number> {
       outcomes.push({ step: label, result: "pass", seconds: Number(seconds(from)) });
       console.log(`ok (${seconds(from)} s)`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const problems = await pageProblems(run);
+      const message = `${error instanceof Error ? error.message : String(error)}${
+        problems.length > 0 ? `\n\nthe pages also reported:\n  ${problems.join("\n  ")}` : ""
+      }`;
       const pictures = await report(run, `step${i + 1}`);
       const marked = step.known !== undefined;
       outcomes.push({
@@ -263,7 +286,7 @@ async function main(): Promise<number> {
         seconds: Number(seconds(from)),
       });
       console.log(
-        `${marked ? `KNOWN FAILURE (${step.known})` : "FAILED"} (${seconds(from)} s)\n\n${message}\n`,
+        `${marked ? `KNOWN FAILURE (${step.known})` : "FAILED"} (${seconds(from)} s)\n\n${redact(run, message)}\n`,
       );
       if (pictures.length > 0) {
         console.log(
@@ -271,8 +294,6 @@ async function main(): Promise<number> {
         );
       }
       console.log(`server log: ${OUT}/server.log\n`);
-      // Its pages' problems are part of the failure, not the next step's.
-      for (const tab of run.tabs.values()) tab.problems.splice(0);
       if (marked) {
         knownFailures++;
         continue;
@@ -287,7 +308,7 @@ async function main(): Promise<number> {
     console.log(`| ${o.step} | ${o.result} | ${o.seconds.toFixed(1)} |`);
   }
   for (const note of run.notes) {
-    console.log(`\n${note}`);
+    console.log(`\n${redact(run, note)}`);
   }
   const verdict = failed
     ? "FAILED"

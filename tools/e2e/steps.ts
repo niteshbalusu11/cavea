@@ -403,19 +403,23 @@ export const STEPS: Step[] = [
       // Validation: the panel, once the check has run, lists no error.
       // Its name carries the count of findings once there are any.
       await t.click({ role: "tab", name: new RegExp(`^${msg("panel.validation")}( \\d+)?$`) });
-      const problems = await until(
-        "validation to finish (the status bar's problems button)",
+      const panel = await t.find({
+        role: "tabpanel",
+        name: new RegExp(`^${msg("panel.validation")}`),
+      });
+      // Finished: the panel no longer says it is checking (the counts shown
+      // meanwhile may be the last full check's, from before the last edit).
+      const findings = await until(
+        "validation to finish (the panel no longer checking)",
         async () => {
-          const name = (await t.all({ role: "button", name: /./ }, bar)).find(
-            (b) => b.name === msg("status.noProblems") || /errors · .* warnings$/.test(b.name),
-          )?.name;
-          return name;
+          const text = await t.text(panel);
+          return text.includes(msg("validation.checking")) ? undefined : text;
         },
         30_000,
       );
-      const findings = await t.text(
-        await t.find({ role: "tabpanel", name: new RegExp(`^${msg("panel.validation")}`) }),
-      );
+      const problems = (await t.all({ role: "button", name: /./ }, bar)).find(
+        (b) => b.name === msg("status.noProblems") || /errors · .* warnings$/.test(b.name),
+      )?.name ?? "no summary in the status bar";
       const noErrors = msg("status.problems", { errors: 0, warnings: 0 }).split(" · ")[0] ?? "";
       check(
         problems === msg("status.noProblems") || problems.startsWith(`${noErrors} · `),
@@ -647,7 +651,7 @@ export const STEPS: Step[] = [
       }
       r.latency.push(...holds);
       r.notes.push(
-        `two-browser latency (WebSocket), click on buyer 1 to buyer 2's frame showing it: hold ${spread(holds)}; release ${spread(releases)}`,
+        `two-browser latency (WebSocket), click on buyer 1 to buyer 2's frame showing it: hold ${spread(holds)}; release ${spread(releases)}; in order, hold ${holds.map((v) => v.toFixed(0)).join(", ")}; release ${releases.map((v) => v.toFixed(0)).join(", ")}`,
       );
       seat.hold = (await one.evaluate<{ holdToken: string }>("window.buyer.selection")).holdToken;
       r.secrets.set("hold token", seat.hold);

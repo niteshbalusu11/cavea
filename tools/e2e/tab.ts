@@ -42,14 +42,22 @@ export interface Problem {
   text: string;
 }
 
-/** Fails after `ms` with "timed out after … waiting for `what`", the last error's text appended. */
+/** The last text a wait read from the page: a timeout shows what was there instead. */
+let lastRead: string | undefined;
+
+/**
+ * Waits until `probe` gives a value (not undefined, null or false) and
+ * returns it. Fails after `ms` with "timed out after … waiting for `what`",
+ * then the probe's last error, or the last text it read from the page.
+ */
 export async function until<T>(
   what: string,
   probe: () => Promise<T | undefined | null | false>,
   ms = 15_000,
 ): Promise<T> {
   let last = "";
-  for (const deadline = Date.now() + ms; ;) {
+  lastRead = undefined;
+  for (const deadline = Date.now() + ms; ; ) {
     try {
       const value = await probe();
       if (value !== undefined && value !== null && value !== false) {
@@ -59,9 +67,8 @@ export async function until<T>(
       last = error instanceof Error ? error.message : String(error);
     }
     if (Date.now() > deadline) {
-      throw new Error(
-        `timed out after ${ms / 1000} s waiting for ${what}${last ? ` (${last})` : ""}`,
-      );
+      const seen = last !== "" ? ` (${last})` : lastRead !== undefined ? `; the page showed “${lastRead.slice(0, 400)}”` : "";
+      throw new Error(`timed out after ${ms / 1000} s waiting for ${what}${seen}`);
     }
     await Bun.sleep(25);
   }
@@ -366,11 +373,12 @@ export class Tab {
   }
 
   /** An element's text as shown, whitespace collapsed. */
-  text(id: number): Promise<string> {
-    return this.call<string>(
+  async text(id: number): Promise<string> {
+    lastRead = await this.call<string>(
       id,
       "function () { return (this.innerText ?? this.textContent ?? '').replace(/\\s+/g, ' ').trim(); }",
     );
+    return lastRead;
   }
 
   /** An input's value. */
