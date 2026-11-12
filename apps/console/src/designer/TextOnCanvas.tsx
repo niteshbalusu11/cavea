@@ -10,9 +10,10 @@
 // to the click. With the text tool and nothing typed, Enter on the canvas
 // places a text in the middle of the view, for the keyboard.
 import { toScreen, type TextField } from "@cavea/designer-core";
-import { Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { msg } from "../i18n/messages.ts";
 import type { Editor } from "./editor.ts";
+import { fit } from "./textLimit.ts";
 
 const NONE = { shift: false, alt: false, ctrl: false };
 /** The field's font size, in CSS px, whatever the zoom: readable, and no
@@ -46,6 +47,8 @@ export function TextOnCanvas(props: {
   const editor = props.editor;
   /** Set while the field closes by Enter or Escape: its blur then does nothing. */
   let closing = false;
+  /** Typing went past what a text holds: the field says so. */
+  const [full, setFull] = createSignal(false);
   const box = () => (props.field === null ? null : fieldBox(props.field, editor.view()));
   /** Commits (Enter) or cancels (Escape) through the tool; back to the
    * canvas unless focus went elsewhere. */
@@ -61,55 +64,74 @@ export function TextOnCanvas(props: {
   return (
     <Show when={box()}>
       {(b) => (
-        <input
-          ref={(e) => {
-            closing = false;
-            e.value = props.field?.text ?? "";
-            queueMicrotask(() => {
-              e.focus({ preventScroll: true });
-              e.select();
-            });
-          }}
-          type="text"
-          spellcheck={false}
-          autocomplete="off"
-          aria-label={msg("canvas.textField")}
-          title={msg("canvas.textFieldHint")}
-          class="absolute z-10 rounded-sm border border-accent bg-raised px-1 text-fg shadow-menu outline-none"
-          style={{
-            left: `${b().left}px`,
-            top: `${b().top}px`,
-            width: `${b().width}px`,
-            "font-size": `${b().px}px`,
-            "line-height": "1.2",
-            "font-weight": String(props.field?.weight ?? 400),
-            "text-align": props.field?.align ?? "center",
-            "transform-origin": "0 0",
-            transform: `rotate(${b().angle}deg) translate(${SHIFT[props.field?.align ?? "center"]}, -50%)`,
-          }}
-          onInput={(e) => {
-            const text = e.currentTarget.value;
-            editor.run((s) => s.setText(text));
-          }}
-          onKeyDown={(e) => {
-            if (e.isComposing) return;
-            if (e.key === "Enter") {
-              e.preventDefault();
-              e.stopPropagation();
-              close("enter", true);
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              e.stopPropagation();
-              close("escape", true);
-            }
-          }}
-          onBlur={(e) => {
-            // A press on the canvas commits by itself; Enter and Escape
-            // have already acted.
-            if (closing || e.relatedTarget === props.canvas()) return;
-            close("enter", false);
-          }}
-        />
+        <>
+          <input
+            ref={(e) => {
+              closing = false;
+              setFull(false);
+              e.value = props.field?.text ?? "";
+              queueMicrotask(() => {
+                e.focus({ preventScroll: true });
+                e.select();
+              });
+            }}
+            type="text"
+            spellcheck={false}
+            autocomplete="off"
+            aria-label={msg("canvas.textField")}
+            title={msg("canvas.textFieldHint")}
+            class="absolute z-10 rounded-sm border border-accent bg-raised px-1 text-fg shadow-menu outline-none"
+            style={{
+              left: `${b().left}px`,
+              top: `${b().top}px`,
+              width: `${b().width}px`,
+              "font-size": `${b().px}px`,
+              "line-height": "1.2",
+              "font-weight": String(props.field?.weight ?? 400),
+              "text-align": props.field?.align ?? "center",
+              "transform-origin": "0 0",
+              transform: `rotate(${b().angle}deg) translate(${SHIFT[props.field?.align ?? "center"]}, -50%)`,
+            }}
+            aria-invalid={full()}
+            aria-describedby={full() ? "text-on-canvas-full" : undefined}
+            onInput={(e) => {
+              // What the field shows is what the text keeps: never more than
+              // a text holds (the edit core would keep the last that fitted).
+              const text = fit(e.currentTarget.value);
+              setFull(text !== e.currentTarget.value);
+              if (text !== e.currentTarget.value) e.currentTarget.value = text;
+              editor.run((s) => s.setText(text));
+            }}
+            onKeyDown={(e) => {
+              if (e.isComposing) return;
+              if (e.key === "Enter") {
+                e.preventDefault();
+                e.stopPropagation();
+                close("enter", true);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                close("escape", true);
+              }
+            }}
+            onBlur={(e) => {
+              // A press on the canvas commits by itself; Enter and Escape
+              // have already acted.
+              if (closing || e.relatedTarget === props.canvas()) return;
+              close("enter", false);
+            }}
+          />
+          <Show when={full()}>
+            <p
+              id="text-on-canvas-full"
+              role="status"
+              class="absolute z-10 rounded-sm bg-raised px-1.5 py-0.5 text-xs text-warning shadow-menu"
+              style={{ left: `${b().left}px`, top: `${b().top + b().px}px` }}
+            >
+              {msg("canvas.textFull")}
+            </p>
+          </Show>
+        </>
       )}
     </Show>
   );

@@ -578,6 +578,7 @@ const ui = {
   "canvas.role": "chart canvas",
   "canvas.textField": "Text on the chart",
   "canvas.textFieldHint": "Enter to place it, Escape to cancel",
+  "canvas.textFull": "A text holds at most 256 bytes (about 256 letters): the rest was not kept.",
   "canvas.unavailable": "The canvas cannot draw here",
   "canvas.noWebgl": "This browser has no WebGL2, which the designer's canvas needs.",
   "canvas.failed": "The canvas stopped: {message}",

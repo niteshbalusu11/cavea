@@ -194,7 +194,13 @@ export function serverChart(props: {
   const [picturing, setPicturing] = createSignal<number | null>(null);
   /** Leaving while the picture is made: where to go once it is done, or
    * if the person leaves without it. */
-  const [leavingPicture, setLeavingPicture] = createSignal<(() => void) | null>(null);
+  const [leavingPicture, setLeavingPicture] = createSignal<{
+    /** Leave now, without the picture. */
+    now: () => void;
+    /** Try leaving again, through every guard: once the picture is done,
+     * work changed meanwhile is asked about as on any leaving. */
+    again: () => void;
+  } | null>(null);
   /** The question about it is shown; "Wait" hides it and keeps the way out. */
   const [askingPicture, setAskingPicture] = createSignal(false);
   /** Pictures being made: publishing again while one is made starts
@@ -720,17 +726,17 @@ export function serverChart(props: {
       setLeaving(() => go);
     } else if (picturing() !== null) {
       e.preventDefault();
-      setLeavingPicture(() => go);
+      setLeavingPicture({ now: go, again: () => e.retry() });
       setAskingPicture(true);
     }
   });
   // The picture is done while the person waits to leave: on they go.
   createEffect(() => {
-    const go = leavingPicture();
-    if (go === null || picturing() !== null) return;
+    const way = leavingPicture();
+    if (way === null || picturing() !== null) return;
     setLeavingPicture(null);
     setAskingPicture(false);
-    go();
+    way.again();
   });
 
   // The session ended under the editor (it expired, or ended elsewhere):
@@ -925,10 +931,10 @@ export function serverChart(props: {
         confirm={msg("thumbnail.leaveConfirm")}
         cancel={msg("thumbnail.wait")}
         onConfirm={() => {
-          const go = leavingPicture();
+          const way = leavingPicture();
           setLeavingPicture(null);
           setAskingPicture(false);
-          go?.();
+          way?.now();
         }}
         // Wait: the question goes, the way out stays, taken once it is done.
         onClose={() => setAskingPicture(false)}
