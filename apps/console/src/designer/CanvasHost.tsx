@@ -126,6 +126,7 @@ export function CanvasHost(props: { editor: Editor; rulers: boolean }) {
   /** Stops drawing and says why; the panels stay usable. */
   const fail = (message: string) => {
     editor.loop.setPainter(null);
+    editor.canvas = null;
     canvas?.dispose();
     canvas = null;
     painter = null;
@@ -203,6 +204,10 @@ export function CanvasHost(props: { editor: Editor; rulers: boolean }) {
       );
     }
     const c = canvas;
+    editor.canvas = c;
+    onCleanup(() => {
+      if (editor.canvas === c) editor.canvas = null;
+    });
     const unavailable = editor.images?.onAvailable(() => {
       if (c.disposed) return;
       c.retryImages();

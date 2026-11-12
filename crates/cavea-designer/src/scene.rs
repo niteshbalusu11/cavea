@@ -29,6 +29,11 @@
 //! While the numbering panel previews (07 §6), its target nodes are compiled
 //! as the numbering would leave them, so the canvas shows the labels it
 //! would apply.
+//!
+//! A *buyer's* live scene ([`LiveSync::for_buyer`], for a version's
+//! thumbnail, 07 §11) leaves out reference images, as the compiler does,
+//! and starts from another sync's compiled pieces, so it compiles nothing
+//! the editor's canvas already has.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -77,7 +82,7 @@ struct Content {
     chart: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Entry {
     /// Unique per compile: the engine keeps a piece's uploads by it.
     id: u64,
@@ -85,6 +90,10 @@ struct Entry {
     content: Content,
     /// The world placement it was compiled at.
     placed: Affine,
+    /// The floor index and role it was compiled with: a buyer's sync
+    /// interns its strings again from them.
+    floor: u32,
+    role: Role,
 }
 
 /// The chart-level data pieces are compiled with.
@@ -132,6 +141,8 @@ pub struct LiveSync {
     pub compiled: u64,
     pub compiled_seats: u64,
     pub merges: u64,
+    /// What a buyer sees: no reference image.
+    buyer: bool,
 }
 
 /// Origin and rotation of a node (07 §2.1): its place in its parent.
@@ -236,9 +247,41 @@ fn plain(node: &Node) -> Node {
     plain
 }
 
+/// A reference image: the designer's only (03 §2.7), never compiled.
+fn reference(node: &Node) -> bool {
+    matches!(node, Node::Image(i) if i.role == ImageRole::Reference)
+}
+
 impl LiveSync {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A sync for another engine that draws what a buyer would see: the
+    /// same pieces, without reference images. It starts from this sync's
+    /// compiled pieces, so its first sync merges them and compiles only
+    /// what changed since this one last synced.
+    pub fn for_buyer(&self) -> Self {
+        let mut live = LiveScene::default();
+        // A piece's strings are indices into its sync's table: interned
+        // again into the new one.
+        let entries = (self.entries.iter())
+            .map(|(k, e)| {
+                let piece =
+                    (e.piece.as_ref()).map(|p| live.piece(p.chart().clone(), e.floor, e.role));
+                (*k, Entry { piece, ..e.clone() })
+            })
+            .collect();
+        Self {
+            live,
+            entries,
+            basis: self.basis.clone(),
+            chart: self.chart,
+            base: self.base.clone(),
+            next_id: self.next_id,
+            buyer: true,
+            ..Self::default()
+        }
     }
 
     /// Brings the engine's live scene up to date with the session. Returns
@@ -302,7 +345,7 @@ impl LiveSync {
         let mut wanted: Vec<(Key, Content, Affine, Option<u32>)> = Vec::new();
         for &root in doc.children(None) {
             let Some(node) = doc.node(root) else { continue };
-            if floor_of(node).or(first_floor) != shown_floor {
+            if floor_of(node).or(first_floor) != shown_floor || (self.buyer && reference(node)) {
                 continue;
             }
             let content_of = |id: u32| doc.stamps(id).map_or(0, |(_, c)| c);
@@ -324,6 +367,9 @@ impl LiveSync {
                     wanted.push((Key::Shell(root), content, place, None));
                     for &child in doc.children(Some(root)) {
                         let Some(c) = doc.node(child) else { continue };
+                        if self.buyer && reference(c) {
+                            continue;
+                        }
                         let content = Content {
                             stamps: [content_of(child), content_of(root)],
                             section: Some(root),
@@ -396,13 +442,16 @@ impl LiveSync {
                     Key::Node(id) => previewed.get(id).map(|&n| n.clone()),
                     Key::Shell(_) => None,
                 };
-                let piece = self.compile(session, *key, *section, source, overflow, floor_index);
+                let compiled = self.compile(session, *key, *section, source, overflow, floor_index);
+                let (piece, role) = compiled.map_or((None, Role::Node), |(p, r)| (Some(p), r));
                 self.next_id += 1;
                 let entry = Entry {
                     id: self.next_id,
                     piece,
                     content: content.clone(),
                     placed: *at,
+                    floor: floor_index,
+                    role,
                 };
                 self.entries.insert(*key, entry);
                 remerge = true;
@@ -482,7 +531,7 @@ impl LiveSync {
         }
     }
 
-    /// Compiles one piece; `None` when it draws nothing.
+    /// Compiles one piece, with its role; `None` when it draws nothing.
     fn compile(
         &mut self,
         session: &Session,
@@ -491,7 +540,7 @@ impl LiveSync {
         source: Option<Node>,
         overflow: Option<AlphaOverflow>,
         floor: u32,
-    ) -> Option<Piece> {
+    ) -> Option<(Piece, Role)> {
         let doc = session.document();
         let preview = source.is_some();
         let (node, role) = match key {
@@ -553,7 +602,7 @@ impl LiveSync {
         let chart = chart?;
         self.compiled += 1;
         self.compiled_seats += chart.seat_pos.len() as u64;
-        Some(self.live.piece(chart, floor, role))
+        Some((self.live.piece(chart, floor, role), role))
     }
 
     /// Whether moved pieces wait to be baked.

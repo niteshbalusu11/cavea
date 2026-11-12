@@ -7,7 +7,8 @@ import type { Chart, ChartDocument, Finding, Version } from "../api/generated.ts
 import { asApiError } from "../api/query.ts";
 import { describe } from "../console/errors.ts";
 import type { LockInfo, LockReply, SaveReply } from "./autosave.ts";
-import { infoOf, lockOf, lockReplyOf, saveReply } from "./replies.ts";
+import { infoOf, lockOf, lockReplyOf, saveReply, unreachable } from "./replies.ts";
+import type { Sent } from "./thumbnail.ts";
 
 /** Where a server chart lives. */
 export interface ChartRef {
@@ -150,5 +151,40 @@ function isFinding(v: unknown): v is Finding {
     typeof f["code"] === "string" &&
     typeof f["message"] === "string" &&
     (f["severity"] === "error" || f["severity"] === "warning")
+  );
+}
+
+/** A request's outcome for the thumbnail: no answer is tried again. */
+async function sent<T>(send: () => Promise<T>): Promise<Sent<T>> {
+  try {
+    return { ok: await send() };
+  } catch (e) {
+    return unreachable(asApiError(e)) ? { offline: true } : { failed: true };
+  }
+}
+
+/** Uploads a thumbnail's picture (`POST /v1/assets`): its hash. */
+export function uploadImage(ref: ChartRef, blob: Blob): Promise<Sent<string>> {
+  return sent(async () => {
+    const asset = await call("uploadAsset", { body: blob }, new AbortController().signal, {
+      workspace: ref.workspace,
+    });
+    return asset.hash;
+  });
+}
+
+/** Attaches an uploaded picture to version `number` as its thumbnail. */
+export function attachThumbnail(
+  ref: ChartRef,
+  number: number,
+  hash: string,
+): Promise<Sent<Version>> {
+  return sent(() =>
+    call(
+      "setVersionThumbnail",
+      { path: { chart: ref.key, number: String(number) }, body: { asset: hash } },
+      new AbortController().signal,
+      { workspace: ref.workspace },
+    ),
   );
 }

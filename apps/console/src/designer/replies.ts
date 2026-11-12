@@ -9,7 +9,7 @@ import type { LockInfo, LockReply, SaveReply } from "./autosave.ts";
 const UNREACHABLE = new Set([502, 503, 504]);
 
 /** No answer, or the server cannot take it now: tried again later. */
-function unreachable(error: ApiError): boolean {
+export function unreachable(error: ApiError): boolean {
   return (
     error.code === "network" ||
     error.code === "timeout" ||

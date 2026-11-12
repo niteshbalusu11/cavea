@@ -14,7 +14,7 @@
 import type { Designer, Session } from "@cavea/designer-core";
 import { useBeforeLeave, useLocation, useNavigate } from "@solidjs/router";
 import { createEffect, createSignal, on, onCleanup, Show, type Accessor, type JSX } from "solid-js";
-import type { Chart } from "../api/generated.ts";
+import type { Chart, Version } from "../api/generated.ts";
 import { asApiError, componentSignal } from "../api/query.ts";
 import { describe, reference } from "../console/errors.ts";
 import { here, signInFor } from "../console/paths.ts";
@@ -38,6 +38,7 @@ import { failureMessage, failureOf } from "./errors.ts";
 import { lockPeers } from "./lockPeers.ts";
 import { makeReadOnly } from "./readonly.ts";
 import {
+  attachThumbnail as attachTo,
   currentEtag,
   openChart,
   publish,
@@ -45,9 +46,11 @@ import {
   releaseLock,
   saveDraft,
   takeLock,
+  uploadImage,
   type ChartRef,
   type Published,
 } from "./server.ts";
+import { attachThumbnail, renderThumbnail } from "./thumbnail.ts";
 import { localSource } from "./source.ts";
 
 /** A server chart to open, with what the person's role allows. */
@@ -357,6 +360,28 @@ export function serverChart(props: {
       ...(taken?.kind === "held" ? { lock: taken.lock } : {}),
     });
     setPhase({ kind: "ready" });
+  };
+
+  /** A published version's thumbnail, made in the background: a failure
+   * is a quiet note, never the publish's. */
+  const thumbnail = async (version: Version) => {
+    const e = props.editor();
+    if (e === null) return;
+    const images = e.images;
+    const done = await attachThumbnail<Version>({
+      render: () =>
+        renderThumbnail(
+          e.session,
+          e.canvas,
+          images === null ? undefined : (hash) => images.source(hash),
+        ),
+      upload: (blob) => uploadImage(ref, blob),
+      attach: (hash) => attachTo(ref, version.number, hash),
+      wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    });
+    if (gone) return;
+    if (done === null) return notify(msg("thumbnail.skipped", { version: version.number }));
+    setChart((c) => (c?.published_version?.id === done.id ? { ...c, published_version: done } : c));
   };
 
   /** The person takes the lock from whoever holds it, then edits the
@@ -764,6 +789,8 @@ export function serverChart(props: {
       const result = await publish(ref, autosave.etag, signal);
       if (result.kind === "published") {
         setChart((c) => (c === null ? c : { ...c, published_version: result.version }));
+        // A new version, or one published again before it had a picture.
+        if (result.version.thumbnail === null) void thumbnail(result.version);
       }
       if (result.kind === "locked") autosave.lost(result.lock);
       return result;

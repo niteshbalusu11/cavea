@@ -2,6 +2,7 @@
 // shell's camera, and the actions the menus, panels and shortcuts share.
 import {
   fitView,
+  type Canvas,
   pan as panView,
   zoomAbout,
   type DesignerFailure,
@@ -74,6 +75,9 @@ export interface Editor {
   session: Session;
   /** The page's images: placing, uploading, where the canvas finds them. */
   images: ImageHost | null;
+  /** The canvas drawing it, while there is one (set by the canvas host):
+   * a version's thumbnail reuses what it has compiled. */
+  canvas: Canvas | null;
   views: Views;
   loop: FrameLoop;
   camera: Accessor<Camera>;
@@ -250,6 +254,7 @@ export function createEditor(
   const editor: Editor = {
     session,
     images,
+    canvas: null,
     views,
     loop,
     camera,

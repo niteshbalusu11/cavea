@@ -849,6 +849,7 @@ const consoleScreens = {
   "charts.noMatch": "No chart matches “{query}”.",
   "charts.clearSearch": "Clear the search",
   "charts.noThumbnail": "No preview yet",
+  "charts.thumbnail": "{name}, as published",
   "charts.unpublished": "Not published yet",
   "charts.published": "{seats} seats · version {version}",
   "charts.edited": "Edited {when}",
@@ -1427,6 +1428,7 @@ const designerLock = {
     "The chart was changed by someone else while this tab was away: it now shows their latest version.",
   "topbar.publishReadOnly": "This chart is open read-only here.",
   "publish.locked": "{who} is editing this chart, so nothing was published.",
+  "thumbnail.skipped": "Version {version} was published without a picture for the charts list.",
 };
 
 export const catalogue = {

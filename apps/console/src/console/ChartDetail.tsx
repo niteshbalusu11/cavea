@@ -257,6 +257,16 @@ function Versions(props: { chart: Chart; onCreate: (version: number) => void }) 
                     {(v: Version) => (
                       <tr>
                         <td class={td}>
+                          <Show when={v.thumbnail}>
+                            {(t) => (
+                              <img
+                                src={t().url}
+                                alt=""
+                                class="mr-2 inline-block h-9 w-12 rounded-sm border border-line bg-canvas object-contain align-middle"
+                                loading="lazy"
+                              />
+                            )}
+                          </Show>
                           {msg("events.versionShort", { number: v.number })}
                           <Show when={v.number === props.chart.published_version?.number}>
                             <span class="ml-2 rounded-sm bg-accent-soft px-1.5 text-xs text-accent">

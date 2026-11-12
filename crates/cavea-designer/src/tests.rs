@@ -1182,3 +1182,65 @@ fn reference_images_are_drawn_but_never_compiled() {
     settle(&mut p, &s);
     assert_eq!(shown(&p).len(), 1);
 }
+
+/// 07 §11: a version's thumbnail shows what a buyer would see. A painter
+/// shown the buyer's view of a session with a reference image and
+/// everything selected draws the same chart as the editor's canvas, without
+/// the picture and without the overlay, and compiles nothing the editor's
+/// sync had compiled.
+#[test]
+fn the_buyers_view_has_no_overlay_and_no_reference_image() {
+    use cavea_compiler::document::ImageRole;
+    use cavea_edit::Draft;
+
+    let mut s = Session::load(preset("theatre")).expect("load");
+    for (role, at) in [(ImageRole::Reference, 0.0), (ImageRole::Background, 9000.0)] {
+        let image = Draft::Image {
+            center: [at, 0.0],
+            size: [4000.0, 3000.0],
+            asset: format!("{:032x}", at as u64),
+            role,
+        };
+        s.insert(None, &image).expect("insert");
+    }
+    s.select_all();
+    s.add_guide(cavea_edit::UserGuide {
+        axis: cavea_edit::GuideAxis::Vertical,
+        at: 100.0,
+    })
+    .expect("guide");
+    let mut editor = painter(VIEW);
+    settle(&mut editor, &s);
+    assert!(
+        editor.engine().overlay_batch().stats().indices > 0,
+        "the editor's overlay"
+    );
+    assert_eq!(
+        editor.engine().scene().expect("scene").chart.images.len(),
+        2
+    );
+
+    let mut buyer = painter(VIEW);
+    buyer.show_buyer(Some(editor.sync()));
+    settle(&mut buyer, &s);
+    let scene = buyer.engine().scene().expect("scene");
+    assert_eq!(drawn(scene), drawn(editor.engine().scene().expect("scene")));
+    let images: Vec<&str> = (scene.chart.images.iter())
+        .map(|i| scene.chart.strings.get(i.asset).unwrap_or_default())
+        .collect();
+    assert_eq!(
+        images,
+        [format!("{:032x}", 9000)],
+        "the background image only"
+    );
+    assert_eq!(buyer.engine().overlay_batch().stats().indices, 0);
+    assert_eq!(buyer.engine().overlay_batch().stats().texts, 0);
+    assert_eq!(buyer.sync().compiled, 0, "the editor's pieces are reused");
+
+    // Without them, the same picture, compiled.
+    let mut alone = painter(VIEW);
+    alone.show_buyer(None);
+    settle(&mut alone, &s);
+    assert_eq!(drawn(alone.engine().scene().expect("scene")), drawn(scene));
+    assert_eq!(alone.engine().scene().expect("scene").chart.images.len(), 1);
+}
