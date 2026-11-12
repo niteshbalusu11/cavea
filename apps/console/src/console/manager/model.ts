@@ -1,5 +1,5 @@
 // The event manager's rules as plain functions (09 §4.2, CON-008; D-68,
-// D-80): which seats an action may take, how a refusal maps back to seats,
+// D-82): which seats an action may take, how a refusal maps back to seats,
 // what the map must be told when the truth or the selection changes, and
 // how the operator's own action shows until the state catches up. The
 // screen and the poller only call these.
