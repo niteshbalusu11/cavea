@@ -198,15 +198,19 @@ summary:focus-visible,
   padding: 0 1.5rem;
 }
 
+.menu {
+  position: sticky;
+  top: 3.6rem;
+  align-self: start;
+  max-height: calc(100vh - 3.6rem);
+  overflow: auto;
+}
+
 .menu > summary {
   display: none;
 }
 
 .side {
-  position: sticky;
-  top: 3.6rem;
-  max-height: calc(100vh - 3.6rem);
-  overflow: auto;
   padding: 1.25rem 0 2rem;
 }
 
@@ -365,6 +369,12 @@ code {
   background: var(--bg-code);
   border-radius: 4px;
   overflow-wrap: anywhere;
+}
+
+td code,
+th code {
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 
 .code {
@@ -550,6 +560,9 @@ details.more[open] > summary {
     padding: 0 1rem;
   }
   .menu {
+    position: static;
+    max-height: none;
+    overflow: visible;
     margin: 0.75rem 0 0;
     border: 1px solid var(--line);
     border-radius: var(--radius);
@@ -561,8 +574,6 @@ details.more[open] > summary {
     font-weight: 600;
   }
   .side {
-    position: static;
-    max-height: none;
     padding: 0.25rem 0.8rem 1rem;
   }
   main {

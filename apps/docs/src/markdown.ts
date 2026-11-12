@@ -88,6 +88,10 @@ export function escape(text: string): string {
 /** Text of an HTML fragment: tags dropped, entities decoded. */
 export function plain(html: string): string {
   return html
+    .replace(
+      /<\/?(?:td|th|tr|li|p|br|h\d|div|pre|table|thead|tbody|ul|ol|aside|summary|details)\b[^>]*>/g,
+      " ",
+    )
     .replace(/<[^>]*>/g, "")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
@@ -151,8 +155,12 @@ export function render(source: string, page: string): Rendered {
   const headings: Heading[] = [];
   html = html.replace(
     /<h([1-4]) id="([^"]+)">([\s\S]*?)<\/h\1>/g,
-    (_, level: string, id: string, inner: string) => {
+    (_, level: string, generated: string, inner: string) => {
       const n = Number(level);
+      // A heading that is one code span, such as an error code, is its own
+      // anchor: `#object_not_free`, not the parser's `#objectnotfree`.
+      const code = inner.match(/^<code>([A-Za-z0-9_.-]+)<\/code>$/)?.[1];
+      const id = code ?? generated;
       headings.push({ level: n, id, text: plain(inner) });
       if (n === 1 || n === 4) return `<h${n} id="${id}">${inner}</h${n}>`;
       return `<h${n} id="${id}">${inner}<a class="anchor" href="#${id}" aria-label="Link to this section">#</a></h${n}>`;

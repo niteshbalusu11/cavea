@@ -80,6 +80,9 @@ const snippet = (text, query) => {
       const s = e.s.toLowerCase();
       const t = e.t.toLowerCase();
       let score = 0;
+      // A page's own title, or an operation's id, asked for exactly.
+      if (e.s === "" && t === phrase) score += 80;
+      if (e.x.toLowerCase().includes(`operation ${phrase}`)) score += 70;
       if (s === phrase) score += 60;
       else if (s.includes(phrase)) score += 30;
       if (t.includes(phrase)) score += 15;
