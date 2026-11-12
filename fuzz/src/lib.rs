@@ -5,6 +5,8 @@
 //! Not a member of the main workspace: `cargo fuzz` builds it on the nightly
 //! toolchain of `nix develop .#fuzz`. Assertions are how the targets report.
 
+pub mod http;
+
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
@@ -278,30 +280,41 @@ impl GpuBackend for Checked {
     fn begin_frame(&mut self, _: Target, _: [f32; 4]) {}
 
     fn draw(&mut self, call: &DrawCall<'_>) -> Result<(), BackendError> {
-        assert_eq!(
-            call.pipeline,
-            Pipeline::Shape,
-            "only the shape pipeline exists"
-        );
-        let instances = |slot: Option<BufferId>, stride: usize| {
-            let id = slot.expect("shape draws bind both instance buffers");
-            self.buffers.get(&id.0).expect("draw with a live buffer") / stride
-        };
-        let n = instances(call.buffers[0], STATIC_STRIDE)
-            .min(instances(call.buffers[1], DYNAMIC_STRIDE));
-        for r in call.ranges {
+        for id in call.buffers.iter().flatten() {
+            assert!(self.buffers.contains_key(&id.0), "draw with a dead buffer");
+        }
+        for id in call.textures.iter().flatten() {
             assert!(
-                r.start <= r.end && r.end as usize <= n,
-                "draw {r:?} past {n} instances"
+                self.textures.contains_key(&id.0),
+                "draw with a dead texture"
             );
         }
-        if let Some(t) = call.texture {
-            assert!(self.textures.contains_key(&t.0), "draw with a dead texture");
+        // The shape pipeline's instance ranges against its two buffers; the
+        // mesh, glyph and text pipelines are checked for live resources only.
+        if call.pipeline == Pipeline::Shape {
+            let instances = |slot: Option<BufferId>, stride: usize| {
+                let id = slot.expect("shape draws bind both instance buffers");
+                self.buffers.get(&id.0).expect("draw with a live buffer") / stride
+            };
+            let n = instances(call.buffers[0], STATIC_STRIDE)
+                .min(instances(call.buffers[1], DYNAMIC_STRIDE));
+            for r in call.ranges {
+                assert!(
+                    r.start <= r.end && r.end as usize <= n,
+                    "draw {r:?} past {n} instances"
+                );
+            }
         }
         Ok(())
     }
 
     fn end_frame(&mut self) {}
+
+    fn restore(&mut self) -> Result<(), BackendError> {
+        self.buffers.clear();
+        self.textures.clear();
+        Ok(())
+    }
 
     fn destroy(&mut self, id: ResourceId) {
         let live = match id {
