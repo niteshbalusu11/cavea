@@ -13,7 +13,23 @@ const good = {
 };
 
 test("a well-formed answer is taken; anything else is `unexpected`", () => {
-  expect(checkMe(good)).toBe(good as never);
+  const expired = {
+    state: "expired",
+    read_only: true,
+    grace_until: null,
+    manage: false,
+    source: null,
+    reason: null,
+    licence: null,
+  };
+  expect(checkMe({ ...good, licence: expired })).toEqual({ ...good, licence: expired } as never);
+  // A licence the console cannot read shows nothing and closes nothing: the server decides.
+  for (const licence of [undefined, null, { state: "expired" }, { ...expired, state: "soon" }]) {
+    expect(checkMe({ ...good, licence }).licence).toMatchObject({
+      state: "valid",
+      read_only: false,
+    });
+  }
   expect(checkMe({ ...good, workspaces: [] }).workspaces).toEqual([]);
   for (const bad of [
     {},

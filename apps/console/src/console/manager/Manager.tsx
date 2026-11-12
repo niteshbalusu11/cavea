@@ -13,6 +13,7 @@ import {
   type SeatObject,
   type Selection,
 } from "@cavea/renderer";
+import { consoleMap } from "@cavea/renderer/licence";
 import { createEffect, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { checkEvent } from "../../api/check.ts";
 import { call, type ApiError } from "../../api/client.ts";
@@ -121,7 +122,8 @@ export function Manager(props: { event: Event; onEvent: (event: Event) => void }
     try {
       // The chart comes from the adapter, which reads its labels too.
       const created = await createSeatMap(host, {
-        state: live.adapter,
+        // The operator's map: the frame's banners carry the licence, not a mark.
+        state: consoleMap(live.adapter),
         selection: { max: MAX },
         theme: resolvedTheme(),
         signal,

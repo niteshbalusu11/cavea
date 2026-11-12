@@ -6,6 +6,7 @@
 // until then.
 import type { Designer, ImageAsset, Session } from "@cavea/designer-core";
 import { createSeatMap, customState, type AdapterContext, type SeatMap } from "@cavea/renderer";
+import { consoleMap } from "@cavea/renderer/licence";
 import { createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
 import { msg } from "../i18n/messages.ts";
 import { Dialog } from "../ui/overlays.tsx";
@@ -78,15 +79,18 @@ export default function Preview(props: {
     const dark = document.documentElement.dataset["theme"] === "dark";
     createSeatMap(host, {
       chart: { bytes: chart },
-      state: customState({
-        connect: (ctx) => {
-          context = ctx;
-          return Promise.resolve({ kind: "binary", bytes: first });
-        },
-        disconnect: () => {
-          context = null;
-        },
-      }),
+      // The designer's own preview: unmarked (the console shows the licence).
+      state: consoleMap(
+        customState({
+          connect: (ctx) => {
+            context = ctx;
+            return Promise.resolve({ kind: "binary", bytes: first });
+          },
+          disconnect: () => {
+            context = null;
+          },
+        }),
+      ),
       theme: dark ? "dark" : "light",
       assets: {
         image: (hash) =>

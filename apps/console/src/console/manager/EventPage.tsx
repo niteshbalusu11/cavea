@@ -15,6 +15,7 @@ import { Gate, may, SECTIONS, SignedIn } from "../Frame.tsx";
 import { ListError, ListLoading } from "../kit.tsx";
 import { EventSettings } from "./EventSettings.tsx";
 import { Manager } from "./Manager.tsx";
+import { LicenceBanner } from "../Licence.tsx";
 
 const EVENTS = SECTIONS.find((s) => s.path === "/events");
 
@@ -27,6 +28,7 @@ export function EventPage() {
       {() =>
         EVENTS === undefined ? null : (
           <div class="flex h-full flex-col bg-app text-fg">
+            <LicenceBanner />
             <Show
               when={workspace()?.id !== undefined && may(EVENTS.permission) && workspace()?.id}
               keyed
