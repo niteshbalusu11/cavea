@@ -65,5 +65,7 @@ export function lockReplyOf(e: unknown): LockReply {
   const lock = lockOf(error);
   if (lock !== null) return { kind: "locked", lock };
   if (unreachable(error)) return { kind: "offline" };
-  return { kind: "refused" };
+  return error.reason === "licence_expired"
+    ? { kind: "refused", licence: true }
+    : { kind: "refused" };
 }

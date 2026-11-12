@@ -4,9 +4,9 @@
 // layer; the console's frame then sends the person to sign-in and back.
 import { createMemo, createRoot, createSignal } from "solid-js";
 import { ApiError, call, configure } from "./api/client.ts";
-import type { ConsoleMe } from "./api/generated.ts";
+import type { ConsoleLicence, ConsoleMe } from "./api/generated.ts";
 import { checkMe } from "./api/check.ts";
-import type { MeWorkspace } from "./api/permissions.ts";
+import { followLicence, type MeWorkspace } from "./api/permissions.ts";
 import { asApiError } from "./api/query.ts";
 import { load as loadStored, save } from "./storage.ts";
 
@@ -49,6 +49,9 @@ export function chooseWorkspace(id: string): void {
   setChosen(id);
   save(WORKSPACE_KEY, id);
 }
+
+// While the licence is expired, chart and event writes are closed (12 §7.6).
+followLicence(() => me()?.licence.read_only === true);
 
 configure({
   workspace: () => workspace()?.id ?? null,
@@ -178,4 +181,12 @@ export function adoptWorkspaceName(id: string, name: string): void {
   if (s.kind !== "signedIn") return;
   const workspaces = s.me.workspaces.map((w) => (w.id === id ? { ...w, name } : w));
   setSession({ kind: "signedIn", me: { ...s.me, workspaces } });
+}
+
+/** Shows a new licence state at once: after an upload, or a refusal that
+ * says the licence has expired. */
+export function adoptLicence(licence: ConsoleLicence): void {
+  const s = session();
+  if (s.kind !== "signedIn") return;
+  setSession({ kind: "signedIn", me: { ...s.me, licence } });
 }

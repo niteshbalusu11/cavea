@@ -8,7 +8,6 @@ import { checkChart, checkEventList } from "../api/check.ts";
 import { call } from "../api/client.ts";
 import type { Chart, Version } from "../api/generated.ts";
 import { createPages } from "../api/pages.ts";
-import { allows } from "../api/permissions.ts";
 import { componentSignal, createQuery, type Query } from "../api/query.ts";
 import { designerPath } from "../designer/ChartRoute.tsx";
 import { formatNumber, msg } from "../i18n/messages.ts";
@@ -16,6 +15,7 @@ import { buttonClass } from "../ui/controls.tsx";
 import { workspace } from "../session.ts";
 import { Confirm, notify } from "../ui/overlays.tsx";
 import { report } from "./errors.ts";
+import { cannot } from "./licence.ts";
 import { EventForm, loadVersions } from "./EventForm.tsx";
 import { roleName } from "./Events.tsx";
 import {
@@ -198,11 +198,8 @@ function Versions(props: { chart: Chart; onCreate: (version: number) => void }) 
     (chart, s) => loadVersions(chart, s),
   );
   const blocked = () =>
-    !allows(workspace(), "createEvent")
-      ? msg("events.roleCannot", { role: roleName() })
-      : props.chart.archived_at !== null
-        ? msg("chart.archivedNoEvents")
-        : null;
+    cannot("createEvent", () => msg("events.roleCannot", { role: roleName() })) ??
+    (props.chart.archived_at !== null ? msg("chart.archivedNoEvents") : null);
   return (
     <Switch>
       <Match when={versions.state().status === "loading"}>
@@ -360,11 +357,8 @@ function Settings(props: { chart: Chart; query: Query<Chart> }) {
   const signal = componentSignal();
   const [confirming, setConfirming] = createSignal(false);
   const blocked = () =>
-    !allows(workspace(), "archiveChart")
-      ? msg("chart.archiveRole", { role: roleName() })
-      : props.chart.archived_at !== null
-        ? msg("chart.alreadyArchived")
-        : null;
+    cannot("archiveChart", () => msg("chart.archiveRole", { role: roleName() })) ??
+    (props.chart.archived_at !== null ? msg("chart.alreadyArchived") : null);
   const archive = async () => {
     try {
       const chart = checkChart(

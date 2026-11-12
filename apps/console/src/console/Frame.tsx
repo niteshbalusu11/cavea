@@ -15,6 +15,7 @@ import { setThemeChoice, themeChoice, type ThemeChoice } from "../theme.ts";
 import { Icon, type IconName } from "../ui/Icon.tsx";
 import { menuContent, menuItem, menuSeparator } from "../ui/overlays.tsx";
 import { report } from "./errors.ts";
+import { LicenceBanner, LicencePill } from "./Licence.tsx";
 import { here, signInFor } from "./paths.ts";
 import { Failed, Loading } from "./states.tsx";
 
@@ -104,6 +105,7 @@ function Shell(props: { me: ConsoleMe; children: JSX.Element }) {
           </For>
         </ul>
         <div class="mt-auto space-y-2 px-2 pb-1">
+          <LicencePill />
           <div
             role="radiogroup"
             aria-label={msg("nav.theme")}
@@ -129,6 +131,7 @@ function Shell(props: { me: ConsoleMe; children: JSX.Element }) {
         </div>
       </nav>
       <main class="min-w-0 flex-1 overflow-y-auto bg-surface">
+        <LicenceBanner />
         <div class="mx-auto max-w-[1280px] px-8 py-6">{props.children}</div>
       </main>
     </div>

@@ -40,6 +40,10 @@ test("taking the lock: held elsewhere, unreachable, signed out, or refused for g
   expect(lockReplyOf(problem(400, "invalid_request", { reason: "archived" }))).toEqual({
     kind: "refused",
   });
+  expect(lockReplyOf(problem(403, "forbidden", { reason: "licence_expired" }))).toEqual({
+    kind: "refused",
+    licence: true,
+  });
   // A 409 without the lock it should name is not taken for one.
   expect(lockReplyOf(problem(409, "chart_locked"))).toEqual({ kind: "refused" });
 });

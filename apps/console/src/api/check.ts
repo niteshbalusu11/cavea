@@ -6,6 +6,7 @@ import type {
   AuditList,
   Chart,
   ChartList,
+  ConsoleLicence,
   ConsoleMe,
   ConsoleWorkspace,
   Event,
@@ -39,6 +40,9 @@ function isWorkspace(v: unknown): boolean {
   );
 }
 
+const isNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const isTextOrNull = (v: unknown): boolean => v === null || isText(v);
+
 /** The answer as a `ConsoleMe`, or an `unexpected` error. */
 export function checkMe(v: unknown): ConsoleMe {
   const ok =
@@ -52,11 +56,47 @@ export function checkMe(v: unknown): ConsoleMe {
     v["csrf_token"] !== "" &&
     isRecord(v["session"]);
   if (!ok) throw unreadable();
-  return v as unknown as ConsoleMe;
+  return { ...(v as unknown as ConsoleMe), licence: readLicence(v["licence"]) };
 }
 
-const isNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
-const isTextOrNull = (v: unknown): boolean => v === null || isText(v);
+const LICENCE_STATES = new Set(["valid", "grace", "expired", "missing", "invalid"]);
+const isStrings = (v: unknown): boolean => Array.isArray(v) && v.every(isText);
+
+/** The licence's state as `me` and the upload give it (12 §7.6). One the
+ * console cannot read shows nothing and disables nothing: the server
+ * refuses what the licence closes either way. */
+export function readLicence(v: unknown): ConsoleLicence {
+  const details = isRecord(v) ? v["licence"] : null;
+  const ok =
+    isRecord(v) &&
+    isText(v["state"]) &&
+    LICENCE_STATES.has(v["state"]) &&
+    typeof v["read_only"] === "boolean" &&
+    typeof v["manage"] === "boolean" &&
+    isTextOrNull(v["grace_until"]) &&
+    isTextOrNull(v["reason"]) &&
+    (v["source"] === null || v["source"] === "setting" || v["source"] === "upload") &&
+    (details === null ||
+      (isRecord(details) &&
+        ["id", "customer", "plan", "issued_at", "expires_at", "key_id"].every((k) =>
+          isText(details[k]),
+        ) &&
+        isStrings(details["features"]) &&
+        isStrings(details["domains"]) &&
+        isNumber(details["grace_days"]) &&
+        (details["max_workspaces"] === null || isNumber(details["max_workspaces"]))));
+  return ok
+    ? (v as unknown as ConsoleLicence)
+    : {
+        state: "valid",
+        read_only: false,
+        manage: false,
+        grace_until: null,
+        reason: null,
+        source: null,
+        licence: null,
+      };
+}
 
 function isVersion(v: unknown): boolean {
   return (

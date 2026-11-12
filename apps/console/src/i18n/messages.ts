@@ -1313,6 +1313,107 @@ const eventScreens = {
   "eventSettings.alreadyArchived": "the event is archived already",
 };
 
+/** The licence (12 §7.3, 09 §7): its screen under Settings, the banners,
+ * and why a chart or event control is closed while it is expired. */
+const licence = {
+  "settings.licence": "Licence",
+  "licence.title": "Licence",
+  "licence.state.valid": "Licensed",
+  "licence.state.grace": "Expired, in its grace period",
+  "licence.state.expired": "Expired",
+  "licence.state.missing": "No licence",
+  "licence.state.invalid": "Not valid",
+  "licence.valid": "The licence is valid. Buyers' seat maps show no mark on the licensed domains.",
+  "licence.validThrough":
+    "The licence is valid through {date}. Buyers' seat maps show no mark on the licensed domains.",
+  "licence.grace":
+    "The licence has expired. Its grace period ends on {date}: renew it before then, or the console becomes read-only for charts and events. Selling seats is not affected.",
+  "licence.expired":
+    "The licence has expired. Charts and events are read-only in the console until it is renewed; selling seats, the event manager's seat actions, keys and members carry on as normal. Buyers' seat maps show a small “Powered by Cavea” mark.",
+  "licence.missing":
+    "This server has no licence, so it runs as a development installation: everything works, and buyers' seat maps show a “Development licence” mark.",
+  "licence.invalid":
+    "The server's licence file is not valid, so it runs as a development installation: everything works, and buyers' seat maps show a “Development licence” mark.",
+  "licence.why": "Why: {reason}",
+  "licence.refused": "Not uploaded: {reason}",
+  "licence.reasonOther": "the server reports “{reason}”. Ask for a new licence.",
+  "licence.notManager":
+    "The licence's details and its upload are for someone who owns every workspace on this server. Ask them to add or renew it.",
+  "licence.details": "Details",
+  "licence.customer": "Customer",
+  "licence.plan": "Plan",
+  "licence.id": "Licence",
+  "licence.issued": "Issued",
+  "licence.expires": "Valid through",
+  "licence.graceUntil": "Grace period until",
+  "licence.graceNone": "No grace period",
+  "licence.domains": "Licensed domains",
+  "licence.domainsNone": "None: buyers' seat maps show the mark on every site.",
+  "licence.domainUnder": "every site under {name}",
+  "licence.features": "Features",
+  "licence.none": "None",
+  "licence.workspaces": "Workspaces",
+  "licence.unlimited": "Unlimited",
+  "licence.reported":
+    "Features and workspaces are shown as the licence states them; this version of the server does not enforce them.",
+  "licence.source": "Comes from",
+  "licence.source.setting": "The server's setting (CAVEA_LICENCE)",
+  "licence.source.upload": "A file uploaded in the console",
+  "licence.key": "Signing key",
+  "licence.uploadTitle": "Upload a licence file",
+  "licence.uploadIntro":
+    "Upload the licence file you received, exactly as it is. It applies at once on every server. When the server's setting also has a licence, the better of the two counts.",
+  "licence.file": "Licence file",
+  "licence.fileHint": "A .json file of at most 16 KiB.",
+  "licence.paste": "Or paste the file's text",
+  "licence.submit": "Upload licence",
+  "licence.submitting": "Uploading…",
+  "licence.nothing": "Choose a licence file, or paste its text.",
+  "licence.tooLarge":
+    "The file is larger than 16 KiB, so it is not a Cavea licence. Check that you chose the right file.",
+  "licence.unreadableFile": "The file could not be read. Try again, or paste its text.",
+  "licence.ownerOnly":
+    "Only someone who owns every workspace on this server can change its licence.",
+  "licence.done": "Licence uploaded: {state}.",
+  "licence.readOnly":
+    "The licence has expired: charts and events cannot be changed until it is renewed.",
+  "licence.bannerLabel": "Licence",
+  "licence.bannerGrace":
+    "The licence has expired and its grace period ends on {date}. Renew it before then to keep changing charts and events.",
+  "licence.bannerExpired":
+    "The licence has expired: charts and events are read-only until it is renewed. Selling seats and the event manager's seat actions carry on.",
+  "licence.bannerDevelopment":
+    "Development licence: this server has no valid licence. Everything works; buyers' seat maps show a “Development licence” mark.",
+  "licence.askOwner": "Ask an owner of this server to renew it.",
+  "licence.askOwnerAdd": "Ask an owner of this server for one.",
+  "licence.open": "Licence settings",
+  "licence.hide": "Hide in this tab",
+  "licence.show": "Development licence",
+  "licence.showLabel": "Development licence: show the notice",
+  "error.licenceExpired":
+    "The licence has expired: charts and events cannot be changed until it is renewed. Selling seats carries on.",
+};
+
+/** Why a licence file is invalid, by the server's `reason` (the reasons of
+ * `cavea_licence::Invalid` and the server's `unreadable`): what to do about
+ * it. `licence.test.ts` fails when the server can give one without a message. */
+const licenceReasons = {
+  unreadable:
+    "the server cannot read the file its setting (CAVEA_LICENCE) names. Check the path and the file's permissions.",
+  too_large:
+    "the file is larger than 16 KiB, so it is not a Cavea licence. Check that it is the right file.",
+  not_utf8: "the file is not text. Check that it is the licence's .json file.",
+  malformed:
+    "the file is not a Cavea licence file: it may be incomplete or edited. Use the file exactly as you received it.",
+  version: "the file is in a newer licence format than this server reads. Update the server.",
+  unknown_key:
+    "the licence is signed by a key this server does not trust: it may be meant for a newer version. Update the server, or ask for a new licence.",
+  signature:
+    "the file was changed after it was issued, so its signature does not match. Use the file exactly as you received it.",
+  payload: "this server cannot read what the licence contains. Ask for a new licence.",
+  dates: "the licence's dates are not valid. Ask for a new licence.",
+};
+
 /** The audit log's actions (09 §7), typed: an action the server gains
  * fails the build until it has a name. */
 const auditActions: Record<AuditEntry["action"], string> = {
@@ -1468,6 +1569,8 @@ export const catalogue = {
   ...consoleScreens,
   ...eventScreens,
   ...group("audit.action", auditActions),
+  ...licence,
+  ...group("licence.reason", licenceReasons),
   ...serverDesigner,
   ...group("kind", kinds),
   ...group("kinds", kindsPlural),

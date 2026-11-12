@@ -10,7 +10,7 @@ import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { checkChartList } from "../api/check.ts";
 import { call } from "../api/client.ts";
 import type { Chart, ChartDocument } from "../api/generated.ts";
-import { allows } from "../api/permissions.ts";
+import { refused } from "../api/permissions.ts";
 import { asApiError, componentSignal, createQuery } from "../api/query.ts";
 import { formatNumber, msg } from "../i18n/messages.ts";
 import { loadSession, workspace } from "../session.ts";
@@ -19,6 +19,7 @@ import { Field, fieldInputClass, FormError } from "../ui/form.tsx";
 import { Icon } from "../ui/Icon.tsx";
 import { afterMenu, Confirm, Dialog, menuContent, menuItem, notify } from "../ui/overlays.tsx";
 import { describe, reference, report } from "./errors.ts";
+import { cannot } from "./licence.ts";
 import { designerPath } from "../designer/ChartRoute.tsx";
 
 /** The largest draft the server takes (08 §6.2). */
@@ -62,8 +63,13 @@ const formatDate = (iso: string) => {
   return Number.isNaN(d.getTime()) ? iso : dates.format(d);
 };
 
-const canWrite = () => allows(workspace(), "createChart");
 const role = () => msg(`role.${workspace()?.role ?? "viewer"}`);
+/** Why a chart cannot be made now: the role, or the expired licence. */
+const writeBlocked = () => cannot("createChart", () => msg("charts.roleCannot", { role: role() }));
+/** Why archiving is closed for now: the licence (the role hides it). */
+const archiveClosed = () => cannot("archiveChart", () => "");
+/** The role writes charts (the licence may close it for now). */
+const roleWrites = () => refused(workspace(), "createChart") !== "role";
 const textProblem = (v: string) =>
   v.trim() === "" || [...v].length > 128 ? msg("charts.textRule") : null;
 
@@ -72,6 +78,35 @@ type Draft =
   | { from: "empty" }
   | { from: "file"; document: ChartDocument; name: string }
   | { from: "chart"; chart: Chart };
+
+/** A button that makes a chart, or the same shown disabled with the reason. */
+const writeButton = (
+  label: string,
+  icon: "plus" | "download",
+  run: () => void,
+  primary: boolean,
+) => (
+  <Show
+    when={writeBlocked() === null}
+    fallback={
+      <Tip label={writeBlocked() ?? ""}>
+        <span
+          tabIndex={0}
+          aria-disabled="true"
+          aria-label={`${label}: ${writeBlocked() ?? ""}`}
+          class={buttonClass(primary ? "primary" : "secondary", "h-8")}
+        >
+          <Icon name={icon} />
+          {label}
+        </span>
+      </Tip>
+    }
+  >
+    <Button variant={primary ? "primary" : "secondary"} icon={icon} class="h-8" onClick={run}>
+      {label}
+    </Button>
+  </Show>
+);
 
 export function Charts() {
   const signal = componentSignal();
@@ -155,33 +190,6 @@ export function Charts() {
     }
   };
 
-  const writeButton = (
-    label: string,
-    icon: "plus" | "download",
-    run: () => void,
-    primary: boolean,
-  ) => (
-    <Show
-      when={canWrite()}
-      fallback={
-        <Tip label={msg("charts.roleCannot", { role: role() })}>
-          <span
-            tabIndex={0}
-            aria-disabled="true"
-            aria-label={`${label}: ${msg("charts.roleCannot", { role: role() })}`}
-            class={buttonClass(primary ? "primary" : "secondary", "h-8")}
-          >
-            <Icon name={icon} />
-            {label}
-          </span>
-        </Tip>
-      }
-    >
-      <Button variant={primary ? "primary" : "secondary"} icon={icon} class="h-8" onClick={run}>
-        {label}
-      </Button>
-    </Show>
-  );
   const newChart = () =>
     writeButton(msg("charts.new"), "plus", () => setForm({ from: "empty" }), true);
   const importChart = () =>
@@ -249,9 +257,9 @@ export function Charts() {
             <Icon name="chart" class="size-8 text-faint" />
             <h2 class="text-lg font-semibold text-fg">{msg("charts.emptyTitle")}</h2>
             <p class="text-base text-muted">
-              {canWrite() ? msg("charts.emptyBody") : msg("charts.emptyReader")}
+              {roleWrites() ? msg("charts.emptyBody") : msg("charts.emptyReader")}
             </p>
-            <Show when={canWrite()}>
+            <Show when={roleWrites()}>
               <div class="flex gap-2">
                 {newChart()}
                 {importChart()}
@@ -377,7 +385,9 @@ function ChartCard(props: {
 }) {
   const version = () => props.chart.published_version;
   const navigate = useNavigate();
-  const canArchive = () => allows(workspace(), "archiveChart") && props.chart.archived_at === null;
+  // The role decides whether an item is there; the licence, whether it works.
+  const canArchive = () =>
+    refused(workspace(), "archiveChart") !== "role" && props.chart.archived_at === null;
   return (
     <li class="flex flex-col overflow-hidden rounded-lg border border-line bg-surface">
       <div class="flex aspect-[4/3] items-center justify-center border-b border-line bg-canvas text-faint">
@@ -449,8 +459,12 @@ function ChartCard(props: {
                 <Icon name="download" />
                 {msg("charts.export")}
               </DropdownMenu.Item>
-              <Show when={canWrite()}>
-                <DropdownMenu.Item class={menuItem} onSelect={afterMenu(props.onDuplicate)}>
+              <Show when={roleWrites()}>
+                <DropdownMenu.Item
+                  class={menuItem}
+                  disabled={writeBlocked() !== null}
+                  onSelect={afterMenu(props.onDuplicate)}
+                >
                   <Icon name="file" />
                   {msg("charts.duplicate")}
                 </DropdownMenu.Item>
@@ -458,11 +472,15 @@ function ChartCard(props: {
               <Show when={canArchive()}>
                 <DropdownMenu.Item
                   class={`${menuItem} text-danger`}
+                  disabled={archiveClosed() !== null}
                   onSelect={afterMenu(props.onArchive)}
                 >
                   <Icon name="trash" />
                   {msg("charts.archive")}
                 </DropdownMenu.Item>
+              </Show>
+              <Show when={roleWrites() && archiveClosed()}>
+                {(why) => <p class="max-w-64 px-2 py-1 text-sm text-muted">{why()}</p>}
               </Show>
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
@@ -507,7 +525,7 @@ function ChartForm(props: { draft: Draft; onClose: () => void; onCreated: (c: Ch
 
   const submit = async (e: SubmitEvent) => {
     e.preventDefault();
-    if (![check("name"), check("key")].every(Boolean) || busy()) return;
+    if (![check("name"), check("key")].every(Boolean) || busy() || writeBlocked() !== null) return;
     setBusy(true);
     setFailure(null);
     try {
@@ -578,11 +596,18 @@ function ChartForm(props: { draft: Draft; onClose: () => void; onCreated: (c: Ch
           error={errors().key}
         />
         <FormError message={failure()?.text ?? null} detail={failure()?.detail} />
+        {/* The licence may expire while the dialog is open: it follows. */}
+        <Show when={writeBlocked()}>{(why) => <p class="text-base text-warning">{why()}</p>}</Show>
         <div class="flex justify-end gap-2">
           <Button class="h-8" onClick={props.onClose}>
             {msg("action.cancel")}
           </Button>
-          <Button type="submit" variant="primary" class="h-8" disabled={busy()}>
+          <Button
+            type="submit"
+            variant="primary"
+            class="h-8"
+            disabled={busy() || writeBlocked() !== null}
+          >
             {busy() ? msg("charts.creating") : msg("charts.create")}
           </Button>
         </div>

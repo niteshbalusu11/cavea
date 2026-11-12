@@ -4,7 +4,7 @@
 // whatever workspace they last chose, and every request names it.
 import { A, Navigate, useLocation, useParams } from "@solidjs/router";
 import { createMemo, Match, Show, Switch } from "solid-js";
-import { allows } from "../api/permissions.ts";
+import { allows, refused } from "../api/permissions.ts";
 import { here, signInFor } from "../console/paths.ts";
 import { Failed, Loading } from "../console/states.tsx";
 import { msg } from "../i18n/messages.ts";
@@ -45,16 +45,16 @@ export function ChartRoute() {
       };
     } else {
       chooseWorkspace(w.id);
-      result = {
-        kind: "chart",
-        setup: {
-          ref: { workspace: w.id, key: params.chart },
-          user: m.user.id,
-          canWrite: allows(w, "saveDraft"),
-          canPublish: allows(w, "publishChart"),
-          role: msg(`role.${w.role}`),
-        },
+      const setup: ServerSetup = {
+        ref: { workspace: w.id, key: params.chart },
+        user: m.user.id,
+        canWrite: allows(w, "saveDraft"),
+        canPublish: allows(w, "publishChart"),
+        role: msg(`role.${w.role}`),
       };
+      // An expired licence opens it read-only, saying so (12 §7.6).
+      if (refused(w, "saveDraft") === "licence") setup.closed = msg("licence.readOnly");
+      result = { kind: "chart", setup };
     }
     latched = { at, opened: result };
     return result;

@@ -54,6 +54,8 @@ export const MESSAGES = {
   holdExpired: "Your hold expired and your seats were released.",
   reconnecting: "Live seat updates were interrupted. Reconnecting…",
   dismiss: "Dismiss",
+  licenceDevelopment: "Development licence",
+  licencePoweredBy: "Powered by Cavea",
 } satisfies Record<string, Message>;
 
 export type MessageId = keyof typeof MESSAGES;

@@ -3,6 +3,7 @@
 import init, { View, type InitInput } from "../wasm/cavea_web.js";
 import { loadGlyphAtlas } from "./atlas.ts";
 import { CaveaError, httpError } from "./errors.ts";
+import { TRUSTED_KEYS } from "./generated/licence-keys.ts";
 import { attach } from "./host.ts";
 import type { SeatMapOptions } from "./options.ts";
 import type { Env } from "./seatmap.ts";
@@ -176,6 +177,15 @@ function hex(value: string): string {
   return `#${[...probe.getImageData(0, 0, 1, 1).data].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 }
 
+/** The page's host name from its origin; `null` for an opaque one (a file, a sandboxed frame). */
+function pageHost(): string | null {
+  try {
+    return globalThis.origin === "null" ? null : new URL(globalThis.origin).hostname;
+  } catch {
+    return null;
+  }
+}
+
 export function browserEnv(): Env {
   return {
     wasm: async (assets) => {
@@ -270,5 +280,8 @@ export function browserEnv(): Env {
     holdTimeoutMs: HOLD_TIMEOUT_MS,
     contextLostMs: 5_000,
     metricsMs: 1_000,
+    // WebCrypto is absent outside secure contexts: the licence is then
+    // treated as valid (12 §7.4).
+    licence: { keys: TRUSTED_KEYS, subtle: () => globalThis.crypto?.subtle, host: pageHost },
   };
 }

@@ -15,8 +15,9 @@
 //!   `cavea-server` in release with the console compiled in (`server.rs`).
 //! - `types [--check]`: write the TypeScript types generated from the Rust
 //!   definitions (`types.rs`) and the console's API types generated from the
-//!   server's OpenAPI document (`api.rs`), or fail if the committed ones are
-//!   stale.
+//!   server's OpenAPI document (`api.rs`), and the renderer's copy of the
+//!   trusted licence keys (`licence_keys.rs`), or fail if the committed ones
+//!   are stale.
 //! - `check-deps`: enforce the workspace dependency rule from
 //!   `docs/01-architecture.md` §3.
 //! - `determinism`: run the tests that pin compiled hashes natively and for
@@ -36,6 +37,7 @@ mod api;
 mod determinism;
 mod e2e;
 mod licence;
+mod licence_keys;
 mod server;
 mod types;
 
