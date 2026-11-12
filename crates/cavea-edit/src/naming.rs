@@ -393,9 +393,15 @@ mod tests {
         let block = editor.document().node(7).cloned().expect("block");
         let mut new = block.clone();
         each_node!(&mut new, n => n.id = 0);
-        assert_eq!(fresh(editor.document(), &new).as_deref(), Some("Row block 1"));
+        assert_eq!(
+            fresh(editor.document(), &new).as_deref(),
+            Some("Row block 1")
+        );
         // A drawn node, in the document unnamed, keeps the name it showed.
-        assert_eq!(fresh(editor.document(), &block).as_deref(), Some("Row block 3"));
+        assert_eq!(
+            fresh(editor.document(), &block).as_deref(),
+            Some("Row block 3")
+        );
         editor.undo().expect("undo");
         assert_eq!(shown(&editor, 9), "Row block 1");
 
