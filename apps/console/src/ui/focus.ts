@@ -20,9 +20,10 @@ export interface Page<E> {
 
 /** The element to focus in place of `opener`, or `null` when the opener
  * itself is still there (focus can return to it as usual). */
-export function replacement<E>(opener: Opener<E> | null, page: Page<E>): E | null {
-  if (opener !== null && page.connected(opener.el)) return null;
-  const same = opener?.focusId == null ? null : page.byFocusId(opener.focusId);
+export function replacement<E>(from: Opener<E> | null, page: Page<E>): E | null {
+  if (from !== null && page.connected(from.el)) return null;
+  const id = from?.focusId ?? null;
+  const same = id === null ? null : page.byFocusId(id);
   return same ?? page.heading();
 }
 
