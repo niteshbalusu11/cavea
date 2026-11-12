@@ -46,7 +46,13 @@
     },
     {
       "section": "Reference",
-      "pages": ["reference/errors.md", "reference/limits.md", "reference/changelog.md"]
+      "pages": [
+        "reference/errors.md",
+        "reference/limits.md",
+        "reference/versions.md",
+        "reference/verify-release.md",
+        "reference/changelog.md"
+      ]
     },
     {
       "section": "Renderer",

@@ -287,39 +287,43 @@ fn steps(
         Ok(Outcome::Pass(format!("{} {how}", at(&index))))
     })?;
     list.step("attest", "Attach the SBOMs as signed attestations", || {
+        // The source's SBOM on the index (what the version's tag names); each
+        // image's own on that architecture's image.
         let sbom = out.join("sbom");
-        let source = sbom.join(format!("cavea-{version}-source.spdx.json"));
-        let mut text = String::new();
+        let mut attach = vec![(
+            "the index: the source's SBOM".to_owned(),
+            sbom.join(format!("cavea-{version}-source.spdx.json")),
+            index.clone(),
+        )];
         for (arch, digest) in &digests {
-            for predicate in [
+            attach.push((
+                format!("linux/{arch}: the image's SBOM"),
                 sbom.join(format!("cavea-server-{version}-{arch}.spdx.json")),
-                source.clone(),
-            ] {
-                let path = predicate.to_string_lossy().into_owned();
-                logged(
-                    &out,
-                    "attest",
-                    &mut target.cosign(
-                        &[
-                            "attest",
-                            "--yes",
-                            "--type",
-                            "spdxjson",
-                            "--predicate",
-                            &path,
-                            &at(digest),
-                        ],
-                        false,
-                    ),
-                )?;
-            }
-            writeln!(text, "linux/{arch}: the image's SBOM and the source SBOM")?;
+                digest.clone(),
+            ));
+        }
+        let mut text = String::new();
+        for (what, predicate, digest) in &attach {
+            let path = predicate.to_string_lossy().into_owned();
+            let args = [
+                "attest",
+                "--yes",
+                "--type",
+                "spdxjson",
+                "--predicate",
+                &path,
+                &at(digest),
+            ];
+            logged(&out, "attest", &mut target.cosign(&args, false))?;
+            writeln!(text, "{what}")?;
         }
         Ok(Outcome::Pass(text.trim().to_owned()))
     })?;
     list.step("verify", "Verify from the registry: signatures, attestations, pull by digest", || {
         let mut text = String::new();
         logged(&out, "verify", &mut target.cosign(&["verify", &at(&index)], true))?;
+        let index_sbom = ["verify-attestation", "--type", "spdxjson", &at(&index)];
+        logged(&out, "verify", &mut target.cosign(&index_sbom, true))?;
         for (arch, digest) in &digests {
             logged(&out, "verify", &mut target.cosign(&["verify", &at(digest)], true))?;
             logged(&out, "verify", &mut target.cosign(&["verify-attestation", "--type", "spdxjson", &at(digest)], true))?;
@@ -333,7 +337,7 @@ fn steps(
             ensure!(theirs == ours, "linux/{arch}: pulled {theirs}, built {ours}");
             writeln!(text, "linux/{arch}: signature and SBOM attestation verify; pulled by digest, image {ours}")?;
         }
-        Ok(Outcome::Pass(format!("index signature verifies\n{}", text.trim())))
+        Ok(Outcome::Pass(format!("index: signature and source SBOM verify\n{}", text.trim())))
     })?;
     list.step("npm", "Publish the npm packages with provenance", || {
         let dist_tag = if pre { "next" } else { "latest" };

@@ -1316,6 +1316,12 @@ fn packages(out: &Path, version: &str, repository: &str) -> Result<Outcome> {
     let root = root();
     let dir = out.join("npm");
     fs::create_dir_all(&dir)?;
+    // Built here, from the gated WASM: earlier suites rebuild the WASM and
+    // the renderer's package for their own purposes.
+    logged(out, "packages", &mut sh(&["cargo", "xtask", "build-web"]))?;
+    for (_, path) in PACKAGES {
+        logged(out, "packages", sh(&["bun", "run", "build"]).current_dir(root.join(path)))?;
+    }
     let mut report = String::new();
     let mut problems = Vec::new();
     for (name, path) in PACKAGES {
