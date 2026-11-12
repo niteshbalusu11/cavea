@@ -8,13 +8,16 @@ import type { Paint } from "./loop.ts";
 
 /** The canvas's draw: whether it wants another frame. */
 export interface Drawable {
-  draw(time: number): boolean;
+  /** `overlay`: whether the session's overlay may have changed since the
+   * last draw (`changed()` named it); when not, it is not built again. */
+  draw(time: number, overlay: boolean): boolean;
 }
 
 export class Painter implements Paint {
   readonly #canvas: Drawable;
   readonly #onChanged: (names: ReadonlySet<ViewName>) => void;
   #wanted = true;
+  #overlay = true;
   /** Draws made, for the idle check. */
   draws = 0;
 
@@ -26,6 +29,7 @@ export class Painter implements Paint {
   /** The session changed: draw at the next frame. */
   changed(names: ReadonlySet<ViewName>): void {
     this.#wanted = true;
+    if (names.has("overlay")) this.#overlay = true;
     this.#onChanged(names);
   }
 
@@ -38,6 +42,8 @@ export class Painter implements Paint {
     if (!this.#wanted) return;
     this.#wanted = false;
     this.draws += 1;
-    if (this.#canvas.draw(time)) this.#wanted = true;
+    const overlay = this.#overlay;
+    this.#overlay = false;
+    if (this.#canvas.draw(time, overlay)) this.#wanted = true;
   }
 }

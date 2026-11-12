@@ -284,7 +284,7 @@ pub struct Painter<B: GpuBackend> {
     dark: bool,
     /// The overlay last given to the engine.
     overlay: Option<Overlay>,
-    /// Events for the host: text requests and errors.
+    /// Events for the host: text and image requests and errors.
     events: Vec<Event>,
 }
 
@@ -349,41 +349,64 @@ impl<B: GpuBackend> Painter<B> {
     /// anything changed. Returns whether another frame is needed (labels or
     /// text still to come, moved pieces still to bake).
     pub fn draw(&mut self, session: &Session, time_ms: f64) -> bool {
+        self.draw_with(session, time_ms, true)
+    }
+
+    /// `draw`, told whether the session's overlay may have changed since
+    /// the last draw (`changed()` named `overlay`): when it has not, the
+    /// overlay is not built again (a pan, a baking frame, text arriving).
+    pub fn draw_with(&mut self, session: &Session, time_ms: f64, overlay_changed: bool) -> bool {
         let baking = self.sync.sync(session, &mut self.engine);
-        let overlay = session.overlay();
-        if self.overlay.as_ref() != Some(&overlay) {
-            let palette = if self.dark { &DARK } else { &LIGHT };
-            self.engine.set_overlay(shapes(&overlay, palette));
-            self.overlay = Some(overlay);
-        }
-        self.engine.handle(Command::Tick { time_ms });
-        let mut again = baking;
-        for event in self.engine.drain_events() {
-            match event {
-                Event::NeedFrame => again = true,
-                e @ (Event::TextRequest { .. } | Event::Error { .. }) => self.events.push(e),
-                _ => {}
+        if overlay_changed || self.overlay.is_none() {
+            let overlay = session.overlay();
+            if self.overlay.as_ref() != Some(&overlay) {
+                let palette = if self.dark { &DARK } else { &LIGHT };
+                self.engine.set_overlay(shapes(&overlay, palette));
+                self.overlay = Some(overlay);
             }
         }
-        again
+        self.engine.handle(Command::Tick { time_ms });
+        self.drain() || baking
     }
 
     /// A command for the engine: `SetText`, `SetGlyphAtlas`, `ContextLost`,
     /// `ContextRestored`. Returns whether a frame is needed.
     pub fn handle(&mut self, command: Command) -> bool {
         self.engine.handle(command);
+        self.drain()
+    }
+
+    /// The host's answer to an image request (04 §7). Returns whether a
+    /// frame is needed.
+    pub fn set_image(&mut self, id: u32, image: Option<&B::Image>) -> bool {
+        self.engine.set_image(id, image);
+        self.drain()
+    }
+
+    /// Asks again for images that could not be loaded. Returns whether a
+    /// frame is needed.
+    pub fn retry_images(&mut self) -> bool {
+        self.engine.retry_images();
+        self.drain()
+    }
+
+    fn drain(&mut self) -> bool {
         let mut again = false;
         for event in self.engine.drain_events() {
             match event {
                 Event::NeedFrame => again = true,
-                e @ (Event::TextRequest { .. } | Event::Error { .. }) => self.events.push(e),
+                e @ (Event::TextRequest { .. }
+                | Event::ImageRequest { .. }
+                | Event::Error { .. }) => {
+                    self.events.push(e);
+                }
                 _ => {}
             }
         }
         again
     }
 
-    /// Text requests and errors since the last call.
+    /// Text and image requests and errors since the last call.
     pub fn take_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.events)
     }

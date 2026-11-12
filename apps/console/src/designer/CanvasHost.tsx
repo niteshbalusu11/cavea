@@ -25,6 +25,7 @@ import { notify } from "../ui/overlays.tsx";
 import type { Editor } from "./editor.ts";
 import { modifiers } from "./keys.ts";
 import { Painter } from "./paint.ts";
+import { guideNear, Rulers, type GuideDrag, type RulersHandle } from "./Rulers.tsx";
 import { pinchStep, wheelStep, type Pinch } from "./wheel.ts";
 
 const BUTTONS: Record<number, Button> = { 0: "primary", 1: "middle", 2: "secondary" };
@@ -32,8 +33,21 @@ const BUTTONS: Record<number, Button> = { 0: "primary", 1: "middle", 2: "seconda
 const themeOf = (): Theme =>
   document.documentElement.dataset["theme"] === "dark" ? "dark" : "light";
 
-export function CanvasHost(props: { editor: Editor }) {
+export function CanvasHost(props: { editor: Editor; rulers: boolean }) {
   const editor = props.editor;
+  let rulers: RulersHandle | null = null;
+  /** A user guide being dragged on the canvas (07 §5.2). */
+  let guideDrag: GuideDrag | null = null;
+  /** The guide under a still pointer, for the cursor: its axis. */
+  const guideAt = (at: [number, number]): GuideDrag | null => {
+    if (editor.views.tool.tool !== "select") return null;
+    const view = editor.view();
+    const guides = editor.views.guides;
+    const v = guideNear(view, guides, "vertical", at[0]);
+    if (v !== null) return { axis: "vertical", index: v };
+    const h = guideNear(view, guides, "horizontal", at[1]);
+    return h === null ? null : { axis: "horizontal", index: h };
+  };
   let region!: HTMLDivElement;
   let element!: HTMLCanvasElement;
   /** Why there is no canvas (no WebGL2, a failed draw), shown in its place. */
@@ -90,7 +104,9 @@ export function CanvasHost(props: { editor: Editor }) {
     const id = held;
     held = null;
     if (release && element.hasPointerCapture(id)) element.releasePointerCapture(id);
-    send({ kind: "pointerCancel" });
+    // A guide drag cut short keeps the guide where it is.
+    if (guideDrag !== null) guideDrag = null;
+    else send({ kind: "pointerCancel" });
   };
   /** Forgets touch points whose release this region will not see (a lost
    * capture, the window's blur), and the pinch once none is left. */
@@ -104,7 +120,7 @@ export function CanvasHost(props: { editor: Editor }) {
     forget(null);
   };
 
-  const cursor = (to: Cursor) => {
+  const cursor = (to: Cursor | "col-resize" | "row-resize") => {
     element.style.cursor = to;
   };
   /** Stops drawing and says why; the panels stay usable. */
@@ -150,6 +166,7 @@ export function CanvasHost(props: { editor: Editor }) {
         canvas.setTheme(t);
         painter?.invalidate();
       }
+      rulers?.retheme();
     });
     theme.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     window.addEventListener("blur", blur);
@@ -172,6 +189,12 @@ export function CanvasHost(props: { editor: Editor }) {
           if (!reported) notify(msg("canvas.gpuError"), "error");
           reported = true;
         },
+        ...(editor.images === null
+          ? {}
+          : {
+              images: (hash: string) => editor.images?.source(hash) ?? null,
+              onImageFailed: (hash: string) => editor.images?.markFailed(hash),
+            }),
       });
     } catch (error) {
       const panicked = error instanceof DesignerError && error.failure.kind === "panic";
@@ -180,10 +203,16 @@ export function CanvasHost(props: { editor: Editor }) {
       );
     }
     const c = canvas;
+    const unavailable = editor.images?.onAvailable(() => {
+      if (c.disposed) return;
+      c.retryImages();
+      painter?.invalidate();
+    });
+    if (unavailable !== undefined) onCleanup(unavailable);
     painter = new Painter(
       {
-        draw(time) {
-          const again = c.draw(time);
+        draw(time, overlay) {
+          const again = c.draw(time, overlay);
           editor.setLimits(c.zoomLimits());
           return again;
         },
@@ -209,6 +238,8 @@ export function CanvasHost(props: { editor: Editor }) {
       frame(time) {
         try {
           p.frame(time);
+          // The rulers, in the same frame and from the same view.
+          if (props.rulers) rulers?.frame();
         } catch (error) {
           // A trap stops the loop and shows the reload dialog; anything
           // else stops only the canvas.
@@ -299,20 +330,37 @@ export function CanvasHost(props: { editor: Editor }) {
           if (touchDown(e) || pinch !== null || held !== null) return;
           element.setPointerCapture(e.pointerId);
           held = e.pointerId;
+          // A press on a user guide moves it; off the canvas it goes.
+          const grabbed = e.button === 0 && !e.altKey ? guideAt(local(e)) : null;
+          if (grabbed !== null) {
+            guideDrag = grabbed;
+            return;
+          }
           send({ kind: "pointerDown", data: pointer(e) });
         }}
         onPointerMove={(e) => {
           if (touchMove(e)) return;
           if (held !== null && e.pointerId !== held) return;
+          if (guideDrag !== null) return rulers?.dragTo(guideDrag, local(e));
           const p = pointer(e);
           editor.setPointer(p.world);
           send({ kind: "pointerMove", data: p });
+          if (held === null) {
+            const g = guideAt(p.screen);
+            if (g !== null) cursor(g.axis === "vertical" ? "col-resize" : "row-resize");
+            else if (element.style.cursor.endsWith("-resize")) cursor(editor.session.cursor());
+          }
           over = p.screen;
           if (editor.views.numbering !== null) resample();
         }}
         onPointerUp={(e) => {
           if (touchUp(e) || e.pointerId !== held) return;
           held = null;
+          if (guideDrag !== null) {
+            rulers?.drop(guideDrag, local(e));
+            guideDrag = null;
+            return;
+          }
           send({ kind: "pointerUp", data: pointer(e) });
         }}
         onPointerCancel={(e) => {
@@ -338,6 +386,9 @@ export function CanvasHost(props: { editor: Editor }) {
           if (e.button === 1) e.preventDefault();
         }}
       />
+      <Show when={props.rulers}>
+        <Rulers editor={editor} guides={() => editor.views.guides} ref={(h) => (rulers = h)} />
+      </Show>
       <Show when={sample()}>
         {(s) => (
           <div

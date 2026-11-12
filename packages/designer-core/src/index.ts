@@ -10,4 +10,6 @@ export { Canvas, createCanvas, fitView, pan, toChart, toScreen, zoomAbout } from
 export type { CanvasOptions, CanvasStats, Point, Theme, View } from "./canvas.ts";
 export type { Designer, DesignerFailure, LoadOptions } from "./session.ts";
 export type { WasmSource } from "./bindings.ts";
+export { fitScale } from "./images.ts";
+export type { ImageAsset, ImageSource } from "./images.ts";
 export type * from "./generated/calls.ts";

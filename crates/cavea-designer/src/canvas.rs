@@ -12,7 +12,8 @@ use cavea_render::{
 };
 use wasm_bindgen::{JsCast as _, JsError, JsValue, prelude::wasm_bindgen};
 use web_sys::{
-    HtmlCanvasElement, WebGl2RenderingContext, WebGlContextAttributes, WebGlPowerPreference,
+    HtmlCanvasElement, ImageBitmap, WebGl2RenderingContext, WebGlContextAttributes,
+    WebGlPowerPreference,
 };
 
 use crate::Designer;
@@ -50,8 +51,10 @@ impl Canvas {
         if context.is_context_lost() {
             return Err(JsError::new("WebGL2 context is lost"));
         }
-        let backend = GlowBackend::new(glow::Context::from_webgl2_context(context.clone()))
-            .map_err(|e| JsError::new(&e.to_string()))?;
+        // `web` keeps the context to upload images from the browser's
+        // decoded bitmaps (04 §25).
+        let backend =
+            GlowBackend::web(context.clone()).map_err(|e| JsError::new(&e.to_string()))?;
         let mut painter = Painter::new(backend);
         painter.set_theme(false);
         Ok(Canvas {
@@ -101,20 +104,23 @@ impl Canvas {
     }
 
     /// Brings the picture up to date with the designer's session and draws
-    /// if anything changed. Returns whether another frame is needed.
-    pub fn draw(&mut self, designer: &Designer, time_ms: f64) -> bool {
+    /// if anything changed. `overlay`: whether the session's overlay may
+    /// have changed since the last draw (`changed()` named it); when not,
+    /// it is not built again. Returns whether another frame is needed.
+    pub fn draw(&mut self, designer: &Designer, time_ms: f64, overlay: bool) -> bool {
         if let Some((w, h)) = self.resize.take() {
             self.canvas.set_width(w);
             self.canvas.set_height(h);
         }
         match &designer.session {
-            Some(session) => self.painter.draw(session, time_ms),
+            Some(session) => self.painter.draw_with(session, time_ms, overlay),
             None => false,
         }
     }
 
-    /// Text requests and errors since the last call, as JSON:
+    /// Text and image requests and errors since the last call, as JSON:
     /// `[{"type": "textRequest", "id", "text", "px", "weight", "font"} |
+    /// {"type": "imageRequest", "id", "asset", "maxSide", "maxPixels"} |
     /// {"type": "error", "code", "message"}]`.
     #[wasm_bindgen(js_name = takeEvents)]
     pub fn take_events(&mut self) -> String {
@@ -132,6 +138,15 @@ impl Canvas {
                 } => Some(serde_json::json!({
                     "type": "textRequest", "id": id, "text": text, "px": px,
                     "weight": weight, "font": font,
+                })),
+                Event::ImageRequest {
+                    id,
+                    asset,
+                    max_side,
+                    max_pixels,
+                } => Some(serde_json::json!({
+                    "type": "imageRequest", "id": id, "asset": asset,
+                    "maxSide": max_side, "maxPixels": max_pixels,
                 })),
                 Event::Error { code, message } => {
                     let code = match code {
@@ -159,6 +174,26 @@ impl Canvas {
             px,
             pixels,
         })
+    }
+
+    /// The host's answer to an `imageRequest` (04 §7): the decoded image,
+    /// premultiplied and within the request's limits, or `undefined` when
+    /// it could not be loaded. Uploaded at once; the host may close the
+    /// bitmap after. Returns whether a frame is needed; an image over the
+    /// limits is reported as an `invalidInput` error.
+    #[wasm_bindgen(js_name = setImage)]
+    pub fn set_image(&mut self, id: u32, image: Option<ImageBitmap>) -> bool {
+        if self.context.is_context_lost() {
+            self.painter.handle(Command::ContextLost);
+        }
+        self.painter.set_image(id, image.as_ref())
+    }
+
+    /// Asks again for images that could not be loaded (the host has their
+    /// bytes now). Returns whether a frame is needed.
+    #[wasm_bindgen(js_name = retryImages)]
+    pub fn retry_images(&mut self) -> bool {
+        self.painter.retry_images()
     }
 
     /// The glyph atlas's RGBA pixels (04 §12), for seat labels.

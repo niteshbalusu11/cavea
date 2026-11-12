@@ -764,18 +764,26 @@ fn measure_canvas() {
         let t0 = Instant::now();
         let mut frames = 0;
         let mut worst = 0.0f64;
+        let mut each = Vec::new();
         loop {
             let t1 = Instant::now();
+            let up = p.engine().backend().uploaded;
+            let made = p.engine().backend().created;
             p.draw(&s, 100.0 + f64::from(frames));
             worst = worst.max(ms(t1));
+            let kb = (p.engine().backend().uploaded - up) / 1024;
+            let made = p.engine().backend().created - made;
+            // Each buffer made ends with `getError`, which waits for the GPU.
+            each.push(format!("{:.1} ms {kb} KB {made} buffers", ms(t1)));
             frames += 1;
             if !p.sync().pending() || frames > 100 {
                 break;
             }
         }
         println!(
-            "  baked on release over {frames} frames, {:.1} ms in all, the longest {worst:.1} ms",
-            ms(t0)
+            "  baked on release over {frames} frames, {:.1} ms in all, the longest {worst:.1} ms ({})",
+            ms(t0),
+            each.join(", ")
         );
     }
 
@@ -1078,4 +1086,99 @@ fn dynamic_seat_labels_move_with_their_piece() {
     assert!(p.engine().moving().is_empty(), "baked");
     assert!(asked.iter().any(|t| t.starts_with("Sitz ")), "{asked:?}");
     assert!(asked.iter().all(|t| t.starts_with("Sitz ")), "{asked:?}");
+}
+
+/// 03 §2.7, 07 §4: a reference image is the designer's only. The canvas
+/// draws it (the live scene's `IMGS`, behind everything) and asks the host
+/// for its picture, and a drag moves it with the pointer, not only once
+/// baked; the chart the preview shows and the server would compile has no
+/// image at all. Made a background image, the compiled chart has it.
+#[test]
+fn reference_images_are_drawn_but_never_compiled() {
+    use cavea_compiler::document::ImageRole;
+    use cavea_edit::{Draft, Field};
+    use cavea_format::Artefact;
+    use cavea_render::protocol::Event;
+
+    let hash = "00112233445566778899aabbccddeeff";
+    let mut s = Session::load(preset("theatre")).expect("load");
+    s.set_snap(cavea_edit::SnapSettings {
+        grid: false,
+        step: 5.0,
+        objects: false,
+        spacing: false,
+        rows: false,
+        angles: false,
+        guides: false,
+    });
+    let draft = Draft::Image {
+        center: [0.0, 0.0],
+        size: [4000.0, 3000.0],
+        asset: hash.into(),
+        role: ImageRole::Reference,
+    };
+    s.insert(None, &draft).expect("insert");
+    let mut p = painter(VIEW);
+    settle(&mut p, &s);
+    let shown = |p: &Painter<Recorder>| -> Vec<(String, [i32; 4])> {
+        let scene = p.engine().scene().expect("scene");
+        let c = &scene.chart;
+        (c.images.iter())
+            .map(|i| {
+                let asset = c.strings.get(i.asset).unwrap_or_default().to_owned();
+                (asset, i.bounds)
+            })
+            .collect()
+    };
+    // Bounds in quarter units, centred on the image's position.
+    assert_eq!(
+        shown(&p),
+        vec![(hash.to_owned(), [-8000, -6000, 8000, 6000])]
+    );
+    let request = |p: &mut Painter<Recorder>| {
+        p.take_events().into_iter().find_map(|e| match e {
+            Event::ImageRequest { id, asset, .. } if asset == hash => Some(id),
+            _ => None,
+        })
+    };
+    let id = request(&mut p).expect("the picture is asked for");
+    // Not loaded (the bytes are not to be had): not asked again by the
+    // live scene, until the host has the bytes and says so.
+    p.set_image(id, None);
+    settle(&mut p, &s);
+    assert_eq!(request(&mut p), None);
+    assert!(p.retry_images());
+    settle(&mut p, &s);
+    assert!(request(&mut p).is_some(), "asked again once retried");
+
+    let compiled = |s: &Session| {
+        let bytes = crate::preview::chart(s).expect("compiles");
+        cavea_format::decode(&bytes, Artefact::Public)
+            .expect("decode")
+            .images
+            .len()
+    };
+    assert_eq!(compiled(&s), 0, "a reference image is never compiled");
+
+    // A drag moves it at every step: the picture follows the pointer.
+    let mut t = 0.0;
+    t += 1000.0;
+    s.input(Input::PointerDown(pointer([1500.0, 1000.0], t)));
+    for k in 1..=3 {
+        t += 16.0;
+        let at = [1500.0 + 400.0 * f64::from(k), 1000.0];
+        s.input(Input::PointerMove(pointer(at, t)));
+        p.draw(&s, t);
+        let dx = 1600 * k;
+        assert_eq!(shown(&p)[0].1, [-8000 + dx, -6000, 8000 + dx, 6000]);
+    }
+    t += 16.0;
+    s.input(Input::PointerUp(pointer([2700.0, 1000.0], t)));
+    settle(&mut p, &s);
+
+    s.set_field(&Field::ImageRole(ImageRole::Background))
+        .expect("role");
+    assert_eq!(compiled(&s), 1);
+    settle(&mut p, &s);
+    assert_eq!(shown(&p).len(), 1);
 }

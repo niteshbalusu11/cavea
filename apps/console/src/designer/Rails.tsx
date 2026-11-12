@@ -64,7 +64,12 @@ export function rove(e: KeyboardEvent, vertical: boolean): void {
 /** The tool rail. The row-block tool chosen with the keyboard (Enter or
  * Space on its button) also opens "Insert row block…" (07 §15): drawing
  * needs a pointer, the form does not. */
-export function ToolRail(props: { editor: Editor; onInsert: () => void }) {
+export function ToolRail(props: {
+  editor: Editor;
+  onInsert: () => void;
+  /** Picks an image file to place; absent when the chart is read-only. */
+  onImage: (() => void) | undefined;
+}) {
   const active = () => props.editor.views.tool.tool;
   return (
     <nav
@@ -100,6 +105,16 @@ export function ToolRail(props: { editor: Editor; onInsert: () => void }) {
           </>
         )}
       </For>
+      <div class="my-1 h-px w-5 bg-line" />
+      <IconButton
+        icon="image"
+        label={msg("shortcut.image")}
+        keys={keyOf("image")}
+        placement="right"
+        tabIndex={-1}
+        reason={props.onImage === undefined ? msg("readOnly.refused") : null}
+        onClick={() => props.onImage?.()}
+      />
     </nav>
   );
 }
@@ -165,6 +180,31 @@ export function StatusBar(props: {
           </span>
         </Show>
       </button>
+      <Show
+        when={(() => {
+          const u = props.editor.images?.uploads() ?? null;
+          return u !== null && u.sending + u.waiting > 0 ? u : null;
+        })()}
+      >
+        {(u) => (
+          <span class="inline-flex items-center gap-1" role="status">
+            <span classList={{ "text-warning": u().waiting > 0 }}>
+              {u().waiting > 0
+                ? msg("image.waitingCount", { n: u().waiting })
+                : msg("image.uploadingCount", { n: u().sending })}
+            </span>
+            <Show when={u().waiting > 0}>
+              <button
+                type="button"
+                class="h-5 rounded-sm px-1.5 text-accent hover:bg-hover"
+                onClick={() => props.editor.images?.retry()}
+              >
+                {msg("action.retry")}
+              </button>
+            </Show>
+          </span>
+        )}
+      </Show>
       <Show when={props.editor.readout()}>
         {(r) => (
           <span class="font-mono text-xs text-fg tabular-nums" aria-live="polite">

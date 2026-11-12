@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use cavea_compiler::document::{Align, BlockRow, Curve, Node, RowBlock, Shape, ShapeKind};
+use cavea_compiler::document::{Align, BlockRow, Curve, Image, Node, RowBlock, Shape, ShapeKind};
 use cavea_core::limits::MAX_SEATS_PER_ROW;
 
 use super::draw::{dist, snap15};
@@ -176,6 +176,10 @@ pub(crate) fn handles(view: &View<'_>, sel: &Selection, pivot: Option<P>) -> Vec
             }
             ShapeKind::Path => {}
         },
+        Some(Node::Image(_)) => {
+            out.extend(corners.map(|(c, at)| handle(HandleKind::Corner(c), at)));
+            out.extend(sides.map(|(s, at)| handle(HandleKind::Side(s), at)));
+        }
         _ => {}
     }
     out
@@ -291,6 +295,7 @@ pub(crate) fn resize(
         (Node::RowBlock(b), HandleKind::Side(side)) if mods.ctrl => pitch(b, id, side, d),
         (Node::RowBlock(b), HandleKind::Side(side)) => counts(b, id, side, d, room, None),
         (Node::Shape(s), _) => scale(s, id, kind, d, q, mods.shift),
+        (Node::Image(i), _) => scale_image(i, id, kind, d, mods.shift),
         _ => Step::Keep,
     }
 }
@@ -829,44 +834,10 @@ fn scale(s: &Shape, id: u32, kind: HandleKind, d: P, q: P, shift: bool) -> Step 
         },
         _ => return Step::Keep,
     };
-    let (w, h) = (x1 - x0, y1 - y0);
-    if !(w > 0.0 && h > 0.0) {
+    let Some([nx0, ny0, nx1, ny1]) = resized([x0, y0, x1, y1], kind, d, shift) else {
         return Step::Keep;
-    }
-    // Which edges move: -1 the low one, 1 the high one, 0 neither.
-    let (ex, ey) = match kind {
-        HandleKind::Side(Side::Top) => (0, -1),
-        HandleKind::Side(Side::Bottom) => (0, 1),
-        HandleKind::Side(Side::Left) => (-1, 0),
-        HandleKind::Side(Side::Right) => (1, 0),
-        HandleKind::Corner(Corner::TopLeft) => (-1, -1),
-        HandleKind::Corner(Corner::TopRight) => (1, -1),
-        HandleKind::Corner(Corner::BottomRight) => (1, 1),
-        HandleKind::Corner(Corner::BottomLeft) => (-1, 1),
-        _ => return Step::Keep,
     };
-    let grow = |e: i32, v: f64, size: f64| match e {
-        0 => size,
-        _ => (size + f64::from(e) * v).max(MIN_SIZE),
-    };
-    let (mut nw, mut nh) = (grow(ex, d[0], w), grow(ey, d[1], h));
-    if shift && ex != 0 && ey != 0 {
-        let k = (nw / w).max(nh / h);
-        (nw, nh) = (w * k, h * k);
-    }
-    if !(nw.is_finite() && nh.is_finite()) {
-        return Step::Keep;
-    }
-    // The fixed edge on each axis, which the new box keeps.
-    let fixed = |e: i32, lo: f64, hi: f64| if e < 0 { hi } else { lo };
-    let (ax, ay) = (fixed(ex, x0, x1), fixed(ey, y0, y1));
-    let span = |e: i32, a: f64, n: f64, lo: f64, hi: f64| match e {
-        0 => (lo, hi),
-        e if e < 0 => (a - n, a),
-        _ => (a, a + n),
-    };
-    let (nx0, nx1) = span(ex, ax, nw, x0, x1);
-    let (ny0, ny1) = span(ey, ay, nh, y0, y1);
+    let (w, h, nw, nh) = (x1 - x0, y1 - y0, nx1 - nx0, ny1 - ny0);
     match s.kind {
         ShapeKind::Polygon => {
             let (sx, sy) = (nw / w, nh / h);
@@ -887,6 +858,73 @@ fn scale(s: &Shape, id: u32, kind: HandleKind, d: P, q: P, shift: bool) -> Step 
         height: nh,
     };
     decoration(id, next, readout)
+}
+
+/// The box `[x0, y0, x1, y1]` (in the node's own space) after dragging
+/// the side or corner handle `kind` by `d`: the opposite side or corner
+/// stays, each side at least [`MIN_SIZE`]; Shift on a corner keeps the
+/// aspect ratio. `None` when the box is empty or the result not finite.
+fn resized([x0, y0, x1, y1]: [f64; 4], kind: HandleKind, d: P, shift: bool) -> Option<[f64; 4]> {
+    let (w, h) = (x1 - x0, y1 - y0);
+    if !(w > 0.0 && h > 0.0) {
+        return None;
+    }
+    // Which edges move: -1 the low one, 1 the high one, 0 neither.
+    let (ex, ey) = match kind {
+        HandleKind::Side(Side::Top) => (0, -1),
+        HandleKind::Side(Side::Bottom) => (0, 1),
+        HandleKind::Side(Side::Left) => (-1, 0),
+        HandleKind::Side(Side::Right) => (1, 0),
+        HandleKind::Corner(Corner::TopLeft) => (-1, -1),
+        HandleKind::Corner(Corner::TopRight) => (1, -1),
+        HandleKind::Corner(Corner::BottomRight) => (1, 1),
+        HandleKind::Corner(Corner::BottomLeft) => (-1, 1),
+        _ => return None,
+    };
+    let grow = |e: i32, v: f64, size: f64| match e {
+        0 => size,
+        _ => (size + f64::from(e) * v).max(MIN_SIZE),
+    };
+    let (mut nw, mut nh) = (grow(ex, d[0], w), grow(ey, d[1], h));
+    if shift && ex != 0 && ey != 0 {
+        let k = (nw / w).max(nh / h);
+        (nw, nh) = (w * k, h * k);
+    }
+    if !(nw.is_finite() && nh.is_finite()) {
+        return None;
+    }
+    // The fixed edge on each axis, which the new box keeps.
+    let fixed = |e: i32, lo: f64, hi: f64| if e < 0 { hi } else { lo };
+    let (ax, ay) = (fixed(ex, x0, x1), fixed(ey, y0, y1));
+    let span = |e: i32, a: f64, n: f64, lo: f64, hi: f64| match e {
+        0 => (lo, hi),
+        e if e < 0 => (a - n, a),
+        _ => (a, a + n),
+    };
+    let (nx0, nx1) = span(ex, ax, nw, x0, x1);
+    let (ny0, ny1) = span(ey, ay, nh, y0, y1);
+    Some([nx0, ny0, nx1, ny1])
+}
+
+/// An image scaled by a side or corner handle, as a rectangle is (07 §5.1):
+/// a new `size`, and its centre moved to the new box's.
+fn scale_image(i: &Image, id: u32, kind: HandleKind, d: P, shift: bool) -> Step {
+    let [w, h] = i.size;
+    let Some([nx0, ny0, nx1, ny1]) =
+        resized([-w / 2.0, -h / 2.0, w / 2.0, h / 2.0], kind, d, shift)
+    else {
+        return Step::Keep;
+    };
+    let mut next = i.clone();
+    next.size = [nx1 - nx0, ny1 - ny0];
+    let t = Place::of([0.0, 0.0], i.rotation).turn(mid([nx0, ny0], [nx1, ny1]));
+    next.origin = [i.origin[0] + t[0], i.origin[1] + t[1]];
+    let readout = Readout::Size {
+        width: next.size[0],
+        height: next.size[1],
+    };
+    let property = Property::Decoration(Box::new(Node::Image(next)));
+    Step::Show(Command::SetProperty { id, property }, readout)
 }
 
 fn decoration(id: u32, shape: Shape, readout: Readout) -> Step {

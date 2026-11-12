@@ -15,8 +15,15 @@ import { formatTime, msg } from "../i18n/messages.ts";
 import { session as consoleSession } from "../session.ts";
 import { Button } from "../ui/controls.tsx";
 import { Confirm, Dialog, notify } from "../ui/overlays.tsx";
-import { Autosave, type AutosaveStart, type LocalStore, type SaveState } from "./autosave.ts";
+import {
+  Autosave,
+  type AutosaveStart,
+  type LocalStore,
+  type SaveReply,
+  type SaveState,
+} from "./autosave.ts";
 import { draftStore, recoveryPrefix, type Recovery } from "./drafts.ts";
+import { afterUploads } from "./images.ts";
 import type { Editor } from "./editor.ts";
 import { failureMessage, failureOf } from "./errors.ts";
 import { makeReadOnly } from "./readonly.ts";
@@ -78,6 +85,8 @@ export function serverChart(props: {
   install: (session: Session) => Editor;
   editor: Accessor<Editor | null>;
   onPanic: (message: string) => void;
+  /** The page's uploads, which a save waits for (`ImageHost`, D-74). */
+  uploads: { settled(): Promise<SaveReply | null>; refusals(): number };
 }): ServerChart {
   const { ref, canWrite } = props.setup;
   const signal = componentSignal();
@@ -130,7 +139,12 @@ export function serverChart(props: {
         // and the store is written as the page is hidden.
         revision: () => session.status().revision,
         exportDraft: () => session.export(),
-        send: (draft, etag) => saveDraft(ref, draft, etag),
+        // Never a draft naming an image the server does not hold yet.
+        send: afterUploads(
+          props.uploads,
+          () => session.export(),
+          (draft, etag) => saveDraft(ref, draft, etag),
+        ),
         store,
         onState: (s) => {
           // A newer editor's machine has replaced this one.

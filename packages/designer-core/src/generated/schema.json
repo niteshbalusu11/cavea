@@ -2828,6 +2828,50 @@
                 "type": "string"
               }
             ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "image"
+                }
+              },
+              {
+                "name": "center",
+                "optional": false,
+                "type": {
+                  "tuple": [
+                    "number",
+                    "number"
+                  ]
+                }
+              },
+              {
+                "name": "size",
+                "optional": false,
+                "type": {
+                  "tuple": [
+                    "number",
+                    "number"
+                  ]
+                }
+              },
+              {
+                "name": "asset",
+                "optional": false,
+                "type": "string"
+              },
+              {
+                "name": "role",
+                "optional": false,
+                "type": {
+                  "args": [],
+                  "ref": "ImageRole"
+                }
+              }
+            ]
           }
         ]
       }
@@ -4371,6 +4415,16 @@
                   "args": [],
                   "ref": "ImageRole"
                 }
+              ],
+              "ref": "Shared"
+            }
+          },
+          {
+            "name": "asset",
+            "optional": false,
+            "type": {
+              "args": [
+                "string"
               ],
               "ref": "Shared"
             }

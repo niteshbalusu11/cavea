@@ -19,6 +19,7 @@ import { createStore, reconcile, type SetStoreFunction } from "solid-js/store";
 import { msg } from "../i18n/messages.ts";
 import { notify } from "../ui/overlays.tsx";
 import { failureMessage, failureOf } from "./errors.ts";
+import type { ImageHost } from "./imageHost.ts";
 import { browserScheduler, FrameLoop, type Views } from "./loop.ts";
 import { ReadOnlyRefusal } from "./readonly.ts";
 
@@ -71,6 +72,8 @@ export type Outcome<T> = { ok: T } | { error: string; failure: DesignerFailure }
 
 export interface Editor {
   session: Session;
+  /** The page's images: placing, uploading, where the canvas finds them. */
+  images: ImageHost | null;
   views: Views;
   loop: FrameLoop;
   camera: Accessor<Camera>;
@@ -149,7 +152,11 @@ async function readClipboard(): Promise<string | null> {
  * Opens the editor on a session. `onPanic` is told when the module traps:
  * the session is unusable from then on, and the loop has stopped.
  */
-export function createEditor(session: Session, onPanic: (message: string) => void): Editor {
+export function createEditor(
+  session: Session,
+  onPanic: (message: string) => void,
+  images: ImageHost | null = null,
+): Editor {
   // The first frame is read before the stores exist, so that they start
   // full; every later one reconciles into them.
   const first: Partial<Views> = { numbering: null };
@@ -166,8 +173,12 @@ export function createEditor(session: Session, onPanic: (message: string) => voi
     {
       set(view, value) {
         if (set === null) first[view] = value;
-        // Categories are known by their key; everything else by its id.
-        else set(view, reconcile(value, { key: view === "categories" ? "key" : "id" }) as never);
+        // Categories are known by their key, guides by their place; everything
+        // else by its id.
+        else {
+          const key = view === "categories" ? "key" : view === "guides" ? null : "id";
+          set(view, reconcile(value, { key }) as never);
+        }
       },
     },
     browserScheduler,
@@ -238,6 +249,7 @@ export function createEditor(session: Session, onPanic: (message: string) => voi
 
   const editor: Editor = {
     session,
+    images,
     views,
     loop,
     camera,

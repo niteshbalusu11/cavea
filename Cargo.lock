@@ -275,6 +275,7 @@ version = "0.0.0"
 name = "cavea-designer"
 version = "0.0.0"
 dependencies = [
+ "blake3",
  "cavea-compiler",
  "cavea-edit",
  "cavea-format",

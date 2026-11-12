@@ -10,6 +10,8 @@ publish.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# Already in the module through the compiler: the asset hash (08 §6.2).
+blake3.workspace = true
 cavea-edit.workspace = true
 cavea-compiler.workspace = true
 cavea-format.workspace = true
@@ -30,6 +32,7 @@ glow.workspace = true
 js-sys.workspace = true
 web-sys = { workspace = true, features = [
   "HtmlCanvasElement",
+  "ImageBitmap",
   "WebGl2RenderingContext",
   "WebGlContextAttributes",
   "WebGlPowerPreference",

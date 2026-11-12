@@ -32,7 +32,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use cavea_compiler::document::{AlphaOverflow, Category, Floor, Node, Outline, Points, Settings};
+use cavea_compiler::document::{
+    AlphaOverflow, Category, Floor, ImageRole, Node, Outline, Points, Settings,
+};
 use cavea_compiler::{ChartDocument, Detail};
 use cavea_edit::Session;
 use cavea_format::Chart;
@@ -45,7 +47,14 @@ use cavea_render::{
 
 /// Seats compiled per frame at most to bake moved pieces after a gesture:
 /// about 10 ms of compiling (0.5 µs a seat, measured natively).
+#[cfg(not(target_arch = "wasm32"))]
 pub const BAKE_SEATS: usize = 20_000;
+/// In the browser the compiler runs as WebAssembly, about four times slower
+/// (2.1 µs a seat in Chromium, measured locally), and each baking frame
+/// also merges the scene again (about 3 ms on `stadium-100k`): 4,000 seats
+/// keep a frame near 11 ms (07 §14).
+#[cfg(target_arch = "wasm32")]
+pub const BAKE_SEATS: usize = 4_000;
 
 /// Which piece: a node (outside a section, or a section's child) or a
 /// section's shell.
@@ -358,9 +367,16 @@ impl LiveSync {
                     let still = same(&e.placed, at) && e.content == *content;
                     let delta = compose(at, &invert(&e.placed));
                     let seats = e.piece.as_ref().map_or(0, Piece::seats);
+                    // Images are not moved by a transform: a piece holding
+                    // one is compiled again at every step (an image alone
+                    // is cheap), so it follows the pointer.
+                    let image = e
+                        .piece
+                        .as_ref()
+                        .is_some_and(|p| !p.chart().images.is_empty());
                     if still {
                         false
-                    } else if !placed {
+                    } else if !placed || image {
                         true
                     } else if gesture {
                         moves.push((*key, delta));
@@ -480,7 +496,13 @@ impl LiveSync {
         let preview = source.is_some();
         let (node, role) = match key {
             Key::Node(id) => {
-                let node = source.or_else(|| doc.tree(id))?;
+                let mut node = source.or_else(|| doc.tree(id))?;
+                // A reference image is the designer's only: the compiler
+                // never compiles it, so the live scene draws it as a
+                // background image (`IMGS`), where it will be drawn.
+                if let Node::Image(image) = &mut node {
+                    image.role = ImageRole::Background;
+                }
                 match section.and_then(|s| doc.node(s)) {
                     Some(Node::Section(sec)) => {
                         let mut wrapper = sec.clone();

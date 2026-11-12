@@ -62,6 +62,11 @@ export interface Designer {
    * objects unavailable, at `seq`; `null` for bytes that are not a chart.
    */
   sampleState(chart: Uint8Array, sold: number, seq: number): Uint8Array | null;
+  /**
+   * An image's content hash as `POST /v1/assets` names it (08 §6.2): the
+   * first 16 bytes of BLAKE3 of `bytes`, in 32 lowercase hex digits.
+   */
+  assetHash(bytes: Uint8Array): string;
 }
 
 export interface LoadOptions {
@@ -114,6 +119,9 @@ export async function loadDesigner(options: LoadOptions = {}): Promise<Designer>
       const frame = bytes(module, () => bindings.sampleState(chart, sold, seq));
       return frame.length === 0 ? null : frame;
     },
+    assetHash(data) {
+      return bytes(module, () => bindings.assetHash(data));
+    },
   };
 }
 
@@ -159,8 +167,8 @@ function settle(module: Module, run: () => string, onPanic: () => void = () => {
   return reply.ok;
 }
 
-/** Bytes from the module, or a `panic` for what it threw (as `settle`). */
-function bytes(module: Module, run: () => Uint8Array, onPanic: () => void = () => {}): Uint8Array {
+/** A value from the module, or a `panic` for what it threw (as `settle`). */
+function bytes<T>(module: Module, run: () => T, onPanic: () => void = () => {}): T {
   if (module.broken !== null) {
     throw new DesignerError({ kind: "panic", message: module.broken });
   }

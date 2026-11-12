@@ -43,6 +43,7 @@ const PATHS = {
   minus: "M3 8h10",
   more: "M3.5 8h.01M8 8h.01M12.5 8h.01",
   file: "M4 1.5h5.5L12.5 4.5v10h-8.5zM9.5 1.5v3h3",
+  image: "M2 3h12v10H2zM2 11l3.5-3.5 3 3 2-2L14 12M10.5 5.5a1 1 0 1 0 0 .01",
   download: "M8 2v8m-3.5-3.5L8 10l3.5-3.5M2.5 13.5h11",
   chart: "M2.5 13.5h11M4.5 11V7m3.5 4V4m3.5 7V8.5",
   calendar: "M2.5 3.5h11v10h-11zM2.5 6.5h11M5.5 2v3m5-3v3",

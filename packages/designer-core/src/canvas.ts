@@ -11,6 +11,12 @@ import { createRasteriser, type Rasteriser, type TextRequest } from "@cavea/rend
 import { loadGlyphAtlas, type GlyphAtlasSource } from "@cavea/renderer/atlas";
 
 import type { CanvasHandle } from "./bindings.ts";
+import {
+  createImageLoader,
+  type ImageLoader,
+  type ImageRequest,
+  type ImageSource,
+} from "./images.ts";
 import type { Rect } from "./generated/calls.ts";
 import { DesignerError, internals, type Module, type Session } from "./session.ts";
 
@@ -48,6 +54,14 @@ export interface CanvasOptions {
   onFrame?: () => void;
   /** Errors the renderer reports (a GPU failure); the canvas keeps going. */
   onError?: (error: { code: string; message: string }) => void;
+  /**
+   * Where the chart's images are, by content hash (04 §25): a file the
+   * person just placed, or the server's `/v1/public/assets/{hash}`. Without
+   * it no image is drawn.
+   */
+  images?: ImageSource;
+  /** An image that could not be loaded or decoded; it is not asked for again. */
+  onImageFailed?: (asset: string, error: unknown) => void;
 }
 
 /** What the last frame drew, for the host's metrics. */
@@ -65,7 +79,7 @@ export interface CanvasStats {
 const LEVELS = ["overview", "crossFade", "seats", "detail"] as const;
 
 /** What the module reports after a draw. */
-type Reported = TextRequest | { type: "error"; code: string; message: string };
+type Reported = TextRequest | ImageRequest | { type: "error"; code: string; message: string };
 
 /** The chart point under a canvas point, for `view`. */
 export function toChart(view: View, [x, y]: Point): Point {
@@ -156,6 +170,7 @@ export class Canvas {
   readonly #options: CanvasOptions;
   #handle: CanvasHandle | null;
   #rasteriser: Rasteriser | null = createRasteriser();
+  #images: ImageLoader | null = null;
   #view: View | null = null;
   #theme: Theme = "light";
   readonly #lost = (event: Event): void => {
@@ -183,6 +198,18 @@ export class Canvas {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new DesignerError({ kind: "arguments", message: `canvas: ${message}` });
+    }
+    const images = options.images;
+    if (images !== undefined) {
+      this.#images = createImageLoader(
+        images,
+        (id, bitmap) => {
+          if (this.#handle !== null && this.#call((h) => h.setImage(id, bitmap))) {
+            this.#options.onFrame?.();
+          }
+        },
+        (asset, error) => this.#options.onImageFailed?.(asset, error),
+      );
     }
     element.addEventListener("webglcontextlost", this.#lost);
     element.addEventListener("webglcontextrestored", this.#restored);
@@ -261,22 +288,33 @@ export class Canvas {
    * the canvas wants another frame (labels and text still arriving, moved
    * nodes still being baked): then call it again next frame.
    */
-  draw(timeMs: number = performance.now()): boolean {
+  draw(timeMs: number = performance.now(), overlayChanged = true): boolean {
     const { handle: designer } = internals(this.#session);
     if (designer === null) {
       throw new DesignerError({ kind: "disposed" });
     }
-    let again = this.#call((h) => h.draw(designer, timeMs));
+    let again = this.#call((h) => h.draw(designer, timeMs, overlayChanged));
     const events = JSON.parse(this.#call((h) => h.takeEvents())) as Reported[];
     for (const event of events) {
       if (event.type === "textRequest") {
         const raster = this.#rasteriser?.draw(event) ?? [0, 0, 0, new Uint8Array(0)];
         again = this.#call((h) => h.setText(event.id, ...raster)) || again;
+      } else if (event.type === "imageRequest") {
+        if (this.#images === null) this.#call((h) => h.setImage(event.id, undefined));
+        else this.#images.request(event);
       } else {
         this.#options.onError?.({ code: event.code, message: event.message });
       }
     }
     return again;
+  }
+
+  /**
+   * Asks again for the images that could not be loaded, once the source
+   * has their bytes (a picture placed again). Draw at the next frame.
+   */
+  retryImages(): void {
+    this.#call((h) => h.retryImages());
   }
 
   /** The chart point under a canvas point, for the current view. */
@@ -328,6 +366,8 @@ export class Canvas {
     this.#handle = null;
     this.#rasteriser?.release();
     this.#rasteriser = null;
+    this.#images?.release();
+    this.#images = null;
   }
 
   get disposed(): boolean {

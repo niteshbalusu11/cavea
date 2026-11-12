@@ -103,6 +103,7 @@ describe("the frame loop", () => {
       "title",
       "tool",
       "validation",
+      "guides",
     ];
     expect(new Set(loop.tick())).toEqual(new Set(all));
     calls.clear();
@@ -129,6 +130,7 @@ describe("the frame loop", () => {
       categories: raw.categories(),
       validation: raw.validation(),
       layers: raw.layers(0, 50),
+      guides: raw.guides(),
     });
 
     // A selection change is not an edit: the title, floors and categories stay.

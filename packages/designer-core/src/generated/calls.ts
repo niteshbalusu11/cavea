@@ -558,6 +558,18 @@ export type Draft =
       kind: "text";
       at: [number, number];
       text: string;
+    }
+  | {
+      /**
+       * An image `size` wide and high centred on `center`, unturned and
+       * opaque (03 §2.7). `asset` is its content hash as `POST /v1/assets`
+       * returns it, 32 lowercase hex digits.
+       */
+      kind: "image";
+      center: [number, number];
+      size: [number, number];
+      asset: string;
+      role: ImageRole;
     };
 
 /**
@@ -965,6 +977,11 @@ export type ImageFields = {
   height: Num;
   opacity: Num;
   role: Shared<ImageRole>;
+  /**
+   * The picture's content hash (read only: the shell shows whether it
+   * is loaded and uploaded).
+   */
+  asset: Shared<string>;
 };
 
 export type ImageRole = "reference" | "background";

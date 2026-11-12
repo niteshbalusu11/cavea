@@ -79,6 +79,18 @@ pub fn sample_state(chart: &[u8], sold: f64, seq: u32) -> Vec<u8> {
     preview::state(chart, sold, seq).unwrap_or_default()
 }
 
+/// An image's content hash as `POST /v1/assets` names it (08 §6.2): the
+/// first 16 bytes of BLAKE3 of its bytes, in 32 lowercase hex digits. The
+/// image tool names a new image node by it before the upload ends.
+#[wasm_bindgen(js_name = assetHash)]
+pub fn asset_hash(bytes: &[u8]) -> String {
+    let digest = blake3::hash(bytes);
+    digest.as_bytes()[..16]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 /// Why a call returned no value. In JSON tagged by `kind`.
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]

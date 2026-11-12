@@ -48,8 +48,9 @@ describe("the shortcut table", () => {
 
   test("pending actions are listed and bound to nothing", () => {
     const pending = SHORTCUTS.filter((s) => s.pending !== undefined).map((s) => s.id);
-    expect(pending).toContain("rulers");
-    expect(id(press("r", { ctrlKey: true }))).toBeNull();
+    expect(pending).toContain("tool.table");
+    expect(id(press("t"))).toBeNull();
+    expect(id(press("r", { ctrlKey: true }))).toBe("rulers");
     expect(id(press("g", { ctrlKey: true }))).toBeNull();
   });
 

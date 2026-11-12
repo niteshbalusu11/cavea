@@ -15,6 +15,8 @@ export interface Layout {
   inspectorOpen: boolean;
   panelsOpen: boolean;
   tab: PanelTab;
+  /** The rulers along the canvas (07 §5.2). */
+  rulers: boolean;
 }
 
 export const LAYOUT_KEY = "cavea.designer.layout.v1";
@@ -26,6 +28,7 @@ export const DEFAULT_LAYOUT: Layout = {
   inspectorOpen: true,
   panelsOpen: true,
   tab: "layers",
+  rulers: true,
 };
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -44,5 +47,6 @@ export function parseLayout(raw: unknown): Layout {
       typeof raw["inspectorOpen"] === "boolean" ? raw["inspectorOpen"] : d.inspectorOpen,
     panelsOpen: typeof raw["panelsOpen"] === "boolean" ? raw["panelsOpen"] : d.panelsOpen,
     tab: TABS.find((t) => t === raw["tab"]) ?? d.tab,
+    rulers: typeof raw["rulers"] === "boolean" ? raw["rulers"] : d.rulers,
   };
 }

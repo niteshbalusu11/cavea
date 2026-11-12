@@ -15,6 +15,7 @@ import type {
   SelectionView,
   StatusView,
   ToolView,
+  UserGuide,
   ValidationView,
   ViewName,
 } from "@cavea/designer-core";
@@ -30,6 +31,8 @@ export interface Views {
   categories: CategoriesView;
   validation: ValidationView;
   layers: LayersPage;
+  /** The floor shown's user guides (the rulers'). */
+  guides: UserGuide[];
   /** Read only while the numbering panel is open (`FrameLoop.watch`). */
   numbering: NumberingView | null;
 }
@@ -53,13 +56,13 @@ export type LoopSession = Pick<
   | "validation"
   | "layers"
   | "numbering"
+  | "guides"
   | "validate"
 >;
 
 /** Views read whenever they change. `numbering` is read only while the
  * numbering panel shows (`watch`); `overlay` and `cursor` are the canvas's,
- * told to the painter (`setPainter`), and `guides` (DSN-031) is never read
- * yet. */
+ * told to the painter (`setPainter`). */
 const ON_DEMAND = { numbering: "numbering" } as const satisfies Partial<
   Record<ViewName, keyof Views>
 >;
@@ -76,6 +79,7 @@ const READ: Partial<Record<ViewName, keyof Views>> = {
   categories: "categories",
   validation: "validation",
   layers: "layers",
+  guides: "guides",
 };
 
 export interface IdleDeadline {
@@ -254,6 +258,8 @@ export class FrameLoop {
         return sink.set(view, s.layers(this.#window[0], this.#window[1]));
       case "numbering":
         return sink.set(view, s.numbering());
+      case "guides":
+        return sink.set(view, s.guides());
       case "validation": {
         const v = s.validation();
         this.#complete = v.complete;
