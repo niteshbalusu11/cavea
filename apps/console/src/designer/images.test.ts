@@ -24,12 +24,12 @@ function png(w: number, h: number): Uint8Array {
   return b;
 }
 
-describe("checks before placing", () => {
-  const deps = (size: { width: number; height: number } | null) => ({
-    measure: () => (size === null ? Promise.reject(new Error("bad")) : Promise.resolve(size)),
-    hash: () => "0".repeat(32),
-  });
+const deps = (size: { width: number; height: number } | null) => ({
+  measure: () => (size === null ? Promise.reject(new Error("bad")) : Promise.resolve(size)),
+  hash: () => "0".repeat(32),
+});
 
+describe("checks before placing", () => {
   test("the type is the bytes', whatever the name or declared type", () => {
     expect(sniff(png(1, 1))).toBe("image/png");
     expect(sniff(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]))).toBe("image/jpeg");
@@ -88,6 +88,8 @@ describe("checks before placing", () => {
   });
 });
 
+const settle = () => new Promise((r) => setTimeout(r, 0));
+
 /** A clock run by hand and a request layer whose answers the test gives. */
 function rig() {
   let now = 0;
@@ -118,7 +120,6 @@ function rig() {
     }
     await Promise.resolve();
   };
-  const settle = () => new Promise((r) => setTimeout(r, 0));
   return { uploads, sent, refused, summaries, advance, settle };
 }
 

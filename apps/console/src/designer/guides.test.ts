@@ -63,7 +63,9 @@ test("anything else stored is refused whole", () => {
     expect(parseGuides(raw)).toBeUndefined();
   }
   // Infinity cannot be stored as JSON; a session refuses a non-finite one.
-  expect(parseGuides([{ floor: null, guides: [{ axis: "vertical", at: 1e400 }] }])).toBeUndefined();
+  expect(
+    parseGuides([{ floor: null, guides: [{ axis: "vertical", at: Number.POSITIVE_INFINITY }] }]),
+  ).toBeUndefined();
 });
 
 test("written at most once per delay, the latest, and at once on flush", () => {
