@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 use cavea_render::Engine;
 use cavea_render::backend::{
     BackendError, BufferDesc, BufferId, Caps, DrawCall, GpuBackend, Pipeline, Rect, ResourceId,
-    Target, TextureDesc, TextureId,
+    Sampling, Target, TextureDesc, TextureFormat, TextureId,
 };
 use cavea_render::protocol::{
     Command, ErrorCode, Event, HoldOutcome, ObjectFailure, ObjectRef, SessionMode,
@@ -226,6 +226,26 @@ pub struct Checked {
 }
 
 impl GpuBackend for Checked {
+    /// An image is its size, as in the renderer's recording backend.
+    type Image = [u32; 2];
+
+    fn image_size(image: &[u32; 2]) -> [u32; 2] {
+        *image
+    }
+
+    fn create_image_texture(
+        &mut self,
+        &[width, height]: &[u32; 2],
+    ) -> Result<TextureId, BackendError> {
+        let desc = TextureDesc {
+            width,
+            height,
+            format: TextureFormat::Rgba8,
+            sampling: Sampling::Linear,
+        };
+        self.create_texture(desc, None)
+    }
+
     fn caps(&self) -> Caps {
         Caps {
             max_texture_size: 4096,
