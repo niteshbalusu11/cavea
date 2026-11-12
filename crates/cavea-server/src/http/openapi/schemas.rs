@@ -447,6 +447,13 @@ otherwise `null`.",
                     ("published_version", nullable(r("Version"))),
                     ("archived_at", nullable(time())),
                     ("created_at", time()),
+                    (
+                        "events",
+                        described(
+                            object(&[("active", integer()), ("archived", integer())], &[]),
+                            "How many of the workspace's events use the chart, any version.",
+                        ),
+                    ),
                 ],
                 &[],
             ),
@@ -989,7 +996,20 @@ days of grace.",
                 &[
                     (
                         "user",
-                        object(&[("id", user_id()), ("email", string())], &[]),
+                        object(
+                            &[
+                                ("id", user_id()),
+                                ("email", string()),
+                                (
+                                    "second_factor",
+                                    described(
+                                        boolean(),
+                                        "Whether signing in asks them for a code as well.",
+                                    ),
+                                ),
+                            ],
+                            &[],
+                        ),
                     ),
                     ("role", roles()),
                 ],

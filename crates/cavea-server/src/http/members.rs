@@ -198,15 +198,22 @@ struct MemberView {
 }
 
 impl MemberView {
-    fn new(user: &str, email: String, role: Role) -> Self {
+    /// `second_factor`: whether signing in asks them for a code. Every caller
+    /// of these routes may manage members (`settings`), and so reset it.
+    fn new(user: &str, email: String, second_factor: bool, role: Role) -> Self {
         Self {
-            user: json!({ "id": format!("usr_{user}"), "email": email }),
+            user: json!({
+                "id": format!("usr_{user}"),
+                "email": email,
+                "second_factor": second_factor,
+            }),
             role: role.as_str(),
         }
     }
 }
 
-const LIST: &str = "SELECT replace(u.id::text, '-', ''), u.email, m.role
+const LIST: &str = "SELECT replace(u.id::text, '-', ''), u.email, u.totp_enabled_at IS NOT NULL,
+       m.role
   FROM memberships m JOIN users u ON u.id = m.user_id
  WHERE m.workspace_id = $1::uuid AND ($2::uuid IS NULL OR m.user_id > $2::uuid)
  ORDER BY m.user_id
@@ -224,7 +231,7 @@ async fn list(
             Some(user_uuid(after).map_err(|_| query_refused("`after` is not a user id."))?)
         }
     };
-    let rows: Vec<(String, String, String)> = sqlx::query_as(LIST)
+    let rows: Vec<(String, String, bool, String)> = sqlx::query_as(LIST)
         .bind(auth.workspace().uuid())
         .bind(after)
         .bind(i64::from(limit) + 1)
@@ -233,8 +240,13 @@ async fn list(
         .await?;
     let members = rows
         .into_iter()
-        .filter_map(|(user, email, role)| {
-            Some(MemberView::new(&user, email, Role::from_db(&role)?))
+        .filter_map(|(user, email, second_factor, role)| {
+            Some(MemberView::new(
+                &user,
+                email,
+                second_factor,
+                Role::from_db(&role)?,
+            ))
         })
         .collect();
     Ok(axum::Json(List::new(members, limit, |m| {
@@ -244,7 +256,8 @@ async fn list(
 
 /// Serialise every change to the workspace's members on its row.
 const LOCK_WORKSPACE: &str = "SELECT FROM workspaces WHERE id = $1::uuid FOR UPDATE";
-const ROLE_OF: &str = "SELECT m.role, u.email FROM memberships m JOIN users u ON u.id = m.user_id
+const ROLE_OF: &str = "SELECT m.role, u.email, u.totp_enabled_at IS NOT NULL
+  FROM memberships m JOIN users u ON u.id = m.user_id
  WHERE m.workspace_id = $1::uuid AND m.user_id = $2::uuid";
 const OWNERS: &str =
     "SELECT count(*) FROM memberships WHERE workspace_id = $1::uuid AND role = 'owner'";
@@ -253,7 +266,8 @@ const SET_ROLE: &str =
 const REMOVE: &str = "DELETE FROM memberships WHERE workspace_id = $1::uuid AND user_id = $2::uuid";
 
 /// The checks of a change to `user`'s membership, under the workspace's
-/// lock: the member's current role and email, `404` if not a member;
+/// lock: the member's current role, email and whether they have a second
+/// factor, `404` if not a member;
 /// `ownership` when the change makes or unmakes an owner; `last_owner` when
 /// it would leave none.
 async fn checked_change(
@@ -261,19 +275,21 @@ async fn checked_change(
     auth: &Auth,
     user: &str,
     new: Option<Role>,
-) -> Result<(Role, String), ApiError> {
+) -> Result<(Role, String, bool), ApiError> {
     let ws = auth.workspace().uuid();
     sqlx::query(LOCK_WORKSPACE)
         .bind(ws)
         .execute(&mut *tx)
         .await?;
-    let row: Option<(String, String)> = sqlx::query_as(ROLE_OF)
+    let row: Option<(String, String, bool)> = sqlx::query_as(ROLE_OF)
         .bind(ws)
         .bind(user)
         .fetch_optional(&mut *tx)
         .await?;
-    let (old, email) = row
-        .and_then(|(role, email)| Some((Role::from_db(&role)?, email)))
+    let (old, email, second_factor) = row
+        .and_then(|(role, email, second_factor)| {
+            Some((Role::from_db(&role)?, email, second_factor))
+        })
         .ok_or_else(|| ApiError::new(Code::NotFound).with_detail("missing", "member"))?;
     let touches_owner = old == Role::Owner || new == Some(Role::Owner);
     if touches_owner && !auth.role().is_some_and(|r| r.allows(Permission::Ownership)) {
@@ -288,7 +304,7 @@ async fn checked_change(
             return Err(last_owner());
         }
     }
-    Ok((old, email))
+    Ok((old, email, second_factor))
 }
 
 #[derive(Debug, Deserialize)]
@@ -314,7 +330,7 @@ async fn change_role(
     let target = format!("usr_{user}");
     let work = async {
         let mut tx = state.db.begin().await?;
-        let (old, email) = checked_change(&mut tx, &auth, user, Some(role)).await?;
+        let (old, email, second_factor) = checked_change(&mut tx, &auth, user, Some(role)).await?;
         if old != role {
             sqlx::query(SET_ROLE)
                 .bind(auth.workspace().uuid())
@@ -328,13 +344,18 @@ async fn change_role(
             audit::record(&mut tx, entry).await?;
         }
         tx.commit().await?;
-        Ok::<_, ApiError>(email)
+        Ok::<_, ApiError>((email, second_factor))
     };
-    let email = work
+    let (email, second_factor) = work
         .instrument(cavea_telemetry::db_span("change_member_role"))
         .await?;
     tracing::info!(member = %target, role = role.as_str(), by = %actor, "member role changed");
-    Ok(axum::Json(MemberView::new(user, email, role)))
+    Ok(axum::Json(MemberView::new(
+        user,
+        email,
+        second_factor,
+        role,
+    )))
 }
 
 async fn remove(
@@ -347,7 +368,7 @@ async fn remove(
     let target = format!("usr_{user}");
     let work = async {
         let mut tx = state.db.begin().await?;
-        let (old, _) = checked_change(&mut tx, &auth, user, None).await?;
+        let (old, _, _) = checked_change(&mut tx, &auth, user, None).await?;
         sqlx::query(REMOVE)
             .bind(auth.workspace().uuid())
             .bind(user)

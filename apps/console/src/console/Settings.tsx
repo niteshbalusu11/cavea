@@ -298,6 +298,11 @@ function MembersTab() {
   const resetTwoStep = async (member: WorkspaceMember) => {
     try {
       await call("resetMemberSecondFactor", { path: { user: member.user.id } }, signal);
+      members.update((rows) =>
+        rows.map((r) =>
+          r.user.id === member.user.id ? { ...r, user: { ...r.user, second_factor: false } } : r,
+        ),
+      );
       notify(msg("resetTwoStep.done", { email: member.user.email }));
     } catch (e) {
       helpRefused(e);
@@ -373,6 +378,9 @@ function MembersTab() {
                     <tr>
                       {memberSort.header("email", complete(members))}
                       {memberSort.header("role", complete(members))}
+                      <th scope="col" class={`${th} whitespace-nowrap`}>
+                        {msg("members.colTwoStep")}
+                      </th>
                       <th scope="col" class={th}>
                         <span class="sr-only">{msg("events.colActions")}</span>
                       </th>
@@ -586,6 +594,9 @@ function MemberRow(props: {
             <For each={choices()}>{(r) => <option value={r}>{roleLabel(r)}</option>}</For>
           </select>
         </Show>
+      </td>
+      <td class={td}>
+        {props.member.user.second_factor ? msg("members.twoStepOn") : msg("members.twoStepOff")}
       </td>
       <td class={`${td} text-right whitespace-nowrap`}>
         <span class="inline-flex gap-2">

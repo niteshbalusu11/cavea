@@ -115,6 +115,26 @@ async function choose(t: Tab, name: string, option: string, within?: number): Pr
   await t.find({ role: "button", name: `${name} ${option}` }, within ?? (await inspector(t)));
 }
 
+/** A native select's option by its text, chosen as a person's choice would be, with its events. */
+async function select(t: Tab, id: number, option: string): Promise<void> {
+  await t.call(
+    id,
+    `function () {
+      const o = [...this.options].find((o) => o.text === ${JSON.stringify(option)});
+      if (!o) throw new Error(${JSON.stringify(`no option ${option}`)});
+      this.value = o.value;
+      this.dispatchEvent(new Event("input", { bubbles: true }));
+      this.dispatchEvent(new Event("change", { bubbles: true }));
+    }`,
+  );
+}
+
+/** A status bar test: it reads `n` seats. */
+const counts =
+  (n: string) =>
+  (text: string): boolean =>
+    text.includes(msg("status.seats", { n }));
+
 /** Closes the notices in the corner, so pictures show only the designer. */
 async function quiet(t: Tab): Promise<void> {
   const region = (await t.all({ role: "region", name: "Cavea" }))[0];
@@ -214,6 +234,27 @@ export const TASKS: Task[] = [
       await t.enter({ role: "textbox", name: msg("charts.name") }, CHART.name, form);
       const key = await t.value(await t.find({ role: "textbox", name: msg("charts.key") }, form));
       check(key === CHART.key, `the key fills in as ${CHART.key}, not ${key}`);
+      // Start from: An empty chart unless changed; the templates and a reference image offered.
+      const start = await t.find({ role: "combobox", name: msg("charts.start") }, form);
+      const options = await t.call<string[]>(
+        start,
+        "function () { return [this.options[this.selectedIndex].text, ...[...this.options].map((o) => o.text)]; }",
+      );
+      const templates = [
+        msg("charts.startTemplate", { template: msg("template.theatre"), seats: "561" }),
+        msg("charts.startTemplate", { template: msg("template.arena"), seats: "1,680" }),
+        msg("charts.startTemplate", { template: msg("template.banquet"), seats: "156" }),
+      ];
+      check(
+        JSON.stringify(options) ===
+          JSON.stringify([
+            msg("charts.startBlank"),
+            msg("charts.startBlank"),
+            ...templates,
+            msg("charts.startImage"),
+          ]),
+        `Start from: ${JSON.stringify(options)}`,
+      );
       await shoot(t, "new-chart", await around(t, [form], 0));
       await t.click({ role: "button", name: msg("charts.create") }, form);
       await t.gone({ role: DIALOG });
@@ -234,6 +275,17 @@ export const TASKS: Task[] = [
       );
       await t.click({ role: "button", name: msg("tour.skip") }, tour);
       await t.gone({ role: "dialog", name: msg("tour.draw") });
+      // Start your chart, over the empty chart.
+      const panel = await t.find({ role: "region", name: msg("start.title") });
+      for (const name of [msg("new.empty"), msg("new.image")]) {
+        await t.find({ role: "button", name: new RegExp(`^${name}`) }, panel);
+      }
+      for (const id of ["theatre", "arena", "banquet"] as const) {
+        await t.find({ role: "button", name: new RegExp(`^${msg(`template.${id}`)} `) }, panel);
+      }
+      await t.find({ role: "button", name: msg("start.close") }, panel);
+      await t.find({ role: "button", name: msg("menu.open") }, panel);
+      await shoot(t, "start", await around(t, [panel], 16), 0.75);
     },
   },
   {
@@ -1149,31 +1201,47 @@ export const TASKS: Task[] = [
     },
   },
   {
-    name: "start.md: from a template: Open the designer, Theatre, Export chart file, Import chart file",
-    async run({ t, shoot, out }) {
+    name: "start.md: a chart from the Theatre template; Starting points…, Replace and undo; Export and Import chart file",
+    async run({ t, out }) {
+      const name = "Studio theatre";
       await t.goto(`${new URL(await t.evaluate<string>("location.href")).origin}/charts`);
-      await t.click({ role: "button", name: msg("charts.openDesigner") });
-      const theatre = await t.find(
-        { role: "button", name: new RegExp(`^${msg("template.theatre")} `) },
-        undefined,
-        30_000,
-      );
-      const empty = await t.find({ role: "button", name: new RegExp(`^${msg("new.empty")}`) });
-      const heading = await t.find({ role: "heading", name: msg("new.title") });
-      const banquet = await t.find({
-        role: "button",
-        name: new RegExp(`^${msg("template.banquet")} `),
+      await t.click({ role: "button", name: msg("charts.new"), nth: 0 });
+      const form = await t.find({ role: DIALOG, name: msg("charts.newTitle") });
+      await t.enter({ role: "textbox", name: msg("charts.name") }, name, form);
+      const theatre = msg("charts.startTemplate", {
+        template: msg("template.theatre"),
+        seats: "561",
       });
-      const image = await t.find({ role: "button", name: new RegExp(`^${msg("new.image")}`) });
-      await shoot(t, "start", await around(t, [heading, empty, image, theatre, banquet], 16), 0.75);
-      await t.click({ role: "button", name: new RegExp(`^${msg("template.theatre")} `) });
-      await t.find(
-        { role: "application", name: msg("canvas.label", { name: msg("template.theatre") }) },
-        undefined,
-        30_000,
+      await select(t, await t.find({ role: "combobox", name: msg("charts.start") }, form), theatre);
+      await t.click({ role: "button", name: msg("charts.create") }, form);
+      await t.gone({ role: DIALOG });
+      await t.click({ role: "link", name });
+      await t.click({ role: "link", name: msg("charts.open") });
+      await t.find({ role: "application", name: msg("canvas.label", { name }) }, undefined, 30_000);
+      await status(t, "561 seats", counts("561"));
+      check(
+        !(await t.has({ role: "region", name: msg("start.title") })),
+        "no starting points over a template",
       );
-      await t.click({ role: "button", name: msg("tour.skip") }).catch(() => undefined);
-      // What the browser saves, as the download would: the file's name and text.
+      // Menu, Starting points…, a template: asked first, replaced, one undo back.
+      const banner = await t.find({ role: "banner" });
+      await t.click({ role: "button", name: msg("menu.label") }, banner);
+      await t.find({ role: "menuitem", name: msg("menu.open") });
+      await t.click({ role: "menuitem", name: new RegExp(`^${msg("start.menu")}`) });
+      await t.click({ role: "button", name: new RegExp(`^${msg("template.banquet")} `) });
+      const ask = await t.find({
+        role: DIALOG,
+        name: msg("start.replaceTitle", { name, template: msg("template.banquet") }),
+      });
+      await t.click({ role: "button", name: msg("start.replace") }, ask);
+      await status(t, "156 seats", counts("156"));
+      await chord(t, "z", CTRL);
+      await status(t, "561 seats again", counts("561"));
+      await saveState(t, msg("save.saved"));
+      // Export chart file from the chart's menu on Charts: what the browser saves.
+      await t.click({ role: "button", name: msg("menu.label") }, banner);
+      await t.click({ role: "menuitem", name: msg("menu.console") });
+      await t.find({ role: "heading", name: msg("charts.title") });
       await t.evaluate(`(() => {
         const click = HTMLAnchorElement.prototype.click;
         const make = URL.createObjectURL;
@@ -1184,9 +1252,8 @@ export const TASKS: Task[] = [
           return click.call(this);
         };
       })()`);
-      const banner = await t.find({ role: "banner" });
-      await t.click({ role: "button", name: msg("menu.label") }, banner);
-      await t.click({ role: "menuitem", name: new RegExp(`^${msg("menu.export")}`) });
+      await t.click({ role: "button", name: msg("charts.menu", { name }) });
+      await t.click({ role: "menuitem", name: msg("charts.export") });
       const saved = await until("the chart file to be saved", () =>
         t
           .evaluate<{ name: string; text: string } | null>("window.saved ?? null")
@@ -1195,18 +1262,15 @@ export const TASKS: Task[] = [
       check(saved.name.endsWith(".json"), `the exported file ends in .json: ${saved.name}`);
       const file = join(out, saved.name);
       await Bun.write(file, saved.text);
-      await t.click({ role: "button", name: msg("menu.label") }, banner);
-      await t.click({ role: "menuitem", name: msg("menu.console") });
-      await t.find({ role: "heading", name: msg("charts.title") });
       await t.send("Page.setInterceptFileChooserDialog", { enabled: true });
       await t.click({ role: "button", name: msg("charts.import") });
       await pick(t, 'input[type=file][accept=".json,application/json"]', file);
       await t.send("Page.setInterceptFileChooserDialog", { enabled: false });
-      const form = await t.find({ role: DIALOG, name: msg("charts.importTitle") });
-      await t.enter({ role: "textbox", name: msg("charts.name") }, "Studio theatre", form);
-      await t.click({ role: "button", name: msg("charts.create") }, form);
+      const imported = await t.find({ role: DIALOG, name: msg("charts.importTitle") });
+      await t.enter({ role: "textbox", name: msg("charts.name") }, "Studio theatre copy", imported);
+      await t.click({ role: "button", name: msg("charts.create") }, imported);
       await t.gone({ role: DIALOG });
-      await t.find({ role: "link", name: "Studio theatre" });
+      await t.find({ role: "link", name: "Studio theatre copy" });
     },
   },
 ];

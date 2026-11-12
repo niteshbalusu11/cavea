@@ -900,10 +900,10 @@ async fn migrations_apply_once_and_refuse_an_unknown_schema() {
         a.unwrap();
         b.unwrap();
         let pool = store::connect(options.clone(), 2).await.unwrap();
-        assert_eq!(migration_rows(&pool).await, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(migration_rows(&pool).await, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         // Again: nothing to do.
         store::migrate(&options).await.unwrap();
-        assert_eq!(migration_rows(&pool).await, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(migration_rows(&pool).await, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 
         // A migration from a newer server.
         sqlx::query(

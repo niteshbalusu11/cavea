@@ -36,6 +36,11 @@ export interface Chart {
   /** Pass back verbatim in `If-Match`. */
   draft_etag: string;
   draft_updated_at: string;
+  /** How many of the workspace's events use the chart, any version. */
+  events: {
+    active: number;
+    archived: number;
+  };
   key: string;
   name: string;
   published_version: Version | null;

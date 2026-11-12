@@ -8,11 +8,12 @@ You need to be signed in to the console as an owner, an admin or an editor of yo
 
 1. In the console, open **Charts** and choose **New chart**.
 2. Type the chart's **Name**, as your staff call the room: "Riverside Hall", "Main auditorium". The **Key** fills in by itself. It is how your ticketing system names the chart and cannot be changed later, so keep it unless your developers asked for another.
+3. **Start from** says what the new chart starts with. Keep **An empty chart** to draw your venue yourself, as this guide does. The other choices are the three templates ([Starting from a template or a file](#starting-from-a-template-or-a-file)) and **A reference image**, a floor plan to trace ([Trace a floor plan](#trace-a-floor-plan)).
 
-   ![The New chart form, with the name Riverside Hall and the key riverside-hall](../images/designer-new-chart.webp)
+   ![The New chart form, with the name Riverside Hall, the key riverside-hall, and Start from set to An empty chart](../images/designer-new-chart.webp)
 
-3. Choose **Create chart**. The chart appears in the list.
-4. Choose the chart's name, then **Open in designer**. The designer opens on an empty canvas, and a short tour starts.
+4. Choose **Create chart**. The chart appears in the list.
+5. Choose the chart's name, then **Open in designer**. The designer opens on an empty canvas, with **Start your chart** over it, and a short tour starts.
 
 ## The tour
 
@@ -22,13 +23,21 @@ The tour has five steps, each pointing at the part of the screen it talks about:
 
 The tour shows once in each browser. To see it again, press `Ctrl`+`K` (`⌘`+`K` on a Mac), type "tour" and choose **Show the designer tour**.
 
+## Start your chart
+
+Over an empty chart, **Start your chart** offers the ways to begin: **Draw from scratch**, **Place a reference image**, and, under **Start from a template**, **Theatre**, **Arena bowl** and **Banquet**. It is not in the way: the tools and the tour still work around it, and it goes away by itself as soon as you choose a drawing tool or draw something. **Draw from scratch**, or the cross (**Close the starting points**), closes it.
+
+![Start your chart over an empty chart: draw from scratch, place a reference image, or start from a template](../images/designer-start.webp)
+
+To see the starting points again later, open the **Menu** at the top left and choose **Starting points…**.
+
 ## Trace a floor plan
 
 Most venues already have a floor plan: an architect's drawing, a fire plan, a scan of the old seating plan. Put it under your chart and draw the seats on top of it, so the chart matches the room.
 
 The plan needs to be a picture file: PNG, JPEG or WebP. If you have a PDF, open it and take a screenshot of the page, or export it as a picture. A clear, straight scan is enough.
 
-1. Choose the **Image tool** at the bottom of the tools on the left (or press `I`) and pick the picture file.
+1. Choose the **Image tool** at the bottom of the tools on the left (or press `I`), or **Place a reference image** in **Start your chart**, and pick the picture file. If you chose **A reference image** for **Start from**, the designer opens on the new chart with **Start your chart**: choose **Place a reference image** there.
 2. The picture appears on the canvas, selected, and the **Inspector** on the right shows it. While it uploads, the bar at the bottom says **Pictures uploading: 1**; wait until that goes.
 3. Tick **Locked** in the inspector, so that clicking and dragging on the canvas while you draw never moves the picture.
 
@@ -57,16 +66,13 @@ You can also leave the picture as it is and change the block's **Seat pitch** an
 
 ## Starting from a template or a file
 
-The designer has three ready-made charts to start from: a theatre, an arena bowl and a banquet room. They are offered only in the designer's own window, not when you open a chart from the console. To use one:
+### From a template
 
-1. In **Charts**, choose **Open the designer**. The designer opens with **New chart** and its starting points: **Draw from scratch**, **Place a reference image**, and under **Start from a template**, **Theatre**, **Arena bowl** and **Banquet**.
+The designer has three ready-made charts: a theatre (561 seats in curved stalls around a stage), an arena bowl (1,680 seats in 40 sections around a floor) and a banquet room (156 seats at long tables and a head table). A template is an ordinary chart: rename its sections, add or remove rows, change its categories, as on any chart you draw.
 
-   ![The New chart screen: draw from scratch, place a reference image, or start from a template](../images/designer-start.webp)
+- **For a new chart:** in **New chart**, choose the template for **Start from**, such as **Theatre template (561 seats)**, then **Create chart**. The chart is made with the template's seats; open it in the designer as above.
+- **For a chart already made:** while it is empty, choose the template in **Start your chart**. Otherwise open the **Menu**, choose **Starting points…** and choose the template: the designer asks first, since everything on the chart is replaced by the template. Choose **Replace**. One undo (`Ctrl`+`Z`) brings back what was there.
 
-2. Choose a template. It opens as a chart you can change.
-3. Open the **Menu** at the top left and choose **Export chart file**. Your browser saves a file ending in `.json`.
-4. Go back to **Charts** (the **Menu**'s **Back to console**), choose **Import chart file** and pick the file. Give the chart a **Name** and choose **Create chart**.
+### From a chart file
 
-The same **Import chart file** opens a chart someone exported from another Cavea workspace. Charts from other seating systems cannot be imported.
-
-> **Warning** A chart drawn after **Open the designer** is saved nowhere until you export it: close the window first and it is gone. Import it into **Charts** as soon as you have the start you want, and do the rest of the work there, where it is saved as you go ([Saving](saving.md)).
+Choose **Import chart file** on **Charts** and pick a chart file, then give the chart a **Name** and choose **Create chart**. A chart file is what **Export chart file** saves, in the designer's **Menu** or a chart's menu on **Charts**: use it to bring a chart from another Cavea workspace or server. To put a chart file's contents into a chart you have already made, open it in the designer and choose **Open chart file…** at the bottom of **Start your chart** (or in the **Menu**); on a chart that is not empty, it asks first, as a template does. Charts from other seating systems cannot be imported.

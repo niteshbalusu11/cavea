@@ -3,7 +3,8 @@
 // import one from a chart document, and from a card's menu export, duplicate
 // or archive it. What the role cannot do is not offered (CON-004).
 // A card shows its published version's thumbnail (DSN-040), made by the
-// designer as it publishes, or a placeholder.
+// designer as it publishes, or a placeholder, and how many events use the
+// chart, active and archived, linking to its Events tab.
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { A, useNavigate } from "@solidjs/router";
 import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
@@ -48,6 +49,29 @@ async function loadAll(signal: AbortSignal): Promise<Chart[]> {
     after = page.next;
   }
 }
+
+/** How many events use a chart, as its card and its page say it: active
+ * ones, and archived ones when there are any. */
+export function eventsSummary(events: Chart["events"]): string {
+  const { active: n, archived } = events;
+  if (archived === 0) {
+    return n === 0
+      ? msg("charts.eventsNone")
+      : n === 1
+        ? msg("charts.eventsOne")
+        : msg("charts.eventsMany", { n });
+  }
+  const id =
+    n === 0
+      ? "charts.eventsActiveNone"
+      : n === 1
+        ? "charts.eventsActiveOne"
+        : "charts.eventsActiveMany";
+  return msg(id, { n, archived });
+}
+
+/** The chart page's Events tab. */
+export const eventsPath = (key: string) => `/charts/${encodeURIComponent(key)}?tab=events`;
 
 /** A chart key from a name: lowercase letters, digits and hyphens. */
 export function keyFrom(name: string): string {
@@ -460,6 +484,18 @@ function ChartCard(props: {
                 })
               }
             </Show>
+          </p>
+          <p class="text-sm text-muted">
+            <A
+              href={eventsPath(props.chart.key)}
+              class="hover:underline"
+              aria-label={msg("charts.eventsLink", {
+                events: eventsSummary(props.chart.events),
+                name: props.chart.name,
+              })}
+            >
+              {eventsSummary(props.chart.events)}
+            </A>
           </p>
           <p class="text-sm text-muted">
             {msg("charts.edited", { when: formatDate(props.chart.draft_updated_at) })}

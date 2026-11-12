@@ -17,6 +17,7 @@ import { Confirm, notify } from "../ui/overlays.tsx";
 import { report } from "./errors.ts";
 import { cannot } from "./licence.ts";
 import { EventForm, loadVersions } from "./EventForm.tsx";
+import { eventsPath, eventsSummary } from "./Charts.tsx";
 import { roleName } from "./Events.tsx";
 import {
   Action,
@@ -155,6 +156,11 @@ function Detail(props: { chart: Chart; query: Query<Chart> }) {
               </span>
             </Show>
           </p>
+          <p class="text-base text-muted">
+            <A href={eventsPath(props.chart.key)} class="hover:underline">
+              {eventsSummary(props.chart.events)}
+            </A>
+          </p>
         </div>
         <A
           href={designerPath(workspace()?.key ?? "", props.chart.key)}
@@ -179,6 +185,7 @@ function Detail(props: { chart: Chart; query: Query<Chart> }) {
             onClose={() => setCreating(null)}
             onCreated={(event) => {
               setCreating(null);
+              props.query.refetch();
               notify(msg("events.created", { name: event.name ?? event.key }));
             }}
           />
