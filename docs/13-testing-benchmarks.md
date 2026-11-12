@@ -503,6 +503,7 @@ Browser coverage uses Playwright locally and a device cloud for what it cannot r
 | `next` | A Next.js App Router app: a server component page holding a client component with `<SeatMap>`, and a page whose client component imports `@cavea/renderer` with `import()`. `next build` prerenders both (the server render: an import that touched the DOM would fail it), the HTML holds the container, and the page hydrates and draws under `next start` |
 | `react18` | `@cavea/react`'s own tests (`packages/react/src/index.test.ts`) under React 18 instead of the workspace's 19 |
 | `csp-custom`, `csp-server`, `csp-cdn` | The policies of 05 §10 with `require-trusted-types-for 'script'`: the map draws with no violation; then each source is taken away in turn and the map must fail the way 05 §10 says. `csp-cdn` also serves a WASM with one byte changed from the CDN, which the script's pinned hash must refuse |
+| `server-sdk` | `@cavea/server-sdk` (05 §15) packed and installed into a Node project (`fixtures/server-sdk`, TypeScript 5.9 and `@types/node` pinned): `tsc` type-checks it strict, without the DOM library and with `skipLibCheck` off, then the compiled program runs under Node 22 and 24 from nixpkgs against `cavea-server` (the `csp-server` setup): a workspace by the admin key, the theatre chart published, every free object walked, hold, book, an idempotent replay, a conflict caught by its code, a session token signed. Needs no WASM build when it runs alone |
 
 **Measured locally** (2026-11-11; Linux; Chromium 157.0.8103.38 headless, SwiftShader; Node 24.21.0; bun 1.4.2). Every row passed:
 
@@ -521,6 +522,7 @@ Browser coverage uses Playwright locally and a device cloud for what it cannot r
 | csp-server, transport `auto` and `sse` | `cavea-server` | Draws, realtime frames arrive (WebSocket; EventSource), and the chart's background image is fetched from `/v1/public/assets/{hash}` under the same `connect-src` with no `img-src` (REN-020); without the server's origin `chart_fetch_failed` or `state_connect_failed`; without its `ws:` origin, EventSource after two refused sockets |
 | csp-cdn | — | Draws from the CDN's files; without `'wasm-unsafe-eval'` or the CDN in `connect-src`, `wasm_unavailable`; a changed WASM on the CDN, `wasm_unavailable` |
 | Trusted Types | — | No violation under `require-trusted-types-for 'script'` in any CSP row |
+| server-sdk | Node 24.22.2 and 22.23.4, TypeScript 5.9.3 | Types resolve; 2,000 free objects walked, 2 booked, the replay the same `seq`, `object_not_free` caught, a three-part session token. Node 20 is not proven: it left nixpkgs at its end of life (2026-04-30) |
 
 The `csp-server` check found that Chromium fires only `error`, never `close`, on a WebSocket a policy refuses, which left `caveaServer` waiting 60 s for silence before trying again; it now counts the `error` (05 §4.1). These are Chromium results in software rendering on one machine, not other browsers or GPUs.
 

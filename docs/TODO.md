@@ -232,7 +232,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **WEB-023** Hold token persistence and restore after reload (05 §4)
 - [x] **WEB-024** Expiry callbacks and the optional hold timer (05 §5, §7). The callbacks and the timer's data (`expiresAt` on the page's clock); the countdown control waits for the built-in interface (WEB-006)
 - [x] **WEB-025** Pause when hidden and resync on return (05 §4)
-- [ ] **WEB-026** `@cavea/server-sdk` for Node, generated from OpenAPI with an ergonomic wrapper (05 §1)
+- [x] **WEB-026** `@cavea/server-sdk` for Node, generated from OpenAPI with an ergonomic wrapper (05 §1, §15)
 
 ### Testing
 

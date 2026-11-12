@@ -8,7 +8,10 @@
 //   bun fixtures/run.ts [check…]
 //
 // Checks: script-tag, vite, vite-dev, webpack, rollup, esbuild, next,
-// react18, csp-custom, csp-server, csp-cdn; none named runs them all. Fixtures are
+// react18, csp-custom, csp-server, csp-cdn, server-sdk; none named runs them
+// all (`server-sdk` alone needs no WASM build: it packs `@cavea/server-sdk`,
+// type-checks a strict Node project using it and runs it under each Node of
+// nixpkgs against `cavea-server`). Fixtures are
 // copied to `target/tmp/compat/<name>` and installed there with bun from their
 // own lockfiles (never into the workspace); builds run under Node, as most
 // customers run them. Chromium and Node come from PATH or, failing that, from
@@ -27,7 +30,7 @@ const FIXTURES = import.meta.dir;
 const PKGS = join(WORK, "pkgs");
 const DIST = join(ROOT, "packages/renderer/dist");
 const ALL =
-  "script-tag vite vite-dev webpack rollup esbuild next react18 csp-custom csp-server csp-cdn";
+  "script-tag vite vite-dev webpack rollup esbuild next react18 csp-custom csp-server csp-cdn server-sdk";
 
 interface Row {
   check: string;
@@ -323,15 +326,21 @@ const loadedFrom = (v: Visit, wasm: string, atlas: string): boolean =>
 
 let chartFile = "";
 
-/** Builds and packs both packages, and compiles the theatre preset. */
-async function prepare(): Promise<void> {
-  try {
-    await readFile(join(ROOT, "packages/renderer/wasm/cavea_web_bg.wasm"));
-  } catch {
-    throw new Error("run `cargo xtask build-web` first");
-  }
+/** Builds and packs the packages `checks` need, and compiles the theatre preset. */
+async function prepare(checks: string[]): Promise<void> {
   await mkdir(PKGS, { recursive: true });
-  for (const pkg of ["renderer", "react"]) {
+  const packages = checks.some((c) => c !== "server-sdk") ? ["renderer", "react"] : [];
+  if (packages.length > 0) {
+    try {
+      await readFile(join(ROOT, "packages/renderer/wasm/cavea_web_bg.wasm"));
+    } catch {
+      throw new Error("run `cargo xtask build-web` first");
+    }
+  }
+  if (checks.includes("server-sdk")) {
+    packages.push("server-sdk");
+  }
+  for (const pkg of packages) {
     await sh(["bun", "run", "build"], { cwd: join(ROOT, "packages", pkg) });
     await sh(["bun", "pm", "pack", "--quiet", "--destination", PKGS], {
       cwd: join(ROOT, "packages", pkg, "dist"),
@@ -354,11 +363,11 @@ async function prepare(): Promise<void> {
  * install), installs its lockfile with bun and the two tarballs as a package
  * manager would (unpacked into `node_modules/@cavea/`). Returns the copy.
  */
-async function install(name: string): Promise<string> {
+async function install(name: string, pkgs = ["renderer", "react"]): Promise<string> {
   const dir = join(WORK, name);
   await mkdir(join(dir, "src"), { recursive: true });
   await cp(join(FIXTURES, name), dir, { recursive: true });
-  if (name !== "next" && name !== "react18") {
+  if (name !== "next" && name !== "react18" && name !== "server-sdk") {
     await cp(join(FIXTURES, "shared/main.js"), join(dir, "src/main.js"));
   }
   try {
@@ -369,7 +378,7 @@ async function install(name: string): Promise<string> {
       { cause: error },
     );
   }
-  for (const pkg of ["renderer", "react"]) {
+  for (const pkg of pkgs) {
     const into = join(dir, "node_modules/@cavea", pkg);
     await rm(into, { recursive: true, force: true });
     await mkdir(into, { recursive: true });
@@ -718,10 +727,19 @@ async function cspCdn(): Promise<void> {
   });
 }
 
+let servers = 0;
+
 /** `cavea-server` on its own database, with a workspace, a published chart, an event and a key. */
-async function caveaServer(): Promise<{ base: string; key: string; event: string }> {
+async function caveaServer(): Promise<{
+  base: string;
+  key: string;
+  event: string;
+  asset: string;
+  admin: string;
+}> {
   const pg = "postgres://cavea:cavea@127.0.0.1:5432";
-  const db = `cavea_compat_${process.pid}`;
+  // One database per call: several checks start a server in one run.
+  const db = `cavea_compat_${process.pid}_${++servers}`;
   await sh(["docker", "compose", "-f", "deploy/compose.yaml", "up", "-d", "--wait"]);
   await sh(["nix", "develop", "-c", "psql", `${pg}/cavea`, "-c", `CREATE DATABASE ${db}`]);
   cleanup.push(async () => {
@@ -805,7 +823,53 @@ async function caveaServer(): Promise<{ base: string; key: string; event: string
   const key = String(
     (await call("/v1/keys", secret, { kind: "publishable", name: "compat" }))["key"],
   );
-  return { base, key, event: "show", asset };
+  return { base, key, event: "show", asset, admin };
+}
+
+/** The packed server SDK in a strict Node project: type-checked with the
+ * DOM library off and `skipLibCheck` off, compiled, and run under Node 22
+ * and 24 from nixpkgs against `cavea-server` (Node 20 left nixpkgs at its
+ * end of life). */
+async function serverSdk(): Promise<void> {
+  const dir = await install("server-sdk", ["server-sdk"]);
+  const server = await caveaServer();
+  const tsc = ["node_modules/typescript/bin/tsc", "-p", "."];
+  const chart = await readFile(join(WORK, "theatre.json"), "utf8");
+  for (const attr of ["nodejs_24", "nodejs_22"]) {
+    const out = await sh(["nix", "build", "--no-link", "--print-out-paths", `nixpkgs#${attr}`]);
+    const bin = join(out.trim().split("\n").at(-1) ?? "", "bin", "node");
+    const version = (await sh([bin, "--version"])).trim();
+    const pkg = await versionOf(dir, "typescript");
+    try {
+      await sh([bin, ...tsc], { cwd: dir });
+      const ran = await sh([bin, "out/main.js"], {
+        cwd: dir,
+        env: { CAVEA_URL: server.base, CAVEA_ADMIN_KEY: server.admin, CAVEA_CHART: chart },
+      });
+      const seen = JSON.parse(ran.trim().split("\n").at(-1) ?? "{}") as Record<string, unknown>;
+      const ok =
+        seen["node"] === version &&
+        seen["seats"] === seen["free"] &&
+        seen["booked"] === 2 &&
+        seen["replayed"] === true &&
+        seen["conflict"] === "object_not_free" &&
+        seen["session"] === 3 &&
+        seen["error"] === "CaveaError";
+      rows.push({
+        check: "server-sdk",
+        tool: `Node ${version}, ${pkg}`,
+        ok,
+        detail: `types resolve under strict, no DOM, skipLibCheck off; ${JSON.stringify(seen)}`,
+      });
+    } catch (error) {
+      rows.push({
+        check: "server-sdk",
+        tool: `Node ${version}, ${pkg}`,
+        ok: false,
+        detail: String(error),
+      });
+    }
+  }
 }
 
 async function cspServer(): Promise<void> {
@@ -889,6 +953,7 @@ const CHECKS: Record<string, () => Promise<void>> = {
   "csp-custom": cspCustom,
   "csp-server": cspServer,
   "csp-cdn": cspCdn,
+  "server-sdk": serverSdk,
 };
 
 const wanted = process.argv.slice(2);
@@ -899,7 +964,7 @@ if (unknown.length > 0) {
 }
 try {
   await mkdir(WORK, { recursive: true });
-  await prepare();
+  await prepare(wanted.length > 0 ? wanted : ALL.split(" "));
   for (const name of wanted.length > 0 ? wanted : ALL.split(" ")) {
     process.stderr.write(`${name}…\n`);
     try {

@@ -77,6 +77,14 @@
         "typescript": "7.0.2",
       },
     },
+    "packages/server-sdk": {
+      "name": "@cavea/server-sdk",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@types/bun": "1.4.4",
+        "typescript": "7.0.2",
+      },
+    },
   },
   "packages": {
     "@babel/code-frame": ["@babel/code-frame@7.29.7", "", { "dependencies": { "@babel/helper-validator-identifier": "^7.29.7", "js-tokens": "^4.0.0", "picocolors": "^1.1.1" } }, "sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw=="],
@@ -124,6 +132,8 @@
     "@cavea/react": ["@cavea/react@workspace:packages/react"],
 
     "@cavea/renderer": ["@cavea/renderer@workspace:packages/renderer"],
+
+    "@cavea/server-sdk": ["@cavea/server-sdk@workspace:packages/server-sdk"],
 
     "@corvu/utils": ["@corvu/utils@0.4.2", "", { "dependencies": { "@floating-ui/dom": "^1.6.11" }, "peerDependencies": { "solid-js": "^1.8" } }, "sha512-Ox2kYyxy7NoXdKWdHeDEjZxClwzO4SKM8plAaVwmAJPxHMqA0rLOoAsa+hBDwRLpctf+ZRnAd/ykguuJidnaTA=="],
 
