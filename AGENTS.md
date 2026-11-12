@@ -81,7 +81,7 @@ Toolchains: Rust is pinned in `rust-toolchain.toml` (with the `wasm32-unknown-un
 - `docker compose -f deploy/compose.yaml up -d --wait`: PostgreSQL 18 on `127.0.0.1:${CAVEA_PG_PORT:-5432}`, user, password and database all `cavea`
 - `docker compose -f deploy/compose.yaml down`
 - `CAVEA_TEST_DATABASE_URL=postgres://cavea:cavea@127.0.0.1:5432/cavea cargo test -p cavea-server -- --include-ignored --skip measure_`: the database tests (migrations, `PgStore`, the actor on PostgreSQL, keys, workspaces and tenant isolation through the router). Each creates and drops its own database. Without the variable `cargo test` lists them as ignored
-- The same with `--release` and `measure_ -- --ignored --nocapture --test-threads=1`: prints commit latency, actor throughput and load time
+- The same with `--release` and `measure_ -- --ignored --nocapture --test-threads=1`: prints commit latency, actor throughput and load time; `measure_console_reads` prints the staff state, counts and events list at 100,000 seats and 1,000 events. `cargo test --release -p cavea-engine --lib -- --ignored --nocapture measure_publication` prints what a publication costs the actor at 100,000 objects
 - A schema change is a new file in `crates/cavea-server/migrations/`, listed in `crates/cavea-server/src/store/migrations.rs`; never edit a released one
 
 CI (`.github/workflows/ci.yml`) runs the Rust checks, `check-deps` and `build-web` (with binaryen 132 installed, so the payload gate runs), then the TypeScript `lint`, `format:check`, `typecheck` and `build`. It runs no tests.
