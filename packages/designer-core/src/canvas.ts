@@ -288,12 +288,12 @@ export class Canvas {
    * the canvas wants another frame (labels and text still arriving, moved
    * nodes still being baked): then call it again next frame.
    */
-  draw(timeMs: number = performance.now()): boolean {
+  draw(timeMs: number = performance.now(), overlayChanged = true): boolean {
     const { handle: designer } = internals(this.#session);
     if (designer === null) {
       throw new DesignerError({ kind: "disposed" });
     }
-    let again = this.#call((h) => h.draw(designer, timeMs));
+    let again = this.#call((h) => h.draw(designer, timeMs, overlayChanged));
     const events = JSON.parse(this.#call((h) => h.takeEvents())) as Reported[];
     for (const event of events) {
       if (event.type === "textRequest") {

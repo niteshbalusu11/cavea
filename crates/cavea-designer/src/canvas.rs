@@ -104,14 +104,16 @@ impl Canvas {
     }
 
     /// Brings the picture up to date with the designer's session and draws
-    /// if anything changed. Returns whether another frame is needed.
-    pub fn draw(&mut self, designer: &Designer, time_ms: f64) -> bool {
+    /// if anything changed. `overlay`: whether the session's overlay may
+    /// have changed since the last draw (`changed()` named it); when not,
+    /// it is not built again. Returns whether another frame is needed.
+    pub fn draw(&mut self, designer: &Designer, time_ms: f64, overlay: bool) -> bool {
         if let Some((w, h)) = self.resize.take() {
             self.canvas.set_width(w);
             self.canvas.set_height(h);
         }
         match &designer.session {
-            Some(session) => self.painter.draw(session, time_ms),
+            Some(session) => self.painter.draw_with(session, time_ms, overlay),
             None => false,
         }
     }

@@ -205,8 +205,8 @@ export function CanvasHost(props: { editor: Editor; rulers: boolean }) {
     const c = canvas;
     painter = new Painter(
       {
-        draw(time) {
-          const again = c.draw(time);
+        draw(time, overlay) {
+          const again = c.draw(time, overlay);
           editor.setLimits(c.zoomLimits());
           return again;
         },

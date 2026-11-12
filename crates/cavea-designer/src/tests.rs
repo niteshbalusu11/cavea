@@ -764,18 +764,26 @@ fn measure_canvas() {
         let t0 = Instant::now();
         let mut frames = 0;
         let mut worst = 0.0f64;
+        let mut each = Vec::new();
         loop {
             let t1 = Instant::now();
+            let up = p.engine().backend().uploaded;
+            let made = p.engine().backend().created;
             p.draw(&s, 100.0 + f64::from(frames));
             worst = worst.max(ms(t1));
+            let kb = (p.engine().backend().uploaded - up) / 1024;
+            let made = p.engine().backend().created - made;
+            // Each buffer made ends with `getError`, which waits for the GPU.
+            each.push(format!("{:.1} ms {kb} KB {made} buffers", ms(t1)));
             frames += 1;
             if !p.sync().pending() || frames > 100 {
                 break;
             }
         }
         println!(
-            "  baked on release over {frames} frames, {:.1} ms in all, the longest {worst:.1} ms",
-            ms(t0)
+            "  baked on release over {frames} frames, {:.1} ms in all, the longest {worst:.1} ms ({})",
+            ms(t0),
+            each.join(", ")
         );
     }
 

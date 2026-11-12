@@ -47,7 +47,14 @@ use cavea_render::{
 
 /// Seats compiled per frame at most to bake moved pieces after a gesture:
 /// about 10 ms of compiling (0.5 µs a seat, measured natively).
+#[cfg(not(target_arch = "wasm32"))]
 pub const BAKE_SEATS: usize = 20_000;
+/// In the browser the compiler runs as WebAssembly, about four times slower
+/// (2.1 µs a seat in Chromium, measured locally), and each baking frame
+/// also merges the scene again (about 3 ms on `stadium-100k`): 4,000 seats
+/// keep a frame near 11 ms (07 §14).
+#[cfg(target_arch = "wasm32")]
+pub const BAKE_SEATS: usize = 4_000;
 
 /// Which piece: a node (outside a section, or a section's child) or a
 /// section's shell.

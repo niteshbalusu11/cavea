@@ -190,15 +190,19 @@ impl MapLabels {
     }
 
     /// Takes the decoration icons of a new live scene; their buffers are
-    /// made again at the next draw.
+    /// made again at the next draw, unless the icons are the same. (Making
+    /// a buffer ends with `getError`, a round trip that waits for the GPU:
+    /// in software rendering, for the whole previous frame.)
     #[cfg(feature = "designer")]
     pub fn reload_icons(&mut self, backend: &mut impl GpuBackend, scene: &Scene) {
-        if let Some(bufs) = self.icon_bufs.take() {
+        let old = std::mem::take(&mut self.icon_bytes);
+        self.load_icons(scene);
+        if self.icon_bytes != old
+            && let Some(bufs) = self.icon_bufs.take()
+        {
             bufs.into_iter()
                 .for_each(|id| backend.destroy(ResourceId::Buffer(id)));
         }
-        self.icon_bytes.iter_mut().for_each(Vec::clear);
-        self.load_icons(scene);
     }
 
     /// The active floor's decoration icons (`ICON`, 04 §7 pass 11) as

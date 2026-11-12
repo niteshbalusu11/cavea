@@ -349,12 +349,21 @@ impl<B: GpuBackend> Painter<B> {
     /// anything changed. Returns whether another frame is needed (labels or
     /// text still to come, moved pieces still to bake).
     pub fn draw(&mut self, session: &Session, time_ms: f64) -> bool {
+        self.draw_with(session, time_ms, true)
+    }
+
+    /// `draw`, told whether the session's overlay may have changed since
+    /// the last draw (`changed()` named `overlay`): when it has not, the
+    /// overlay is not built again (a pan, a baking frame, text arriving).
+    pub fn draw_with(&mut self, session: &Session, time_ms: f64, overlay_changed: bool) -> bool {
         let baking = self.sync.sync(session, &mut self.engine);
-        let overlay = session.overlay();
-        if self.overlay.as_ref() != Some(&overlay) {
-            let palette = if self.dark { &DARK } else { &LIGHT };
-            self.engine.set_overlay(shapes(&overlay, palette));
-            self.overlay = Some(overlay);
+        if overlay_changed || self.overlay.is_none() {
+            let overlay = session.overlay();
+            if self.overlay.as_ref() != Some(&overlay) {
+                let palette = if self.dark { &DARK } else { &LIGHT };
+                self.engine.set_overlay(shapes(&overlay, palette));
+                self.overlay = Some(overlay);
+            }
         }
         self.engine.handle(Command::Tick { time_ms });
         self.drain() || baking

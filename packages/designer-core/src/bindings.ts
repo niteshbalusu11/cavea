@@ -36,8 +36,9 @@ export interface CanvasHandle {
     dpr: number,
   ): boolean;
   setTheme(dark: boolean): void;
-  /** Draws `designer`'s session if anything changed; whether to draw again. */
-  draw(designer: Handle, timeMs: number): boolean;
+  /** Draws `designer`'s session if anything changed (`overlay`: whether
+   * its overlay may have); whether to draw again. */
+  draw(designer: Handle, timeMs: number, overlay: boolean): boolean;
   /** Text and image requests and errors, as JSON. */
   takeEvents(): string;
   /** The answer to an image request: whether a frame is needed. */
