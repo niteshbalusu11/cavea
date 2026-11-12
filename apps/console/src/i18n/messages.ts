@@ -1426,6 +1426,8 @@ const designerLock = {
     "Only one person edits a chart at a time, so it is now read-only here. You can still look around.",
   "lock.lostKept":
     "Your changes that had not reached the server are kept in this browser. Take over again to carry on with them (they are offered as the chart reopens), or download them.",
+  "lock.lostNotKept":
+    "Your changes that had not reached the server could not be stored in this browser (a private window, or no space left): download them now, or they are lost when this page closes.",
   "lock.unrenewed": "Offline — changes kept locally; others may take over until you are back",
   "lock.unreachable": "The server could not be reached to start editing.",
   "lock.reloaded":

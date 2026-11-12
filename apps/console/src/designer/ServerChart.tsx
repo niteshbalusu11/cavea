@@ -688,6 +688,9 @@ export function serverChart(props: {
       />
     </Show>
   );
+  /** The store refused the work: read with the save state, which is
+   * reported again when a store write fails. */
+  const notStored = () => (state(), autosave?.localFailed === true);
   const elsewhere = () => {
     const a = access();
     return a.kind === "elsewhere" ? a : null;
@@ -757,7 +760,12 @@ export function serverChart(props: {
         <div class="px-5 pb-5">
           <p class="text-base text-muted">{msg("lock.lostBody")}</p>
           <Show when={elsewhere()?.kept}>
-            <p class="mt-2 text-base text-fg">{msg("lock.lostKept")}</p>
+            <p
+              class="mt-2 text-base"
+              classList={{ "text-fg": !notStored(), "text-danger": notStored() }}
+            >
+              {msg(notStored() ? "lock.lostNotKept" : "lock.lostKept")}
+            </p>
           </Show>
           <div class="mt-5 flex flex-wrap justify-end gap-2">
             <Show when={elsewhere()?.kept}>
