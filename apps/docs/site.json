@@ -50,7 +50,17 @@
     },
     {
       "section": "Renderer",
-      "planned": "Options, callbacks and methods; theming; state adapters; React (DOC-004)"
+      "pages": [
+        "renderer/index.md",
+        "renderer/options.md",
+        "renderer/callbacks.md",
+        "renderer/methods.md",
+        "renderer/adapters.md",
+        "renderer/theming.md",
+        "renderer/errors.md",
+        "renderer/performance.md",
+        "renderer/accessibility.md"
+      ]
     },
     {
       "section": "Guides",

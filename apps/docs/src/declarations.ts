@@ -135,7 +135,8 @@ export class Declarations {
       `(\\/\\*\\*(?:(?!\\*\\/)[\\s\\S])*\\*\\/\\s*)?export (?:declare )?(?:interface|type|function|const|class) ${name}\\b`,
     );
     const m = this.text.match(re);
-    if (m === null || m.index === undefined) throw new Error(`${this.where}: no declaration of ${name}`);
+    if (m === null || m.index === undefined)
+      throw new Error(`${this.where}: no declaration of ${name}`);
     const head = m.index + (m[1]?.length ?? 0);
     const after = head + m[0].length - (m[1]?.length ?? 0);
     const kind = m[0].match(/(interface|type|function|const|class) \w+$/)?.[1];

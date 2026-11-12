@@ -146,8 +146,10 @@ export async function build(
 
   // What the written pages print from the product's source, and the checks on it.
   const refs = await sources(ROOT);
-  for (const page of pages) {
-    if (!page.generated) page.source = expand(page.source, page.path, refs);
+  for (const page of pages.filter((p) => !p.generated)) {
+    // The samples as written; the declarations a directive prints are the package's own.
+    refs.problems.push(...(await sampleMarks(page.path, page.source, vars)));
+    page.source = expand(page.source, page.path, refs);
   }
   refs.problems.push(...unclaimed(refs));
   const written = (path: string): string => byPath.get(path)?.source ?? "";
@@ -156,9 +158,6 @@ export async function build(
   }
   if (byPath.has("deployment/settings.md")) {
     refs.problems.push(...(await settings(ROOT, written("deployment/settings.md"))));
-  }
-  for (const page of pages.filter((p) => !p.generated)) {
-    refs.problems.push(...(await sampleMarks(page.path, page.source, vars)));
   }
   if (refs.problems.length > 0) {
     throw new Error(`the pages do not match the product:\n  ${refs.problems.join("\n  ")}`);
@@ -257,7 +256,9 @@ async function sampleMarks(
     if (f.meta.qs !== undefined) continue;
     if (check === undefined) {
       if (CODE.has(f.lang)) {
-        problems.push(`${path}:${f.line}: a ${f.lang} block without check=… says nothing checks it`);
+        problems.push(
+          `${path}:${f.line}: a ${f.lang} block without check=… says nothing checks it`,
+        );
       }
       continue;
     }
@@ -268,7 +269,8 @@ async function sampleMarks(
       const file = Bun.file(join(ROOT, check.slice("file:".length)));
       const code = substitute(f.code, vars, path);
       if (!(await file.exists())) problems.push(`${where}: no such file`);
-      else if ((await file.text()) !== code) problems.push(`${where}: the block differs from the file`);
+      else if ((await file.text()) !== code)
+        problems.push(`${where}: the block differs from the file`);
     } else if (check.startsWith("run:")) {
       const script = join(HERE, check.slice("run:".length), "check.ts");
       if (!(await Bun.file(script).exists())) problems.push(`${where}: no check ${script}`);
@@ -300,8 +302,15 @@ function sections(
       x: body.slice(0, 600),
     });
   }
-  for (const m of html.matchAll(/<tr id="([^"]+)"><td><code>([^<]+)<\/code><\/td>([\s\S]*?)<\/tr>/g)) {
-    out.push({ t: title, s: plain(m[2] ?? ""), u: `${url}#${m[1]}`, x: plain(m[3] ?? "").slice(0, 300) });
+  for (const m of html.matchAll(
+    /<tr id="([^"]+)"><td><code>([^<]+)<\/code><\/td>([\s\S]*?)<\/tr>/g,
+  )) {
+    out.push({
+      t: title,
+      s: plain(m[2] ?? ""),
+      u: `${url}#${m[1]}`,
+      x: plain(m[3] ?? "").slice(0, 300),
+    });
   }
   return out;
 }

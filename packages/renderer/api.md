@@ -645,11 +645,13 @@ export interface Selection {
     expiresAt: number | null;
 }
 export interface ReadyInfo {
+    /** The chart's name, its seats, and its bookable objects (seats, and later tables, booths and areas). */
     chart: {
         name: string;
         seats: number;
         objects: number;
     };
+    /** What draws the map: WebGL2, the only backend today. */
     backend: "webgl2";
     /** Milliseconds since `createSeatMap` was called (04 §24). */
     marks: Record<string, number>;
@@ -773,7 +775,9 @@ export interface Metrics {
     drawCalls: number;
     /** Seats in the ranges the last frame drew. */
     visibleSeats: number;
+    /** The level of detail of the last frame drawn: `overview`, `crossFade`, `seats` or `detail`. */
     level: Lod | null;
+    /** What draws the map: WebGL2, the only backend today. */
     backend: "webgl2";
     /** The device pixel ratio rendered at. */
     pixelRatio: number;

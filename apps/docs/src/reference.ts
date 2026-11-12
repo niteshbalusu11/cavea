@@ -70,9 +70,10 @@ function memberRows(
     if (filter === "callbacks" && !isCallback(m)) continue;
     const name = `${prefix}${m.name}`;
     const doc = describe(m.doc);
-    const literal = !m.method && m.raw.startsWith("{") && m.raw.endsWith("}");
+    // An object type without a description of its own is listed member by member.
+    const literal = !m.method && doc === "" && m.raw.startsWith("{") && m.raw.endsWith("}");
     if (literal || EXPAND.has(m.type)) {
-      if (doc !== "") rows.push(`| ${code(name)} | ${code(literal ? "object" : m.type)} | ${doc} |`);
+      if (doc !== "") rows.push(`| ${code(name)} | ${code(m.type)} | ${doc} |`);
       const inner = literal ? members(m.raw.slice(1, -1)) : d.interface(m.type);
       if (!literal) s.claimed.add(m.type);
       rows.push(...memberRows(s, d, inner, owner, `${name}.`, undefined, marks));
@@ -109,7 +110,8 @@ function unionTable(s: Sources, name: string): string {
   s.claimed.add(name);
   const rows = s.renderer.union(name).map((u) => {
     const doc = describe(u.doc);
-    if (doc === "") s.problems.push(`${name} "${u.value}" has no description (${s.renderer.where})`);
+    if (doc === "")
+      s.problems.push(`${name} "${u.value}" has no description (${s.renderer.where})`);
     return `| ${code(u.value)} | ${doc} |`;
   });
   return ["| Code | Meaning |", "|---|---|", ...rows].join("\n");
@@ -150,7 +152,8 @@ function themeDefaults(): string {
   const schemes = Object.keys(SCHEMES) as Array<keyof typeof SCHEMES>;
   const names = Object.keys(SCHEMES.light);
   const rows = names.map(
-    (n) => `| ${code(`--cavea-${n}`)} | ${schemes.map((sc) => code(SCHEMES[sc][n] ?? "")).join(" | ")} |`,
+    (n) =>
+      `| ${code(`--cavea-${n}`)} | ${schemes.map((sc) => code(SCHEMES[sc][n] ?? "")).join(" | ")} |`,
   );
   return [
     `| Token | ${schemes.map((sc) => code(sc)).join(" | ")} |`,
@@ -185,7 +188,8 @@ function shortcuts(): string {
   return out.join("\n").trim();
 }
 
-const DIRECTIVE = /^<!-- (members|union|declaration|messages|theme-defaults|shortcuts)(?::\s*([\w:]+)(?:\s+(\w+))?)?\s*-->$/gm;
+const DIRECTIVE =
+  /^<!-- (members|union|declaration|messages|theme-defaults|shortcuts)(?::\s*([\w:]+)(?:\s+(\w+))?)?\s*-->$/gm;
 
 /** `source` with every directive line replaced by what it asks for. */
 export function expand(source: string, page: string, s: Sources): string {
@@ -215,7 +219,9 @@ export function expand(source: string, page: string, s: Sources): string {
   });
   for (const m of out.matchAll(/§|docs\/\d\d-|\(D-\d+\)/g)) {
     const at = out.slice(Math.max(0, (m.index ?? 0) - 50), (m.index ?? 0) + 30).replace(/\n/g, " ");
-    s.problems.push(`${page}: an internal specification reference reached the page from a declaration: …${at}…`);
+    s.problems.push(
+      `${page}: an internal specification reference reached the page from a declaration: …${at}…`,
+    );
   }
   const left = out.match(/^<!--\s*(?:members|union|declaration)\b.*-->$/m);
   if (left) s.problems.push(`${page}: a directive the build does not understand: ${left[0]}`);
@@ -240,10 +246,17 @@ function tableNames(markdown: string, pattern: RegExp): Set<string> {
   return out;
 }
 
-function differ(what: string, documented: Set<string>, actual: Set<string>, where: string): string[] {
+function differ(
+  what: string,
+  documented: Set<string>,
+  actual: Set<string>,
+  where: string,
+): string[] {
   const problems: string[] = [];
-  for (const a of actual) if (!documented.has(a)) problems.push(`${a} is not in ${what} (${where})`);
-  for (const d of documented) if (!actual.has(d)) problems.push(`${what} names ${d}, which ${where} does not have`);
+  for (const a of actual)
+    if (!documented.has(a)) problems.push(`${a} is not in ${what} (${where})`);
+  for (const d of documented)
+    if (!actual.has(d)) problems.push(`${what} names ${d}, which ${where} does not have`);
   return problems;
 }
 
@@ -254,15 +267,28 @@ export async function themeTokens(root: string, page: string): Promise<string[]>
   for (const m of ui.matchAll(/--cavea-([a-z]+(?:-[a-z]+)*)(-?)/g)) {
     actual.add(m[2] === "-" ? `--cavea-${m[1]}-<key>` : `--cavea-${m[1]}`);
   }
-  return differ("the theming page's token table", tableNames(page, /^--cavea-/), actual, "the renderer (theme.ts, ui.ts)");
+  return differ(
+    "the theming page's token table",
+    tableNames(page, /^--cavea-/),
+    actual,
+    "the renderer (theme.ts, ui.ts)",
+  );
 }
 
 /** The settings page's table against the variables the server's configuration reads. */
 export async function settings(root: string, page: string): Promise<string[]> {
   const config = await readFile(join(root, "crates/cavea-server/src/config.rs"), "utf8");
   const actual = new Set(
-    [...config.matchAll(/(?:setting|optional|var_os)\("(CAVEA_[A-Z0-9_]+)"/g)].map((m) => m[1] ?? ""),
+    [...config.matchAll(/(?:setting|optional|var_os)\("(CAVEA_[A-Z0-9_]+)"/g)].map(
+      (m) => m[1] ?? "",
+    ),
   );
-  if (actual.size < 10) return [`found only ${actual.size} settings in config.rs: the scan needs updating`];
-  return differ("the settings table", tableNames(page, /^CAVEA_/), actual, "crates/cavea-server/src/config.rs");
+  if (actual.size < 10)
+    return [`found only ${actual.size} settings in config.rs: the scan needs updating`];
+  return differ(
+    "the settings table",
+    tableNames(page, /^CAVEA_/),
+    actual,
+    "crates/cavea-server/src/config.rs",
+  );
 }
