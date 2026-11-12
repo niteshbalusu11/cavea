@@ -1,5 +1,5 @@
-// The signed-in person's account (CON-003): who they are and a password
-// change. A change ends every other session of theirs; this one continues
+// The signed-in person's account (CON-003): who they are, a password
+// change and two-step sign-in (`TwoStep.tsx`). A change ends every other session of theirs; this one continues
 // with a new cookie and CSRF token.
 import { createSignal, onCleanup, Show } from "solid-js";
 import { msg } from "../i18n/messages.ts";
@@ -10,6 +10,7 @@ import { Field, FormError } from "../ui/form.tsx";
 import { notify } from "../ui/overlays.tsx";
 import { describe, reference } from "./errors.ts";
 import { passwordProblem } from "./Setup.tsx";
+import { TwoStep } from "./TwoStep.tsx";
 import { createWait } from "./wait.ts";
 
 type FieldName = "current" | "next" | "confirm";
@@ -139,6 +140,7 @@ export function Account() {
           </Button>
         </form>
       </section>
+      <TwoStep />
     </>
   );
 }

@@ -161,7 +161,7 @@ export async function signInWithCode(challenge: string, code: string, signal: Ab
 
 /** Uses a reset link (D-90): the new password is set, and the person is
  * signed in, or asked for a code when they still have a second factor. */
-export async function useResetLink(
+export async function redeemResetLink(
   token: string,
   password: string,
   signal: AbortSignal,

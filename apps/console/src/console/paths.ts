@@ -11,7 +11,7 @@ export function here(location: { pathname: string; search: string }): string {
   return path + location.search;
 }
 
-const AUTH_PAGES = ["/sign-in", "/setup", "/console/setup"];
+const AUTH_PAGES = ["/sign-in", "/setup", "/console/setup", "/reset", "/console/reset"];
 
 /** Where sign-in returns to: a path of this console from the `next`
  * parameter, never another origin (`//host`, `/\host`) or a sign-in page. */

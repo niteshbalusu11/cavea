@@ -1208,6 +1208,9 @@ const accountSecurity = {
     "Enter the six-digit code from your authenticator app, or one of your recovery codes.",
   "signIn.code": "Code",
   "signIn.codeHint": "Six digits, or a recovery code such as abcde-fghij.",
+  "signIn.recoveryHint": "A recovery code such as abcde-fghij. Each works once.",
+  "signIn.useRecovery": "Use a recovery code",
+  "signIn.useApp": "Use a code from the app",
   "signIn.codeMissing": "Enter a code.",
   "signIn.codeWrong":
     "That code is not right, or it has been used. Enter the code your app shows now.",
@@ -1247,7 +1250,7 @@ const accountSecurity = {
   "totp.confirm": "Turn on",
   "totp.confirming": "Turning on…",
   "totp.notStarted":
-    "This setup has ended: it was started again somewhere else. Close this and start again.",
+    "This setup ended: it was started again somewhere else. Enter your password to start again.",
   "totp.alreadyOn": "Two-step sign-in is already on for your account.",
   "totp.closedEarly": "Two-step sign-in is still off. Start again whenever you are ready.",
   "codes.title": "Save your recovery codes",
@@ -1278,6 +1281,7 @@ const accountSecurity = {
   "totpOff.done": "Two-step sign-in is off.",
   "totpOff.notOn": "Two-step sign-in was already off for your account.",
   "members.accountMenu": "Sign-in help for {email}",
+  "members.signInHelp": "Sign-in help",
   "members.resetLink": "Make a password reset link…",
   "members.resetTwoStep": "Reset two-step sign-in…",
   "members.otherWorkspaces":
@@ -1320,6 +1324,7 @@ const accountSecurity = {
   "reset.challengeEnded":
     "Your password is saved, but signing in took too long or had too many wrong codes. Sign in with your new password.",
   "reset.toSignIn": "Go to sign-in",
+  "reset.done": "Your new password is saved and you are signed in.",
   "events.createdFrom": "Created from",
   "events.createdUntil": "Created until",
   "events.dateZone": "Days in your time zone ({zone}).",
