@@ -250,6 +250,133 @@ const validation = {
   W110: "Chart very large",
 };
 
+/** A finding's sentence (07 §10, `designer/findings.ts`): what is wrong and
+ * what to do, naming objects as the layers panel does and rows and seats by
+ * their labels. `{node}` and `{related}` are objects; `{row}` is where a
+ * row-level finding is ("Row C of Stalls", or a single row by its name),
+ * `{seat}` a seat ("Seat A-C-12 of Stalls"). */
+const findings = {
+  something: "An object",
+  rowOf: "Row {row} of {node}",
+  rowNumberOf: "The {n} row of {node}",
+  aRowOf: "A row of {node}",
+  seatOf: "Seat {seat} of {node}",
+  seatNumberOf: "The {n} seat of {row}",
+  aSeatOf: "A seat of {node}",
+  itsFloor: "its floor",
+  aFloor: "a floor",
+  theFloor: "the floor",
+  schema:
+    "This chart was saved by a newer version of Cavea (format {schema}; this one reads up to {newest}). Open it where it was made, or update this server.",
+  migration:
+    "This chart's format (version {from}) could not be brought up to date. Export it and ask for help.",
+  duplicateLabel:
+    "{node} and {related} both have a seat labelled {label}, so buyers cannot tell them apart. Renumber one of them, or label their sections differently.",
+  duplicateLabelSelf:
+    "{node} has two seats labelled {label}, so buyers cannot tell them apart. Renumber its rows or seats.",
+  labelTooLong:
+    "{node} has a seat label longer than 64 characters. Shorten its section, row or seat labels.",
+  emptyRowLabel: "{row} has no label. Number the rows in the Numbering panel.",
+  emptySeatLabel: "{seat} has no label. Number its seats in the Numbering panel.",
+  noCategory:
+    "{node} has seats without a category, so they cannot be sold. Choose its category in the inspector, or paint them with the category brush.",
+  unknownCategory:
+    "{node} uses the category {key}, which the chart no longer has. Choose another in the inspector.",
+  unknownFloor: "{node} is on a floor the chart no longer has. Choose its floor in the inspector.",
+  unknownIcon: "{node} is an icon this version cannot draw ({key}). Delete it and place another.",
+  floorConflict:
+    "{node} is on a different floor from its section. Put it on {floor}, or move it out of the section.",
+  duplicateFloor:
+    "The chart lists {floor} twice: it was edited outside the designer. Export it and remove the copy.",
+  duplicateCategory:
+    "Two categories share the key {key}. Give one of them another key in the Categories panel.",
+  categoryColor:
+    "The colour of the category {category} is not one a chart can use. Pick another in the Categories panel.",
+  focalPoint:
+    "The focal point of {floor} is too far away. Place it again with the Focal point tool (F).",
+  duplicateId:
+    "{node} and {related} share an identity: one was copied outside the designer. Delete one of them and copy the other here.",
+  invalidValue: "{node} has an impossible {field}. Set it again in the inspector.",
+  emptyText: "{node} has no text. Type some, or delete it.",
+  outOfRange: "{node} is too far from the rest of the chart. Move it closer.",
+  geometry: "{node} cannot be drawn: {problem}",
+  tooMany: "{node} has more than {limit} {what}. Simplify it.",
+  tooManyChart: "The chart has more than {limit} {what}. Remove some.",
+  unsupported:
+    "{node} is a {what}, which cannot be published yet. Delete it, or draw it with row blocks.",
+  nestedSection:
+    "{node} is a section inside a section, which cannot be published. Move it out to the top level.",
+  overlap:
+    "Seats of {node} overlap seats of {related}. Move one of them apart, or narrow their seats in the chart's settings.",
+  overlapSelf: "Seats of {node} overlap each other. Widen its seat or row spacing.",
+  noFocalPoint:
+    "The chart has no focal point (the stage or the pitch), which seat order and best-available seating face. Place it with the Focal point tool (F).",
+  noFocalPointFloor:
+    "{floor} has no focal point (the stage or the pitch), which seat order and best-available seating face. Place it with the Focal point tool (F).",
+  singleSeat: "{row} has a single seat. Check that it is meant to.",
+  outsideOutline:
+    "{seat} is outside the outline of {related}. Move it inside, or redraw the outline.",
+  unusedCategory:
+    "No seat uses the category {category}. Assign it to seats, or delete it in the Categories panel.",
+  noAccessibleSeat:
+    "No seat is marked accessible. Give wheelchair spaces a category marked accessible in the Categories panel.",
+  similarColors:
+    "The categories {category} and {other} look too alike on the map. Change one colour in the Categories panel.",
+  lowContrast:
+    "The category {category} is hard to see on {background} ({ratio}:1; at least 3:1 is needed). Pick a darker or lighter colour in the Categories panel.",
+  textTooSmall:
+    "{node} is only {px} px tall when the whole chart is shown. Make it larger, or set its minimum zoom so it shows only when zoomed in.",
+  noSectionLabel:
+    "{node} has no label, which buyers see on its seats. Give it one in the inspector.",
+  chartTooLarge:
+    "The chart is {extent} units across, wider than any venue. Look for an object placed far away.",
+  tooManySeatsInRow:
+    "{row} has {seats} seats; a row holds at most {limit}. Split the block in two.",
+  tooManySeats: "{node} has more than {limit} seats. Make it smaller.",
+  seatIds:
+    "{row} has damaged seat identities: it was edited outside the designer. Delete the row and draw it again.",
+  removedOutOfRange:
+    "{row} removes a seat it does not have: it was edited outside the designer. Restore its seats in the inspector.",
+  arcRow: "{row} does not fit its curve. Make the curve wider, or the block shallower.",
+  pathTooShort: "{node} has no length. Draw it again.",
+  directionNotForRows:
+    "{node} numbers its seats round a table, which rows cannot. Choose left to right or right to left in the Numbering panel.",
+  invalidLabelStart:
+    "The numbering of {node} starts at a value its scheme cannot write. Choose another start in the Numbering panel.",
+  labels: "{row}: {problem}. Change its numbering in the Numbering panel.",
+};
+
+/** The compiler's geometry problems, by their words with `_` for spaces. */
+const findingGeometry = {
+  zero_size: "it has no size. Make it larger.",
+  "self-intersecting_outline": "its outline crosses itself. Move a corner.",
+  cannot_be_tessellated: "its outline cannot be filled. Simplify it.",
+};
+
+/** Why a row's labels cannot be written (`LabelError`). */
+const findingLabels = {
+  zeroStep: "its numbering steps by zero",
+  startParity: "its odd or even numbering starts on a number of the wrong kind",
+  overflow: "its numbering runs past the largest number",
+  outOfRange:
+    "its numbering reaches a value its scheme cannot write (zero in letters, or past 3,999 in Roman numerals)",
+  customExhausted: "its list of labels is shorter than the row",
+  tooLong: "a label is longer than 64 characters",
+};
+
+/** The canvas backgrounds a category's colour is checked against. */
+const findingBackground = { light: "a light background", dark: "a dark background" };
+
+/** Document fields the inspector does not name. */
+const findingField = {
+  outline: "outline",
+  path: "path",
+  position: "position",
+  skew: "skew",
+  radius: "curve radius",
+  priority: "priority",
+};
+
 const enums = {
   ...group("seatShape", { circle: "Circle", rounded: "Rounded", chair: "Chair" } satisfies Record<
     SeatShape,
@@ -604,7 +731,8 @@ const ui = {
   "numbering.notes": "Notes on the selected blocks",
   "numbering.reversed":
     "faces away from the focal point, so its left to right is stored as right to left.",
-  "numbering.unknown": "has no focal point to face, or is edge-on to it: left to right is its own.",
+  "numbering.unknown":
+    "has no focal point to face (place one with the Focal point tool, F), or is edge-on to it: left to right is its own.",
   "numbering.mirrored":
     "Its centre-outward or serpentine seats read mirrored from the focal point.",
   "numbering.overridesOf": "{rows} row and {seats} seat labels set by hand.",
@@ -1818,6 +1946,11 @@ export const catalogue = {
   ...group("commandError", commandErrors),
   ...group("importError", importErrors),
   ...group("validation", validation),
+  ...group("finding", findings),
+  ...group("findingGeometry", findingGeometry),
+  ...group("findingLabels", findingLabels),
+  ...group("findingBackground", findingBackground),
+  ...group("findingField", findingField),
   ...enums,
 };
 
