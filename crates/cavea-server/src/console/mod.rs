@@ -147,6 +147,18 @@ impl Permission {
         Self::Ownership,
     ];
 
+    /// Whether a console session is refused this while the licence is
+    /// expired (12 §7.3 "read-only except seat operations", D-81): writing
+    /// charts and events. Seat operations, keys, members and settings are
+    /// never refused, nor is anything done with a secret key.
+    #[must_use]
+    pub fn closed_while_expired(self) -> bool {
+        matches!(
+            self,
+            Self::ChartsWrite | Self::ChartsArchive | Self::EventsWrite
+        )
+    }
+
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {

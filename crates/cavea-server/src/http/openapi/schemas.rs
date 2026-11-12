@@ -655,6 +655,111 @@ Without: booked objects.",
                     ("hold_ttl_seconds", integer()),
                     ("max_objects", integer()),
                     ("require_session", boolean()),
+                    ("licence", r("PublicLicence")),
+                ],
+                &[],
+            ),
+        ),
+        (
+            "PublicLicence",
+            described(
+                object(
+                    &[
+                        (
+                            "status",
+                            json!({ "enum": ["licensed", "expired", "unlicensed"] }),
+                        ),
+                        (
+                            "domains",
+                            described(
+                                array(string()),
+                                "While `licensed`: the host names the renderer runs on \
+unmarked, lowercase; `*.example.com` is every name under `example.com`, not the name itself. \
+Empty otherwise.",
+                            ),
+                        ),
+                    ],
+                    &[],
+                ),
+                "What the renderer needs of the server's licence to decide its mark (12 §7.4): \
+`licensed` (valid or in grace), `expired`, or `unlicensed` (missing or invalid).",
+            ),
+        ),
+        (
+            "LicenceUpload",
+            object(
+                &[(
+                    "licence",
+                    text("The licence file's text, exactly as issued (at most 16 KiB)."),
+                )],
+                &[],
+            ),
+        ),
+        (
+            "ConsoleLicence",
+            object(
+                &[
+                    (
+                        "state",
+                        json!({ "enum": ["valid", "grace", "expired", "missing", "invalid"] }),
+                    ),
+                    (
+                        "read_only",
+                        described(
+                            boolean(),
+                            "`expired`: the server refuses console writes to charts and \
+events (`403` `licence_expired`); seat operations, keys, members and settings go on.",
+                        ),
+                    ),
+                    (
+                        "grace_until",
+                        described(
+                            nullable(json!({ "type": "string", "format": "date" })),
+                            "While `grace`: the last day of grace (UTC).",
+                        ),
+                    ),
+                    (
+                        "manage",
+                        described(
+                            boolean(),
+                            "Whether this user owns every workspace on the server: may upload \
+a licence and sees the fields below, which are otherwise `null`.",
+                        ),
+                    ),
+                    ("source", nullable(json!({ "enum": ["setting", "upload"] }))),
+                    (
+                        "reason",
+                        described(
+                            nullable(string()),
+                            "While `invalid`: why (`unreadable`, `too_large`, `not_utf8`, \
+`malformed`, `version`, `unknown_key`, `signature`, `payload`, `dates`).",
+                        ),
+                    ),
+                    (
+                        "licence",
+                        nullable(object(
+                            &[
+                                ("id", string()),
+                                ("customer", string()),
+                                ("plan", string()),
+                                ("features", array(string())),
+                                ("domains", array(string())),
+                                ("max_workspaces", nullable(integer())),
+                                ("issued_at", json!({ "type": "string", "format": "date" })),
+                                (
+                                    "expires_at",
+                                    described(
+                                        json!({ "type": "string", "format": "date" }),
+                                        "Valid through this day (UTC); then `grace_days` \
+days of grace.",
+                                    ),
+                                ),
+                                ("grace_days", integer()),
+                                ("key_id", string()),
+                            ],
+                            &[],
+                        )),
+                    ),
                 ],
                 &[],
             ),
@@ -766,6 +871,7 @@ Without: booked objects.",
                             &[],
                         ),
                     ),
+                    ("licence", r("ConsoleLicence")),
                 ],
                 &[],
             ),

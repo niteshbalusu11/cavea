@@ -22,6 +22,7 @@ use axum::extract::FromRequestParts;
 use axum::http::header::{self, HeaderName};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, Method};
+use cavea_engine::Clock as _;
 use subtle::ConstantTimeEq as _;
 
 use super::auth::{Auth, Credential, credential, unauthorized, wrong_kind};
@@ -264,6 +265,16 @@ async fn member(parts: &Parts, state: &AppState) -> Result<Auth, ApiError> {
             .with_message("Your role in this workspace does not allow this.")
             .with_detail("reason", "role")
             .with_detail("permission", permission.as_str()));
+    }
+    // Only for chart and event writes: a seat operation's permission never
+    // reaches the licence (D-20).
+    if permission.closed_while_expired() && state.licences.read_only(state.seats.clock.now().0) {
+        return Err(ApiError::new(Code::Forbidden)
+            .with_message(
+                "The licence has expired: the console is read-only but for seat operations. \
+Upload a renewed licence under Settings.",
+            )
+            .with_detail("reason", "licence_expired"));
     }
     Ok(auth)
 }

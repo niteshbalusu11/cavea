@@ -145,7 +145,7 @@ const WORKSPACES: &str = "SELECT replace(w.id::text, '-', ''), w.key, w.name, m.
 const EMAIL: &str = "SELECT email FROM users WHERE id = $1::uuid";
 
 /// `ConsoleMe`: the user, their workspaces with roles and permissions, the
-/// CSRF token and the session's ends.
+/// CSRF token, the session's ends and the licence (`http::licence`).
 pub(super) async fn me_json(
     state: &AppState,
     id: &SessionId,
@@ -175,6 +175,7 @@ pub(super) async fn me_json(
             }))
         })
         .collect();
+    let licence = super::licence::for_user(state, &session.user).await?;
     Ok(json!({
         "user": { "id": format!("usr_{}", session.user), "email": email },
         "workspaces": workspaces,
@@ -183,6 +184,7 @@ pub(super) async fn me_json(
             "expires_at": session.expires_at,
             "absolute_expires_at": session.absolute_expires_at,
         },
+        "licence": licence,
     }))
 }
 

@@ -1,0 +1,25 @@
+[package]
+name = "cavea-licence"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Signing and key generation, for the private tool (`cargo xtask licence`) and
+# tests. The server never enables it.
+sign = []
+
+[dependencies]
+# The licence's payload and signature in its JSON envelope; already in the
+# server's tree through sqlx-postgres.
+base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
+# Ed25519 (12 §7.2) and the key id's SHA-256; already in the server's tree
+# through rustls (`tls-rustls-ring-webpki`), so it adds no crate there.
+ring = { version = "0.17.14", default-features = false }
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde_json.workspace = true
+
+[lints]
+workspace = true

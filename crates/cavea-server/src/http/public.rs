@@ -15,6 +15,7 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{Next, map_response};
 use axum::response::{IntoResponse, Response};
+use cavea_engine::Clock as _;
 use serde_json::json;
 use tracing::Instrument as _;
 
@@ -132,7 +133,9 @@ pub(super) async fn cors(State(state): State<AppState>, request: Request, next: 
 
 /// What the renderer needs to start (05 §4): the compiled chart of the pinned
 /// version, the hold lifetime and the selection limit of a buyer's token, and
-/// whether holding needs a session token from the host page (08 §11).
+/// whether holding needs a session token from the host page (08 §11), and
+/// what the renderer needs of the licence to decide its mark (12 §7.4,
+/// `Licences::public`).
 /// Browsers may keep it briefly, per credential; shared caches may not, since
 /// the answer depends on the credential.
 async fn event(
@@ -150,6 +153,8 @@ async fn event(
         "hold_ttl_seconds": target.settings.hold_ttl(),
         "max_objects": target.settings.max_objects(),
         "require_session": target.settings.require_session(),
+        // For the renderer's mark (12 §7.4); from memory, never failing.
+        "licence": state.licences.public(state.seats.clock.now().0),
     });
     let mut response = axum::Json(body).into_response();
     let headers = response.headers_mut();

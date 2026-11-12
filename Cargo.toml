@@ -18,6 +18,7 @@ cavea-compiler = { path = "crates/cavea-compiler" }
 cavea-render = { path = "crates/cavea-render" }
 cavea-edit = { path = "crates/cavea-edit" }
 cavea-engine = { path = "crates/cavea-engine" }
+cavea-licence = { path = "crates/cavea-licence" }
 cavea-telemetry = { path = "crates/cavea-telemetry" }
 cavea-testkit = { path = "crates/cavea-testkit" }
 

@@ -26,7 +26,7 @@ use tracing::Instrument as _;
 use crate::http::Auth;
 
 /// Every action recorded (`audit_log.action`).
-pub const ACTIONS: [&str; 19] = [
+pub const ACTIONS: [&str; 20] = [
     "console.setup",
     "console.sign_in",
     "console.sign_in_failed",
@@ -46,6 +46,7 @@ pub const ACTIONS: [&str; 19] = [
     "chart.archived",
     "event.created",
     "event.archived",
+    "licence.uploaded",
 ];
 
 /// One row, before it is written.

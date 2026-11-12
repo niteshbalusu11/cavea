@@ -30,6 +30,9 @@ cavea-compiler.workspace = true
 cavea-core.workspace = true
 cavea-engine.workspace = true
 cavea-format.workspace = true
+# The licence file's format and its verification (12 §7.2, D-80): its crates
+# (ring, base64, serde_json) are already in the tree.
+cavea-licence.workspace = true
 cavea-telemetry.workspace = true
 # The secure random source for API keys; already in the tree through sqlx-postgres.
 getrandom = { version = "0.4.3", default-features = false }
@@ -68,7 +71,16 @@ tungstenite = { version = "0.29.0", default-features = false }
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { version = "0.2.191", default-features = false }
 
+[features]
+# A test build that also trusts the public key in `CAVEA_TEST_LICENCE_KEY` at
+# compile time, for trying licences by hand (D-80). Debug builds only: with
+# `--release` it fails to compile; `cargo xtask build-server`, the image and
+# CI build without it.
+trust-test-key = []
+
 [dev-dependencies]
+# Tests sign their own licences with keys made at run time.
+cavea-licence = { workspace = true, features = ["sign"] }
 cavea-testkit.workspace = true
 # `SinkExt` and `StreamExt` for that client; already built for axum.
 futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }

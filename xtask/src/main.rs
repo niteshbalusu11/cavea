@@ -29,10 +29,13 @@
 //!   and the renderer's package, then drive the product's first path end to
 //!   end in the flake's headless Chromium (`e2e.rs`, `tools/e2e/run.ts`,
 //!   `docs/13-testing-benchmarks.md` §9).
+//! - `licence keygen|issue|inspect|verify`: the private licence tool
+//!   (`licence.rs`, `docs/12-security-licensing.md` §7.2).
 
 mod api;
 mod determinism;
 mod e2e;
+mod licence;
 mod server;
 mod types;
 
@@ -91,11 +94,13 @@ fn main() -> Result<()> {
         ["determinism"] => determinism::determinism(),
         ["golden", rest @ ..] => golden(rest),
         ["e2e", rest @ ..] => e2e::e2e(rest),
+        ["licence", rest @ ..] => licence::licence(rest),
         _ => {
             eprintln!(
                 "usage: cargo xtask <build-web [--demo | --update-baseline] | build-designer | \
                  build-server [--target <triple>] | types [--check] | check-deps | determinism | \
-                 golden [--update] [--runs n] [case…] | e2e [--keep] [--headed] [--to n]>"
+                 golden [--update] [--runs n] [case…] | e2e [--keep] [--headed] [--to n] | \
+                 licence <keygen | issue | inspect | verify> …>"
             );
             std::process::exit(2);
         }
@@ -444,8 +449,15 @@ fn check_deps() -> Result<()> {
                 "cavea-core" => dep == "cavea-format",
                 "cavea-format" => dep == "cavea-core",
                 "cavea-telemetry" => false,
+                // The licence format: depends on nothing in the workspace.
+                "cavea-licence" => false,
                 // Test tools and the designer's entry point: nothing depends on them.
-                _ => !matches!(dep, "cavea-server" | "cavea-loadgen" | "cavea-designer"),
+                _ => {
+                    !matches!(dep, "cavea-server" | "cavea-loadgen" | "cavea-designer")
+                        // Signing is private (D-80): only the server, which
+                        // verifies, and xtask, the tool, use the licence crate.
+                        && (dep != "cavea-licence" || matches!(name, "cavea-server" | "xtask"))
+                }
             };
             if !allowed {
                 violations.push(format!("{name} -> {dep}"));

@@ -317,6 +317,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cavea-licence"
+version = "0.0.0"
+dependencies = [
+ "base64",
+ "ring",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cavea-loadgen"
 version = "0.0.0"
 dependencies = [
@@ -357,6 +367,7 @@ dependencies = [
  "cavea-core",
  "cavea-engine",
  "cavea-format",
+ "cavea-licence",
  "cavea-telemetry",
  "cavea-testkit",
  "futures-util",
@@ -2600,6 +2611,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "brotli",
+ "cavea-licence",
  "proc-macro2",
  "serde_json",
  "syn 3.0.10",
