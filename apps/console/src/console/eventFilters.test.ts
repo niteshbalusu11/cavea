@@ -84,6 +84,11 @@ test("a range in the URL is real days, in order; anything else is not applied", 
   expect(rangeProblem("", "2026-03-03")).toBeNull();
   expect(day("2024-02-29")).toBe("2024-02-29");
   expect(day("2025-02-29")).toBe("");
+  // Days the server's instants do not reach are never sent.
+  expect(day("1969-12-31")).toBe("");
+  expect(day("1970-06-01")).toBe("");
+  expect(day("9999-12-31")).toBe("");
+  expect(day("9998-12-31")).toBe("9998-12-31");
 });
 
 /** The range sent for `from` to `to` (both included) in `zone`. */

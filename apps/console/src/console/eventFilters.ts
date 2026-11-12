@@ -113,9 +113,10 @@ export function day(text: string): string {
   const m = DAY.exec(text);
   if (m === null) return "";
   const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  // Before year 1000 is a year still being typed (and `Date.UTC` reads
-  // 0 to 99 as 1900 to 1999).
-  if (y < 1000) return "";
+  // Outside 1971 to 9998: a year still being typed (and `Date.UTC` reads
+  // 0 to 99 as 1900 to 1999), or one whose day, in any zone and with the
+  // day after it, falls outside the server's instants (1970 to 9999).
+  if (y < 1971 || y > 9998) return "";
   const t = new Date(Date.UTC(y, mo - 1, d));
   return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d ? text : "";
 }
