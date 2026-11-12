@@ -923,8 +923,9 @@ fn measure_panels() {
     let t = Instant::now();
     let listed = s.validation().findings.len();
     let lv = ms(t);
+    let bytes = serde_json::to_string(&s.validation()).map_or(0, |j| j.len());
     println!(
-        "validation: first pass {first:.1} ms (units and full), full pass {full:.1} ms, view {lv:.3} ms ({listed} findings)"
+        "validation: first pass {first:.1} ms (units and full), full pass {full:.1} ms, view {lv:.3} ms ({listed} findings, {bytes} B as JSON)"
     );
     let block = s
         .document()

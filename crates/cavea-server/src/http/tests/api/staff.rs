@@ -699,7 +699,10 @@ async fn chart_lock_two_editors_of_one_person() {
             Some(e) => format!("/v1/charts/{}/{path}?editor={e}", t.chart),
             None => format!("/v1/charts/{}/{path}", t.chart),
         };
-        let as_anna = async |method: Method, uri: String, headers: &[(header::HeaderName, String)], body: Option<Value>| {
+        let as_anna = async |method: Method,
+                             uri: String,
+                             headers: &[(header::HeaderName, String)],
+                             body: Option<Value>| {
             let mut all = console(&anna_id, Some(&t.id));
             all.extend_from_slice(headers);
             call_with(&app, method, &uri, None, &refs(&all), body).await
@@ -711,7 +714,8 @@ async fn chart_lock_two_editors_of_one_person() {
             let (response, _) = as_anna(Method::DELETE, at("lock", editor), &[], None).await;
             assert_eq!(response.status(), 204);
         };
-        let holder = async || as_anna(Method::GET, at("lock", None), &[], None).await.1["lock"].clone();
+        let holder =
+            async || as_anna(Method::GET, at("lock", None), &[], None).await.1["lock"].clone();
         let save = async |editor: Option<&str>| {
             let headers = [
                 (header::IF_MATCH, "*".to_owned()),
@@ -719,7 +723,13 @@ async fn chart_lock_two_editors_of_one_person() {
             ];
             let mut all = console(&anna_id, Some(&t.id));
             all.extend(headers);
-            let req = request(Method::PUT, &at("draft", editor), None, &refs(&all), Some(t.document.clone()));
+            let req = request(
+                Method::PUT,
+                &at("draft", editor),
+                None,
+                &refs(&all),
+                Some(t.document.clone()),
+            );
             send(app.clone(), req).await
         };
         let publish = async |editor: Option<&str>| {
@@ -747,7 +757,10 @@ async fn chart_lock_two_editors_of_one_person() {
         assert_eq!(response.status(), 200);
         // A renewal naming no editor keeps the lock as it is.
         let (response, renewed) = lock(None, json!({})).await;
-        assert_eq!((response.status(), &renewed["since"]), (StatusCode::OK, &first["since"]));
+        assert_eq!(
+            (response.status(), &renewed["since"]),
+            (StatusCode::OK, &first["since"])
+        );
         let (response, problem) = lock(Some("browser-b"), json!({})).await;
         assert_problem(&response, &problem, Code::ChartLocked);
 
@@ -773,7 +786,10 @@ async fn chart_lock_two_editors_of_one_person() {
         let (response, old) = lock(None, json!({})).await;
         assert_eq!(response.status(), 200, "{old}");
         let (response, renewed) = lock(Some("browser-a"), json!({})).await;
-        assert_eq!((response.status(), &renewed["since"]), (StatusCode::OK, &old["since"]));
+        assert_eq!(
+            (response.status(), &renewed["since"]),
+            (StatusCode::OK, &old["since"])
+        );
         // And from then on it is that browser's.
         let (response, problem) = lock(Some("browser-b"), json!({})).await;
         assert_problem(&response, &problem, Code::ChartLocked);

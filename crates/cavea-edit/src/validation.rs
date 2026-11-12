@@ -31,8 +31,8 @@ use serde::Serialize;
 
 use crate::command::expand_runs;
 use crate::document::Document;
-use crate::views::NodeKind;
 use crate::index::{Rect, SpatialIndex};
+use crate::views::NodeKind;
 
 /// Whether the compiler can report `f` from one top-level node alone: not
 /// a warning, not a duplicate across nodes, not a chart-wide count.
@@ -382,54 +382,107 @@ pub struct FindingView {
     rename_all_fields = "camelCase"
 )]
 pub enum FindingDetail {
-    Schema { schema: u32, newest: u32 },
-    Migration { from: u32 },
+    Schema {
+        schema: u32,
+        newest: u32,
+    },
+    Migration {
+        from: u32,
+    },
     /// The same full label is on `related`'s seat too.
-    DuplicateLabel { label: String },
+    DuplicateLabel {
+        label: String,
+    },
     LabelTooLong,
     /// The row named has no label; with a seat, that seat has none.
-    EmptyLabel { seat: bool },
+    EmptyLabel {
+        seat: bool,
+    },
     NoCategory,
-    UnknownCategory { key: String },
+    UnknownCategory {
+        key: String,
+    },
     UnknownFloor,
-    UnknownIcon { key: String },
+    UnknownIcon {
+        key: String,
+    },
     /// A section child on another floor than its section's (names, if any).
-    FloorConflict { floor: Option<String>, section_floor: Option<String> },
-    DuplicateFloor { floor: Option<String> },
-    DuplicateCategory { key: String },
+    FloorConflict {
+        floor: Option<String>,
+        section_floor: Option<String>,
+    },
+    DuplicateFloor {
+        floor: Option<String>,
+    },
+    DuplicateCategory {
+        key: String,
+    },
     /// The category's label, else its key.
-    CategoryColor { category: String },
-    FocalPoint { floor: Option<String> },
+    CategoryColor {
+        category: String,
+    },
+    FocalPoint {
+        floor: Option<String>,
+    },
     /// An id `related` uses too: a copy made outside the designer.
     DuplicateId,
     /// The document's field name, e.g. `seatPitch`.
-    InvalidValue { field: String },
+    InvalidValue {
+        field: String,
+    },
     EmptyText,
     OutOfRange,
     /// The compiler's words: `zero size`, `self-intersecting outline`,
     /// `cannot be tessellated`.
-    Geometry { problem: String },
+    Geometry {
+        problem: String,
+    },
     /// More than `limit` of `what` (the compiler's words).
-    TooMany { what: String, limit: u32 },
+    TooMany {
+        what: String,
+        limit: u32,
+    },
     /// A kind of object not compiled yet: `table`, `booth`, `area`, `section`.
-    Unsupported { node_kind: String },
+    Unsupported {
+        node_kind: String,
+    },
     Overlap,
     /// The floor's name; `None` for an unnamed floor or a chart without
     /// floors.
-    NoFocalPoint { floor: Option<String> },
+    NoFocalPoint {
+        floor: Option<String>,
+    },
     SingleSeat,
     OutsideOutline,
-    UnusedCategory { category: String },
+    UnusedCategory {
+        category: String,
+    },
     NoAccessibleSeat,
-    SimilarColors { category: String, other: String },
+    SimilarColors {
+        category: String,
+        other: String,
+    },
     /// `ratio` as 4.5 for 4.5:1.
-    LowContrast { category: String, background: String, ratio: f64 },
+    LowContrast {
+        category: String,
+        background: String,
+        ratio: f64,
+    },
     /// CSS pixels at fit zoom.
-    TextTooSmall { px: f64 },
+    TextTooSmall {
+        px: f64,
+    },
     NoSectionLabel,
-    ChartTooLarge { extent: u32 },
-    TooManySeatsInRow { seats: u32, limit: u32 },
-    TooManySeats { limit: u32 },
+    ChartTooLarge {
+        extent: u32,
+    },
+    TooManySeatsInRow {
+        seats: u32,
+        limit: u32,
+    },
+    TooManySeats {
+        limit: u32,
+    },
     SeatIds,
     RemovedOutOfRange,
     ArcRow,
@@ -438,7 +491,9 @@ pub enum FindingDetail {
     InvalidLabelStart,
     /// The row's labels cannot be written: `zeroStep`, `startParity`,
     /// `overflow`, `outOfRange`, `customExhausted`, `tooLong`.
-    Labels { problem: String },
+    Labels {
+        problem: String,
+    },
 }
 
 /// The label of the row and seat a finding names, as a person reads them
@@ -545,7 +600,9 @@ fn finding_detail(doc: &Document, d: &Detail) -> FindingDetail {
         Detail::InvalidValue { field } => F::InvalidValue { field: s(field) },
         Detail::EmptyText => F::EmptyText,
         Detail::OutOfRange => F::OutOfRange,
-        Detail::Geometry { problem } => F::Geometry { problem: s(problem) },
+        Detail::Geometry { problem } => F::Geometry {
+            problem: s(problem),
+        },
         Detail::TooMany { what, limit } => F::TooMany {
             what: s(what),
             limit: *limit,

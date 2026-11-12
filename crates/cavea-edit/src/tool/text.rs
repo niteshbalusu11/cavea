@@ -139,7 +139,13 @@ impl TextEdit {
 
 /// A new text's size, rotation, alignment, weight and colour (07 §4).
 fn defaults() -> (f64, f64, Align, u16, String) {
-    (TEXT_SIZE, 0.0, Align::Center, TEXT_WEIGHT, TEXT_COLOR.to_owned())
+    (
+        TEXT_SIZE,
+        0.0,
+        Align::Center,
+        TEXT_WEIGHT,
+        TEXT_COLOR.to_owned(),
+    )
 }
 
 #[derive(Debug, Default)]

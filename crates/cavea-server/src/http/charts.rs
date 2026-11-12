@@ -1289,7 +1289,8 @@ impl EditorQuery {
             None => Ok(None),
             Some(e)
                 if (1..=64).contains(&e.len())
-                    && e.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') =>
+                    && e.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') =>
             {
                 Ok(Some(e))
             }
