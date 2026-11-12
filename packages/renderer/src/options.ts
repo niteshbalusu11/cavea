@@ -131,7 +131,7 @@ export interface SeatMapOptions {
      */
     image?: ImageSource;
   };
-  /** The chart is drawn and the first state applied; just before `createSeatMap` resolves. */
+  /** The chart is decoded and the first state applied (a hidden container has not drawn yet); just before `createSeatMap` resolves. */
   onReady?: (info: ReadyInfo) => void;
   /** The selection changed, or the buyer chose another ticket type. */
   onSelectionChange?: (selection: Selection) => void;

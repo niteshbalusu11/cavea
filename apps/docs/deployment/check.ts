@@ -88,9 +88,15 @@ interface Block {
 }
 
 async function blocks(): Promise<Block[]> {
-  const site = (await Bun.file(join(HERE, "site.json")).json()) as { vars: Record<string, string> };
+  const site = (await Bun.file(join(HERE, "site.json")).json()) as {
+    vars: Record<string, string>;
+    nav: Array<{ section: string; pages?: string[] }>;
+  };
   const out: Block[] = [];
-  for (const page of ["index.md", "monitoring.md", "backups.md"]) {
+  // Every deployment page, in the navigation's order, so a block marked on any of them is run or fails the check.
+  const nav = site.nav.find((s) => s.section === "Deployment")?.pages ?? [];
+  check(nav.length > 0, "site.json lists the deployment pages");
+  for (const page of nav.map((p) => p.replace(/^deployment\//, ""))) {
     const raw = await readFile(join(HERE, "content/deployment", page), "utf8");
     const source = substitute(raw, { ...site.vars, image: IMAGE }, page);
     for (const f of fences(source)) {
