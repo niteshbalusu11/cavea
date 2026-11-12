@@ -473,7 +473,8 @@ export const STEPS: Step[] = [
             curve: { kind: "arc", radius: 1500 },
             category: "stalls",
             start: 101,
-            categories: ["stalls:Stalls"],
+            // The server's empty draft's own, and the one added here.
+            categories: ["standard:Standard", "stalls:Stalls"],
           }),
         "the saved draft: one block of 4 rows of 10, an arc of radius 1500, seats from 101, category stalls",
         found,
