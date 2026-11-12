@@ -69,6 +69,7 @@ The request is malformed: a body, header, path or query parameter the server can
 | `last_owner` | The change would leave the workspace without an owner. | Make another member an owner first. |
 | `upgrade` | The realtime route was called without a WebSocket upgrade. | Connect with a WebSocket client. |
 | `last_event_id` | The server-sent events stream got a `Last-Event-ID` that is not a sequence number. | Let the browser's `EventSource` send it. |
+| `no_second_factor` | Confirming or turning off two-step sign-in for an account that has none to confirm or turn off. | Start again from the account page. |
 
 <h2 id="status-401">401 Unauthorized</h2>
 
@@ -86,6 +87,9 @@ The credential is missing, malformed or not valid. Check which credential the op
 | `credentials` | Signing in to the console with a wrong email or password. | Check them. Repeated failures slow further attempts (`429`, `backoff`). |
 | `setup_token` | The setup link is wrong, expired or used, or the server already has its owner. | Restart the server for a new link while it has no user; otherwise sign in. |
 | `invitation` | The invitation link is wrong, expired or used. | Ask for a new invitation. |
+| `challenge` | The second step of a sign-in came too late (after five minutes), after five wrong codes, or twice. | Sign in again with the email and password. |
+| `second_factor` | The code from the authenticator app, or the recovery code, is wrong or was used already. Repeated failures slow further attempts (`429`, `backoff`). | Type the current code, or an unused recovery code. |
+| `reset_token` | The password reset link is wrong, expired (after an hour) or used. | Ask an owner or admin for a new link. |
 
 <h2 id="status-403">403 Forbidden</h2>
 
@@ -106,6 +110,9 @@ The credential is valid, but may not do this. Without a `reason`, the seat engin
 | `instance_owner` | Only a person who owns every workspace on the server may change its licence. | Ask that person. |
 | `credentials` | Changing the console password with a wrong current password. | Enter the current password. |
 | `invitation_email` | The invitation is for another email address. | Sign in as the invited address. |
+| `second_factor` | Turning on, or off, two-step sign-in with a wrong code. | Type the current code from the authenticator app (or, to turn it off, an unused recovery code). |
+| `own_account` | Making a reset link for, or resetting the two-step sign-in of, your own account from the members list. | Change your password, or turn off two-step sign-in, from your account page. |
+| `other_workspaces` | Resetting someone who also belongs to a workspace where you are not an owner or admin (or, for an owner there, not an owner). An account is the whole server's, not one workspace's. | Ask an owner of that workspace to do it. |
 
 <h2 id="status-404">404 Not found</h2>
 
@@ -122,6 +129,7 @@ Something with this key already exists in the workspace, possibly archived: a ch
 | Reason | Meaning | What to do |
 |---|---|---|
 | `sign_in` | Accepting an invitation as a new account, for an email that already has one. | Sign in, then open the invitation link again. |
+| `second_factor` | Starting two-step sign-in for an account that already has it on. | Turn it off first to start again with a new authenticator. |
 
 ### `object_not_free`
 

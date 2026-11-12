@@ -721,6 +721,45 @@ async fn measure_hold_with_a_key() {
             at(0.5),
             at(0.99)
         );
+        // The reply's size at a typical hold (one and eight seats) and at the
+        // most one command takes (1,000), on an event of their own.
+        let body = json!({ "key": "sizes", "chart": a.chart });
+        let (response, _) = call(
+            &app,
+            Method::POST,
+            "/v1/events",
+            Some(&a.secret),
+            Some(body),
+        )
+        .await;
+        assert_eq!(response.status(), 201);
+        for (first, count) in [(0, 1), (1, 8), (1_000, 1_000)] {
+            let body = json!({ "event": "sizes" });
+            let (_, token) = call(
+                &app,
+                Method::POST,
+                "/v1/hold-tokens",
+                Some(&a.secret),
+                Some(body),
+            )
+            .await;
+            let token = token["hold_token"].as_str().unwrap();
+            let idx: Vec<u32> = (first..first + count).collect();
+            let body = json!({ "hold_token": token, "objects": { "version": a.hash, "idx": idx } });
+            let request = request(
+                Method::POST,
+                "/v1/events/sizes/hold",
+                None,
+                &refs(&key),
+                Some(body.to_string()),
+            );
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), 200);
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            println!("hold reply, {count} seats: {} bytes", bytes.len());
+        }
     })
     .await;
 }

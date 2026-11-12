@@ -34,13 +34,18 @@ fn capture(logs: &Captured) -> DefaultGuard {
 }
 
 /// Every string in `value` that is a secret the server handed out: an API
-/// key, a hold token, a CSRF token, a link with a token in its fragment.
+/// key, a hold token, a CSRF token, a link with a token in its fragment, a
+/// sign-in challenge, a TOTP secret and its URI, recovery codes.
 fn handed_out(value: &Value, found: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
+            if let Some(codes) = map.get("recovery_codes").and_then(Value::as_array) {
+                found.extend(codes.iter().filter_map(Value::as_str).map(str::to_owned));
+            }
             for (name, v) in map {
                 if let Value::String(s) = v {
-                    let secret = matches!(name.as_str(), "hold_token" | "csrf_token")
+                    let named = ["hold_token", "csrf_token", "challenge", "secret", "uri"];
+                    let secret = named.contains(&name.as_str())
                         || (name == "key" && (s.starts_with("sk_") || s.starts_with("pk_")))
                         || (name == "link" && s.contains("#token="));
                     if secret {
@@ -323,6 +328,89 @@ async fn secrets_never_reach_the_logs() {
             let (response, _) = send(app.clone(), request).await;
             assert_eq!(response.status(), 404, "{uri}");
         }
+
+        // The second factor's secrets, each made for real: a TOTP secret and
+        // its URI, recovery codes, a sign-in challenge, codes sent back, and
+        // a reset link used.
+        let session = members.session(owner).unwrap().clone();
+        let headers = console(&session, None);
+        let mut cookies = Vec::new();
+        let mut post = async |uri: &str, headers: &[(header::HeaderName, String)], body: Value| {
+            let (response, answer) =
+                call_with(&app, Method::POST, uri, None, &refs(headers), Some(body)).await;
+            if let Some(cookie) = response.headers().get(header::SET_COOKIE) {
+                let value = cookie.to_str().unwrap();
+                cookies.push(
+                    value
+                        .split(';')
+                        .next()
+                        .unwrap()
+                        .split('=')
+                        .nth(1)
+                        .unwrap()
+                        .to_owned(),
+                );
+            }
+            (response.status().as_u16(), answer)
+        };
+        let (status, enrolled) = post(
+            "/console/api/totp",
+            &headers,
+            json!({ "password": PASSWORD }),
+        )
+        .await;
+        assert_eq!(status, 200, "{enrolled}");
+        handed_out(&enrolled, &mut secrets);
+        let key = super::accounts::unbase32(enrolled["secret"].as_str().unwrap());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap();
+        let now = u64::try_from(now.as_millis()).unwrap();
+        let code = crate::console::totp::code(&key, crate::console::totp::step(now));
+        secrets.push(code.clone());
+        let (status, codes) = post(
+            "/console/api/totp/confirm",
+            &headers,
+            json!({ "code": code }),
+        )
+        .await;
+        assert_eq!(status, 200, "{codes}");
+        handed_out(&codes, &mut secrets);
+        let recovery: Vec<String> = codes["recovery_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap().to_owned())
+            .collect();
+        let sign_in = json!({ "email": "owner@a.example", "password": PASSWORD });
+        let (status, first) = post("/console/api/session", &[], sign_in).await;
+        assert_eq!(status, 202, "{first}");
+        handed_out(&first, &mut secrets);
+        let body = json!({ "challenge": first["challenge"], "code": recovery[0] });
+        let (status, me) = post("/console/api/session/second-factor", &[], body).await;
+        assert_eq!(status, 200, "{me}");
+        handed_out(&me, &mut secrets);
+        let body = json!({ "password": PASSWORD, "code": recovery[1] });
+        let (status, me) = post("/console/api/totp/disable", &headers, body).await;
+        assert_eq!(status, 200, "{me}");
+        let uri = format!("/v1/workspaces/{}/password-resets", a.id);
+        let admin = [(header::AUTHORIZATION, format!("Bearer {ADMIN}"))];
+        let body = json!({ "email": "owner@a.example" });
+        let (status, created) = post(&uri, &admin, body).await;
+        assert_eq!(status, 201, "{created}");
+        handed_out(&created, &mut secrets);
+        let token = created["link"]
+            .as_str()
+            .unwrap()
+            .rsplit("#token=")
+            .next()
+            .unwrap();
+        let body = json!({ "token": token, "password": PASSWORD });
+        let (status, me) = post("/console/api/password-reset", &[], body).await;
+        assert_eq!(status, 200, "{me}");
+        handed_out(&me, &mut secrets);
+        secrets.extend(cookies);
+        members.sign_in(&pool).await;
 
         for (_, id) in &members.sessions {
             secrets.push(id.as_str().to_owned());

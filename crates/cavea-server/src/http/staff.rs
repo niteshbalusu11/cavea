@@ -25,6 +25,7 @@ use axum::http::{HeaderMap, HeaderValue, Method};
 use cavea_engine::Clock as _;
 use subtle::ConstantTimeEq as _;
 
+use super::Reason;
 use super::auth::{Auth, Credential, credential, unauthorized, wrong_kind};
 use super::{ApiError, AppState, Code};
 use crate::console::sessions::{self, Found};
@@ -86,9 +87,7 @@ pub fn session_cookie(headers: &HeaderMap, state: &AppState) -> Option<Option<Se
 }
 
 fn console_session_refused() -> ApiError {
-    ApiError::new(Code::Unauthorized)
-        .with_message("Sign in to the console again.")
-        .with_detail("reason", "console_session")
+    ApiError::from(Reason::ConsoleSession).with_message("Sign in to the console again.")
 }
 
 /// A non-safe request with a console cookie must come from this server's own
@@ -98,9 +97,8 @@ fn console_session_refused() -> ApiError {
 /// from a browser) passes this check; the token still applies.
 pub fn same_origin(headers: &HeaderMap) -> Result<(), ApiError> {
     let refused = || {
-        ApiError::new(Code::Forbidden)
+        ApiError::from(Reason::Origin)
             .with_message("Console requests must come from the console's own origin.")
-            .with_detail("reason", "origin")
     };
     if let Some(site) = headers.get(SEC_FETCH_SITE) {
         return match site.as_bytes() {
@@ -136,16 +134,15 @@ pub(super) fn cookie_session(
     let id = match session_cookie(headers, state) {
         Some(Some(id)) => id,
         Some(None) => return Err(console_session_refused()),
-        None => return Err(unauthorized("missing")),
+        None => return Err(unauthorized(Reason::Missing)),
     };
     if !is_safe(method) {
         same_origin(headers)?;
         let sent = headers.get(CSRF).map(HeaderValue::as_bytes);
         let valid = sent.is_some_and(|sent| bool::from(sent.ct_eq(id.csrf().as_bytes())));
         if !valid {
-            return Err(ApiError::new(Code::Forbidden)
-                .with_message("Send the session's CSRF token in `Cavea-Csrf-Token`.")
-                .with_detail("reason", "csrf"));
+            return Err(ApiError::from(Reason::Csrf)
+                .with_message("Send the session's CSRF token in `Cavea-Csrf-Token`."));
         }
     }
     Ok(id)
@@ -176,9 +173,8 @@ pub async fn no_store_for_cookies(
 /// The workspace a console request names: `ws_` and 32 lowercase hex digits.
 fn named_workspace(headers: &HeaderMap) -> Result<String, ApiError> {
     let value = headers.get(WORKSPACE).ok_or_else(|| {
-        ApiError::new(Code::InvalidRequest)
+        ApiError::from(Reason::NoWorkspace)
             .with_message("Name a workspace you are a member of in `Cavea-Workspace`.")
-            .with_detail("reason", "workspace")
     })?;
     let value = value.to_str().map_err(|_| not_a_member())?;
     value
@@ -261,28 +257,24 @@ async fn member(parts: &Parts, state: &AppState) -> Result<Auth, ApiError> {
     let auth = Auth::member(workspace, found.user, role);
     cavea_telemetry::record_workspace(&auth.workspace().to_string());
     if !role.allows(permission) {
-        return Err(ApiError::new(Code::Forbidden)
+        return Err(ApiError::from(Reason::Role)
             .with_message("Your role in this workspace does not allow this.")
-            .with_detail("reason", "role")
             .with_detail("permission", permission.as_str()));
     }
     // Only for chart and event writes: a seat operation's permission never
     // reaches the licence (D-20).
     if permission.closed_while_expired() && state.licences.read_only(state.seats.clock.now().0) {
-        return Err(ApiError::new(Code::Forbidden)
-            .with_message(
-                "The licence has expired: the console is read-only but for seat operations. \
+        return Err(ApiError::from(Reason::LicenceExpired).with_message(
+            "The licence has expired: the console is read-only but for seat operations. \
 Upload a renewed licence under Settings.",
-            )
-            .with_detail("reason", "licence_expired"));
+        ));
     }
     Ok(auth)
 }
 
 fn not_a_member() -> ApiError {
-    ApiError::new(Code::Forbidden)
+    ApiError::from(Reason::NotAMember)
         .with_message("Name a workspace you are a member of in `Cavea-Workspace`.")
-        .with_detail("reason", "workspace")
 }
 
 /// Requires a console session: the `/console/api` routes of a signed-in user.

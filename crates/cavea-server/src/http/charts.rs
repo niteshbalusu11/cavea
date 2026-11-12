@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json, value::RawValue};
 use tracing::Instrument as _;
 
+use super::Reason;
 use super::auth::{Auth, KeyId};
 use super::extract::{Json, Page, Path, Query, RawJson, check_text, invalid, invalid_field};
 use super::openapi::{Needs, Op, Routes};
@@ -147,7 +148,7 @@ Replaces any thumbnail the version had.",
                 "getChartLock",
                 "Who is editing the chart",
             ))
-            .about("07 §9: the designer's editing lock, or `null` when nobody holds a live one.")
+            .about("The designer's editing lock, or `null` when nobody holds a live one.")
             .reply(200, "ChartLockState", "The lock"),
             read_lock,
         )
@@ -158,7 +159,7 @@ Replaces any thumbnail the version had.",
                 "Take, renew or take over the editing lock",
             ))
             .about(
-                "07 §9. Takes the lock, or renews it for its holder, for 60 seconds by the \
+                "Takes the lock, or renews it for its holder, for 60 seconds by the \
 database's clock; renew every 20. Held by another and live: `409 chart_locked` with the lock in \
 `details.lock`, unless `take_over` is true. While another holds a live lock, saving the draft and \
 publishing are `409 chart_locked`.",
@@ -383,9 +384,8 @@ fn not_found() -> ApiError {
 }
 
 fn archived() -> ApiError {
-    ApiError::new(Code::InvalidRequest)
+    ApiError::from(Reason::Archived)
         .with_message("The chart is archived: its draft can no longer change.")
-        .with_detail("reason", "archived")
 }
 
 /// Another holds a live editing lock (07 §9).
@@ -401,23 +401,18 @@ fn version_conflict(current: i64) -> ApiError {
 impl From<ChartError> for ApiError {
     fn from(error: ChartError) -> Self {
         match error {
-            ChartError::Document(message) => ApiError::new(Code::InvalidRequest)
-                .with_message(message)
-                .with_detail("reason", "document"),
-            ChartError::Schema(schema) => ApiError::new(Code::InvalidRequest)
-                .with_message(format!("Chart document schema {schema} is not supported."))
-                .with_detail("reason", "document"),
-            ChartError::Nul => ApiError::new(Code::InvalidRequest)
-                .with_message("The document holds U+0000, which cannot be stored.")
-                .with_detail("reason", "document"),
+            ChartError::Document(message) => ApiError::from(Reason::Document).with_message(message),
+            ChartError::Schema(schema) => ApiError::from(Reason::Document)
+                .with_message(format!("Chart document schema {schema} is not supported.")),
+            ChartError::Nul => ApiError::from(Reason::Document)
+                .with_message("The document holds U+0000, which cannot be stored."),
             ChartError::Invalid(findings) => {
                 // The compiler's documented form (03 §3.2); it cannot fail.
                 let findings = serde_json::to_value(findings).unwrap_or_default();
                 ApiError::new(Code::ChartInvalid).with_detail("findings", findings)
             }
-            ChartError::Timeout => ApiError::new(Code::Overloaded)
-                .with_message("The chart could not be compiled in time; retry shortly.")
-                .with_detail("reason", "compile_timeout"),
+            ChartError::Timeout => ApiError::from(Reason::CompileTimeout)
+                .with_message("The chart could not be compiled in time; retry shortly."),
             ChartError::Internal(cause) => ApiError::internal(cause),
         }
     }
@@ -446,7 +441,7 @@ fn if_match(headers: &HeaderMap) -> Result<Option<IfMatch>, ApiError> {
         .map(|etag| Some(IfMatch::Etag(etag)))
         .ok_or_else(|| {
             invalid(
-                "if_match",
+                Reason::IfMatch,
                 "`If-Match` must be a chart's `draft_etag`, such as \"3\", or `*`.",
             )
         })
@@ -526,7 +521,7 @@ async fn create(
             let draft = String::from(Box::<str>::from(document));
             if draft.len() > MAX_DRAFT_BYTES {
                 return Err(invalid(
-                    "body_too_large",
+                    Reason::BodyTooLarge,
                     "The body is over the size limit.",
                 ));
             }
@@ -709,7 +704,7 @@ async fn save_draft(
 ) -> Result<Response, ApiError> {
     let expected = if_match(&headers)?.ok_or_else(|| {
         invalid(
-            "if_match",
+            Reason::IfMatch,
             "`If-Match` is required: the chart's `draft_etag`, or `*` to overwrite any draft.",
         )
     })?;
@@ -1067,9 +1062,7 @@ async fn versions(
     let after = match page.after.as_deref() {
         None => None,
         Some(after) => Some(version_uuid(after).ok_or_else(|| {
-            ApiError::new(Code::InvalidRequest)
-                .with_message("`after` is not a chart version id.")
-                .with_detail("reason", "query")
+            ApiError::from(Reason::Query).with_message("`after` is not a chart version id.")
         })?),
     };
     let list = async {

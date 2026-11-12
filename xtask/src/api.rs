@@ -435,7 +435,9 @@ fn content(content: Option<&Value>, other: &str) -> Result<Option<String>> {
 /// The TypeScript type of `schema`, its nested lines indented by `pad`.
 fn ts(schema: &Value, pad: &str) -> Result<String> {
     let map = object(Some(schema), "schema")?;
-    if let Some(unknown) = map.keys().find(|k| !KEYWORDS.contains(&k.as_str())) {
+    // `x-` extensions describe; they change no type.
+    let known = |k: &String| KEYWORDS.contains(&k.as_str()) || k.starts_with("x-");
+    if let Some(unknown) = map.keys().find(|k| !known(k)) {
         bail!("unsupported keyword `{unknown}`");
     }
     if let Some(r) = map.get("$ref") {

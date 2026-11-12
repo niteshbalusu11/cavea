@@ -502,15 +502,15 @@ fn problem_response(status: u16) -> Option<&'static str> {
     })
 }
 
-const INFO: &str = "The Cavea server's REST API (`docs/08-server.md` §6). JSON bodies with \
+const INFO: &str = "The Cavea server's REST API. JSON bodies with \
 `snake_case` fields; times are RFC 3339 UTC. Routes under `/v1` that take a secret key also take a \
-console session (the cookie `/console/api/session` sets, 09 §10): the request names its workspace \
+console session (the cookie `/console/api/session` sets): the request names its workspace \
 in `Cavea-Workspace`, a non-safe method carries `Cavea-Csrf-Token`, and the member's role must \
-grant the operation's `x-cavea-permission` (`x-cavea-roles` lists the roles that do, 09 §2). Every response carries `Cavea-Request-Id`; a caller may \
+grant the operation's `x-cavea-permission` (`x-cavea-roles` lists the roles that do). Every response carries `Cavea-Request-Id`; a caller may \
 send its own (1 to 64 characters of `A-Z a-z 0-9 . _ -`). Errors are `application/problem+json` \
-with a stable `code` (08 §6.4): match on `code`, not on `message`. Lists are \
+with a stable `code`: match on `code`, not on `message`. Lists are \
 `{\"data\": [..], \"next\": <cursor or null>}`, oldest first; pass `next` back as `after`. The \
-WebSocket protocol of `GET /v1/public/rt` is 08 §8, which OpenAPI cannot describe.";
+WebSocket protocol of `GET /v1/public/rt` is a binary protocol, which OpenAPI cannot describe.";
 
 /// The whole document.
 #[must_use]
@@ -549,7 +549,7 @@ pub fn document() -> Value {
             },
             "IdempotencyKey": {
                 "name": "Idempotency-Key", "in": "header", "required": false,
-                "description": "1 to 255 printable ASCII characters, kept 24 hours (08 §6.1). The same \
+                "description": "1 to 255 printable ASCII characters, kept 24 hours. The same \
 key with another request is `409 idempotency_mismatch`.",
                 "schema": { "type": "string", "minLength": 1, "maxLength": 255 },
             },
@@ -616,7 +616,7 @@ whatever is there.",
             "securitySchemes": {
                 "adminKey": {
                     "type": "http", "scheme": "bearer",
-                    "description": "The operator's `CAVEA_ADMIN_KEY` (08 §11).",
+                    "description": "The operator's `CAVEA_ADMIN_KEY`.",
                 },
                 "secretKey": {
                     "type": "http", "scheme": "bearer", "bearerFormat": "sk_…",
@@ -628,11 +628,11 @@ whatever is there.",
                 },
                 "publishableKeyQuery": {
                     "type": "apiKey", "in": "query", "name": "key",
-                    "description": "A publishable key in the URL: the realtime routes (D-31).",
+                    "description": "A publishable key in the URL: the realtime routes, whose clients cannot set headers.",
                 },
                 "sessionToken": {
                     "type": "apiKey", "in": "header", "name": "Cavea-Session",
-                    "description": "A session token signed by the customer's backend (08 §11). \
+                    "description": "A session token signed by the customer's backend. \
     Required when the event sets `require_session`; verified whenever sent.",
                 },
                 "holdToken": {
@@ -641,7 +641,7 @@ whatever is there.",
                 },
                 "consoleSession": {
                     "type": "apiKey", "in": "cookie", "name": "__Host-cavea_console",
-                    "description": "A staff member's console session (09 §2), set by \
+                    "description": "A staff member's console session, set by \
     `POST /console/api/session` or `/console/api/setup`; `cavea_console` when \
     `CAVEA_CONSOLE_COOKIE_SECURE=false`. Not the buyer's session token. With it, a non-safe method \
     sends `Cavea-Csrf-Token`, and a `/v1` route names its workspace in `Cavea-Workspace`.",
@@ -674,10 +674,15 @@ fn problem_responses(used: &[u16]) -> Map<String, Value> {
             })
         });
         let description = entry["description"].as_str().unwrap_or_default();
-        let joined = if description.is_empty() {
-            format!("`{}`", code.as_str())
+        let reserved = if code.reserved() {
+            " (reserved: not sent by this version)"
         } else {
-            format!("{description}, `{}`", code.as_str())
+            ""
+        };
+        let joined = if description.is_empty() {
+            format!("`{}`{reserved}", code.as_str())
+        } else {
+            format!("{description}, `{}`{reserved}", code.as_str())
         };
         entry["description"] = joined.into();
     }

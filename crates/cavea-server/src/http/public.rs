@@ -35,7 +35,7 @@ pub(super) fn routes() -> Routes {
                 "A compiled chart",
             )
             .about(
-                "03 §4.6. No credential: the content hash names the file. Brotli when \
+                "No credential: the content hash names the file. Brotli when \
 `Accept-Encoding` allows it. Immutable; CORS open.",
             )
             .response(

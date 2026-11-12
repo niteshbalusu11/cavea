@@ -14,8 +14,8 @@
 
 import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, posix, relative } from "node:path";
-import { apiPages, problemCodes, type Doc } from "./api.ts";
-import { compare, parseCatalogue, scanReasons } from "./errors.ts";
+import { apiPages, type Doc } from "./api.ts";
+import { compare, declared, parseCatalogue } from "./errors.ts";
 import { layout, type NavSection } from "./layout.ts";
 import { fences, plain, render, substitute, type Heading } from "./markdown.ts";
 import { expand, settings, sources, themeTokens, unclaimed, unknownMetrics } from "./reference.ts";
@@ -121,11 +121,7 @@ export async function build(
   // The error reference against the server.
   const errorsPage = pages.find((p) => p.path === "reference/errors.md");
   if (errorsPage === undefined) throw new Error("content/reference/errors.md is missing");
-  const problems = compare(
-    parseCatalogue(errorsPage.source),
-    problemCodes(doc),
-    await scanReasons(ROOT),
-  );
+  const problems = compare(parseCatalogue(errorsPage.source), declared(doc));
   if (problems.length > 0) {
     throw new Error(`the error reference does not match the server:\n  ${problems.join("\n  ")}`);
   }

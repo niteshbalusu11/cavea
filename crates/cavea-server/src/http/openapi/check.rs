@@ -120,6 +120,38 @@ pub fn exchange(
     if is_json(&media) {
         let value: Value = serde_json::from_slice(body).map_err(|e| format!("{at}: {e}"))?;
         validate(&entry["schema"], &value, "response").map_err(|e| format!("{at}: {e}"))?;
+        if media == "application/problem+json" {
+            declared_reasons(&value).map_err(|e| format!("{at}: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// A problem's `details.reason`, and each `details.objects[].reason`, must
+/// be one the document lists for its `code` (`Problem`'s `x-cavea-reasons`
+/// and `x-cavea-object-reasons`).
+fn declared_reasons(problem: &Value) -> Result<(), String> {
+    let schema = &doc()["components"]["schemas"]["Problem"];
+    let code = problem["code"].as_str().unwrap_or_default();
+    let listed = |map: &str, reason: &Value| {
+        schema[map][code]
+            .as_array()
+            .is_some_and(|reasons| reasons.contains(reason))
+    };
+    let details = &problem["details"];
+    if let Some(reason) = details.get("reason")
+        && !listed("x-cavea-reasons", reason)
+    {
+        return Err(format!("reason {reason} is not declared for `{code}`"));
+    }
+    for object in details["objects"].as_array().into_iter().flatten() {
+        if let Some(reason) = object.get("reason")
+            && !listed("x-cavea-object-reasons", reason)
+        {
+            return Err(format!(
+                "object reason {reason} is not declared for `{code}`"
+            ));
+        }
     }
     Ok(())
 }
@@ -135,7 +167,7 @@ pub(crate) fn validate(schema: &Value, value: &Value, at: &str) -> Result<(), St
     };
     for (keyword, rule) in schema {
         let ok = match keyword.as_str() {
-            k if ANNOTATIONS.contains(&k) => true,
+            k if ANNOTATIONS.contains(&k) || k.starts_with("x-") => true,
             "type" => match rule {
                 Value::String(t) => is_type(t, value),
                 Value::Array(ts) => ts.iter().any(|t| is_type(t.as_str().unwrap(), value)),

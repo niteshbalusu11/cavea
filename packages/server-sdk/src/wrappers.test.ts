@@ -28,6 +28,7 @@ const ARGS: Record<string, unknown[]> = {
   "workspaces.create": [{ key: "k", name: "n" }],
   "workspaces.mintKey": ["p", { name: "n" }],
   "workspaces.inviteOwner": ["p", { email: "a@b.example" }],
+  "workspaces.ownerPasswordReset": ["p", { email: "a@b.example" }],
 };
 
 test("every wrapped operation sends its own method and path", async () => {

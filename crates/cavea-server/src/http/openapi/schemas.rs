@@ -5,7 +5,7 @@
 
 use serde_json::{Map, Value, json};
 
-use super::super::Code;
+use super::super::{Code, Reason};
 use super::schema_ref as r;
 use crate::console::Permission;
 
@@ -117,6 +117,124 @@ fn workspace(created: bool) -> Value {
     object(&required, &[])
 }
 
+/// An error: the code, and per code the reasons it may carry, from the one
+/// list handlers take them from ([`Reason`]).
+fn problem(codes: &[&str]) -> Value {
+    let mut schema = described(
+        object(
+            &[
+                ("code", json!({ "enum": codes })),
+                ("status", integer()),
+                ("message", text("For humans; may change. Match on `code`.")),
+                (
+                    "details",
+                    described(
+                        json!({
+                            "type": "object",
+                            "properties": { "reason": r("ProblemReason") },
+                        }),
+                        "Empty, or what the code adds: `reason`, `missing`, `objects`, `field`, \
+`limit`, `requested`, `session`, `findings`, `draft_etag`, `version`, `lock`, `permission`.",
+                    ),
+                ),
+                ("request_id", text("Equals `Cavea-Request-Id`.")),
+            ],
+            &[],
+        ),
+        "An error. `x-cavea-reasons` maps each code to the `details.reason` values it may \
+carry; `x-cavea-object-reasons` each code to the `reason` of each object in `details.objects`. \
+A code missing from a map carries none. `x-cavea-reserved-codes` are listed so that clients \
+can handle them, but this version never sends them: `hold_token_expired` (an expired token is \
+`not_found`), and the codes of features not built yet (upgrading an event, channels, the orphan \
+rule, best-available).",
+    );
+    let reserved: Vec<&str> = Code::ALL
+        .into_iter()
+        .filter(|c| c.reserved())
+        .map(Code::as_str)
+        .collect();
+    schema["x-cavea-reserved-codes"] = json!(reserved);
+    schema["x-cavea-reasons"] = Value::Object(Reason::by_code());
+    schema["x-cavea-object-reasons"] = Value::Object(Reason::objects_by_code());
+    schema
+}
+
+/// `ObjectDetails`' fields, which `EventObject` also has.
+fn object_details() -> Vec<(&'static str, Value)> {
+    vec![
+        (
+            "label",
+            text("The full label, composed by the chart's template."),
+        ),
+        ("oid", integer()),
+        (
+            "kind",
+            described(
+                json!({ "enum": ["seat", "table", "booth", "area"] }),
+                "`table` is a table booked whole.",
+            ),
+        ),
+        (
+            "category",
+            described(
+                object(&[("key", string()), ("label", string())], &[]),
+                "The object's category: its key and label as the chart defines them.",
+            ),
+        ),
+        (
+            "section",
+            described(
+                nullable(string()),
+                "The section's label; `null` outside a section or for a section without one.",
+            ),
+        ),
+        (
+            "row",
+            described(
+                nullable(string()),
+                "A seat's row label; `null` for other kinds.",
+            ),
+        ),
+        (
+            "seat",
+            described(
+                nullable(string()),
+                "A seat's own label within its row; `null` for other kinds.",
+            ),
+        ),
+    ]
+}
+
+fn hold_token_state(object_schema: &str) -> Value {
+    object(
+        &[
+            ("event", string()),
+            ("expires_at", time()),
+            ("max_objects", nullable(integer())),
+            ("objects", array(r(object_schema))),
+        ],
+        &[],
+    )
+}
+
+fn hold_reply(object_schema: &str) -> Value {
+    object(
+        &[
+            ("seq", integer()),
+            ("expires_at", time()),
+            ("objects", array(r(object_schema))),
+        ],
+        &[],
+    )
+}
+
+fn seat_reply(object_schema: &str) -> Value {
+    object(
+        &[("seq", integer()), ("objects", array(r(object_schema)))],
+        &[],
+    )
+}
+
 fn hold_ttl() -> Value {
     described(range(60, 7_200), "Seconds.")
 }
@@ -124,6 +242,7 @@ fn hold_ttl() -> Value {
 /// Every schema, by name.
 pub(super) fn all() -> Map<String, Value> {
     let codes: Vec<&str> = Code::ALL.iter().map(|c| c.as_str()).collect();
+    let reasons: std::collections::BTreeSet<&str> = Reason::all().map(Reason::as_str).collect();
     let permissions: Vec<&str> = Permission::ALL.iter().map(|p| p.as_str()).collect();
     let roles = || json!({ "enum": ["owner", "admin", "editor", "operator", "viewer"] });
     let user_id = || text("`usr_` and 32 hex digits.");
@@ -136,27 +255,13 @@ pub(super) fn all() -> Map<String, Value> {
         described(range(4, 15), "A custom status code."),
     ] });
     let entries = [
+        ("Problem", problem(&codes)),
         (
-            "Problem",
+            "ProblemReason",
             described(
-                object(
-                    &[
-                        ("code", json!({ "enum": codes })),
-                        ("status", integer()),
-                        ("message", text("For humans; may change. Match on `code`.")),
-                        (
-                            "details",
-                            described(
-                                json!({ "type": "object" }),
-                                "Empty, or what the code adds (08 §6.4): `reason`, `missing`, \
-`objects`, `field`, `limit`, `requested`, `session`, `findings`, `draft_etag`, `version`.",
-                            ),
-                        ),
-                        ("request_id", text("Equals `Cavea-Request-Id`.")),
-                    ],
-                    &[],
-                ),
-                "An error (08 §6.4).",
+                json!({ "enum": reasons }),
+                "Why, when the code says: `details.reason`. `Problem`'s `x-cavea-reasons` lists \
+which reasons each code may carry; a reason is never sent with any other code.",
             ),
         ),
         (
@@ -207,7 +312,7 @@ pub(super) fn all() -> Map<String, Value> {
             "ChartDocument",
             json!({
                 "type": "object",
-                "description": "A chart document (`docs/03-chart-format.md` §2), stored as sent.",
+                "description": "A chart document, stored as sent.",
             }),
         ),
         (
@@ -351,7 +456,10 @@ otherwise `null`.",
             "Finding",
             object(
                 &[
-                    ("code", text("An E or W code (03 §3.2), or `unsupported`.")),
+                    (
+                        "code",
+                        text("An E or W code of the compiler's findings, or `unsupported`."),
+                    ),
                     ("severity", json!({ "enum": ["error", "warning"] })),
                     ("node", nullable(integer())),
                     ("related", nullable(integer())),
@@ -469,7 +577,7 @@ otherwise `null`.",
         (
             "ObjectRefs",
             json!({
-                "description": "Labels, or `idx` in the event's chart version (08 §6.1). At most 1,000.",
+                "description": "Labels, or `idx` in the event's chart version. At most 1,000.",
                 "oneOf": [
                     { "type": "array", "items": string(), "maxItems": 1_000 },
                     object(
@@ -485,6 +593,14 @@ otherwise `null`.",
         (
             "ObjectLabel",
             object(&[("label", string()), ("oid", integer())], &[]),
+        ),
+        (
+            "ObjectDetails",
+            described(
+                object(&object_details(), &[]),
+                "An object as the secret-key routes return it: what a backend needs to price \
+and print a ticket without another call, from the event's chart version.",
+            ),
         ),
         (
             "CreateHoldToken",
@@ -528,18 +644,8 @@ otherwise `null`.",
                 &[],
             ),
         ),
-        (
-            "HoldTokenState",
-            object(
-                &[
-                    ("event", string()),
-                    ("expires_at", time()),
-                    ("max_objects", nullable(integer())),
-                    ("objects", array(r("ObjectLabel"))),
-                ],
-                &[],
-            ),
-        ),
+        ("HoldTokenState", hold_token_state("ObjectDetails")),
+        ("PublicHoldTokenState", hold_token_state("ObjectLabel")),
         (
             "ExtendHoldToken",
             object(&[], &[("ttl_seconds", nullable(hold_ttl()))]),
@@ -555,17 +661,8 @@ otherwise `null`.",
                 &[],
             ),
         ),
-        (
-            "HoldReply",
-            object(
-                &[
-                    ("seq", integer()),
-                    ("expires_at", time()),
-                    ("objects", array(r("ObjectLabel"))),
-                ],
-                &[],
-            ),
-        ),
+        ("HoldReply", hold_reply("ObjectDetails")),
+        ("PublicHoldReply", hold_reply("ObjectLabel")),
         (
             "Release",
             described(
@@ -618,21 +715,12 @@ Without: booked objects.",
                 &[],
             ),
         ),
-        (
-            "SeatReply",
-            object(
-                &[("seq", integer()), ("objects", array(r("ObjectLabel")))],
-                &[],
-            ),
-        ),
+        ("SeatReply", seat_reply("ObjectDetails")),
+        ("PublicSeatReply", seat_reply("ObjectLabel")),
         (
             "EventObject",
             object(
-                &[
-                    ("label", string()),
-                    ("oid", integer()),
-                    ("status", object_status),
-                ],
+                &[object_details().as_slice(), &[("status", object_status)]].concat(),
                 &[
                     ("seq", integer()),
                     ("expires_at", time()),
@@ -693,7 +781,7 @@ Empty otherwise.",
                     ],
                     &[],
                 ),
-                "What the renderer needs of the server's licence to decide its mark (12 §7.4): \
+                "What the renderer needs of the server's licence to decide its mark: \
 `licensed` (valid or in grace), `expired`, or `unlicensed` (missing or invalid).",
             ),
         ),
@@ -839,6 +927,13 @@ days of grace.",
                                     text("`usr_` and 32 hex digits: the actor in event logs."),
                                 ),
                                 ("email", string()),
+                                (
+                                    "second_factor",
+                                    described(
+                                        boolean(),
+                                        "Whether signing in asks for a code as well.",
+                                    ),
+                                ),
                             ],
                             &[],
                         ),
@@ -908,6 +1003,171 @@ days of grace.",
             object(&[("email", string()), ("role", roles())], &[]),
         ),
         ("InviteOwner", object(&[("email", string())], &[])),
+        (
+            "ConsoleSecondFactor",
+            described(
+                object(
+                    &[
+                        (
+                            "challenge",
+                            text(
+                                "64 hex digits, shown only here: send it with a code to \
+`/console/api/session/second-factor`.",
+                            ),
+                        ),
+                        ("expires_at", time()),
+                    ],
+                    &[],
+                ),
+                "The password is right and the user has a second factor: no session yet.",
+            ),
+        ),
+        (
+            "ConsoleSecondStep",
+            object(
+                &[
+                    ("challenge", string()),
+                    (
+                        "code",
+                        text(
+                            "Six digits from the authenticator app, or a recovery code \
+(`abcde-fghij`; spaces, dashes and case do not matter).",
+                        ),
+                    ),
+                ],
+                &[],
+            ),
+        ),
+        (
+            "ConsolePasswordProof",
+            object(&[("password", text("The user's current password."))], &[]),
+        ),
+        (
+            "ConsoleTotpSecret",
+            object(
+                &[
+                    (
+                        "secret",
+                        text("The secret in base32, shown only here, for typing in."),
+                    ),
+                    (
+                        "uri",
+                        text(
+                            "`otpauth://totp/Cavea:<email>?secret=…`, shown only here: draw it \
+as a QR code for the authenticator app.",
+                        ),
+                    ),
+                    ("algorithm", json!({ "enum": ["SHA1"] })),
+                    ("digits", integer()),
+                    ("period", described(integer(), "Seconds per code.")),
+                ],
+                &[],
+            ),
+        ),
+        (
+            "ConsoleCode",
+            object(
+                &[("code", text("Six digits from the authenticator app."))],
+                &[],
+            ),
+        ),
+        (
+            "ConsoleRecoveryCodes",
+            object(
+                &[(
+                    "recovery_codes",
+                    described(
+                        array(string()),
+                        "Ten codes, shown only here, each usable once instead of a code.",
+                    ),
+                )],
+                &[],
+            ),
+        ),
+        (
+            "ConsoleTotpDisable",
+            object(
+                &[
+                    ("password", text("The user's current password.")),
+                    (
+                        "code",
+                        text("Six digits from the authenticator app, or a recovery code."),
+                    ),
+                ],
+                &[],
+            ),
+        ),
+        (
+            "CreatePasswordReset",
+            object(
+                &[],
+                &[(
+                    "clear_second_factor",
+                    described(
+                        boolean(),
+                        "Using the link also removes the member's second factor. Default \
+`false`: a lost password and a lost phone are separate.",
+                    ),
+                )],
+            ),
+        ),
+        (
+            "CreateOwnerPasswordReset",
+            object(
+                &[("email", text("The email of an owner of the workspace."))],
+                &[(
+                    "clear_second_factor",
+                    described(
+                        boolean(),
+                        "Using the link also removes the owner's second factor. Default `false`.",
+                    ),
+                )],
+            ),
+        ),
+        (
+            "PasswordResetCreated",
+            object(
+                &[
+                    (
+                        "reset",
+                        object(
+                            &[
+                                ("id", text("`pwr_` and 32 hex digits.")),
+                                ("user", text("`usr_` and 32 hex digits.")),
+                                ("expires_at", time()),
+                                ("clear_second_factor", boolean()),
+                            ],
+                            &[],
+                        ),
+                    ),
+                    (
+                        "link",
+                        text(
+                            "`{CAVEA_PUBLIC_URL}/console/reset#token=<64 hex digits>`, shown \
+only here: give it to the person. It works once, for an hour. The console's page posts the token \
+and a new password to `/console/api/password-reset`.",
+                        ),
+                    ),
+                ],
+                &[],
+            ),
+        ),
+        (
+            "ConsolePasswordReset",
+            object(
+                &[
+                    ("token", text("The 64 hex digits of the link's fragment.")),
+                    (
+                        "password",
+                        described(
+                            json!({ "type": "string", "minLength": 15, "maxLength": 128 }),
+                            "The new password: 15 to 128 characters; no other rule.",
+                        ),
+                    ),
+                ],
+                &[],
+            ),
+        ),
         (
             "Invitation",
             object(

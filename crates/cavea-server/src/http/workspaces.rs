@@ -6,6 +6,7 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument as _;
 
+use super::Reason;
 use super::auth::{AdminKeyAuth, KeyKind, NewKey};
 use super::extract::{Json, Page, Path, Query, check_text};
 use super::keys::{KeyRow, KeyView, key_columns};
@@ -55,7 +56,7 @@ pub(super) fn routes() -> Routes {
             .about(
                 "How a workspace the admin key made gets its first member (and the operator's \
 recovery for one whose owners are gone): a one-time link making `email` an owner, shown only \
-here, accepted in the console as any invitation (09 §7). `409` if the email is already a \
+here, accepted in the console as any invitation. `409` if the email is already a \
 member's.",
             )
             .needs(Needs::Admin)
@@ -116,9 +117,7 @@ async fn list(
     let after = match page.after.as_deref() {
         None => None,
         Some(after) => Some(workspace_uuid(after).ok_or_else(|| {
-            ApiError::new(Code::InvalidRequest)
-                .with_message("`after` is not a workspace id.")
-                .with_detail("reason", "query")
+            ApiError::from(Reason::Query).with_message("`after` is not a workspace id.")
         })?),
     };
     let rows: Vec<WorkspaceRow> = sqlx::query_as(LIST)
@@ -131,7 +130,7 @@ async fn list(
     Ok(axum::Json(List::new(workspaces, limit, |w| w.id.clone())))
 }
 
-fn workspace_uuid(id: &str) -> Option<&str> {
+pub(super) fn workspace_uuid(id: &str) -> Option<&str> {
     let hex = id.strip_prefix("ws_")?;
     (hex.len() == 32 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))).then_some(hex)
 }

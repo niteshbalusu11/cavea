@@ -57,7 +57,7 @@ export declare function transport(options: TransportOptions): Send;
 ## errors.d.ts
 
 ```ts
-import type { OperationId, Problem } from "./generated.js";
+import type { OperationId, Problem, ProblemReason } from "./generated.js";
 /** What went wrong: a problem's `code`, or the client's own for a call that
  * got no usable answer: `network` (no answer), `timeout` (no answer in
  * time), `unexpected` (an answer that is not a problem of the API, such as a
@@ -70,8 +70,10 @@ export declare class CaveaError extends Error {
     /** The HTTP status, or 0 when no answer arrived. */
     readonly status: number;
     readonly code: ErrorCode;
-    /** `details.reason`, when the problem gives one (`invalid_field`, `archived`, …). */
-    readonly reason: string | null;
+    /** `details.reason`, when the problem gives one (`invalid_field`, `archived`, …): one of
+     * the reasons the API description lists for `code` (`Problem`'s
+     * `x-cavea-reasons`). A newer server's new reason still arrives, as its text. */
+    readonly reason: ProblemReason | null;
     /** The problem's `details`; `{}` when it has none. */
     readonly details: Readonly<Record<string, unknown>>;
     /** `Cavea-Request-Id`, to find the request in the server's logs; `null`
@@ -83,7 +85,7 @@ export declare class CaveaError extends Error {
         operation: OperationId;
         status: number;
         code: ErrorCode;
-        reason?: string | null;
+        reason?: ProblemReason | null;
         details?: Readonly<Record<string, unknown>>;
         requestId?: string | null;
         retryAfter?: number | null;
@@ -136,7 +138,7 @@ export interface Chart {
     name: string;
     published_version: Version | null;
 }
-/** A chart document (`docs/03-chart-format.md` §2), stored as sent. */
+/** A chart document, stored as sent. */
 export type ChartDocument = Record<string, unknown>;
 export interface ChartList {
     data: Chart[];
@@ -190,6 +192,12 @@ export interface CreateKey {
     kind: "secret" | "publishable";
     name: string;
 }
+export interface CreateOwnerPasswordReset {
+    /** Using the link also removes the owner's second factor. Default `false`. */
+    clear_second_factor?: boolean;
+    /** The email of an owner of the workspace. */
+    email: string;
+}
 export interface CreateWorkspace {
     key: string;
     name: string;
@@ -212,11 +220,25 @@ export interface EventList {
     next: string | null;
 }
 export interface EventObject {
+    /** The object's category: its key and label as the chart defines them. */
+    category: {
+        key: string;
+        label: string;
+    };
     expires_at?: string;
     extra?: Record<string, unknown> | null;
+    /** `table` is a table booked whole. */
+    kind: "seat" | "table" | "booth" | "area";
+    /** The full label, composed by the chart's template. */
     label: string;
     oid: number;
     order_ref?: string;
+    /** A seat's row label; `null` for other kinds. */
+    row: string | null;
+    /** A seat's own label within its row; `null` for other kinds. */
+    seat: string | null;
+    /** The section's label; `null` outside a section or for a section without one. */
+    section: string | null;
     seq?: number;
     status: "free" | "held" | "booked" | "blocked" | number;
     ticket_type?: string | null;
@@ -244,7 +266,7 @@ export interface ExtendReply {
     seq: number;
 }
 export interface Finding {
-    /** An E or W code (03 §3.2), or `unsupported`. */
+    /** An E or W code of the compiler's findings, or `unsupported`. */
     code: string;
     message: string;
     node: number | null;
@@ -257,7 +279,7 @@ export interface Hold {
 }
 export interface HoldReply {
     expires_at: string;
-    objects: ObjectLabel[];
+    objects: ObjectDetails[];
     seq: number;
 }
 export interface HoldTokenCreated {
@@ -272,7 +294,7 @@ export interface HoldTokenState {
     event: string;
     expires_at: string;
     max_objects: number | null;
-    objects: ObjectLabel[];
+    objects: ObjectDetails[];
 }
 export interface Invitation {
     created_at: string;
@@ -329,11 +351,26 @@ export interface LockChart {
 export interface MintKey {
     name: string;
 }
-export interface ObjectLabel {
+/** An object as the secret-key routes return it: what a backend needs to price and print a ticket without another call, from the event's chart version. */
+export interface ObjectDetails {
+    /** The object's category: its key and label as the chart defines them. */
+    category: {
+        key: string;
+        label: string;
+    };
+    /** `table` is a table booked whole. */
+    kind: "seat" | "table" | "booth" | "area";
+    /** The full label, composed by the chart's template. */
     label: string;
     oid: number;
+    /** A seat's row label; `null` for other kinds. */
+    row: string | null;
+    /** A seat's own label within its row; `null` for other kinds. */
+    seat: string | null;
+    /** The section's label; `null` outside a section or for a section without one. */
+    section: string | null;
 }
-/** Labels, or `idx` in the event's chart version (08 §6.1). At most 1,000. */
+/** Labels, or `idx` in the event's chart version. At most 1,000. */
 export type ObjectRefs = string[] | {
     idx: number[];
     /** The public hash of the event's chart version. */
@@ -346,24 +383,40 @@ export type Objects = {
     data: EventObject[];
     next: string | null;
 };
-/** An error (08 §6.4). */
+export interface PasswordResetCreated {
+    /** `{CAVEA_PUBLIC_URL}/console/reset#token=<64 hex digits>`, shown only here: give it to the person. It works once, for an hour. The console's page posts the token and a new password to `/console/api/password-reset`. */
+    link: string;
+    reset: {
+        clear_second_factor: boolean;
+        expires_at: string;
+        /** `pwr_` and 32 hex digits. */
+        id: string;
+        /** `usr_` and 32 hex digits. */
+        user: string;
+    };
+}
+/** An error. `x-cavea-reasons` maps each code to the `details.reason` values it may carry; `x-cavea-object-reasons` each code to the `reason` of each object in `details.objects`. A code missing from a map carries none. `x-cavea-reserved-codes` are listed so that clients can handle them, but this version never sends them: `hold_token_expired` (an expired token is `not_found`), and the codes of features not built yet (upgrading an event, channels, the orphan rule, best-available). */
 export interface Problem {
     code: "invalid_request" | "unauthorized" | "forbidden" | "not_found" | "already_exists" | "object_not_free" | "object_not_held_by_token" | "object_status_conflict" | "version_conflict" | "chart_locked" | "upgrade_conflict" | "idempotency_mismatch" | "hold_token_expired" | "hold_limit_exceeded" | "channel_not_allowed" | "orphan_rule_violated" | "not_enough_objects" | "chart_invalid" | "rate_limited" | "internal_error" | "overloaded" | "unavailable";
-    /** Empty, or what the code adds (08 §6.4): `reason`, `missing`, `objects`, `field`, `limit`, `requested`, `session`, `findings`, `draft_etag`, `version`. */
-    details: Record<string, unknown>;
+    /** Empty, or what the code adds: `reason`, `missing`, `objects`, `field`, `limit`, `requested`, `session`, `findings`, `draft_etag`, `version`, `lock`, `permission`. */
+    details: {
+        reason?: ProblemReason;
+    };
     /** For humans; may change. Match on `code`. */
     message: string;
     /** Equals `Cavea-Request-Id`. */
     request_id: string;
     status: number;
 }
+/** Why, when the code says: `details.reason`. `Problem`'s `x-cavea-reasons` lists which reasons each code may carry; a reason is never sent with any other code. */
+export type ProblemReason = "archived" | "asset_dimensions" | "asset_malformed" | "asset_memory" | "asset_type" | "backoff" | "bad_status" | "body_too_large" | "body_unreadable" | "challenge" | "compile_timeout" | "console_session" | "content_type" | "credentials" | "csrf" | "detail_mismatch" | "document" | "extra_too_large" | "idempotency_key" | "idempotency_key_length" | "if_match" | "instance_owner" | "invalid" | "invalid_field" | "invitation" | "invitation_email" | "json_data" | "json_depth" | "json_syntax" | "key_kind" | "last_event_id" | "last_owner" | "licence_expired" | "malformed" | "missing" | "no_objects" | "no_second_factor" | "order_ref_length" | "origin" | "other_workspaces" | "own_account" | "password_hashing" | "path" | "query" | "reset_token" | "revoked" | "role" | "second_factor" | "self_revocation" | "session" | "session_token" | "setup_token" | "sign_in" | "ticket_type_length" | "token_already_exists" | "tokens_per_sub" | "too_many_objects" | "ttl_out_of_range" | "unpublished" | "upgrade" | "workspace" | "zero_object_limit";
 /** With `hold_token`: held objects, all of the token's if `objects` is left out. Without: booked objects. */
 export interface Release {
     hold_token?: string | null;
     objects?: ObjectRefs | null;
 }
 export interface SeatReply {
-    objects: ObjectLabel[];
+    objects: ObjectDetails[];
     seq: number;
 }
 export interface SetThumbnail {
@@ -578,6 +631,8 @@ export interface Operations {
                 q?: string;
                 archived?: boolean;
                 order?: "oldest" | "newest";
+                created_after?: string;
+                created_before?: string;
             };
         };
         reply: EventList;
@@ -769,6 +824,15 @@ export interface Operations {
             body: MintKey;
         };
         reply: KeyCreated;
+    };
+    createOwnerPasswordReset: {
+        input: {
+            path: {
+                workspace: string;
+            };
+            body: CreateOwnerPasswordReset;
+        };
+        reply: PasswordResetCreated;
     };
 }
 export type OperationId = keyof Operations;
@@ -1161,6 +1225,16 @@ export declare const OPERATIONS: {
             readonly "201": "application/json";
         };
     };
+    readonly createOwnerPasswordReset: {
+        readonly method: "POST";
+        readonly path: "/v1/workspaces/{workspace}/password-resets";
+        readonly credential: "admin";
+        readonly idempotencyKey: false;
+        readonly paginated: false;
+        readonly replies: {
+            readonly "201": "application/json";
+        };
+    };
 };
 ```
 
@@ -1168,7 +1242,7 @@ export declare const OPERATIONS: {
 
 ```ts
 import { type Answer, type CallOptions, type Fetch, type Input, type Reply } from "./core.js";
-import type { Asset, Book, ChangeStatus, Chart, ChartLock, ChartLockState, ChartDocument, CreateChart, CreateEvent, CreateHoldToken, CreateKey, CreateWorkspace, Event, EventObject, ExtendHoldToken, ExtendReply, Hold, HoldReply, HoldTokenCreated, HoldTokenState, InvitationCreated, InviteOwner, Key, KeyCreated, LockChart, MintKey, OperationId, Release, SeatReply, SetThumbnail, UpdateEvent, UpdateKey, Validation, Version, Workspace, WorkspaceCreated } from "./generated.js";
+import type { Asset, Book, ChangeStatus, Chart, ChartLock, ChartLockState, ChartDocument, CreateChart, CreateEvent, CreateHoldToken, CreateKey, CreateOwnerPasswordReset, CreateWorkspace, Event, EventObject, ExtendHoldToken, ExtendReply, Hold, HoldReply, HoldTokenCreated, HoldTokenState, InvitationCreated, InviteOwner, Key, KeyCreated, LockChart, MintKey, OperationId, PasswordResetCreated, Release, SeatReply, SetThumbnail, UpdateEvent, UpdateKey, Validation, Version, Workspace, WorkspaceCreated } from "./generated.js";
 export { CaveaError, isCaveaError, type ErrorCode } from "./errors.js";
 export type { Answer, CallOptions, Fetch, Input, Reply } from "./core.js";
 export type * from "./generated.js";
@@ -1349,6 +1423,9 @@ export declare class Cavea {
         mintKey: (id: string, body: MintKey, options?: CallOptions) => Promise<KeyCreated>;
         /** An owner invitation to workspace `id`, with its one-time link. */
         inviteOwner: (id: string, body: InviteOwner, options?: CallOptions) => Promise<InvitationCreated>;
+        /** A one-time password reset link for an owner of workspace `id`, by
+         * email: the recovery for an owner who cannot sign in. */
+        ownerPasswordReset: (id: string, body: CreateOwnerPasswordReset, options?: CallOptions) => Promise<PasswordResetCreated>;
     };
 }
 ```

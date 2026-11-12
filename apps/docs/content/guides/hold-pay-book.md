@@ -74,12 +74,12 @@ if (secretKey === undefined) throw new Error("CAVEA_SECRET_KEY is not set");
 export const cavea = new Cavea({ baseUrl: "https://seats.example.com", secretKey });
 ```
 
-At checkout, read the hold token. It says which seats it holds, by label, and when it expires:
+At checkout, read the hold token. It says which seats it holds and when it expires; each seat comes with its category, and its section, row and seat apart from its label:
 
 ```ts check=types
 import { isCaveaError, type Cavea } from "{{server_sdk_package}}";
 #hide declare const cavea: Cavea;
-#hide declare function priceOf(event: string, label: string): number;
+#hide declare function priceOf(event: string, category: string): number;
 
 /** What the buyer is about to pay for, or why they cannot. */
 export async function basket(event: string, holdToken: string) {
@@ -87,7 +87,7 @@ export async function basket(event: string, holdToken: string) {
     const held = await cavea.holdTokens.get(holdToken);
     if (held.event !== event || held.objects.length === 0) return { ok: false as const, why: "empty" };
     const seats = held.objects.map((o) => o.label);
-    const total = seats.reduce((sum, label) => sum + priceOf(event, label), 0);
+    const total = held.objects.reduce((sum, o) => sum + priceOf(event, o.category.key), 0);
     return { ok: true as const, seats, total, expiresAt: new Date(held.expires_at) };
   } catch (error) {
     // The token has expired, or never existed: its seats are free again.
@@ -97,7 +97,7 @@ export async function basket(event: string, holdToken: string) {
 }
 ```
 
-Store `seats` and `total` with the order: the payment is for these seats, and step 5 books exactly these. Price the seats from your own data by their labels, not from anything the page sent. The server does not report a seat's category, so keep your own table from labels (or sections) to prices.
+Store `seats` and `total` with the order: the payment is for these seats, and step 5 books exactly these. Price the seats from what the server says, never from anything the page sent: each object's `category` is the chart's category (`key` and `label`), so your backend needs only a table from category keys to prices. For the ticket, `section`, `row` and `seat` are the parts of the label, so you can print them in your own format; `section` is `null` on a chart without sections, whose labels start with a dash (`-D-10`).
 
 If the token has expired, tell the buyer their seats were released and send them back to the map: nothing has been charged.
 
