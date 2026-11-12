@@ -147,6 +147,9 @@ export function ValidationPanel(props: { editor: Editor }) {
                 // Reactive: the store reuses a row's finding object for whatever lands at its place.
                 const title = () => msgOf("validation", f.code) ?? f.code;
                 const text = createMemo(() => {
+                  // Read again on every change of the document: a row
+                  // renumbered keeps its finding, not its label.
+                  void editor.views.status.revision;
                   const node = f.node;
                   const place =
                     node !== null && namesPlace(f)

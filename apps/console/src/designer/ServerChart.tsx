@@ -195,6 +195,11 @@ export function serverChart(props: {
   /** Leaving while the picture is made: where to go once it is done, or
    * if the person leaves without it. */
   const [leavingPicture, setLeavingPicture] = createSignal<(() => void) | null>(null);
+  /** The question about it is shown; "Wait" hides it and keeps the way out. */
+  const [askingPicture, setAskingPicture] = createSignal(false);
+  /** Pictures being made: publishing again while one is made starts
+   * another, and the guard holds until the last is done. */
+  let pictures = 0;
   /** Why it is read-only when the role is not why: the expired licence. */
   const [closed, setClosed] = createSignal(props.setup.closed);
   const [access, setAccess] = createSignal<Access>(
@@ -449,11 +454,13 @@ export function serverChart(props: {
    * is a quiet note, never the publish's. While it is made the top bar says
    * so and leaving asks first (`picturing`). */
   const thumbnail = async (version: Version, published: Published_) => {
+    pictures += 1;
     setPicturing(version.number);
     try {
       await picture(version, published);
     } finally {
-      setPicturing(null);
+      pictures -= 1;
+      if (pictures === 0) setPicturing(null);
     }
   };
   const picture = async (version: Version, published: Published_) => {
@@ -714,6 +721,7 @@ export function serverChart(props: {
     } else if (picturing() !== null) {
       e.preventDefault();
       setLeavingPicture(() => go);
+      setAskingPicture(true);
     }
   });
   // The picture is done while the person waits to leave: on they go.
@@ -721,6 +729,7 @@ export function serverChart(props: {
     const go = leavingPicture();
     if (go === null || picturing() !== null) return;
     setLeavingPicture(null);
+    setAskingPicture(false);
     go();
   });
 
@@ -910,7 +919,7 @@ export function serverChart(props: {
         </div>
       </Confirm>
       <Confirm
-        open={leavingPicture() !== null}
+        open={askingPicture() && leavingPicture() !== null}
         title={msg("thumbnail.leaveTitle")}
         description={msg("thumbnail.leaveBody", { version: picturing() ?? 0 })}
         confirm={msg("thumbnail.leaveConfirm")}
@@ -918,9 +927,11 @@ export function serverChart(props: {
         onConfirm={() => {
           const go = leavingPicture();
           setLeavingPicture(null);
+          setAskingPicture(false);
           go?.();
         }}
-        onClose={() => setLeavingPicture(null)}
+        // Wait: the question goes, the way out stays, taken once it is done.
+        onClose={() => setAskingPicture(false)}
       />
       <Confirm
         open={leaving() !== null}
