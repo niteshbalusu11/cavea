@@ -9,6 +9,9 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 brotli.workspace = true
+# The private licence tool (`cargo xtask licence`, D-80): signing and key
+# generation, which nothing shipped has.
+cavea-licence = { workspace = true, features = ["sign"] }
 serde_json.workspace = true
 wasm-bindgen-cli-support.workspace = true
 syn.workspace = true

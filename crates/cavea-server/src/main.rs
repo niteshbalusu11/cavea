@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use cavea_engine::Clock as _;
 use cavea_server::config::Config;
 use cavea_server::http::AppState;
 use cavea_server::limiter::Limiter;
@@ -94,6 +95,8 @@ async fn run(config: Config, streams: tokio::runtime::Handle) -> anyhow::Result<
     tokio::task::spawn_blocking(cavea_server::console::password::warm).await?;
     let limiter = Limiter::new(config.rate_limit_holds, config.rate_limit_reads)
         .with_sign_in(config.rate_limit_sign_in);
+    let licences = cavea_server::licence::Licences::new(verifier(), config.licence.clone());
+    licences.refresh(&db, seats.clock.now().0).await;
     let console = cavea_server::http::web::Files::embedded();
     let (files, bytes) = console.size();
     tracing::info!(files, bytes, "console files");
@@ -107,9 +110,26 @@ async fn run(config: Config, streams: tokio::runtime::Handle) -> anyhow::Result<
         seats,
         realtime,
         health: cavea_server::http::Health::default(),
+        licences,
     };
     cavea_server::serve(listener, state, shutdown_signal()).await?;
     Ok(())
+}
+
+/// The keys licences are verified against: the ones compiled into every
+/// build (`cavea_licence::TRUSTED`), plus, in a build with the
+/// `trust-test-key` feature only, the base64 public key that
+/// `CAVEA_TEST_LICENCE_KEY` held when it was compiled (D-80). No setting read
+/// at run time adds a key.
+fn verifier() -> cavea_licence::Verifier {
+    let keys = cavea_licence::TRUSTED
+        .iter()
+        .filter_map(|k| cavea_licence::PublicKey::from_base64(k));
+    #[cfg(feature = "trust-test-key")]
+    let keys = keys.chain(cavea_licence::PublicKey::from_base64(env!(
+        "CAVEA_TEST_LICENCE_KEY"
+    )));
+    cavea_licence::Verifier::new(keys)
 }
 
 /// Started with standard input, output or error closed, the server's first

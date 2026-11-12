@@ -964,6 +964,14 @@ const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
         Some(r#"{"name":"a"}"#),
     ),
     (Method::GET, "/console/api/audit", 200, None),
+    // No member of the matrix owns every workspace (A, B and C exist), so
+    // each is refused alike (`instance_owner`); `licence.rs` uploads.
+    (
+        Method::PUT,
+        "/console/api/licence",
+        403,
+        Some(r#"{"licence":"{}"}"#),
+    ),
     (
         Method::POST,
         "/v1/workspaces/{workspace}/invitations",
@@ -1654,6 +1662,7 @@ mod assets;
 mod charts;
 mod console;
 mod events;
+mod licence;
 mod limits;
 mod members;
 mod objects;

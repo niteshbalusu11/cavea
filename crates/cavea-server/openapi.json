@@ -411,7 +411,8 @@
               "chart.published",
               "chart.archived",
               "event.created",
-              "event.archived"
+              "event.archived",
+              "licence.uploaded"
             ]
           },
           "actor": {
@@ -686,12 +687,138 @@
         ],
         "type": "object"
       },
+      "ConsoleLicence": {
+        "additionalProperties": false,
+        "properties": {
+          "grace_until": {
+            "description": "While `grace`: the last day of grace (UTC).",
+            "format": "date",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "licence": {
+            "additionalProperties": false,
+            "properties": {
+              "customer": {
+                "type": "string"
+              },
+              "domains": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "expires_at": {
+                "description": "Valid through this day (UTC); then `grace_days` days of grace.",
+                "format": "date",
+                "type": "string"
+              },
+              "features": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "grace_days": {
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "issued_at": {
+                "format": "date",
+                "type": "string"
+              },
+              "key_id": {
+                "type": "string"
+              },
+              "max_workspaces": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "plan": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "customer",
+              "plan",
+              "features",
+              "domains",
+              "max_workspaces",
+              "issued_at",
+              "expires_at",
+              "grace_days",
+              "key_id"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "manage": {
+            "description": "Whether this user owns every workspace on the server: may upload a licence and sees the fields below, which are otherwise `null`.",
+            "type": "boolean"
+          },
+          "read_only": {
+            "description": "`expired`: the server refuses console writes to charts and events (`403` `licence_expired`); seat operations, keys, members and settings go on.",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "While `invalid`: why (`unreadable`, `too_large`, `not_utf8`, `malformed`, `version`, `unknown_key`, `signature`, `payload`, `dates`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "setting",
+                  "upload"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "enum": [
+              "valid",
+              "grace",
+              "expired",
+              "missing",
+              "invalid"
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "read_only",
+          "grace_until",
+          "manage",
+          "source",
+          "reason",
+          "licence"
+        ],
+        "type": "object"
+      },
       "ConsoleMe": {
         "additionalProperties": false,
         "properties": {
           "csrf_token": {
             "description": "Send it in `Cavea-Csrf-Token` with every non-safe request.",
             "type": "string"
+          },
+          "licence": {
+            "$ref": "#/components/schemas/ConsoleLicence"
           },
           "session": {
             "additionalProperties": false,
@@ -790,7 +917,8 @@
           "user",
           "workspaces",
           "csrf_token",
-          "session"
+          "session",
+          "licence"
         ],
         "type": "object"
       },
@@ -1664,6 +1792,19 @@
         ],
         "type": "object"
       },
+      "LicenceUpload": {
+        "additionalProperties": false,
+        "properties": {
+          "licence": {
+            "description": "The licence file's text, exactly as issued (at most 16 KiB).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "licence"
+        ],
+        "type": "object"
+      },
       "LockChart": {
         "additionalProperties": false,
         "properties": {
@@ -1905,6 +2046,9 @@
           "hold_ttl_seconds": {
             "type": "integer"
           },
+          "licence": {
+            "$ref": "#/components/schemas/PublicLicence"
+          },
           "max_objects": {
             "type": "integer"
           },
@@ -1917,7 +2061,33 @@
           "chart",
           "hold_ttl_seconds",
           "max_objects",
-          "require_session"
+          "require_session",
+          "licence"
+        ],
+        "type": "object"
+      },
+      "PublicLicence": {
+        "additionalProperties": false,
+        "description": "What the renderer needs of the server's licence to decide its mark (12 §7.4): `licensed` (valid or in grace), `expired`, or `unlicensed` (missing or invalid).",
+        "properties": {
+          "domains": {
+            "description": "While `licensed`: the host names the renderer runs on unmarked, lowercase; `*.example.com` is every name under `example.com`, not the name itself. Empty otherwise.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "licensed",
+              "expired",
+              "unlicensed"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "domains"
         ],
         "type": "object"
       },
@@ -2612,6 +2782,68 @@
         "x-cavea-roles": [
           "owner",
           "admin"
+        ]
+      }
+    },
+    "/console/api/licence": {
+      "put": {
+        "description": "12 §7.3. The file's text in `licence`. Only a user who owns every workspace on the server may (`403` `instance_owner`). A file that is not a licence signed by a key this build trusts is `400` `invalid_field` (`licence`) with `details.problem` saying why; nothing is stored. Otherwise it is stored for every node (each reads it within 30 s) and answered with the licence as `me` shows it; if `CAVEA_LICENCE` holds a better one, that one still counts. Works in every licence state.",
+        "operationId": "consoleLicence",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LicenceUpload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleLicence"
+                }
+              }
+            },
+            "description": "The licence that now counts",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Upload a licence file",
+        "tags": [
+          "console"
         ]
       }
     },

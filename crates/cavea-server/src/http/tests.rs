@@ -65,6 +65,7 @@ fn state() -> AppState {
         // Off: tests sign in more often than people do; the budget has its
         // own test.
         rate_limit_sign_in: 0,
+        licence: None,
     };
     // Never connects: no route under test reaches the database.
     let db = sqlx::postgres::PgPoolOptions::new().connect_lazy_with(Default::default());
@@ -81,6 +82,7 @@ fn state() -> AppState {
         db,
         health: super::Health::default(),
         console: super::web::Files::new(&[]),
+        licences: crate::licence::Licences::new(cavea_licence::Verifier::new([]), None),
     }
 }
 

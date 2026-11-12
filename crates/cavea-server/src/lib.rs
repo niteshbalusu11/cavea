@@ -8,6 +8,7 @@ pub mod charts;
 pub mod config;
 pub mod console;
 pub mod http;
+pub mod licence;
 pub mod limiter;
 pub mod metrics;
 pub mod net;
@@ -44,6 +45,12 @@ pub async fn serve(
     let seats = state.seats.clone();
     let realtime = state.realtime.clone();
     let probe = tokio::spawn(state.health.clone().watch(state.db.clone()));
+    let licence = tokio::spawn(
+        state
+            .licences
+            .clone()
+            .watch(state.db.clone(), state.seats.clock.clone()),
+    );
     // In the background, so that the server answers at once; a request for an
     // event not loaded yet loads it itself.
     let preload = tokio::spawn({
@@ -72,6 +79,7 @@ pub async fn serve(
             }
             preload.abort();
             probe.abort();
+            licence.abort();
             if tokio::time::timeout_at(deadline, seats.shutdown()).await.is_err() {
                 tracing::error!("actors did not stop within the shutdown deadline");
             }

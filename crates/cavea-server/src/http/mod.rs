@@ -20,6 +20,7 @@ pub mod extract;
 pub mod headers;
 pub mod health;
 mod keys;
+mod licence;
 mod members;
 mod objects;
 pub mod openapi;
@@ -74,6 +75,9 @@ pub struct AppState {
     pub sign_in: Arc<crate::console::guard::Guard>,
     /// The console's files (`web`), compiled in by `cargo xtask build-server`.
     pub console: web::Files,
+    /// The licence and its state (`crate::licence`). Never read on a seat
+    /// route.
+    pub licences: crate::licence::Licences,
 }
 
 /// The whole HTTP surface.
@@ -96,6 +100,7 @@ fn routes() -> openapi::Routes {
         .merge(realtime::routes())
         .merge(console::routes())
         .merge(members::routes())
+        .merge(licence::routes())
 }
 
 /// Add the fallbacks (the console's files, else problem+json), the default
