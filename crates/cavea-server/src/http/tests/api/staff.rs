@@ -526,6 +526,13 @@ async fn chart_lock_life_cycle() {
         let publish = format!("/v1/charts/{}/publish", t.chart);
         let (response, problem) = as_member(&ben_id, Method::POST, &publish, None).await;
         assert_problem(&response, &problem, Code::ChartLocked);
+        // Even with a stale etag: the lock is told first.
+        let stale = [(header::IF_MATCH, "\"1\"".to_owned())];
+        let mut headers = console(&ben_id, Some(&t.id));
+        headers.extend(stale);
+        let (response, problem) =
+            call_with(&app, Method::POST, &publish, None, &refs(&headers), None).await;
+        assert_problem(&response, &problem, Code::ChartLocked);
         // So is a key.
         let (response, problem) = call(&app, Method::POST, &publish, Some(&t.secret), None).await;
         assert_problem(&response, &problem, Code::ChartLocked);

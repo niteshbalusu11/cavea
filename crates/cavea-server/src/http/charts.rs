@@ -914,9 +914,24 @@ async fn publish(
     State(state): State<AppState>,
 ) -> Result<(StatusCode, axum::Json<Version>), ApiError> {
     let expected = if_match(&headers)?;
+    let actor = auth.actor();
     let (chart_id, draft, etag, is_archived) = draft_for_compile(&state, &auth, &key).await?;
     if is_archived {
         return Err(archived());
+    }
+    // The lock before the etag, as for a save: a taken-over editor learns who
+    // took over, whatever its etag. Checked again once the chart is locked.
+    let lock: Option<DraftState> = sqlx::query_as(DRAFT_STATE)
+        .bind(auth.workspace().uuid())
+        .bind(&key)
+        .fetch_optional(&state.db)
+        .instrument(cavea_telemetry::db_span("read_lock"))
+        .await?;
+    if let Some((_, _, a, e, since, until)) = lock
+        && let Some(lock) = Lock::live(&auth, a, e, since, until)
+        && lock.holder != *actor
+    {
+        return Err(locked(lock));
     }
     if !matches(expected, etag) {
         return Err(version_conflict(etag));
@@ -930,7 +945,6 @@ async fn publish(
     let stats = stats_json(&output);
     let compiled = &output.compiled;
     let started = std::time::Instant::now();
-    let actor = auth.actor();
     let store = async {
         let mut tx = state.db.begin().await?;
         let (current, is_archived, a, e, since, until): DraftState = sqlx::query_as(LOCK_CHART)
