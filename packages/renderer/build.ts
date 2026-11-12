@@ -18,6 +18,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile, copyFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { brotliCompressSync, constants } from "node:zlib";
+import { copyLicence, publishFields } from "../publish.ts";
 
 const root = import.meta.dir;
 const dist = join(root, "dist");
@@ -138,10 +139,8 @@ async function manifest(): Promise<string> {
   const pkg = {
     name: source["name"],
     version: source["version"],
-    // Nothing is published before the release pipeline (OPS-001).
-    private: true,
+    ...(await publishFields(root)),
     description: "Seat map for ticketing sites: WebGL2 renderer compiled to WebAssembly",
-    license: "UNLICENSED",
     type: "module",
     sideEffects: false,
     main: "./index.js",
@@ -187,6 +186,7 @@ async function main(): Promise<void> {
   await copyFile(join(root, "assets", ATLAS), join(dist, ATLAS));
   await copyFile(join(root, "assets", "OFL.txt"), join(dist, "OFL.txt"));
   await writeFile(join(dist, "package.json"), await manifest());
+  await copyLicence(dist);
   if (update) {
     await writeFile(apiFile, api);
   }

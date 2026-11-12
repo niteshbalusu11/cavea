@@ -32,14 +32,23 @@
 //!   `docs/13-testing-benchmarks.md` §9).
 //! - `licence keygen|issue|inspect|verify`: the private licence tool
 //!   (`licence.rs`, `docs/12-security-licensing.md` §7.2).
+//! - `release [--dry-run] [--skip item,…] | prepare <version> | publish`:
+//!   a release, checked, built, signed and published (`release.rs`,
+//!   `publish.rs`, D-91).
+//! - `upgrade [--from <rev>]… [--renderer <rev>]…`: the upgrade test from an
+//!   earlier revision with a populated database, and older renderers
+//!   against this server (`upgrade.rs`, `tools/upgrade/run.ts`, 13 §13).
 
 mod api;
 mod determinism;
 mod e2e;
 mod licence;
 mod licence_keys;
+mod publish;
+mod release;
 mod server;
 mod types;
+mod upgrade;
 
 use std::{
     collections::BTreeSet,
@@ -97,12 +106,16 @@ fn main() -> Result<()> {
         ["golden", rest @ ..] => golden(rest),
         ["e2e", rest @ ..] => e2e::e2e(rest),
         ["licence", rest @ ..] => licence::licence(rest),
+        ["release", rest @ ..] => release::release(rest),
+        ["upgrade", rest @ ..] => upgrade::upgrade(rest),
         _ => {
             eprintln!(
                 "usage: cargo xtask <build-web [--demo | --update-baseline] | build-designer | \
                  build-server [--target <triple>] | types [--check] | check-deps | determinism | \
                  golden [--update] [--runs n] [case…] | e2e [--keep] [--headed] [--to n] | \
-                 licence <keygen | issue | inspect | verify> …>"
+                 licence <keygen | issue | inspect | verify> … | \
+                 release [--dry-run] [--skip item,…] | release prepare <version> | \
+                 release publish [--dir <dir>] | upgrade [--from <rev>]… [--renderer <rev>]…>"
             );
             std::process::exit(2);
         }

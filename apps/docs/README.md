@@ -90,6 +90,6 @@ It runs the pages' `compose.yaml` and `Caddyfile` under a project name, port and
 
 ## Publishing
 
-`site.json` names the server image and the seat map's script URL as they will be published, and `"published": false` puts a notice on every page that points to "Before the first release". At the first release: set the real names and version, set `published` to `true`, delete `content/before-release.md` and its entry in `site.json`.
+`site.json` names the server image and the seat map's script URL as they will be published, and `"published": false` puts a notice on every page that points to "Before the first release". `site.json`'s `image`, `renderer_package`, `server_sdk_package` and `repository` are also what `cargo xtask release` publishes to (D-91): it refuses while the image's registry is the `example` placeholder or a name disagrees with the packages. `cargo xtask release prepare <version>` sets `version`, the image's tag and the script's URL and sets `published` to `true`. At the first release, also set the real registry in `image` and delete `content/before-release.md` and its entry in `site.json`.
 
 The output is static files. To deploy, copy `apps/docs/dist/` to a static host: GitHub Pages, Cloudflare Pages, Netlify, or a bucket behind a CDN, at the root of a host name such as `docs.example.com` (the 404 page links from the root). The host and domain are the owner's choice.

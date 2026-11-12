@@ -49,14 +49,30 @@
         assert pkgs.lib.assertMsg (
           pkgs.bun.version == bunVersion
         ) "flake.nix: nixpkgs has bun ${pkgs.bun.version}, package.json pins ${bunVersion}";
+        let
+          tools = [
+            rust
+            pkgs.bun
+            pkgs.binaryen # wasm-opt, used by `cargo xtask build-web`
+            pkgs.brotli
+            pkgs.postgresql_18 # psql; the server itself runs in Docker
+          ];
+        in
         {
-          default = pkgs.mkShell {
-            packages = [
-              rust
-              pkgs.bun
-              pkgs.binaryen # wasm-opt, used by `cargo xtask build-web`
-              pkgs.brotli
-              pkgs.postgresql_18 # psql; the server itself runs in Docker
+          default = pkgs.mkShell { packages = tools; };
+          # `nix develop .#release`: the default shell plus what only a
+          # release uses (`cargo xtask release`, D-91), kept out of the
+          # default shell so nobody else downloads them. The release records
+          # each one's version in its checklist.
+          release = pkgs.mkShell {
+            packages = tools ++ [
+              pkgs.cargo-deny # licences, advisories, bans, sources (deny.toml)
+              pkgs.cargo-audit # RustSec advisories over Cargo.lock (.cargo/audit.toml)
+              pkgs.syft # the SBOMs (SPDX JSON)
+              pkgs.cosign # signs and attests the image (keyless in the workflow)
+              pkgs.crane # registry digests and the multi-arch index
+              pkgs.nodejs_24 # npm: `npm publish --provenance` (bun cannot issue provenance)
+              pkgs.actionlint # checks the workflow files
             ];
           };
           # `nix develop .#fuzz`: the nightly toolchain and cargo-fuzz for the
