@@ -246,7 +246,12 @@ function MembersTab() {
 
   const apply = async (p: Pending) => {
     if (p.kind === "role") {
-      const change = roleOf(p.member.user.id, p.member.role);
+      // The role as the list shows it now, not as the dialog was opened
+      // with: an earlier change may have been taken back since.
+      const s = members.state();
+      const row =
+        s.status === "ready" ? s.data.data.find((r) => r.user.id === p.member.user.id) : undefined;
+      const change = roleOf(p.member.user.id, row?.role ?? p.member.role);
       const id = change.begin(p.to);
       try {
         const answer = checkMember(

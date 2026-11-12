@@ -3,7 +3,7 @@
 // cannot run now stays listed, dimmed, with the reason. Searching charts
 // and events (09 §8) needs the server: it is another list of `Command`s
 // handed to the same palette.
-import { createMemo, createSignal, createUniqueId, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, createUniqueId, For, Show } from "solid-js";
 import { msg } from "../i18n/messages.ts";
 import { Dialog } from "../ui/overlays.tsx";
 import type { Command } from "./commands.ts";
@@ -57,7 +57,14 @@ export function Palette(props: {
     }));
     return [...rank(props.commands(), query(), (c) => c.label), ...found];
   });
-  const current = () => shown()[Math.min(active(), shown().length - 1)];
+  // Results can change under the active row (a search answering): the
+  // active index stays within them, so what is highlighted, announced and
+  // run is one row.
+  createEffect(() => {
+    const n = shown().length;
+    if (active() > Math.max(0, n - 1)) setActive(Math.max(0, n - 1));
+  });
+  const current = () => shown()[active()];
   const optionId = (i: number) => `${id}-${i}`;
 
   const close = () => {

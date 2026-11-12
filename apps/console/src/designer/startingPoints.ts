@@ -59,17 +59,19 @@ export function templateCommand(current: string, template: string): Command {
     commands.push({ op: "addFloor", index: i, floor: { ...f, id: 0 } });
     floors.set(f.id, i + 1);
   });
-  // Categories: the template's added or updated first (a chart is never
-  // left without one), then the others removed, then put in its order.
-  const keys = new Set(now.categories.map((c) => c.key));
-  let count = now.categories.length;
-  for (const c of next.categories) {
-    if (keys.has(c.key)) commands.push({ op: "updateCategory", key: c.key, category: c });
-    else commands.push({ op: "addCategory", index: count++, category: c });
-  }
+  // Categories: the others removed first (so a chart near the limit still
+  // takes the template's), then the template's updated or added, then put
+  // in its order. The nodes are gone already, so nothing refers to them.
   const wanted = new Set(next.categories.map((c) => c.key));
+  const kept = new Set<string>();
   for (const c of now.categories) {
-    if (!wanted.has(c.key)) commands.push({ op: "removeCategory", key: c.key, replacement: null });
+    if (wanted.has(c.key)) kept.add(c.key);
+    else commands.push({ op: "removeCategory", key: c.key, replacement: null });
+  }
+  let count = kept.size;
+  for (const c of next.categories) {
+    if (kept.has(c.key)) commands.push({ op: "updateCategory", key: c.key, category: c });
+    else commands.push({ op: "addCategory", index: count++, category: c });
   }
   next.categories.forEach((c, i) => commands.push({ op: "moveCategory", key: c.key, index: i }));
   next.nodes.forEach((n, i) => {

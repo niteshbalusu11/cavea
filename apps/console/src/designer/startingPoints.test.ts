@@ -64,3 +64,20 @@ test("each template applies to an empty chart and over another one, as one undo 
     }
   }
 });
+
+test("a template replaces a chart at the category limit", async () => {
+  const d = await designer();
+  const full = JSON.parse(emptyChart("Full")) as { categories: unknown[] };
+  // 4,095 categories, the most a chart holds (cavea-core's limits), none a template's.
+  full.categories = Array.from({ length: 4095 }, (_, i) => ({
+    key: `c${i}`,
+    label: `C ${i}`,
+    color: "#2563EB",
+    accessible: false,
+  }));
+  const s = d.open(JSON.stringify(full));
+  s.apply(templateCommand(s.export(), await text("theatre")));
+  expect(s.status().seats).toBe(561);
+  expect((JSON.parse(s.export()) as { categories: unknown[] }).categories.length).toBe(4);
+  s.dispose();
+});
