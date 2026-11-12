@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Opening night: choose your seats</title>
+    <style>
+      body {
+        margin: 0 auto;
+        max-width: 1000px;
+        padding: 16px;
+        font-family: system-ui, sans-serif;
+      }
+      #map {
+        height: 65vh;
+      }
+      button {
+        padding: 8px 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Opening night</h1>
+    <div id="map"></div>
+    <h2>Your seats</h2>
+    <ul id="seats"></ul>
+    <p id="total">Choose up to six seats on the map.</p>
+    <button id="continue" type="button" disabled>Continue</button>
+    <p id="problem" role="alert"></p>
+
+    <script src="https://cdn.jsdelivr.net/npm/@cavea/renderer@0.1.0/cavea.min.js"></script>
+    <script>
+      // Your Cavea server, a publishable key (safe in a page: it can only show
+      // and hold seats) and the event's key.
+      const CAVEA_URL = "http://localhost:8080";
+      const PUBLISHABLE_KEY = "pk_paste-your-publishable-key-here";
+      const EVENT = "opening-night";
+
+      // Prices to show, in pence, by the chart's category keys. Display only:
+      // your backend charges from its own table.
+      const PRICES = { premium: 6500, standard: 4500, value: 2500, access: 4500 };
+      const pounds = (pence) =>
+        new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" }).format(pence / 100);
+
+      let selection = null;
+      let holding = false;
+      const button = document.getElementById("continue");
+      const ready = () =>
+        selection !== null && selection.objects.length > 0 && selection.holdToken !== null;
+
+      function show() {
+        const list = document.getElementById("seats");
+        list.replaceChildren(
+          ...selection.objects.map((seat) => {
+            const item = document.createElement("li");
+            item.textContent = `${seat.label} (${seat.category.label}): ${pounds(PRICES[seat.category.key] ?? 0)}`;
+            return item;
+          }),
+        );
+        const total = selection.objects.reduce(
+          (sum, seat) => sum + (PRICES[seat.category.key] ?? 0),
+          0,
+        );
+        document.getElementById("total").textContent =
+          selection.objects.length === 0
+            ? "Choose up to six seats on the map."
+            : `Total: ${pounds(total)}`;
+        // A seat still being held is not the buyer's yet.
+        button.disabled = holding || !ready();
+      }
+
+      Cavea.createSeatMap(document.getElementById("map"), {
+        state: Cavea.caveaServer({
+          baseUrl: CAVEA_URL,
+          publishableKey: PUBLISHABLE_KEY,
+          event: EVENT,
+        }),
+        pricing: Object.entries(PRICES).map(([category, price]) => ({ category, price })),
+        currency: "GBP",
+        selection: { max: 6 },
+        onSelectionChange: (s) => {
+          selection = s;
+          show();
+        },
+        onHoldPending: () => {
+          holding = true;
+          button.disabled = true;
+        },
+        onHoldSettled: () => {
+          holding = false;
+          button.disabled = !ready();
+        },
+      });
+
+      // Checkout is your backend's: it reads what the hold token holds, prices
+      // it, takes payment and books (see the Node backend example). The token
+      // goes in the request body, never in a URL: it can release the seats.
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        const reply = await fetch("/api/checkout", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ holdToken: selection.holdToken }),
+        }).catch(() => null);
+        if (reply !== null && reply.ok) {
+          location.assign("/payment");
+        } else {
+          document.getElementById("problem").textContent =
+            "Checkout is not available. Please try again.";
+          button.disabled = !ready();
+        }
+      });
+    </script>
+  </body>
+</html>

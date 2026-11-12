@@ -230,6 +230,8 @@ docker compose down -v
 
 ## Next
 
+- [Examples](examples/index.md): this page grown into a checkout, in plain HTML, React, Next.js and Node.
+- [Drawing a seating chart](designer/index.md): the designer, task by task, for whoever draws your venues.
 - [Concepts](concepts/index.md): charts, events, holds, bookings, keys and the realtime stream, each on a page.
 - [Server API](api/index.md): every operation, with its credential, body and replies.
 - [Error codes](reference/errors.md) and [limits](reference/limits.md).

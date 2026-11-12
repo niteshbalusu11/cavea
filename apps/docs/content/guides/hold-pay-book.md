@@ -181,6 +181,7 @@ To give back seats before booking, release the hold token (`cavea.holdTokens.rel
 
 ## Next
 
+- The [Next.js example](../examples/index.md) and the [Node backend example](../examples/index.md) are this guide as running code, each checked against a real server.
 - [Bot protection](bot-protection.md): tie holds to signed-in buyers so a script cannot hold the house.
 - [Bookings](../concepts/bookings.md) and [holds](../concepts/holds.md), the concepts behind this guide.
 - [Holds and bookings](../api/seats.md) in the API reference.

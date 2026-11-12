@@ -91,12 +91,23 @@
     },
     {
       "section": "Designer",
-      "planned": "User guide for venue staff (DOC-008)",
-      "pages": ["designer/shortcuts.md"]
+      "pages": [
+        "designer/index.md",
+        "designer/start.md",
+        "designer/find-your-way.md",
+        "designer/seats.md",
+        "designer/numbering.md",
+        "designer/categories.md",
+        "designer/arranging.md",
+        "designer/checking.md",
+        "designer/saving.md",
+        "designer/publishing.md",
+        "designer/shortcuts.md"
+      ]
     },
     {
       "section": "Examples",
-      "planned": "Plain page, React, Next.js, Node backend (DOC-009)"
+      "pages": ["examples/index.md"]
     }
   ]
 }

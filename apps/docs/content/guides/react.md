@@ -118,4 +118,6 @@ Save it as, say, `app/events/[event]/seat-picker.tsx` and render `<SeatPicker ev
 
 Without `@cavea/react`, import `{{renderer_package}}` inside an effect with `import()`, so the server never evaluates it, create the map there, and abort its `signal` in the effect's cleanup.
 
+The [examples](../examples/index.md) include a React app with Vite (the selection lifted into the app, theming) and a Next.js app with the whole checkout in route handlers.
+
 This set-up (App Router with Turbopack: a server component page holding a client component that uses `<SeatMap>`, and one that imports the renderer in an effect) is built, rendered on the server and hydrated in a browser by the repository's compatibility checks.

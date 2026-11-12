@@ -9,13 +9,17 @@
 // from `site.json`; `--var` overrides one for a local build, as the
 // quick-start check does. The build fails on a broken internal link or
 // anchor, an unknown variable, a page missing from the navigation, an
-// internal specification reference left in a generated page, or an error
-// reference that does not match the server (src/errors.ts).
+// internal specification reference left in a generated page, an error
+// reference that does not match the server (src/errors.ts), a designer
+// validation finding the guide does not explain (src/findings.ts), or an
+// example on another version than the site's (src/examples.ts).
 
 import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, posix, relative } from "node:path";
 import { apiPages, type Doc } from "./api.ts";
 import { compare, declared, parseCatalogue } from "./errors.ts";
+import { examples } from "./examples.ts";
+import { findingCodes, findings } from "./findings.ts";
 import { layout, type NavSection } from "./layout.ts";
 import { fences, plain, render, substitute, type Heading } from "./markdown.ts";
 import { expand, settings, sources, themeTokens, unclaimed, unknownMetrics } from "./reference.ts";
@@ -156,6 +160,10 @@ export async function build(
   if (byPath.has("deployment/settings.md")) {
     refs.problems.push(...(await settings(ROOT, written("deployment/settings.md"))));
   }
+  if (byPath.has("designer/checking.md")) {
+    refs.problems.push(...findings(await findingCodes(ROOT), written("designer/checking.md")));
+  }
+  refs.problems.push(...(await examples(ROOT, site.vars)));
   if (refs.problems.length > 0) {
     throw new Error(`the pages do not match the product:\n  ${refs.problems.join("\n  ")}`);
   }
