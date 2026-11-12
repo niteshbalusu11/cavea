@@ -1,0 +1,67 @@
+# cargo-deny's policy (12 §3 T15, D-85): run by `cargo xtask release` before
+# every release, never in CI. A finding stops the release. The exception path
+# is an entry here (or in `.cargo/audit.toml` for cargo-audit) with the date,
+# the reason, and when to look again, in a reviewed pull request.
+#
+#   nix develop .#release -c cargo deny --locked check
+
+[graph]
+# Every platform the server and the renderer ship for.
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "wasm32-unknown-unknown",
+]
+all-features = false
+
+[advisories]
+# RustSec, fetched at run time. Unmaintained and unsound notices count as
+# findings for crates we build; yanked versions too.
+unmaintained = "workspace"
+unsound = "workspace"
+yanked = "deny"
+ignore = []
+
+[licenses]
+# What may ship inside a commercial, closed-source product: permissive
+# licences only. Copyleft (GPL, LGPL, AGPL, MPL, EPL, CDDL, the CC-BY-SA family)
+# is not on the list: a crate under one fails the release until the owner
+# decides. Where a crate offers a choice (`MIT OR LGPL-2.1-or-later`), cargo-deny
+# takes the allowed one. Every licence below is in the tree today
+# (`cargo metadata`, 2026-11-11), except none.
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+# The workspace's own crates (`publish = false`, `license = "UNLICENSED"`).
+ignore = true
+
+[bans]
+# Two versions of one crate cost build time and size (AGENTS.md,
+# "Dependencies"): reported, not fatal, since some come from upstream and
+# cannot be avoided; a new one shows in the release's output.
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+
+[sources]
+# crates.io only: no git dependency, no other registry.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

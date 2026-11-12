@@ -1,0 +1,16 @@
+# cargo-audit's policy (12 §3 T15, D-85): run by `cargo xtask release` before
+# every release, never in CI. A vulnerability stops the release. An entry
+# below is the documented exception: the advisory, the date, why it does not
+# apply, and when to look again. cargo-audit reads Cargo.lock as it is, so it
+# also sees optional dependencies no crate enables; cargo-deny (deny.toml)
+# reads the build graph and is the check for what is compiled.
+
+[advisories]
+ignore = [
+  # 2026-11-11. libsqlite3-sys 0.37.0 (C SQLite CVE-2026-119375): in Cargo.lock
+  # only as sqlx's optional SQLite driver, which no crate enables; `cargo tree
+  # -i libsqlite3-sys --target all -e all` prints nothing, and cargo-deny does
+  # not report it. Nothing we build links SQLite. Look again when sqlx is
+  # upgraded (drop the entry once Cargo.lock no longer lists 0.37).
+  "RUSTSEC-2026-0459",
+]
