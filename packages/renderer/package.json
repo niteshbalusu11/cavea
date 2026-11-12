@@ -2,6 +2,11 @@
   "name": "@cavea/renderer",
   "version": "0.0.0",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/niteshbalusu11/cavea.git",
+    "directory": "packages/renderer"
+  },
   "type": "module",
   "exports": {
     ".": "./src/index.ts",

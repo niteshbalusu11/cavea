@@ -12,6 +12,7 @@
 // to the server's OpenAPI document reaches it through `generated.ts`.
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
+import { copyLicence, publishFields } from "../publish.ts";
 
 const root = import.meta.dir;
 const dist = join(root, "dist");
@@ -82,11 +83,9 @@ async function manifest(): Promise<string> {
   const pkg = {
     name: source["name"],
     version: source["version"],
-    // Nothing is published before the release pipeline (OPS-001).
-    private: true,
+    ...(await publishFields(root)),
     description:
       "Cavea server's REST API for a ticketing backend (Node 20.3+, bun). Holds a secret key: never in a browser",
-    license: "UNLICENSED",
     type: "module",
     sideEffects: false,
     engines: { node: ">=20.3" },
@@ -122,6 +121,7 @@ async function main(): Promise<void> {
   const code = await bundle();
   await writeFile(join(dist, "index.js"), code);
   await writeFile(join(dist, "package.json"), await manifest());
+  await copyLicence(dist);
   if (update) {
     await writeFile(apiFile, api);
   }

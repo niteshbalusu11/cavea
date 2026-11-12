@@ -4,6 +4,7 @@
 // `index.d.ts`, and a `package.json` with React as a peer dependency.
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { copyLicence, publishFields } from "../publish.ts";
 
 const root = import.meta.dir;
 const dist = join(root, "dist");
@@ -39,10 +40,8 @@ const renderer = JSON.parse(await readFile(join(root, "../renderer/package.json"
 const pkg = {
   name: source.name,
   version: source.version,
-  // Nothing is published before the release pipeline (OPS-001).
-  private: true,
+  ...(await publishFields(root)),
   description: "React component for the Cavea seat map",
-  license: "UNLICENSED",
   type: "module",
   sideEffects: false,
   main: "./index.js",
@@ -55,4 +54,5 @@ const pkg = {
   peerDependencies: source.peerDependencies,
 };
 await writeFile(join(dist, "package.json"), `${JSON.stringify(pkg, null, 2)}\n`);
+await copyLicence(dist);
 console.log("dist: index.js, index.d.ts, package.json");
