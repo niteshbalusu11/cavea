@@ -13,6 +13,8 @@ import {
   refusedSeats,
   seatStatus,
   statusOf,
+  markRead,
+  markUnread,
   takeDetails,
   type Status,
 } from "./model.ts";
@@ -148,4 +150,16 @@ test("a late details answer does not undo a newer one; a seat gone free loses it
   // A newer answer without the seat: it is free, its details go.
   takeDetails(details, readAt, ["A-1"], [], 3);
   expect(details.has("A-1")).toBe(false);
+});
+
+test("a details read that failed is read again until a later read succeeds, overlapping ones too", () => {
+  const unread = new Map<string, number>();
+  // Read 1 is sent; the seat is rebooked; read 2 is sent and fails; read
+  // 1, from before the change, then succeeds: A-1 must still be read again.
+  markUnread(unread, ["A-1"], 2);
+  markRead(unread, ["A-1"], 1);
+  expect([...unread.keys()]).toEqual(["A-1"]);
+  // The retry (read 3) succeeds: done.
+  markRead(unread, ["A-1"], 3);
+  expect(unread.size).toBe(0);
 });

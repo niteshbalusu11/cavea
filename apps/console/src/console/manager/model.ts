@@ -161,6 +161,18 @@ export function takeDetails(
   }
 }
 
+/** Seats whose details read number `at` failed, in `unread` (seat → the
+ * failed read's number): read again until a later read succeeds. */
+export function markUnread(unread: Map<string, number>, labels: readonly string[], at: number) {
+  for (const label of labels) unread.set(label, Math.max(unread.get(label) ?? 0, at));
+}
+
+/** Read number `at` succeeded for `labels`: a seat whose read failed
+ * after it was sent is still to be read again. */
+export function markRead(unread: Map<string, number>, labels: readonly string[], at: number) {
+  for (const label of labels) if ((unread.get(label) ?? 0) < at) unread.delete(label);
+}
+
 /** At most this many labels named in a list ("A-1, A-2 and 6 more"). */
 export const NAMED = 8;
 

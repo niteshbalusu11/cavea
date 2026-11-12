@@ -26,6 +26,8 @@ import {
   refusedSeats,
   seatStatus,
   statusOf,
+  markRead,
+  markUnread,
   takeDetails,
   type Action,
   type Pending,
@@ -165,7 +167,7 @@ export function createLive(options: {
   const readAt = new Map<string, number>();
   /** Watched seats whose last details read failed: read again at every
    * poll, the failure shown, until one succeeds. */
-  const unread = new Set<string>();
+  const unread = new Map<string, number>();
   let detailsFailed: ApiError | null = null;
 
   async function read(wanted: readonly string[]): Promise<void> {
@@ -180,12 +182,12 @@ export function createLive(options: {
         );
       } catch (e) {
         if (!isAbort(e) && !conn.signal.aborted) {
-          for (const l of chunk) unread.add(l);
+          markUnread(unread, chunk, at);
           detailsFailed = asApiError(e);
         }
         throw e;
       }
-      for (const l of chunk) unread.delete(l);
+      markRead(unread, chunk, at);
       takeDetails(details, readAt, chunk, answer.data, at);
       if (unread.size === 0) detailsFailed = null;
     }
@@ -325,7 +327,7 @@ export function createLive(options: {
       }
       // Watched seats whose details could not be read: again now.
       const retry = watched().filter((l) => unread.has(l));
-      for (const l of unread) if (!retry.includes(l)) unread.delete(l);
+      for (const l of unread.keys()) if (!retry.includes(l)) unread.delete(l);
       if (unread.size === 0) detailsFailed = null;
       readQuietly(retry);
       setHealth({ checkedAt: Date.now(), error: detailsFailed });
