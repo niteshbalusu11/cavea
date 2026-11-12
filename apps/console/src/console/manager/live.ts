@@ -288,9 +288,13 @@ export function createLive(options: {
       if (s.kind === "gap") {
         delay = 0;
       } else {
+        // Seats the operator's own action is shown for: once the state has
+        // caught up, it decides, even when its delta left their code as it
+        // was (the action and a later change merged into one).
+        const waiting = [...pending.keys()];
         const moved = apply(s);
         if (s.kind === "snapshot" || (s.kind === "delta" && seq !== before)) {
-          stateChanged(moved, s.kind === "snapshot");
+          stateChanged([...moved, ...waiting], s.kind === "snapshot");
         }
       }
       setHealth({ checkedAt: Date.now(), error: null });
