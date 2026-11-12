@@ -1311,6 +1311,7 @@ const auditActions: Record<AuditEntry["action"], string> = {
   "chart.archived": "Chart archived",
   "event.created": "Event created",
   "event.archived": "Event archived",
+  "licence.uploaded": "Licence uploaded",
 };
 
 /** The designer on a server chart: opening, saving, recovery, conflicts,
