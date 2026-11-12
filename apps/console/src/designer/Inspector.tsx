@@ -117,29 +117,30 @@ export function Inspector(props: { editor: Editor; onNumbering: () => void }) {
             editor.run((s) => s.setField({ field: "curve", value }));
           }}
         />
-        <Show when={cur?.kind === "arc" && cur}>
-          {(arc) => (
-            <NumberField
-              label={msg("field.curveRadius")}
-              value={"radius" in arc() ? (arc() as { radius: number }).radius : null}
-              min={1}
-              max={1e7}
-              unit={msg("unit.cu")}
-              onCommit={(radius) => set({ field: "curve", value: { kind: "arc", radius } })}
-            />
-          )}
+        {/* Read from `cur`, the view's own object, not a <Show> accessor:
+            the view changes that object in place, so a field's effect can
+            run after its <Show> has closed and before it is disposed, and
+            an accessor read then throws ("Stale read from <Show>"), which
+            stopped the designer following edits after an Insert. */}
+        <Show when={cur?.kind === "arc"}>
+          <NumberField
+            label={msg("field.curveRadius")}
+            value={cur?.kind === "arc" ? cur.radius : null}
+            min={1}
+            max={1e7}
+            unit={msg("unit.cu")}
+            onCommit={(radius) => set({ field: "curve", value: { kind: "arc", radius } })}
+          />
         </Show>
-        <Show when={cur?.kind === "bulge" && cur}>
-          {(b) => (
-            <NumberField
-              label={msg("field.curveAmount")}
-              value={"amount" in b() ? (b() as { amount: number }).amount : null}
-              min={-1e7}
-              max={1e7}
-              unit={msg("unit.cu")}
-              onCommit={(amount) => set({ field: "curve", value: { kind: "bulge", amount } })}
-            />
-          )}
+        <Show when={cur?.kind === "bulge"}>
+          <NumberField
+            label={msg("field.curveAmount")}
+            value={cur?.kind === "bulge" ? cur.amount : null}
+            min={-1e7}
+            max={1e7}
+            unit={msg("unit.cu")}
+            onCommit={(amount) => set({ field: "curve", value: { kind: "bulge", amount } })}
+          />
         </Show>
       </>
     );
