@@ -414,7 +414,7 @@ mod tests {
     #![allow(clippy::unwrap_used, reason = "tests")]
 
     use cavea_compiler::document::{ChartDocument, Node};
-    use cavea_format::full_label::compose;
+    use cavea_compiler::write_full_label as compose;
     use cavea_format::{Bounds, Object, Point};
 
     use super::*;
@@ -481,8 +481,9 @@ mod tests {
         let document = stadium();
         check_seats(&chart(&document), &document, true);
 
-        // No sections: one block at the top level, `standard`; labels
-        // compose with a leading dash (`-A-1`), and `section` is null.
+        // No sections: one block at the top level, `standard`; labels leave
+        // the empty section out with its dash (`A-1`, D-96), and `section`
+        // is null.
         let mut flat = stadium();
         flat.nodes = flat
             .nodes
@@ -501,7 +502,9 @@ mod tests {
             })
             .collect();
         let flat_chart = chart(&flat);
-        assert!(flat_chart.label(0).unwrap().starts_with('-'));
+        let d = flat_chart.details(0).unwrap();
+        let (row, seat) = (d.row.unwrap(), d.seat.unwrap());
+        assert_eq!(flat_chart.label(0), Some(format!("{row}-{seat}").as_str()));
         check_seats(&flat_chart, &flat, false);
     }
 
@@ -561,5 +564,31 @@ mod tests {
             );
         }
         assert_eq!(chart.details(first + 3), None);
+    }
+
+    /// What loading a chart version costs the provider at 100,000 seats
+    /// (decode and every full label): `cargo test --release -p cavea-server
+    /// measure_chart_load -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement"]
+    fn measure_chart_load() {
+        use cavea_testkit::presets::{DEFAULT_SEED, find};
+        let doc = find("stadium-100k").unwrap().generate(DEFAULT_SEED);
+        let compiled = cavea_compiler::compile(&doc).unwrap();
+        let mut times: Vec<_> = (0..15)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                let chart = build(&compiled.full, compiled.public_hash).unwrap();
+                let took = start.elapsed();
+                assert!(chart.view.len() >= 100_000);
+                took
+            })
+            .collect();
+        times.sort();
+        println!(
+            "chart load, stadium-100k: median {:?}, min {:?}",
+            times[times.len() / 2],
+            times[0]
+        );
     }
 }

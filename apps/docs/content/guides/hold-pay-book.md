@@ -97,7 +97,7 @@ export async function basket(event: string, holdToken: string) {
 }
 ```
 
-Store `seats` and `total` with the order: the payment is for these seats, and step 5 books exactly these. Price the seats from what the server says, never from anything the page sent: each object's `category` is the chart's category (`key` and `label`), so your backend needs only a table from category keys to prices. For the ticket, `section`, `row` and `seat` are the parts of the label, so you can print them in your own format; `section` is `null` on a chart without sections, whose labels start with a dash (`-D-10`).
+Store `seats` and `total` with the order: the payment is for these seats, and step 5 books exactly these. Price the seats from what the server says, never from anything the page sent: each object's `category` is the chart's category (`key` and `label`), so your backend needs only a table from category keys to prices. For the ticket, `section`, `row` and `seat` are the parts of the label, so you can print them in your own format; `section` is `null` on a chart without sections, whose labels are the row and seat alone (`D-10`).
 
 If the token has expired, tell the buyer their seats were released and send them back to the map: nothing has been charged.
 

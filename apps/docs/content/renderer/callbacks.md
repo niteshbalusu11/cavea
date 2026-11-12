@@ -83,7 +83,7 @@ Every object a callback or method reports has this shape. Only seats exist today
 
 <!-- members: SeatObject -->
 
-`label` is the seat's full name in the chart, which your backend books by: section, row and seat joined as the chart's label template says (`Stalls-C-12`). A chart with no sections gives labels that start with a dash (`-C-12`) with the default template.
+`label` is the seat's full name in the chart, which your backend books by: section, row and seat joined as the chart's label template says (`Stalls-C-12`). A part that is empty is left out with its separator: a seat in no section is `C-12` with the default template.
 
 `findObject` and the tooltip add the status:
 

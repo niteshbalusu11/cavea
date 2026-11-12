@@ -8,6 +8,7 @@
 use core::fmt::{self, Write};
 
 use cavea_core::label::{LabelBuf, LabelError, LabelRule, Scheme, seat_ordinal};
+use cavea_core::template::write_full_label;
 
 use crate::{Chart, NONE};
 
@@ -46,7 +47,7 @@ impl SeatLabel<'_> {
     pub fn full(&self, chart: &Chart) -> Result<LabelBuf, FullLabelError> {
         let template = chart.strings.get(chart.meta.label_template);
         let mut out = LabelBuf::new();
-        compose(
+        write_full_label(
             template.unwrap_or_default(),
             self.section,
             self.row,
@@ -153,30 +154,6 @@ pub fn seat_label(chart: &Chart, idx: u32) -> Result<SeatLabel<'_>, FullLabelErr
 /// Writes seat `idx`'s full label.
 pub fn full_label(chart: &Chart, idx: u32) -> Result<LabelBuf, FullLabelError> {
     seat_label(chart, idx)?.full(chart)
-}
-
-/// `template` with `{section}`, `{row}` and `{seat}` replaced in one pass; any
-/// other text, braces included, is copied as is (03 §3.1 step 6, the same rule
-/// as the compiler's `write_full_label`).
-pub fn compose<W: Write>(
-    template: &str,
-    section: &str,
-    row: &str,
-    seat: &str,
-    out: &mut W,
-) -> fmt::Result {
-    let mut rest = template;
-    while let Some(open) = rest.find('{') {
-        let (text, tail) = rest.split_at(open);
-        out.write_str(text)?;
-        let part = [("{section}", section), ("{row}", row), ("{seat}", seat)]
-            .into_iter()
-            .find(|(key, _)| tail.starts_with(key));
-        let (len, value) = part.map_or((1, "{"), |(key, value)| (key.len(), value));
-        out.write_str(value)?;
-        rest = tail.get(len..).unwrap_or_default();
-    }
-    out.write_str(rest)
 }
 
 /// Full label to seat `idx`: an open-addressing table of `idx + 1` (0 is

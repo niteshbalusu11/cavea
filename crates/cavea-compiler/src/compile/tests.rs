@@ -424,7 +424,12 @@ fn expected(doc: &ChartDocument) -> BTreeMap<u32, Expected> {
                 .category
                 .or(section.and_then(|x| x.category.as_deref()))
                 .unwrap();
-            let section_label = section.and_then(|x| x.label.as_deref()).unwrap_or("");
+            // The default template; outside a labelled section the empty part
+            // goes with its dash (D-96).
+            let label = match section.and_then(|x| x.label.as_deref()) {
+                Some(section) if !section.is_empty() => format!("{section}-{}-{seat}", row.label),
+                _ => format!("{}-{seat}", row.label),
+            };
             let expected = Expected {
                 world,
                 node: s.pos,
@@ -433,7 +438,7 @@ fn expected(doc: &ChartDocument) -> BTreeMap<u32, Expected> {
                 removed: s.removed,
                 category: category.to_owned(),
                 flags: s.flags,
-                label: format!("{section_label}-{}-{seat}", row.label),
+                label,
             };
             assert!(out.insert(s.oid, expected).is_none());
         }
@@ -1081,7 +1086,7 @@ fn duplicate_labels_and_ids_name_their_nodes() {
                 Code::E001,
                 Some(3),
                 Detail::DuplicateLabel {
-                    label: label("-A-1"),
+                    label: label("A-1"),
                     first: 1
                 }
             ),
@@ -1089,7 +1094,7 @@ fn duplicate_labels_and_ids_name_their_nodes() {
                 Code::E001,
                 Some(3),
                 Detail::DuplicateLabel {
-                    label: label("-A-2"),
+                    label: label("A-2"),
                     first: 1
                 }
             ),
@@ -1097,7 +1102,7 @@ fn duplicate_labels_and_ids_name_their_nodes() {
                 Code::E001,
                 Some(3),
                 Detail::DuplicateLabel {
-                    label: label("-A-3"),
+                    label: label("A-3"),
                     first: 1
                 }
             ),

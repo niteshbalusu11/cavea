@@ -9,6 +9,7 @@
     "packages/renderer/src/generated/**",
     "apps/console/src/api/generated.ts",
     "packages/server-sdk/src/generated.ts",
-    "crates/cavea-server/openapi.json"
+    "crates/cavea-server/openapi.json",
+    "apps/console/src/console/manager/fixtures/label-cases.json"
   ]
 }

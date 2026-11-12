@@ -203,11 +203,11 @@ The script tag loads the seat map, `{{renderer_package}}`, which sets `window.Ca
 
 ## 8. Hold a seat
 
-Open `http://localhost:8000`. The map shows the event's 200 seats in rows A to J (or the sample theatre's 561, if you used the API). Click a seat: it changes to a check mark, and the line under the map says which seat is held for you, such as `Held for you: -D-10`.
+Open `http://localhost:8000`. The map shows the event's 200 seats in rows A to J (or the sample theatre's 561, if you used the API). Click a seat: it changes to a check mark, and the line under the map says which seat is held for you, such as `Held for you: D-10`.
 
 ![The buyer's page: one seat near the middle is selected and held, and the line under the map says which](images/buyer-map.webp)
 
-The label is the seat's name in the chart: section, row and seat, joined by `-`. This chart has no sections, so the label starts with a dash.
+The label is the seat's name in the chart: section, row and seat, joined by `-`. This chart has no sections, so the label is the row and the seat alone.
 
 The seat is now held on the server under a [hold token](concepts/holds.md) that the map created for this browser tab. To see what others see:
 

@@ -14,7 +14,7 @@
 //! no hash-map iteration, and every sort has a total order.
 
 use std::collections::BTreeMap;
-use std::fmt::{self, Write};
+use std::fmt;
 use std::ops::Range;
 
 use cavea_core::label::{LabelBuf, Scheme, SeatDirection};
@@ -90,34 +90,10 @@ impl fmt::Display for CompileError {
 
 impl std::error::Error for CompileError {}
 
-/// Writes an object's full label: `template` with `{section}`, `{row}` and
-/// `{seat}` replaced by the parts, in one pass (03 §3.1 step 6). Any other text,
-/// braces included, is copied as is. Fails past 64 bytes when `out` is a
-/// [`LabelBuf`]. A consumer of a compiled chart composes labels the same way
-/// from `META`'s template, the section and row labels, and the seat label.
-pub fn write_full_label<W: Write>(
-    template: &str,
-    section: &str,
-    row: &str,
-    seat: &str,
-    out: &mut W,
-) -> fmt::Result {
-    let mut rest = template;
-    while let Some(open) = rest.find('{') {
-        let (text, tail) = rest.split_at(open);
-        out.write_str(text)?;
-        let part = [("{section}", section), ("{row}", row), ("{seat}", seat)]
-            .into_iter()
-            .find(|(key, _)| tail.starts_with(key));
-        let (len, value) = match part {
-            Some((key, value)) => (key.len(), value),
-            None => (1, "{"),
-        };
-        out.write_str(value)?;
-        rest = tail.get(len..).unwrap_or_default();
-    }
-    out.write_str(rest)
-}
+/// Writes an object's full label from the chart's template and its parts,
+/// each empty part left out with its separator (03 §3.1.1, D-96). One
+/// implementation for every consumer: `cavea_core::template`.
+pub use cavea_core::template::write_full_label;
 
 /// Compiles a chart document to its two artefacts and its warnings. The same
 /// document always gives the same bytes and the same findings.

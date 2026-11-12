@@ -4,7 +4,7 @@ At the end of this page your blocks will be in named sections, the stage and oth
 
 ## Sections
 
-A section is a part of the house with a name buyers know: "Stalls", "Circle", "Box A". Its label starts every seat's label ("Stalls-C-12"), and buyers see it on the map. Put every block in a section, even on a small chart: a seat outside any section gets a label starting with a dash ([The full label](numbering.md#the-full-label)).
+A section is a part of the house with a name buyers know: "Stalls", "Circle", "Box A". Its label starts every seat's label ("Stalls-C-12"), and buyers see it on the map. A block outside any section works too: its seats' labels are the row and the seat alone, "C-12" ([The full label](numbering.md#the-full-label)).
 
 1. Open the **Layers** tab in the panels.
 2. Right-click the block's line in the list and choose **Group into section**. The block is now inside a new section, which is selected.

@@ -157,11 +157,40 @@ function seatOrdinal(order: number, len: number, p: number): number {
   return p;
 }
 
-/** `template` with `{section}`, `{row}` and `{seat}` replaced in one pass. */
-function compose(template: string, section: string, row: string, seat: string): string {
-  return template.replace(/\{(section|row|seat)\}/g, (_, part: string) =>
-    part === "section" ? section : part === "row" ? row : seat,
-  );
+/**
+ * `template` with `{section}`, `{row}` and `{seat}` filled in one pass, each
+ * empty part left out with its separator: the one after it, or the one before
+ * it when no written part follows (03 §3.1.1, D-96). The prefix and suffix are
+ * always written. The port of `cavea_core::template::write_full_label`,
+ * checked against its table (`fixtures/label-cases.json`).
+ */
+export function compose(template: string, section: string, row: string, seat: string): string {
+  const values: Record<string, string> = { section, row, seat };
+  const placeholder = /\{(section|row|seat)\}/g;
+  let out = "";
+  let separator = "";
+  let started = false;
+  let wrote = false;
+  let afterWritten = false;
+  let at = 0;
+  for (const m of template.matchAll(placeholder)) {
+    const literal = template.slice(at, m.index);
+    if (!started) {
+      out += literal;
+      started = true;
+    } else if (afterWritten) {
+      separator = literal;
+    }
+    const value = values[m[1] ?? ""] ?? "";
+    afterWritten = value !== "";
+    if (afterWritten) {
+      if (wrote) out += separator;
+      out += value;
+      wrote = true;
+    }
+    at = m.index + m[0].length;
+  }
+  return out + template.slice(at);
 }
 
 const utf8 = new TextDecoder("utf-8", { fatal: true });

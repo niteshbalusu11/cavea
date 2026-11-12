@@ -94,7 +94,7 @@
       "Circle/IV./b": 3,
       "Circle/IV./c": 3,
       "Circle/IV./d": 3,
-      "/Box/j": 5
+      "Box/j": 5
     }
   },
   "delta": {
@@ -137,8 +137,8 @@
       "Circle/2/2": 0,
       "Circle/IV./b": 0,
       "Circle/IV./d": 0,
-      "/Box/b": 2,
-      "/Box/f": 2
+      "Box/b": 2,
+      "Box/f": 2
     }
   }
 }
