@@ -601,6 +601,23 @@
             "format": "date-time",
             "type": "string"
           },
+          "events": {
+            "additionalProperties": false,
+            "description": "How many of the workspace's events use the chart, any version.",
+            "properties": {
+              "active": {
+                "type": "integer"
+              },
+              "archived": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "active",
+              "archived"
+            ],
+            "type": "object"
+          },
           "key": {
             "type": "string"
           },
@@ -625,7 +642,8 @@
           "draft_updated_at",
           "published_version",
           "archived_at",
-          "created_at"
+          "created_at",
+          "events"
         ],
         "type": "object"
       },
@@ -3144,11 +3162,16 @@
               "id": {
                 "description": "`usr_` and 32 hex digits.",
                 "type": "string"
+              },
+              "second_factor": {
+                "description": "Whether signing in asks them for a code as well.",
+                "type": "boolean"
               }
             },
             "required": [
               "id",
-              "email"
+              "email",
+              "second_factor"
             ],
             "type": "object"
           }

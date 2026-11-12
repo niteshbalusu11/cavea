@@ -472,14 +472,29 @@ async fn password_reset_links() {
         assert_eq!(response.status(), 200, "{me}");
         assert_eq!(me["user"]["second_factor"], false);
 
-        // An owner or admin resets a second factor alone; idempotent.
+        // An owner or admin resets a second factor alone; idempotent. The
+        // members list says who has one, before and after.
         let viewer_session = started(&response);
         enrol(&app, &clock, &viewer_session, PASSWORD).await;
+        let with_factor = async || {
+            let uri = "/console/api/members";
+            let (response, page) = as_user(&app, Method::GET, uri, &admin, ws, None).await;
+            assert_eq!(response.status(), 200, "{page}");
+            let members = page["data"].as_array().unwrap();
+            assert_eq!(members.len(), 3);
+            members
+                .iter()
+                .filter(|m| m["user"]["second_factor"] == true)
+                .map(|m| m["user"]["id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(with_factor().await, [format!("usr_{viewer}")]);
         let uri = format!("/console/api/members/usr_{viewer}/second-factor");
         for _ in 0..2 {
             let (response, _) = as_user(&app, Method::DELETE, &uri, &admin, ws, None).await;
             assert_eq!(response.status(), 204);
         }
+        assert!(with_factor().await.is_empty());
         let (response, me) = sign_in(&app, EMAIL, PASSWORD).await;
         assert_eq!(response.status(), 200, "{me}");
         assert_eq!(me["user"]["second_factor"], false);

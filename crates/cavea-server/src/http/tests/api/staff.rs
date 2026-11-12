@@ -1,8 +1,8 @@
 //! What the console's manager and the designer need of the server, against
 //! PostgreSQL: the staff state (`GET /v1/events/{event}/state`) against the
 //! committed rows, the events' counts, the events list's search, filters and
-//! order, a publishable key's origins, the chart editing lock, and versions'
-//! thumbnails and authors.
+//! order, a publishable key's origins, the chart editing lock, versions'
+//! thumbnails and authors, and each chart's count of events.
 
 use cavea_engine::{ManualClock, Timestamp};
 use cavea_format::wire;
@@ -380,6 +380,97 @@ async fn events_list_searches_and_orders() {
         assert_eq!(row["counts"]["booked"], 1);
         assert_eq!(row["counts"]["free"], 1_999);
         assert_eq!(row["seq"], 1);
+    })
+    .await;
+}
+
+/// Every chart reply counts the workspace's events on any of the chart's
+/// versions, active and archived apart, following creation, archiving and a
+/// row deleted by hand; another workspace's events under the same chart key
+/// are never counted.
+#[tokio::test]
+#[ignore = "needs CAVEA_TEST_DATABASE_URL"]
+async fn charts_count_their_events() {
+    let _serial = serial();
+    with_db(async move |pool| {
+        let app = api(&pool, Some(ADMIN));
+        let a = Tenant::create_as(&app, "a", "x").await;
+        let b = Tenant::create_as(&app, "b", "x").await;
+        assert_eq!(a.chart, b.chart);
+        let sk = a.secret.as_str();
+        let counts = async |secret: &str| -> (Value, Value) {
+            let (response, page) = get(&app, secret, "/v1/charts?limit=1").await;
+            assert_eq!(response.status(), 200, "{page}");
+            let (response, detail) = get(&app, secret, &format!("/v1/charts/{}", a.chart)).await;
+            assert_eq!(response.status(), 200, "{detail}");
+            assert_eq!(page["data"][0]["events"], detail["events"]);
+            (
+                detail["events"]["active"].clone(),
+                detail["events"]["archived"].clone(),
+            )
+        };
+        assert_eq!(counts(sk).await, (json!(1), json!(0)));
+
+        // A chart without events, as created.
+        let (response, empty) =
+            post(&app, sk, "/v1/charts", json!({ "key": "e", "name": "E" })).await;
+        assert_eq!(response.status(), 201);
+        assert_eq!(empty["events"], json!({ "active": 0, "archived": 0 }));
+
+        // Events on the first version and on a second one.
+        for key in ["one", "two", "three"] {
+            let body = json!({ "key": key, "chart": a.chart });
+            let (response, _) = post(&app, sk, "/v1/events", body).await;
+            assert_eq!(response.status(), 201);
+        }
+        let document: Value = serde_json::from_str(&a.document).unwrap();
+        let mut renamed = document.clone();
+        renamed["name"] = json!("renamed");
+        let uri = format!("/v1/charts/{}/draft", a.chart);
+        let headers = [(header::IF_MATCH, "*")];
+        let (response, _) =
+            call_with(&app, Method::PUT, &uri, Some(sk), &headers, Some(renamed)).await;
+        assert_eq!(response.status(), 200);
+        let uri = format!("/v1/charts/{}/publish", a.chart);
+        let (response, version) = call(&app, Method::POST, &uri, Some(sk), None).await;
+        assert_eq!(response.status(), 201, "{version}");
+        let body = json!({ "key": "four", "chart": a.chart, "version": version["number"] });
+        let (response, _) = post(&app, sk, "/v1/events", body).await;
+        assert_eq!(response.status(), 201);
+        assert_eq!(counts(sk).await, (json!(5), json!(0)));
+
+        for key in ["one", "four", "four"] {
+            let uri = format!("/v1/events/{key}");
+            let (response, _) = call(&app, Method::DELETE, &uri, Some(sk), None).await;
+            assert_eq!(response.status(), 200);
+        }
+        assert_eq!(counts(sk).await, (json!(3), json!(2)));
+        // No route deletes an event; an operator's hand can.
+        sqlx::query("DELETE FROM events WHERE key = 'two'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(counts(sk).await, (json!(2), json!(2)));
+
+        // The other workspace's events on its own `chart-x` stay its own.
+        for key in ["b1", "b2"] {
+            let body = json!({ "key": key, "chart": b.chart });
+            let (response, _) = post(&app, &b.secret, "/v1/events", body).await;
+            assert_eq!(response.status(), 201);
+        }
+        assert_eq!(counts(sk).await, (json!(2), json!(2)));
+        assert_eq!(counts(&b.secret).await, (json!(3), json!(0)));
+
+        // Every chart reply carries them: archiving, and saving the draft.
+        let uri = format!("/v1/charts/{}/draft", a.chart);
+        let (response, saved) =
+            call_with(&app, Method::PUT, &uri, Some(sk), &headers, Some(document)).await;
+        assert_eq!(response.status(), 200);
+        assert_eq!(saved["events"], json!({ "active": 2, "archived": 2 }));
+        let uri = format!("/v1/charts/{}", a.chart);
+        let (response, archived) = call(&app, Method::DELETE, &uri, Some(sk), None).await;
+        assert_eq!(response.status(), 200);
+        assert_eq!(archived["events"], json!({ "active": 2, "archived": 2 }));
     })
     .await;
 }
@@ -850,6 +941,83 @@ async fn measure_console_reads() {
         ] {
             let (p50, p99, size) = timed(&app, sk, uri, 100).await;
             println!("{label}: p50 {p50:.3} ms, p99 {p99:.3} ms, {size} bytes");
+        }
+    })
+    .await;
+}
+
+/// The charts list with each chart's event counts, at 1,000 charts and
+/// 10,000 events (ten a chart, a third archived), made by SQL from the
+/// tenant's chart and event: the console reads the whole list, ten pages.
+/// Then the same without `events_chart_version`, for its worth. Run with
+/// `--release -- --ignored --nocapture measure_charts_list --test-threads=1`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "a measurement: needs CAVEA_TEST_DATABASE_URL and --release"]
+async fn measure_charts_list() {
+    let _serial = serial();
+    with_db(async move |pool| {
+        let app = api(&pool, Some(ADMIN));
+        let t = Tenant::create(&app, "a").await;
+        let sk = t.secret.as_str();
+        for sql in [
+            "INSERT INTO charts (id, workspace_id, key, name, draft, created_at)
+             SELECT gen_random_uuid(), c.workspace_id, 'm-' || lpad(i::text, 4, '0'),
+                    'Chart ' || i, c.draft, now() + i * interval '1 ms'
+               FROM charts c, generate_series(1, 999) i WHERE c.key = $1",
+            "INSERT INTO chart_versions
+                    (id, chart_id, number, hash, full_hash, source, public_ccf, public_ccf_br, full_ccf, stats)
+             SELECT gen_random_uuid(), m.id, 1, v.hash, v.full_hash, v.source, v.public_ccf, v.public_ccf_br,
+                    v.full_ccf, v.stats
+               FROM charts m, charts c JOIN chart_versions v ON v.id = c.published_version_id
+              WHERE m.key LIKE 'm-%' AND c.key = $1",
+            "UPDATE charts m SET published_version_id = v.id
+               FROM chart_versions v WHERE v.chart_id = m.id AND m.key LIKE 'm-%' AND $1 <> ''",
+            "INSERT INTO events (id, workspace_id, key, chart_version_id, archived_at)
+             SELECT gen_random_uuid(), m.workspace_id, m.key || '-' || j, m.published_version_id,
+                    CASE WHEN j % 3 = 0 THEN now() END
+               FROM charts m, generate_series(1, 10) j WHERE m.key LIKE 'm-%' AND $1 <> ''",
+            "ANALYZE",
+        ] {
+            let query = sqlx::query(sql);
+            let query = if sql == "ANALYZE" { query } else { query.bind(&t.chart) };
+            query.execute(&pool).await.unwrap();
+        }
+        let (_, page) = get(&app, sk, "/v1/charts/m-0500").await;
+        assert_eq!(page["events"], json!({ "active": 7, "archived": 3 }));
+        for index in [true, false] {
+            if !index {
+                sqlx::query("DROP INDEX events_chart_version")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+            let label = if index { "with the index" } else { "without it" };
+            for (what, uri) in [
+                ("first page of 100", "/v1/charts?limit=100".to_owned()),
+                ("last page by cursor", "/v1/charts?limit=100&after=m-0899".to_owned()),
+                ("one chart", "/v1/charts/m-0500".to_owned()),
+            ] {
+                let (p50, p99, size) = timed(&app, sk, &uri, 50).await;
+                println!("charts, {what}, {label}: p50 {p50:.3} ms, p99 {p99:.3} ms, {size} bytes");
+            }
+            let mut times = Vec::new();
+            for _ in 0..20 {
+                let started = std::time::Instant::now();
+                let mut after = String::new();
+                let mut charts = 0;
+                loop {
+                    let (_, page) = get(&app, sk, &format!("/v1/charts?limit=100{after}")).await;
+                    charts += page["data"].as_array().unwrap().len();
+                    match page["next"].as_str() {
+                        Some(next) => after = format!("&after={next}"),
+                        None => break,
+                    }
+                }
+                assert_eq!(charts, 1_000);
+                times.push(started.elapsed().as_secs_f64() * 1e3);
+            }
+            let (p50, p99) = quantiles(times);
+            println!("charts, the whole list (10 pages), {label}: p50 {p50:.3} ms, p99 {p99:.3} ms");
         }
     })
     .await;

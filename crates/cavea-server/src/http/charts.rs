@@ -195,8 +195,10 @@ END"
     };
 }
 
-/// `charts` columns aliased `c`, then its published version's, in [`ChartRow`]
-/// order. Join the version as
+/// `charts` columns aliased `c`, then its published version's, then how many
+/// of the workspace's events use any of its versions, active and archived
+/// (one subquery per chart returned, on `events_chart_version`), in
+/// [`ChartRow`] order. Join the version as
 /// `LEFT JOIN chart_versions v ON v.id = c.published_version_id`.
 macro_rules! chart_columns {
     () => {
@@ -208,7 +210,11 @@ macro_rules! chart_columns {
             ", ",
             rfc3339!("c", ".created_at"),
             ", ",
-            version_columns!()
+            version_columns!(),
+            ", (SELECT ARRAY[count(*) FILTER (WHERE e.archived_at IS NULL),
+                count(*) FILTER (WHERE e.archived_at IS NOT NULL)]
+     FROM chart_versions cv JOIN events e ON e.chart_version_id = cv.id
+    WHERE cv.chart_id = c.id AND e.workspace_id = c.workspace_id)"
         )
     };
 }
@@ -260,6 +266,7 @@ type ChartRow = (
     Option<String>,
     Option<String>,
     Option<String>,
+    Vec<i64>,
 );
 
 /// A published chart version as the API shows it.
@@ -338,6 +345,14 @@ struct Chart {
     published_version: Option<Version>,
     archived_at: Option<String>,
     created_at: String,
+    events: EventCounts,
+}
+
+/// How many events use a chart (any of its versions).
+#[derive(Debug, Serialize)]
+struct EventCounts {
+    active: i64,
+    archived: i64,
 }
 
 impl Chart {
@@ -356,6 +371,7 @@ impl Chart {
             v4,
             v5,
             v6,
+            events,
         ) = row;
         let published_version = match (v0, v1, v2, v3, v4) {
             (Some(v0), Some(v1), Some(v2), Some(v3), Some(v4)) => {
@@ -371,6 +387,13 @@ impl Chart {
             published_version,
             archived_at,
             created_at,
+            events: match events.as_slice() {
+                [active, archived] => EventCounts {
+                    active: *active,
+                    archived: *archived,
+                },
+                _ => return Err(ApiError::internal("event counts not a pair")),
+            },
         })
     }
 }
@@ -456,16 +479,18 @@ fn matches(if_match: Option<IfMatch>, current: i64) -> bool {
 
 // ---- list, create, read, archive ----
 
-/// Oldest first; archived charts included. `after` is a chart key.
+/// Oldest first; archived charts included. `after` is a chart key. The page
+/// is chosen first, so only its charts' events are counted.
 const LIST: &str = concat!(
     "SELECT ",
     chart_columns!(),
-    " FROM charts c LEFT JOIN chart_versions v ON v.id = c.published_version_id
- WHERE c.workspace_id = $1::uuid
-   AND ($2::text IS NULL OR (c.created_at, c.id) >
+    " FROM (SELECT * FROM charts
+ WHERE workspace_id = $1::uuid
+   AND ($2::text IS NULL OR (created_at, id) >
         (SELECT created_at, id FROM charts WHERE workspace_id = $1::uuid AND key = $2))
- ORDER BY c.created_at, c.id
- LIMIT $3"
+ ORDER BY created_at, id
+ LIMIT $3) c LEFT JOIN chart_versions v ON v.id = c.published_version_id
+ ORDER BY c.created_at, c.id"
 );
 
 async fn list(
