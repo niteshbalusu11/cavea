@@ -30,7 +30,7 @@ interface Use {
 
 const files = readdirSync(DIR)
   .filter((f) => f.endsWith(".yml") || f.endsWith(".yaml"))
-  .sort();
+  .toSorted();
 const uses: Use[] = [];
 for (const file of files) {
   readFileSync(join(DIR, file), "utf8")
@@ -93,7 +93,9 @@ for (const u of uses) {
   const tags = gh(`repos/${repo}/tags?per_page=100`)
     .split("\n")
     .filter((t) => /^v\d+\.\d+\.\d+$/.test(t));
-  const same = tags.filter((t) => t.startsWith(`${major}.`)).reduce((a, b) => (newer(b, a) ? b : a), u.version);
+  const same = tags
+    .filter((t) => t.startsWith(`${major}.`))
+    .reduce((a, b) => (newer(b, a) ? b : a), u.version);
   const top = tags.reduce((a, b) => (newer(b, a) ? b : a), u.version);
   latest.set(u.action, {
     tag: same,
@@ -104,7 +106,8 @@ for (const u of uses) {
 
 for (const u of uses) {
   const l = latest.get(u.action);
-  const note = l === undefined ? "not pinned" : l.tag === u.version ? "newest" : `${l.tag} available`;
+  const note =
+    l === undefined ? "not pinned" : l.tag === u.version ? "newest" : `${l.tag} available`;
   const major = l?.major ? `; new major ${l.major} (not taken)` : "";
   console.log(`${u.file}:${u.line} ${u.action} ${u.version ?? u.ref}: ${note}${major}`);
 }
