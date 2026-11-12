@@ -11,10 +11,12 @@
 //! before this one (01 §6); before the first release there is none, and it
 //! says so.
 //!
-//! Both servers are built with `trust-test-key` and a key made for the run,
+//! Both servers are debug builds with `trust-test-key` and a key made for the run,
 //! so a licence can be uploaded to the old one and read by the new one; the
-//! key is deleted at the end. Builds share `target/upgrade/target`, so a
-//! revision is compiled once. Worktrees and the run's files are removed at
+//! key is deleted at the end. Each revision builds in a target directory of
+//! its own, `target/upgrade/target/<commit>` (`new` for this tree), kept
+//! between runs: checkouts of one workspace must not share one, since cargo
+//! would take one's crates for the other's. Worktrees and the run's files are removed at
 //! the end unless `--keep`. Exit codes: 0 every scenario passed, 1 one
 //! failed, 3 the test could not run.
 
@@ -128,13 +130,13 @@ fn scenarios(
     ])?;
 
     println!("\n=== building this tree's server and CLI");
-    let new = build(root, &target, &work.join("new"), Some(&public))?;
+    let new = build(root, &target.join("new"), &work.join("new"), Some(&public))?;
     let mut failed = 0;
     for rev in from {
         let (sha, src) = checkout(root, base, rev, worktrees)?;
         println!("\n=== upgrade from {rev} ({})", &sha[..12]);
         let key = supports_test_key(&src).then_some(public.as_str());
-        let old = build(&src, &target, &work.join(&sha[..12]), key)?;
+        let old = build(&src, &target.join(&sha[..12]), &work.join(&sha[..12]), key)?;
         let mut command = bun_run(root);
         command
             .args(["--label", rev, "--new"])
@@ -161,7 +163,7 @@ fn scenarios(
             continue;
         }
         let dist = work.join(format!("renderer-{}", &sha[..12]));
-        build_renderer(&src, &target, &dist)?;
+        build_renderer(&src, &target.join(&sha[..12]), &dist)?;
         let mut command = bun_run(root);
         command
             .args(["--label", rev, "--new"])
@@ -213,22 +215,16 @@ fn checkout(
     Ok((sha, src))
 }
 
-/// `cavea-server` and `cavea` from `src`, in release, copied into `out`;
-/// with `key`, the server also trusts it (`trust-test-key`). Returns `out`.
+/// `cavea-server` and `cavea` from `src`, copied into `out`; with `key`, the
+/// server also trusts it (`trust-test-key`, which refuses a release build,
+/// so these are debug builds: what is tested is the data, not the speed).
+/// Returns `out`.
 fn build(src: &Path, target: &Path, out: &Path, key: Option<&str>) -> Result<PathBuf> {
     let mut command = cargo();
     command
         .current_dir(src)
         .env("CARGO_TARGET_DIR", target)
-        .args([
-            "build",
-            "--release",
-            "--locked",
-            "-p",
-            "cavea-server",
-            "-p",
-            "cavea-cli",
-        ]);
+        .args(["build", "--locked", "-p", "cavea-server", "-p", "cavea-cli"]);
     if let Some(key) = key {
         command
             .args(["--features", "cavea-server/trust-test-key"])
@@ -237,7 +233,7 @@ fn build(src: &Path, target: &Path, out: &Path, key: Option<&str>) -> Result<Pat
     run(&mut command)?;
     fs::create_dir_all(out)?;
     for binary in ["cavea-server", "cavea"] {
-        fs::copy(target.join("release").join(binary), out.join(binary))
+        fs::copy(target.join("debug").join(binary), out.join(binary))
             .with_context(|| format!("no {binary} built from {}", src.display()))?;
     }
     Ok(out.to_path_buf())

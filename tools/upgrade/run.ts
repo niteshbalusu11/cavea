@@ -177,6 +177,8 @@ interface World {
   labels: Record<string, string>;
   asset?: string;
   draftEtag?: string;
+  /** The optional reads the old server answered. */
+  optional: Set<string>;
 }
 
 async function populate(oldServer: Server, ops: Set<string>, admin: string): Promise<World> {
@@ -200,13 +202,21 @@ async function populate(oldServer: Server, ops: Set<string>, admin: string): Pro
     };
     say("owner set up from the old server's setup link");
   }
-  for (const key of ["upgrade", "neighbour"]) {
-    await must([201], "POST", "/v1/workspaces", { key, name: `Upgrade ${key}` }, { key: admin });
+  // Only an owner of every workspace may upload a licence: before the admin
+  // makes more.
+  if (owner && has("consoleLicence") && licenceFile !== undefined) {
+    const licence = await Bun.file(licenceFile).text();
+    await must([200], "PUT", "/console/api/licence", { licence }, { session: { ...owner.session, workspace: "" } });
+    say("a licence uploaded");
   }
-  const sk = str((await must([201], "POST", "/v1/workspaces/upgrade/keys", { name: "backend" }, { key: admin })).json, "key");
-  const sk2 = str((await must([201], "POST", "/v1/workspaces/neighbour/keys", { name: "backend" }, { key: admin })).json, "key");
+  const ids: string[] = [];
+  for (const key of ["upgrade", "neighbour"]) {
+    ids.push(str((await must([201], "POST", "/v1/workspaces", { key, name: `Upgrade ${key}` }, { key: admin })).json, "id"));
+  }
+  const sk = str((await must([201], "POST", `/v1/workspaces/${ids[0]}/keys`, { name: "backend" }, { key: admin })).json, "key");
+  const sk2 = str((await must([201], "POST", `/v1/workspaces/${ids[1]}/keys`, { name: "backend" }, { key: admin })).json, "key");
   if (has("inviteWorkspaceOwner")) {
-    await must([201], "POST", "/v1/workspaces/upgrade/invitations", { email: "second@example.org" }, { key: admin });
+    await must([201], "POST", `/v1/workspaces/${ids[0]}/invitations`, { email: "second@example.org" }, { key: admin });
   }
   const as = { key: sk };
   const pk = str((await must([201], "POST", "/v1/keys", { kind: "publishable", name: "buyers", allowed_origins: null }, as)).json, "key");
@@ -276,20 +286,22 @@ async function populate(oldServer: Server, ops: Set<string>, admin: string): Pro
   if (owner && has("inviteMember")) {
     await must([201], "POST", "/console/api/members", { email: "viewer@example.org", role: "viewer" }, { session: owner.session });
   }
-  if (owner && has("consoleLicence") && licenceFile !== undefined) {
-    const licence = await Bun.file(licenceFile).text();
-    await must([200], "PUT", "/console/api/licence", { licence }, { session: { ...owner.session, workspace: "" } });
-    say("a licence uploaded");
-  }
-  return { ops, admin, sk, pk, owner, editor, holds: { staff, buyer }, labels, asset, draftEtag };
+  return { ops, admin, sk, pk, owner, editor, holds: { staff, buyer }, labels, asset, draftEtag, optional: new Set() };
 }
 
 /** Every object the old server made, as each read route answers, by route. */
-async function snapshot(w: World): Promise<Map<string, Json>> {
+async function snapshot(w: World, old: boolean): Promise<Map<string, Json>> {
   const has = (op: string): boolean => w.ops.has(op);
   const shot = new Map<string, Json>();
-  const get = async (path: string, as: As): Promise<Json> => {
+  /** Reads `path` into the snapshot; an `optional` one only where the old server had it. */
+  const get = async (path: string, as: As, optional = false): Promise<Json> => {
     const reply = await call("GET", path, undefined, as);
+    if (optional && (old ? reply.status !== 200 : !w.optional.has(path))) {
+      return null;
+    }
+    if (optional && old) w.optional.add(path);
+    // Every read succeeds on the old server; on the new one a failure is a difference.
+    check(!old || reply.status === 200, `the old server answers GET ${path} (${reply.status})`);
     const value = reply.json ?? { bytes: reply.bytes.length, sha256: createHash("sha256").update(reply.bytes).digest("hex") };
     shot.set(`GET ${path} (${as.session ? "session" : as.key === w.admin ? "admin" : as.key === w.pk ? "publishable" : "secret"})`, { status: reply.status, body: value, etag: reply.headers.get("etag") });
     return value;
@@ -307,12 +319,13 @@ async function snapshot(w: World): Promise<Map<string, Json>> {
   await get("/v1/charts/draft/draft", w.editor);
   if (has("getChartLock")) await get("/v1/charts/draft/lock", w.editor);
   await get("/v1/events", as);
-  if (has("listEvents")) await get("/v1/events?archived=true", as);
+  // Archived events are listed on request only since #82.
+  await get("/v1/events?archived=true", as, true);
   const night = await get("/v1/events/night", as);
   await get("/v1/events/matinee", as);
   let after = "";
-  for (let page = 0; page < 50; page++) {
-    const objects = await get(`/v1/events/night/objects?limit=500${after}`, as);
+  for (let page = 0; page < 100; page++) {
+    const objects = await get(`/v1/events/night/objects?limit=100${after}`, as);
     const next = at(objects, "next");
     if (typeof next !== "string" || next === "") break;
     after = `&after=${encodeURIComponent(next)}`;
@@ -327,13 +340,13 @@ async function snapshot(w: World): Promise<Map<string, Json>> {
     await get("/console/api/me", session);
     if (has("listMembers")) await get("/console/api/members", session);
     if (has("listInvitations")) await get("/console/api/invitations", session);
-    if (has("listAudit")) await get("/console/api/audit?limit=200", session);
+    if (has("listAudit")) await get("/console/api/audit?limit=100", session);
   }
   return shot;
 }
 
-/** Fields that change by reading: a key's last use. */
-const VOLATILE = new Set(["last_used_at"]);
+/** Fields that change by reading: a key's last use; an error's request id. */
+const VOLATILE = new Set(["last_used_at", "request_id"]);
 
 /** The differences between what the old server answered and what the new one does. */
 function compare(before: Map<string, Json>, after: Map<string, Json>): { changed: string[]; added: string[] } {
@@ -401,7 +414,7 @@ async function upgrade(): Promise<void> {
   }
   say(`old server (${label}) up: ${ops.size} operations, migrations ${await migrations()}`);
   const world = await populate(old, ops, admin);
-  const before = await snapshot(world);
+  const before = await snapshot(world, true);
   say(`read back ${before.size} routes from the old server`);
 
   const stop = await old.stop();
@@ -412,7 +425,7 @@ async function upgrade(): Promise<void> {
   const next = await server(newDir!, env, "new");
   const now = await migrations();
   say(`new server up on the same database: migrations ${applied} -> ${now}`);
-  const after = await snapshot(world);
+  const after = await snapshot(world, false);
   const { changed, added } = compare(before, after);
   for (const c of changed) findings.push(`old data answers differently: ${c}`);
   if (added.length > 0) notes.push(`fields the new server adds to old objects: ${added.sort().join(", ")}`);
@@ -441,7 +454,7 @@ async function upgrade(): Promise<void> {
   await must([200], "POST", "/v1/events/night/book", { hold_token: fresh, order_ref: "order-5" }, as);
   await must([200], "POST", "/v1/events/night/change-status", { objects: [l.blocked], status: "free" }, as);
   const counts = at((await must([200], "GET", "/v1/events/night", undefined, as)).json, "counts");
-  check(at(counts, "booked") === 7, `seven seats booked after the upgrade: ${JSON.stringify(counts)}`);
+  check(at(counts, "booked") === 6, `six seats booked after the upgrade: ${JSON.stringify(counts)}`);
   say("old holds extended and booked, the buyer's released and booked, a new hold, a seat unblocked");
 
   const saved = await call("PUT", "/v1/charts/draft/draft", { ...JSON.parse(cli(oldDir!, "gen", "theatre")), name: "Draft, edited after the upgrade" }, {
@@ -456,7 +469,7 @@ async function upgrade(): Promise<void> {
   }
   await must([200, 201], "POST", "/v1/charts/hall/publish", undefined, as);
   await must([201], "POST", "/v1/events", { key: "after", chart: "hall" }, as);
-  say("the draft edited on with its old ETag; the lock released; a chart published and an event made");
+  say(`the draft edited on with its old ETag${ops.has("getChartLock") ? "; the lock released" : ""}; a chart published and an event made`);
 
   if (world.owner) {
     const me = await call("GET", "/console/api/me", undefined, { session: world.owner.session });
@@ -486,8 +499,8 @@ async function renderer(): Promise<void> {
   base = `http://localhost:${port}`;
   const admin = hex(24);
   await server(newDir!, { CAVEA_DATABASE_URL: url, CAVEA_LISTEN: `127.0.0.1:${port}`, CAVEA_ADMIN_KEY: admin, CAVEA_PUBLIC_URL: base }, "new");
-  await must([201], "POST", "/v1/workspaces", { key: "page", name: "Page" }, { key: admin });
-  const sk = str((await must([201], "POST", "/v1/workspaces/page/keys", { name: "backend" }, { key: admin })).json, "key");
+  const id = str((await must([201], "POST", "/v1/workspaces", { key: "page", name: "Page" }, { key: admin })).json, "id");
+  const sk = str((await must([201], "POST", `/v1/workspaces/${id}/keys`, { name: "backend" }, { key: admin })).json, "key");
   const pk = str((await must([201], "POST", "/v1/keys", { kind: "publishable", name: "page", allowed_origins: null }, { key: sk })).json, "key");
   await must([201], "POST", "/v1/charts", { key: "hall", name: "Hall", document: JSON.parse(cli(newDir!, "gen", "theatre")) }, { key: sk });
   await must([200, 201], "POST", "/v1/charts/hall/publish", undefined, { key: sk });

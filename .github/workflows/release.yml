@@ -1,0 +1,118 @@
+# The release (D-85, docs/01-architecture.md §6). Never runs for a pull
+# request or a branch push: CI stays format, lint, type and build checks.
+#
+# - A version tag (`v0.1.0`) pushed by the owner: `check` runs the audits, the
+#   test suites and the builds (`cargo xtask release`) with no credential but
+#   read access; `publish`, in the `release` environment, pushes, signs and
+#   publishes what `check` built (`cargo xtask release publish`).
+# - Run by hand (Actions, "Release", "Run workflow"): a dry run on the
+#   runner (`cargo xtask release --dry-run`), publishing rehearsed against a
+#   local registry with a throwaway key. Nothing is published.
+#
+# A failed `publish` is resumed with "Re-run failed jobs" (the same files;
+# every step can run twice). Never "Re-run all jobs" for a tag whose image
+# was pushed: `check` would build other images, which `publish` refuses.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check and build
+    runs-on: ubuntu-latest
+    # Cold builds of everything, twice the image, and every suite.
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The changelog check and the previous release need the history.
+          fetch-depth: 0
+          persist-credentials: false
+      # The runner's preinstalled SDKs make room for the builds (about 30 GB).
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      # Every tool at the flake's pinned versions (`nix develop .#release`).
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - name: PostgreSQL for the suites
+        run: docker compose -f deploy/compose.yaml up -d --wait
+      - name: Release checks and build
+        if: github.event_name == 'push'
+        run: nix develop .#release -c cargo xtask release
+      - name: Dry run
+        if: github.event_name == 'workflow_dispatch'
+        run: nix develop .#release -c cargo xtask release --dry-run
+      # The checklist and logs always; the images, packages and SBOMs for `publish`.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: release
+          path: target/release/
+          retention-days: 30
+
+  publish:
+    name: Push, sign and publish
+    needs: check
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Required reviewers set on this environment pause the run here for a
+    # person's approval; its secrets are readable by this job only.
+    environment: release
+    permissions:
+      contents: write # the GitHub release
+      packages: write # pushing to ghcr.io, when that is the registry
+      id-token: write # keyless signing and npm provenance
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: target/release/
+      # The registry is the host in `vars.image` of apps/docs/site.json. For
+      # ghcr.io the job's own token suffices; another registry needs the
+      # `REGISTRY_USER` variable and the `REGISTRY_TOKEN` secret.
+      - name: Sign in to the registry
+        env:
+          REGISTRY_USER: ${{ vars.REGISTRY_USER || github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN || github.token }}
+        run: |
+          registry=$(jq -r '.vars.image | split("/")[0]' apps/docs/site.json)
+          printf '%s' "$REGISTRY_TOKEN" | docker login "$registry" -u "$REGISTRY_USER" --password-stdin
+      # npm trusted publishing needs no token; until it is set up, the
+      # `NPM_TOKEN` secret (a granular token for the scope) is used.
+      - name: npm credentials
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then
+            # npm expands the variable itself, so the token is never written to disk.
+            # shellcheck disable=SC2016
+            echo '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' > "$HOME/.npmrc"
+          fi
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: nix develop .#release -c cargo xtask release publish
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: published
+          path: |
+            target/release/*/checklist.md
+            target/release/*/logs/
+          retention-days: 90
