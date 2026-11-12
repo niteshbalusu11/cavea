@@ -5,16 +5,15 @@ import { LockPeers, type Channel } from "./lockPeers.ts";
 
 /** One browser's channels of one name: a message reaches every other. */
 function bus() {
-  const channels = new Set<Channel>();
+  const channels = new Map<Channel, (data: unknown) => void>();
   return (): Channel => {
     const c: Channel = {
-      postMessage(message) {
-        for (const other of channels) if (other !== c) other.onmessage?.({ data: message });
+      send(message) {
+        for (const [other, heard] of channels) if (other !== c) heard(message);
       },
-      onmessage: null,
+      listen: (heard) => void channels.set(c, heard),
       close: () => void channels.delete(c),
     };
-    channels.add(c);
     return c;
   };
 }

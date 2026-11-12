@@ -9,7 +9,7 @@ test("a read-only session can be looked at and not changed", async () => {
   const d = await designer();
   const text = await Bun.file(new URL("./templates/theatre.json", import.meta.url)).text();
   const s = d.open(text);
-  makeReadOnly(s);
+  makeReadOnly(s, "read-only");
   const before = s.export();
   const revision = s.status().revision;
   s.selectAll();

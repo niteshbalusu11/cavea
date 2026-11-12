@@ -503,7 +503,7 @@ test("two editors of one chart in one browser: neither's save or choice removes 
   // One store, a record per editor, as `drafts.ts` keys them.
   const shared = new Map<string, string>();
   const clock = new FakeClock();
-  const server = new FakeServer();
+  const server = new FakeServer(clock);
   const editor = (id: string) => {
     const doc = { revision: 0 };
     const save = new Autosave(

@@ -230,7 +230,7 @@ export function createEditor(
     } catch (error) {
       if (error instanceof ReadOnlyRefusal) {
         return {
-          error: msg("readOnly.refused"),
+          error: error.reason,
           failure: { kind: "arguments", message: "read-only" },
         };
       }

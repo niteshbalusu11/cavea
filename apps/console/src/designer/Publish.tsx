@@ -11,7 +11,7 @@ import { describe } from "../console/errors.ts";
 import { formatNumber, msg } from "../i18n/messages.ts";
 import { Button } from "../ui/controls.tsx";
 import { Dialog } from "../ui/overlays.tsx";
-import type { PublishOutcome } from "./ServerChart.tsx";
+import { holderName, type PublishOutcome } from "./ServerChart.tsx";
 
 type Step =
   | { kind: "ready" }
@@ -131,6 +131,8 @@ function Result(props: { outcome: PublishOutcome; before: Chart["published_versi
       return <p role="alert">{msg("publish.notSaved")}</p>;
     case "conflict":
       return <p role="alert">{msg("publish.conflict")}</p>;
+    case "locked":
+      return <p role="alert">{msg("publish.locked", { who: holderName(o.lock, "") })}</p>;
     case "failed":
       return <p role="alert">{msg("publish.failed", { message: describe(o.error) })}</p>;
   }

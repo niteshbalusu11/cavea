@@ -167,7 +167,7 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
    * waits for it. */
   const request = async (text: string, file: string) => {
     // A read-only chart takes no file over it (dropped, or opened).
-    if (server?.readOnly === true) return notify(msg("readOnly.refused"), "error");
+    if (server?.readOnly() === true) return notify(msg("readOnly.refused"), "error");
     const d = await loading.catch(() => undefined);
     if (d === undefined || gone || panic() !== null) return;
     let session: Session;
@@ -260,16 +260,23 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
       imagePicker?.click();
     },
   };
-  const readOnly = server?.readOnly === true;
+  /** Read-only by role, or while another holds the editing lock. */
+  const readOnly = () => server?.readOnly() === true;
   const ui = {
     onNew: server === null ? () => setNewOpen(true) : undefined,
-    onOpen: readOnly ? undefined : () => picker?.click(),
+    get onOpen() {
+      return readOnly() ? undefined : () => picker?.click();
+    },
     onSave: saveNow,
     onExport: server === null ? saveNow : exportNow,
     status: server?.indicator,
-    readOnly,
+    get readOnly() {
+      return readOnly();
+    },
     onPreview: () => void loading.then(setPreviewing, () => undefined),
-    onImage: readOnly ? undefined : () => imagePicker?.click(),
+    get onImage() {
+      return readOnly() ? undefined : () => imagePicker?.click();
+    },
   };
   const publishFor = (e: Editor) => {
     const v = e.views.validation;
@@ -278,11 +285,13 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
         ? msg("topbar.publishLocal")
         : props.server?.canPublish !== true
           ? msg("topbar.publishRole", { role: props.server?.role ?? "" })
-          : !v.complete
-            ? msg("topbar.publishChecking")
-            : !v.publishable
-              ? msg("topbar.publishBlocked")
-              : null;
+          : readOnly()
+            ? msg("topbar.publishReadOnly")
+            : !v.complete
+              ? msg("topbar.publishChecking")
+              : !v.publishable
+                ? msg("topbar.publishBlocked")
+                : null;
     return { reason, run: () => setPublishing(true) };
   };
 

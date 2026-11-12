@@ -5,9 +5,9 @@
 // hand tool to move around (the shell owns zoom).
 import { Session, type Input, type InputResult, type ToolId } from "@cavea/designer-core";
 
-/** Thrown by a refused call; the editor shows it as one message. */
+/** Thrown by a refused call; the editor shows `reason` as one message. */
 export class ReadOnlyRefusal extends Error {
-  constructor() {
+  constructor(readonly reason: string) {
     super("read-only");
     this.name = "ReadOnlyRefusal";
   }
@@ -61,8 +61,15 @@ const LOOKING = new Set([
 const NOTHING: InputResult = { pan: null };
 
 /** Makes `session` read-only, on the instance: the hand tool, pointer
- * input only, and every other call that is not looking refused. */
-export function makeReadOnly(session: Session): void {
+ * input only, and every other call that is not looking refused, saying
+ * `reason` (the role's, or the editing lock's). A gesture under way is
+ * cancelled first, so the document is left as it was before it. */
+export function makeReadOnly(session: Session, reason: string): void {
+  try {
+    session.input({ kind: "pointerCancel" });
+  } catch {
+    // Nothing to cancel.
+  }
   const calls = Object.getPrototypeOf(Session.prototype) as object;
   for (const name of Object.getOwnPropertyNames(calls)) {
     if (name === "constructor" || name === "setTool" || name === "input" || LOOKING.has(name)) {
@@ -70,7 +77,7 @@ export function makeReadOnly(session: Session): void {
     }
     Object.defineProperty(session, name, {
       value: () => {
-        throw new ReadOnlyRefusal();
+        throw new ReadOnlyRefusal(reason);
       },
     });
   }
@@ -79,7 +86,7 @@ export function makeReadOnly(session: Session): void {
   setTool.call(session, "hand");
   Object.defineProperty(session, "setTool", {
     value: (tool: ToolId) => {
-      if (tool !== "hand") throw new ReadOnlyRefusal();
+      if (tool !== "hand") throw new ReadOnlyRefusal(reason);
     },
   });
   Object.defineProperty(session, "input", {

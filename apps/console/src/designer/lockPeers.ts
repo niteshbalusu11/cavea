@@ -10,8 +10,9 @@
 
 /** What the page needs of a `BroadcastChannel`. */
 export interface Channel {
-  postMessage(message: unknown): void;
-  onmessage: ((event: { data: unknown }) => void) | null;
+  send(message: unknown): void;
+  /** Called with every message another tab sends. */
+  listen(heard: (data: unknown) => void): void;
   close(): void;
 }
 
@@ -27,7 +28,7 @@ export class LockPeers {
   constructor(channel: Channel, tab: string) {
     this.#channel = channel;
     this.#tab = tab;
-    channel.onmessage = (event) => this.#heard(event.data);
+    channel.listen((data) => this.#heard(data));
     this.#say("hello");
   }
 
@@ -45,12 +46,11 @@ export class LockPeers {
 
   close(): void {
     this.holding = false;
-    this.#channel.onmessage = null;
     this.#channel.close();
   }
 
   #say(word: Word): void {
-    this.#channel.postMessage({ tab: this.#tab, word });
+    this.#channel.send({ tab: this.#tab, word });
   }
 
   #heard(data: unknown): void {
@@ -68,9 +68,18 @@ export class LockPeers {
 export function lockPeers(user: string, workspace: string, chart: string): LockPeers {
   const name = `cavea.designer.lock/${user}/${workspace}/${chart}`;
   const tab = crypto.randomUUID();
-  const channel: Channel =
-    typeof BroadcastChannel === "function"
-      ? new BroadcastChannel(name)
-      : { postMessage: () => {}, onmessage: null, close: () => {} };
-  return new LockPeers(channel, tab);
+  if (typeof BroadcastChannel !== "function") {
+    return new LockPeers({ send: () => {}, listen: () => {}, close: () => {} }, tab);
+  }
+  const bc = new BroadcastChannel(name);
+  return new LockPeers(
+    {
+      // oxlint-disable-next-line unicorn/require-post-message-target-origin -- a BroadcastChannel takes no origin: it reaches this origin's tabs only
+      send: (message) => bc.postMessage(message),
+      listen: (heard) =>
+        bc.addEventListener("message", (e: MessageEvent<unknown>) => heard(e.data)),
+      close: () => bc.close(),
+    },
+    tab,
+  );
 }
