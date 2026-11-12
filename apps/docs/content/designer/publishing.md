@@ -19,7 +19,7 @@ Nothing in the preview is saved or sold. While your Cavea server has no licence,
 Publishing turns the draft, as it is now, into a version of the chart: a fixed copy, numbered 1, 2, 3, that events are created from. It needs a chart without errors ([Check the chart](checking.md)), and the role of owner, admin or editor.
 
 1. Choose **Publish** at the top right.
-2. The message says what is published now, if anything, and how many seats this draft has.
+2. The message says what is published now, if anything, and how many seats this draft has. Hidden sections, blocks and rows are not published: if the count is short, look for a hidden one in the **Layers** list.
 3. Choose **Publish**. When it is done it says **Published version 1: 136 seats.** For a later version it also says how many seats it adds or removes.
 4. Close the message.
 

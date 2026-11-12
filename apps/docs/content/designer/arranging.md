@@ -61,7 +61,7 @@ The **Layers** list shows everything on the chart, front to back. Right-click a 
 - **Bring forward**, **Send backward**, **Bring to front**, **Send to back**: what is drawn over what.
 - **Move up**, **Move down** (`Alt`+`↑`, `Alt`+`↓`): the same, by the keyboard.
 - **Lock** (`Ctrl`+`L`): a locked object cannot be selected on the canvas or moved, so you cannot move it by accident while you work around it. Lock the floor plan picture.
-- **Hide** (`Ctrl`+`H`): hidden objects disappear from the canvas while you work. A hidden block is still on the chart.
+- **Hide** (`Ctrl`+`H`): hidden objects disappear from the canvas. They stay in your draft, but they are also left out of the preview and of what you publish: a hidden block's seats are not on sale. Show them again before you publish if they should be sold.
 - **Duplicate**, **Delete**.
 
 A lock or an eye in a line's right-hand end means it is locked or hidden: choose it (**Unlock**, **Show**) to undo that.
