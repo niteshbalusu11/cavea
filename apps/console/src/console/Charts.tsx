@@ -21,6 +21,9 @@ import { afterMenu, Confirm, Dialog, menuContent, menuItem, notify } from "../ui
 import { describe, reference, report } from "./errors.ts";
 import { cannot } from "./licence.ts";
 import { designerPath } from "../designer/ChartRoute.tsx";
+import { NewChart } from "../designer/NewChart.tsx";
+import { TEMPLATES, type Template } from "../designer/templates.ts";
+import { SelectField } from "./kit.tsx";
 
 /** The largest draft the server takes (08 §6.2). */
 const MAX_DOCUMENT_BYTES = 16 * 1024 * 1024;
@@ -73,9 +76,13 @@ const roleWrites = () => refused(workspace(), "createChart") !== "role";
 const textProblem = (v: string) =>
   v.trim() === "" || [...v].length > 128 ? msg("charts.textRule") : null;
 
+/** A new chart's starting point (07 §16): blank, a template, or a
+ * reference image (placed in the designer, which opens after creating). */
+export type Start = "blank" | "image" | Template["id"];
+
 /** What the form for a new chart starts from. */
 type Draft =
-  | { from: "empty" }
+  | { from: "empty"; start: Start }
   | { from: "file"; document: ChartDocument; name: string }
   | { from: "chart"; chart: Chart };
 
@@ -191,7 +198,7 @@ export function Charts() {
   };
 
   const newChart = () =>
-    writeButton(msg("charts.new"), "plus", () => setForm({ from: "empty" }), true);
+    writeButton(msg("charts.new"), "plus", () => setForm({ from: "empty", start: "blank" }), true);
   const importChart = () =>
     writeButton(msg("charts.import"), "download", () => file?.click(), false);
 
@@ -253,17 +260,33 @@ export function Charts() {
           )}
         </Match>
         <Match when={charts().length === 0 || (active().length === 0 && !archived())}>
-          <div class="mt-10 flex max-w-xl flex-col items-start gap-3 rounded-lg border border-dashed border-line-strong p-8">
+          <div class="mt-10 flex max-w-2xl flex-col items-start gap-3 rounded-lg border border-dashed border-line-strong p-8">
             <Icon name="chart" class="size-8 text-faint" />
             <h2 class="text-lg font-semibold text-fg">{msg("charts.emptyTitle")}</h2>
             <p class="text-base text-muted">
               {roleWrites() ? msg("charts.emptyBody") : msg("charts.emptyReader")}
             </p>
             <Show when={roleWrites()}>
-              <div class="flex gap-2">
-                {newChart()}
-                {importChart()}
-              </div>
+              <Show
+                when={writeBlocked() === null}
+                fallback={
+                  <div class="flex gap-2">
+                    {newChart()}
+                    {importChart()}
+                  </div>
+                }
+              >
+                {/* The designer's starting points; each asks for the chart's name first. */}
+                <NewChart
+                  choices={{
+                    empty: () => setForm({ from: "empty", start: "blank" }),
+                    template: (t) => setForm({ from: "empty", start: t.id }),
+                    image: () => setForm({ from: "empty", start: "image" }),
+                    open: () => file?.click(),
+                  }}
+                  openLabel={msg("charts.import")}
+                />
+              </Show>
             </Show>
             <Show when={charts().length > 0}>
               <button
@@ -354,9 +377,12 @@ export function Charts() {
             draft={draft}
             onClose={() => setForm(null)}
             onCreated={(chart) => {
+              const start = draft.from === "empty" ? draft.start : "blank";
               setForm(null);
               notify(msg("charts.created", { name: chart.name }));
-              list.refetch();
+              // A reference image is placed in the designer, which offers it on the new chart.
+              if (start === "image") navigate(designerPath(workspace()?.key ?? "", chart.key));
+              else list.refetch();
             }}
           />
         )}
@@ -501,6 +527,9 @@ function ChartForm(props: { draft: Draft; onClose: () => void; onCreated: (c: Ch
         ? msg("charts.copyName", { name: props.draft.chart.name })
         : "";
   const [name, setName] = createSignal(initial);
+  const [start, setStart] = createSignal<Start>(
+    props.draft.from === "empty" ? props.draft.start : "blank",
+  );
   const [key, setKey] = createSignal(keyFrom(initial));
   const [keyEdited, setKeyEdited] = createSignal(false);
   const [errors, setErrors] = createSignal<{ name: string | null; key: string | null }>({
@@ -532,6 +561,10 @@ function ChartForm(props: { draft: Draft; onClose: () => void; onCreated: (c: Ch
       const draft = props.draft;
       let document: ChartDocument | undefined;
       if (draft.from === "file") document = draft.document;
+      const template = TEMPLATES.find((t) => t.id === start());
+      if (draft.from === "empty" && template !== undefined) {
+        document = JSON.parse(await template.load()) as ChartDocument;
+      }
       if (draft.from === "chart") {
         document = await call("getDraft", { path: { chart: draft.chart.key } }, signal);
       }
@@ -595,6 +628,25 @@ function ChartForm(props: { draft: Draft; onClose: () => void; onCreated: (c: Ch
           onBlur={() => check("key")}
           error={errors().key}
         />
+        <Show when={props.draft.from === "empty"}>
+          <SelectField<Start>
+            label={msg("charts.start")}
+            value={start()}
+            options={[
+              { value: "blank", label: msg("charts.startBlank") },
+              ...TEMPLATES.map((t) => ({
+                value: t.id,
+                label: msg("charts.startTemplate", {
+                  template: msg(`template.${t.id}`),
+                  seats: formatNumber(t.seats),
+                }),
+              })),
+              { value: "image", label: msg("charts.startImage") },
+            ]}
+            hint={start() === "image" ? msg("charts.startImageHint") : msg("charts.startHint")}
+            onChange={setStart}
+          />
+        </Show>
         <FormError message={failure()?.text ?? null} detail={failure()?.detail} />
         {/* The licence may expire while the dialog is open: it follows. */}
         <Show when={writeBlocked()}>{(why) => <p class="text-base text-warning">{why()}</p>}</Show>

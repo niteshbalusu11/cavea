@@ -61,7 +61,7 @@ function Card(props: {
 }
 
 /** The three starting points and the file picker. */
-export function NewChart(props: { choices: Choices }): JSX.Element {
+export function NewChart(props: { choices: Choices; openLabel?: string }): JSX.Element {
   return (
     <div class="w-full max-w-2xl">
       <div class="grid grid-cols-2 gap-2">
@@ -100,14 +100,19 @@ export function NewChart(props: { choices: Choices }): JSX.Element {
           class="rounded-sm text-accent underline-offset-2 hover:underline"
           onClick={() => props.choices.open()}
         >
-          {msg("menu.open")}
+          {props.openLabel ?? msg("menu.open")}
         </button>
       </p>
     </div>
   );
 }
 
-export function NewChartDialog(props: { open: boolean; choices: Choices; onClose: () => void }) {
+export function NewChartDialog(props: {
+  open: boolean;
+  title: string;
+  choices: Choices;
+  onClose: () => void;
+}) {
   const close = (run: () => void) => () => {
     props.onClose();
     setTimeout(run, 0);
@@ -115,7 +120,7 @@ export function NewChartDialog(props: { open: boolean; choices: Choices; onClose
   return (
     <Dialog
       open={props.open}
-      title={msg("new.title")}
+      title={props.title}
       heading
       onClose={props.onClose}
       class="max-w-2xl"

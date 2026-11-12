@@ -385,6 +385,17 @@ const ui = {
   "new.templates": "Start from a template",
   "new.or": "Or",
   "new.loadFailed": "The template could not be loaded. Check the connection and try again.",
+  "start.title": "Start your chart",
+  "start.body":
+    "Draw it from scratch, trace a floor plan, or start from a template and change it. Undo takes a template back.",
+  "start.close": "Close the starting points",
+  "start.menu": "Starting points…",
+  "start.replaceTitle": "Replace {name} with the {template} template?",
+  "start.replaceBody":
+    "Everything on the chart is replaced by the template: its objects, floors, categories and settings. Undo brings them back.",
+  "start.replace": "Replace",
+  "start.applied": "Started from the {template} template.",
+  "start.failed": "The template could not be applied: {message}",
   "template.theatre": "Theatre",
   "template.theatreBody": "{seats} seats in curved stalls around a stage.",
   "template.arena": "Arena bowl",
@@ -689,7 +700,7 @@ const ui = {
 
   "confirm.replaceTitle": "Replace the open chart?",
   "confirm.replaceBody":
-    "“{name}” has changes that have not been exported. Opening another chart discards them, with their undo history.",
+    "Opening another chart replaces “{name}”: what is in it and its undo history are discarded, unless you have exported it.",
   "import.failed": "Could not open {file}",
   "import.notJson": "Only chart document files (.json) can be opened.",
   "import.unreadable":
@@ -835,7 +846,7 @@ const consoleScreens = {
   "charts.failed": "The charts could not be loaded.",
   "charts.emptyTitle": "Draw your first chart",
   "charts.emptyBody":
-    "A chart is the seat map events are sold from. Start an empty chart, or import a chart file exported from the designer.",
+    "A chart is the seat map events are sold from. Draw one from scratch, trace a floor plan, or start from a template; you name it first.",
   "charts.emptyReader":
     "This workspace has no charts yet. An owner, an admin or an editor can create one.",
   "charts.showArchivedCount": "Show archived charts ({n})",
@@ -877,6 +888,13 @@ const consoleScreens = {
   "charts.keyTaken": "A chart with this key already exists in this workspace, possibly archived.",
   "charts.badDocument": "The file is not a chart document the server takes: {message}",
   "charts.create": "Create chart",
+  "charts.start": "Start from",
+  "charts.startBlank": "An empty chart",
+  "charts.startTemplate": "{template} template ({seats} seats)",
+  "charts.startImage": "A reference image",
+  "charts.startHint": "A template is an ordinary chart: change anything in the designer.",
+  "charts.startImageHint":
+    "The designer opens on the new chart, where you choose the picture to trace.",
   "charts.creating": "Creating…",
   "charts.importTooLarge": "The file is larger than 16 MB, the most a chart may be.",
   "charts.importNotJson": "The file is not a chart document (JSON).",

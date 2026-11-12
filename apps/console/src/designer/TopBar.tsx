@@ -17,6 +17,8 @@ export function TopBar(props: {
   /** New chart and Open file, where they apply (not on a server chart's
    * new, not read-only). */
   onNew?: (() => void) | undefined;
+  /** New chart's label: a server chart's is its starting points. */
+  newLabel: string;
   onOpen?: (() => void) | undefined;
   /** Downloads the chart document. */
   onExport: () => void;
@@ -53,7 +55,7 @@ export function TopBar(props: {
               {(onNew) => (
                 <DropdownMenu.Item class={menuItem} onSelect={afterMenu(onNew())}>
                   <Icon name="plus" />
-                  {msg("menu.new")}
+                  {props.newLabel}
                 </DropdownMenu.Item>
               )}
             </Show>
