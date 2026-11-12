@@ -3,8 +3,7 @@
 // canvas in the map's shadow root. Every string from the chart or the host
 // goes in as text or an attribute value, never as markup (12 §3 T7). Nothing
 // here draws the canvas or runs while idle: the only timers are toasts'.
-import type { Mark } from "./licence.ts";
-import type { Translate } from "./messages.ts";
+import type { MessageId, Translate } from "./messages.ts";
 import type { SeatObject } from "./options.ts";
 import type { Prices } from "./pricing.ts";
 import type { ObjectStatus } from "./seatmap.ts";
@@ -56,7 +55,7 @@ export interface Ui {
   selected(label: string | null): void;
   toast(text: string): void;
   /** Shows the licence mark (12 §7.3), once decided. */
-  mark(mark: Mark): void;
+  mark(mark: Extract<MessageId, `licence${string}`> | null): void;
   /** The box, in CSS pixels on the map, of a control over `at` (with a margin), if any. */
   covered(at: [number, number]): [number, number, number, number] | null;
   destroy(): void;

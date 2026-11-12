@@ -64,7 +64,9 @@ export function LicenceTab() {
             </Show>
           </section>
           <Show when={l().manage}>
-            <Details licence={l()} />
+            <Show when={l().licence !== null || l().source !== null}>
+              <Details licence={l()} />
+            </Show>
             <Upload />
           </Show>
         </div>
@@ -199,7 +201,11 @@ function Upload() {
       if (signal.aborted || refusal.sessionLost) return;
       const problem = refusal.details["problem"];
       if (refusal.reason === "invalid_field" && refusal.details["field"] === "licence") {
-        setError(reasonText(typeof problem === "string" ? problem : ""));
+        setError(
+          msg("licence.refused", {
+            reason: reasonText(typeof problem === "string" ? problem : ""),
+          }),
+        );
         paste?.focus();
       } else if (refusal.reason === "instance_owner") {
         setFailure({ text: msg("licence.ownerOnly") });

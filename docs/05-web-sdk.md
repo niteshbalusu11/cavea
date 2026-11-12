@@ -139,6 +139,7 @@ Prices are the host's display data; Cavea charges nothing. Each entry needs a ca
 | `colorblind` | boolean | false | Not yet |
 | `locale` | BCP 47 tag | `navigator.language` | Built: plural forms, numbers and default prices; an invalid tag is `invalid_option`. `setLocale` changes it live |
 | `messages` | Partial message catalogue | built-in | Built (below) |
+| `licence` | string | none | Built (LIC-003): the licence file's text, for a map without `caveaServer`. Verified in the page after the first interactive frame (12 §7.7); without it, or when it does not verify, the map shows a small "Development licence" mark, and expired, "Powered by Cavea". Any value is accepted: a licence problem never refuses or delays the map. Ignored with `caveaServer` (its server's licence counts), with a development warning |
 | `dir` | `'ltr'`, `'rtl'`, `'auto'` | `'auto'` | Built: the interface's direction. `'auto'` is `locale`'s script's direction when the host gives a `locale` (Arabic, Hebrew, Persian, Urdu and the others written right to left), else the page's, inherited through the shadow root. The canvas is not mirrored |
 
 **Messages.** Every string the map shows is in one English catalogue, keyed by the ids below; `messages` overrides any subset (an unknown id warns in development and is ignored; a missing one is English). Placeholders are `{name}`; numbers in them are formatted for `locale`. A message with a count is an object of plural forms, chosen with `Intl.PluralRules(locale)` and falling back to `other`: `{ one: 'Un seul siège.', other: '{count} sièges au plus.' }`. No ICU syntax and no library. A malformed message (not a string, or an object without a string `other`) is `invalid_option`.
@@ -172,6 +173,8 @@ Prices are the host's display data; Cavea charges nothing. Each entry needs a ca
 | `holdExpired` | Your hold expired and your seats were released. | Toast: `onHoldLost` with `onHoldExpired` |
 | `reconnecting` | Live seat updates were interrupted. Reconnecting… | Toast: `state_disconnected` |
 | `dismiss` | Dismiss | A toast's close button |
+| `licenceDevelopment` | Development licence | The licence mark (12 §7.7): no valid licence, or a host the licence does not cover |
+| `licencePoweredBy` | Powered by Cavea | The licence mark: the licence has expired |
 
 ### 3.5 Loading
 
@@ -188,7 +191,7 @@ Prices are the host's display data; Cavea charges nothing. Each entry needs a ca
 
 `createSeatMap` validates the options object before it fetches anything. An invalid value rejects the promise with a fatal `CaveaError` whose `code` is `invalid_option` and whose `option` names it (`selection.max`, `theme`, …). A `state` adapter must have `connect` and `disconnect`, and `hold` and `release` together or neither. Callbacks must be functions.
 
-In a **development build** the package warns on the console, once per map and message, about unknown keys (`unknown option "colour" is ignored`), options and callbacks that are not built yet (`option "pricing" is not supported yet and is ignored`), methods that are not built yet (`setPricing() is not supported yet`), calls on a destroyed map, and errors when no `onError` is given. A development build is any build in which `process.env.NODE_ENV` is not `"production"`: bundlers replace that expression with a literal in production builds, and on a page with no bundler and no `process` it counts as development. In production these warnings are silent; the ignored options are ignored all the same. Warnings go through one function and are the only console output of the package.
+In a **development build** the package warns on the console, once per map and message, about the licence mark it shows and why (12 §7.7), unknown keys (`unknown option "colour" is ignored`), options and callbacks that are not built yet (`option "pricing" is not supported yet and is ignored`), methods that are not built yet (`setPricing() is not supported yet`), calls on a destroyed map, and errors when no `onError` is given. A development build is any build in which `process.env.NODE_ENV` is not `"production"`: bundlers replace that expression with a literal in production builds, and on a page with no bundler and no `process` it counts as development. In production these warnings are silent; the ignored options are ignored all the same. Warnings go through one function and are the only console output of the package.
 
 
 ## 4. State adapters
@@ -404,6 +407,7 @@ All built-in controls live in a shadow root on the container, so host styles can
 | Toasts | `ui.toasts` | Built, below |
 | Hold timer | `ui.holdTimer` | Not yet (M5). Optional countdown with an "I need more time" action that calls the host |
 | List-view toggle | `ui.listViewToggle` | Not yet (A11Y-014). Switches to the accessible list |
+| Licence mark | — (not an option) | Built (LIC-003): one line of text in the bottom inline-end corner when the licence calls for it (12 §7.7), shown after the first interactive frame: the theme's muted text on its background, `pointer-events: none`, not focusable, not announced, not a link, no `part`. The legend keeps clear of it; it hides with the controls during the loading and error states |
 | Loading and error states | `ui.loading` | Built: a skeleton (a block 24 px inside the map, pulsing unless motion is reduced, with the `loading` message as a polite status) until the first frame with the chart is drawn; the chart's bounds are unknown until it arrives, so the skeleton is the map's own box. The error state (§9) replaces it with the `loadFailed` message and a Retry button (`role="alert"`). While either shows, the zoom controls and legend are hidden |
 
 Each element is on unless its option is `false`; one that is off is never created, costs no listener, and its callbacks still fire. It stays in the bundle: the interface is one module, and dropping an element at build time would need a separate entry (a packaging question for WEB-013 and WEB-018).
@@ -592,7 +596,7 @@ const state = customState({
 });
 ```
 
-This path uses no Cavea server. It is the "renderer only" licence.
+This path uses no Cavea server. It is the "renderer only" licence: pass the licence file's text as `licence` (`createSeatMap(element, { state, licence: licenceText })`, §3.4), or the map shows the "Development licence" mark (12 §7.7).
 
 ## 15. Server SDK
 

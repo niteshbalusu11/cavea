@@ -1,4 +1,4 @@
-// The licence mark (docs/12-security-licensing.md §7.3, §7.4; D-83): which
+// The licence mark (docs/12-security-licensing.md §7.3, §7.4; D-84): which
 // mark a map shows, if any, decided once after the first interactive frame
 // and never again. A licence problem never stops a sale (D-20): nothing here
 // throws, waits on the network, or touches selection, holds or the realtime
@@ -107,7 +107,7 @@ const IPV4 = /^\d+\.\d+\.\d+\.\d+$/;
  * internationalised names are compared in their ASCII form, and a wildcard
  * never covers an IP address. The page's own machine (`localhost`, its
  * subdomains, `127.0.0.0/8`, `[::1]`) is covered by any licence, so a
- * developer sees there what their production page shows (D-83); `null` (an
+ * developer sees there what their production page shows (D-84); `null` (an
  * opaque origin: a file, a sandboxed frame) cannot be known and is covered.
  */
 export function covers(host: string | null, patterns: readonly string[]): boolean {

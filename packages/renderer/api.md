@@ -367,6 +367,18 @@ export type SectionInfo = {
 export type ThemeName = "light" | "dark" | "high-contrast";
 ```
 
+## generated/licence-keys.d.ts
+
+```ts
+/** An Ed25519 public key a licence may be signed with: its id and its 32 bytes in base64. */
+export type TrustedKey = {
+    readonly id: string;
+    readonly key: string;
+};
+/** The keys every build trusts, oldest first. */
+export declare const TRUSTED_KEYS: readonly TrustedKey[];
+```
+
 ## host.d.ts
 
 ```ts
@@ -546,6 +558,8 @@ export declare const MESSAGES: {
     holdExpired: string;
     reconnecting: string;
     dismiss: string;
+    licenceDevelopment: string;
+    licencePoweredBy: string;
 };
 export type MessageId = keyof typeof MESSAGES;
 export type Messages = Partial<Record<MessageId, Message>>;
@@ -667,6 +681,14 @@ export interface SeatMapOptions {
     messages?: Messages;
     /** The interface's direction; `auto` (default): `locale`'s if given, else the page's. */
     dir?: "ltr" | "rtl" | "auto";
+    /**
+     * The licence file's text, for a map without `caveaServer` (12 §7.4):
+     * verified in the browser after the first interactive frame. Without it,
+     * or when it does not verify, the map carries a "Development licence"
+     * mark; it never stops the map. Ignored with `caveaServer`, whose server
+     * says.
+     */
+    licence?: string;
     /**
      * Aborting it before the map is ready rejects `createSeatMap` (`aborted`)
      * and removes everything; after, it destroys the map (05 §9).
@@ -791,6 +813,7 @@ export declare function prices(pricing: CategoryPricing[], format: FormatPrice |
 ## seatmap.d.ts
 
 ```ts
+import type { TrustedKey } from "./generated/licence-keys.js";
 import type { AttachOptions, Attached } from "./host.js";
 import { type Bounds, type SeatMapOptions, type SeatObject, type Selection, type Theme } from "./options.js";
 import { type CategoryPricing } from "./pricing.js";
@@ -819,6 +842,13 @@ export interface Env {
     contextLostMs: number;
     /** `onMetrics` fires at most once in this long (04 §24: 1 s). */
     metricsMs: number;
+    /** What the licence check needs (12 §7.4): the trusted keys, WebCrypto, and the page's host. */
+    licence: {
+        keys: readonly TrustedKey[];
+        subtle(): SubtleCrypto | undefined;
+        /** The page's host name, or `null` for an opaque origin (a file, a sandboxed frame). */
+        host(): string | null;
+    };
 }
 export interface Mounted {
     canvas: HTMLCanvasElement;
@@ -925,7 +955,7 @@ export declare function serverAdapter(input: CaveaServerOptions, platform: () =>
 ## ui.d.ts
 
 ```ts
-import type { Translate } from "./messages.js";
+import type { MessageId, Translate } from "./messages.js";
 import type { SeatObject } from "./options.js";
 import type { Prices } from "./pricing.js";
 import type { ObjectStatus } from "./seatmap.js";
@@ -979,6 +1009,8 @@ export interface Ui {
     /** The selection changed; `label` was just selected alone (the tooltip may pin to it). */
     selected(label: string | null): void;
     toast(text: string): void;
+    /** Shows the licence mark (12 §7.3), once decided. */
+    mark(mark: Extract<MessageId, `licence${string}`> | null): void;
     /** The box, in CSS pixels on the map, of a control over `at` (with a margin), if any. */
     covered(at: [number, number]): [number, number, number, number] | null;
     destroy(): void;

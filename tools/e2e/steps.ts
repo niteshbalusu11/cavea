@@ -591,6 +591,15 @@ export const STEPS: Step[] = [
           30_000,
         );
       }
+      // The server has no licence: each map carries the "Development licence"
+      // mark (12 §7.3), after its first frame; the clicks below go through it.
+      for (const b of [one, two]) {
+        await until(`the "Development licence" mark on ${b.name}'s map`, () =>
+          b.evaluate<boolean>(
+            `document.getElementById("map")?.shadowRoot?.querySelector(".w")?.textContent === "Development licence"`,
+          ),
+        );
+      }
       // Realtime over the WebSocket, as `caveaServer` prefers it (05 §4.1):
       // each map's socket answered (101) and is sending frames.
       for (const b of [one, two]) {

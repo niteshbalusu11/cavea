@@ -1335,6 +1335,7 @@ const licence = {
   "licence.invalid":
     "The server's licence file is not valid, so it runs as a development installation: everything works, and buyers' seat maps show a “Development licence” mark.",
   "licence.why": "Why: {reason}",
+  "licence.refused": "Not uploaded: {reason}",
   "licence.reasonOther": "the server reports “{reason}”. Ask for a new licence.",
   "licence.notManager":
     "The licence's details and its upload are for someone who owns every workspace on this server. Ask them to add or renew it.",
