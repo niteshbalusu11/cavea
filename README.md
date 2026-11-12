@@ -28,4 +28,4 @@ Checks: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D
 
 ## Licence
 
-No licence is granted. All rights reserved. The source is published for visibility only.
+Proprietary. Evaluation, development and staging use are free; production use needs a commercial licence. See [`LICENSE`](LICENSE). To report a security problem, see [`SECURITY.md`](SECURITY.md).
