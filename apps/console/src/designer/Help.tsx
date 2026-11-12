@@ -3,9 +3,21 @@
 import { createSignal, For, Show } from "solid-js";
 import { msg } from "../i18n/messages.ts";
 import { Dialog } from "../ui/overlays.tsx";
+import type { MessageId } from "../i18n/messages.ts";
 import { helpSections, isMac } from "./shortcuts.ts";
 
-export function Help(props: { open: boolean; onClose: () => void }) {
+type Section = {
+  group: string;
+  rows: { id: string; label: MessageId; keys: string[]; pending?: string }[];
+};
+
+export function Help(props: {
+  open: boolean;
+  onClose: () => void;
+  /** The console frame's keys instead of the designer's (`console/Keys.tsx`). */
+  sections?: (mac: boolean) => Section[];
+  body?: string;
+}) {
   const [mac, setMac] = createSignal(isMac());
   return (
     <Dialog
@@ -16,7 +28,7 @@ export function Help(props: { open: boolean; onClose: () => void }) {
       class="max-w-3xl"
     >
       <div class="flex shrink-0 items-center justify-between px-5 pb-3">
-        <p class="text-sm text-muted">{msg("help.body")}</p>
+        <p class="text-sm text-muted">{props.body ?? msg("help.body")}</p>
         <div
           role="radiogroup"
           aria-label={msg("help.platform")}
@@ -39,11 +51,11 @@ export function Help(props: { open: boolean; onClose: () => void }) {
       </div>
       <div class="min-h-0 overflow-y-auto border-t border-line px-5 py-3">
         <div class="columns-2 gap-8">
-          <For each={helpSections(mac())}>
+          <For each={(props.sections ?? helpSections)(mac())}>
             {(section) => (
               <section class="mb-4 break-inside-avoid">
                 <h3 class="mb-1 text-xs font-semibold tracking-wide text-faint uppercase">
-                  {msg(`group.${section.group}`)}
+                  {msg(`group.${section.group}` as MessageId)}
                 </h3>
                 <dl>
                   <For each={section.rows}>

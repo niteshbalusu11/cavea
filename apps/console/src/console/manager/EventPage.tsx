@@ -16,6 +16,7 @@ import { ListError, ListLoading } from "../kit.tsx";
 import { EventSettings } from "./EventSettings.tsx";
 import { Manager } from "./Manager.tsx";
 import { LicenceBanner } from "../Licence.tsx";
+import { ConsoleKeys } from "../Keys.tsx";
 
 const EVENTS = SECTIONS.find((s) => s.path === "/events");
 
@@ -40,6 +41,7 @@ export function EventPage() {
             >
               {(_ws) => <EventScreen />}
             </Show>
+            <ConsoleKeys />
           </div>
         )
       }

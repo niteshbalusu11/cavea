@@ -10,7 +10,16 @@ import type { Editor } from "./editor.ts";
 import type { PanelTab } from "./layout.ts";
 import { display, isMac, SHORTCUTS, type Group } from "./shortcuts.ts";
 
-export type CommandGroup = Group | "insert" | "panels" | "file" | "theme";
+export type CommandGroup =
+  | Group
+  | "insert"
+  | "panels"
+  | "file"
+  | "theme"
+  // The console frame's palette (`console/Keys.tsx`).
+  | "navigate"
+  | "charts"
+  | "events";
 
 export interface Command {
   id: string;
@@ -18,6 +27,8 @@ export interface Command {
   group: CommandGroup;
   /** The shortcut, written the platform's way. */
   keys: string | null;
+  /** A search result's second line of identity: its key. */
+  detail?: string;
   /** Why it cannot run now, or `null` when it can. */
   reason: () => string | null;
   run: () => void;
