@@ -114,7 +114,17 @@ function Keys() {
           <Show
             when={rows().length > 0}
             fallback={
-              <Empty icon="code" title={msg("keys.emptyTitle")} body={msg("keys.emptyBody")} />
+              <Empty icon="code" title={msg("keys.emptyTitle")} body={msg("keys.emptyBody")}>
+                <Show when={cannotManage() === null}>
+                  <Action
+                    label={msg("keys.new")}
+                    icon="plus"
+                    variant="primary"
+                    blocked={null}
+                    onClick={() => setCreating(true)}
+                  />
+                </Show>
+              </Empty>
             }
           >
             <label class="mt-4 flex items-center gap-2 text-base text-fg">

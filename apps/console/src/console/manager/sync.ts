@@ -1,5 +1,5 @@
 // How the manager follows the staff state route (08 §8.3, §8.6; D-72,
-// D-77), as a plain function of what it has and what a poll answered: the
+// D-80), as a plain function of what it has and what a poll answered: the
 // poller only carries out the step. A SNAPSHOT replaces everything; a DELTA
 // from the `seq` held moves to its `to`; `204` changes nothing. A DELTA
 // from any other `seq` is a gap, and a frame that cannot be decoded or does

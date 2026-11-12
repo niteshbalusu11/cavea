@@ -1,4 +1,4 @@
-// The event manager's view of the seats (09 §4.2, CON-008; D-68, D-77),
+// The event manager's view of the seats (09 §4.2, CON-008; D-68, D-80),
 // kept current by polling the staff state route (`GET …/state`, 08 §8.4,
 // D-72): one manager SNAPSHOT at the start, then every `POLL_MS` the DELTA
 // since the `seq` held, `204` when nothing changed, or a SNAPSHOT when the
