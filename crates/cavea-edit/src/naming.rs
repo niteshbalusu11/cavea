@@ -4,7 +4,7 @@
 //! is the smallest that no object of the same kind's name uses. A node that
 //! has a name, or a label or text the layers panel shows, keeps it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cavea_compiler::document::{Node, ShapeKind};
 
@@ -57,40 +57,55 @@ pub(crate) fn fresh(doc: &Document, node: &Node) -> Option<String> {
     Some(format!("{word} {n}"))
 }
 
-/// Every name the nodes of `doc` have: what copies are named against.
-pub(crate) fn names(doc: &Document) -> BTreeSet<String> {
-    doc.ids()
-        .filter_map(|id| doc.node(id))
-        .filter_map(|n| each_node!(n, x => x.name.clone()))
-        .collect()
+/// The names copies are named against in one paste or duplicate: every
+/// node's name, the copies' as they are named, and for each kind's word
+/// the number below which every "<word> N" is taken (nothing is freed
+/// during one operation), so each copy's search starts there, not at 1.
+#[derive(Debug, Default)]
+pub(crate) struct Names {
+    taken: BTreeSet<String>,
+    next: BTreeMap<&'static str, u32>,
+}
+
+/// Every name the nodes of `doc` have.
+pub(crate) fn names(doc: &Document) -> Names {
+    Names {
+        taken: doc
+            .ids()
+            .filter_map(|id| doc.node(id))
+            .filter_map(|n| each_node!(n, x => x.name.clone()))
+            .collect(),
+        next: BTreeMap::new(),
+    }
 }
 
 /// Names a pasted or duplicated `node` and its section's children: one
-/// whose name is an automatic one of its kind ("Row block 2") already in
-/// `taken` (the document's names, from [`names`], and earlier copies')
-/// gets the smallest free number, so a copy never shares its original's
-/// name. Any other name is a person's, and kept.
-pub(crate) fn rename_copy(node: &mut Node, taken: &mut BTreeSet<String>) {
+/// whose name is an automatic one of its kind ("Row block 2") already
+/// taken (the document's names, and earlier copies') gets the smallest
+/// free number, so a copy never shares its original's name. Any other name
+/// is a person's, and kept.
+pub(crate) fn rename_copy(node: &mut Node, names: &mut Names) {
     if let Some(word) = word(node)
         && let Some(name) = each_node!(&*node, n => n.name.clone())
         && name
             .strip_prefix(word)
             .and_then(|r| r.strip_prefix(' '))
             .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-        && taken.contains(&name)
+        && names.taken.contains(&name)
     {
-        let fresh = (1u32..)
-            .map(|n| format!("{word} {n}"))
-            .find(|c| !taken.contains(c))
-            .unwrap_or(name);
-        each_node!(node, x => x.name = Some(fresh));
+        let from = names.next.get(word).copied().unwrap_or(1);
+        let found = (from..=u32::MAX).find(|n| !names.taken.contains(&format!("{word} {n}")));
+        if let Some(n) = found {
+            names.next.insert(word, n.saturating_add(1));
+            each_node!(node, x => x.name = Some(format!("{word} {n}")));
+        }
     }
     if let Some(name) = each_node!(&*node, n => n.name.clone()) {
-        taken.insert(name);
+        names.taken.insert(name);
     }
     if let Node::Section(sec) = node {
         for child in &mut sec.children {
-            rename_copy(child, taken);
+            rename_copy(child, names);
         }
     }
 }
@@ -151,6 +166,13 @@ mod tests {
         for n in [&mut a, &mut b, &mut c] {
             rename_copy(n, &mut taken);
         }
+        // Thousands of copies: each search starts where the last ended.
+        let mut many = names(&doc);
+        for _ in 0..5_000 {
+            rename_copy(&mut copy(1), &mut many);
+        }
+        assert!(many.taken.contains("Row block 5001"));
+        assert_eq!(many.next.get("Row block"), Some(&5_002));
         let name = |n: &Node| each_node!(n, x => x.name.clone());
         // Two copies of "Row block 1": 2, then 3; a person's name is kept.
         assert_eq!(name(&a).as_deref(), Some("Row block 2"));
