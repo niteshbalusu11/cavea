@@ -27,6 +27,7 @@ use http_body::{Frame, SizeHint};
 use serde_json::json;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+use super::Reason;
 use super::extract::{Path, invalid};
 use super::openapi::{Needs, Op, Routes};
 use super::public::{IMMUTABLE, cors_open, none_match, parse_hash};
@@ -68,7 +69,7 @@ a side. Refused with `400` and `reason`: `body_too_large`, `asset_type`, `asset_
 }
 
 fn too_large(max: u32) -> ApiError {
-    invalid("body_too_large", "The image is over the size limit.").with_detail("limit", max)
+    invalid(Reason::BodyTooLarge, "The image is over the size limit.").with_detail("limit", max)
 }
 
 async fn upload(
@@ -93,7 +94,8 @@ async fn upload(
     hold(&mut held, budget, declared.unwrap_or(0))?;
     let mut bytes = Vec::with_capacity(declared.unwrap_or(0));
     while let Some(frame) = std::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await {
-        let frame = frame.map_err(|_| invalid("body_unreadable", "The body could not be read."))?;
+        let frame =
+            frame.map_err(|_| invalid(Reason::BodyUnreadable, "The body could not be read."))?;
         if let Ok(data) = frame.into_data() {
             if bytes.len() + data.len() > limit {
                 return Err(too_large(max));
@@ -112,7 +114,12 @@ async fn upload(
     .await
     .map_err(ApiError::internal)?;
     let image = image.map_err(|refused| {
-        let error = invalid(refused.reason(), "Not an image this server takes.");
+        let reason = match refused {
+            assets::Refused::Type => Reason::AssetType,
+            assets::Refused::Malformed => Reason::AssetMalformed,
+            assets::Refused::Dimensions => Reason::AssetDimensions,
+        };
+        let error = invalid(reason, "Not an image this server takes.");
         match refused {
             assets::Refused::Dimensions => error.with_detail("limit", assets::MAX_SIDE),
             _ => error,
@@ -152,9 +159,8 @@ fn hold(
 
 /// The node holds as many image bytes as it may (`assets::Memory`).
 fn busy() -> ApiError {
-    ApiError::new(Code::Overloaded)
+    ApiError::from(Reason::AssetMemory)
         .with_message("Too many images are being transferred; retry shortly.")
-        .with_detail("reason", "asset_memory")
 }
 
 fn hex(hash: &[u8; 16]) -> String {

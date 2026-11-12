@@ -28,6 +28,7 @@ use tokio::sync::mpsc;
 use tokio::time::{Instant, timeout};
 use tracing::{Instrument as _, Span, field, info, info_span};
 
+use super::Reason;
 use super::auth::{Auth, ClientIp, QueryKey, has_hex_tail};
 use super::extract::{Path, Query, invalid};
 use super::openapi::{Needs, Op, Routes};
@@ -50,7 +51,7 @@ pub(super) fn routes() -> Routes {
                 "Snapshot, or a delta (polling)",
             )
             .about(
-                "08 §8.4, §8.5. Without `after_seq`: the public SNAPSHOT frame with \
+                "Without `after_seq`: the public SNAPSHOT frame with \
 `ETag: \"<seq>\"`. With it: one DELTA from it, the SNAPSHOT, or `204` when nothing was published \
 after it. Cacheable for `CAVEA_SNAPSHOT_MAX_AGE` seconds.",
             )
@@ -60,7 +61,7 @@ after it. Cacheable for `CAVEA_SNAPSHOT_MAX_AGE` seconds.",
                 serde_json::json!({ "type": "integer", "minimum": 0 }),
                 "The last `seq` the caller has.",
             )
-            .response(200, "A frame (08 §8.6)", binary(FRAME_TYPE))
+            .response(200, "A frame", binary(FRAME_TYPE))
             .etag()
             .response(204, "Nothing published after `after_seq`", None)
             .response(304, "Not modified", None)
@@ -75,7 +76,7 @@ after it. Cacheable for `CAVEA_SNAPSHOT_MAX_AGE` seconds.",
                 "publicStream",
                 "Server-sent events",
             )
-            .about("08 §8.4: each `data:` line is a base64 frame (08 §8.6).")
+            .about("Each `data:` line is a base64 frame.")
             .needs(Needs::QueryKey)
             .response(200, "An event stream", binary("text/event-stream"))
             .errors(&[503]),
@@ -85,8 +86,8 @@ after it. Cacheable for `CAVEA_SNAPSHOT_MAX_AGE` seconds.",
         .add(
             Op::get("/v1/public/rt", "publicRealtime", "WebSocket")
                 .about(
-                    "Upgrades to a WebSocket speaking the binary protocol of 08 §8, which \
-OpenAPI cannot describe: frames are in 08 §8.1 to §8.6. Without an upgrade request it is `400`.",
+                    "Upgrades to a WebSocket speaking the binary realtime protocol, which \
+OpenAPI cannot describe. Without an upgrade request it is `400`.",
                 )
                 .needs(Needs::QueryKey)
                 .response(101, "Switching to the WebSocket protocol", None)
@@ -232,7 +233,7 @@ impl<S: Send + Sync> FromRequestParts<S> for Upgrade {
         WebSocketUpgrade::from_request_parts(parts, state)
             .await
             .map(Self)
-            .map_err(|_| invalid("upgrade", "Expected a WebSocket upgrade."))
+            .map_err(|_| invalid(Reason::Upgrade, "Expected a WebSocket upgrade."))
     }
 }
 
@@ -253,9 +254,8 @@ async fn websocket(
             .to_str()
             .is_ok_and(|o| list.iter().any(|a| a.eq_ignore_ascii_case(o)))
     {
-        return Err(ApiError::new(Code::Forbidden)
-            .with_message("WebSockets are not accepted from this origin.")
-            .with_detail("reason", "origin"));
+        return Err(ApiError::from(Reason::Origin)
+            .with_message("WebSockets are not accepted from this origin."));
     }
     let slot = admit(&state, ip)?;
     let span = connection_span(Transport::WebSocket, &auth);
@@ -521,7 +521,7 @@ async fn stream(
             .to_str()
             .ok()
             .and_then(|id| id.trim().parse().ok())
-            .ok_or_else(|| invalid("last_event_id", "`Last-Event-ID` must be a seq."))?,
+            .ok_or_else(|| invalid(Reason::LastEventId, "`Last-Event-ID` must be a seq."))?,
         None => query.last_seq.unwrap_or(0),
     };
     let target = target(&state, &auth, Find::Key(&event)).await?;

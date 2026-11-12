@@ -45,4 +45,5 @@ export const WRAPPERS = {
   createWorkspace: "workspaces.create",
   inviteWorkspaceOwner: "workspaces.inviteOwner",
   mintWorkspaceKey: "workspaces.mintKey",
+  createOwnerPasswordReset: "workspaces.ownerPasswordReset",
 } as const satisfies Record<OperationId, string | null>;

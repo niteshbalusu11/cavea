@@ -28,6 +28,7 @@ import type {
   CreateEvent,
   CreateHoldToken,
   CreateKey,
+  CreateOwnerPasswordReset,
   CreateWorkspace,
   Event,
   EventObject,
@@ -44,6 +45,7 @@ import type {
   LockChart,
   MintKey,
   OperationId,
+  PasswordResetCreated,
   Release,
   SeatReply,
   SetThumbnail,
@@ -523,5 +525,13 @@ export class Cavea {
       options?: CallOptions,
     ): Promise<InvitationCreated> =>
       this.call("inviteWorkspaceOwner", { path: { workspace: id }, body }, options),
+    /** A one-time password reset link for an owner of workspace `id`, by
+     * email: the recovery for an owner who cannot sign in. */
+    ownerPasswordReset: (
+      id: string,
+      body: CreateOwnerPasswordReset,
+      options?: CallOptions,
+    ): Promise<PasswordResetCreated> =>
+      this.call("createOwnerPasswordReset", { path: { workspace: id }, body }, options),
   };
 }

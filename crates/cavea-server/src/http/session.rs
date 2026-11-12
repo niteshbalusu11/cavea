@@ -30,9 +30,10 @@ use sha2::Sha256;
 use subtle::ConstantTimeEq as _;
 use tracing::Instrument as _;
 
+use super::Reason;
 use super::auth::{Auth, KeyId, push_hex, sha256};
 use super::seats::Target;
-use super::{ApiError, AppState, Code};
+use super::{ApiError, AppState};
 
 /// The request header that carries a session token on the public routes.
 pub(super) const HEADER: &str = "cavea-session";
@@ -71,9 +72,8 @@ impl Refusal {
             Self::Expired => ("expired", "The session token has expired."),
             Self::Event => ("event", "The session token is for another event."),
         };
-        ApiError::new(Code::Unauthorized)
+        ApiError::from(Reason::SessionToken)
             .with_message(message)
-            .with_detail("reason", "session_token")
             .with_detail("session", session)
     }
 }
@@ -244,12 +244,11 @@ const BIND: &str = "UPDATE holds SET session_sub = $3
            AND expires_at > to_timestamp(0) + $4 * interval '1 millisecond') < $6";
 
 fn over_cap(cap: u32) -> ApiError {
-    ApiError::new(Code::HoldLimitExceeded)
+    ApiError::from(Reason::TokensPerSub)
         .with_message(
             "This session already has as many live hold tokens on the event as it may; reuse \
              one, or wait for one to expire.",
         )
-        .with_detail("reason", "tokens_per_sub")
         .with_detail("limit", cap)
 }
 
@@ -347,9 +346,8 @@ pub(super) async fn check_binding(
         .await?;
     match bound {
         Some(Some(sub)) if session.is_none_or(|s| s.sub != sub) => {
-            Err(ApiError::new(Code::Forbidden)
-                .with_message("The hold token was created with another session.")
-                .with_detail("reason", "session"))
+            Err(ApiError::from(Reason::Session)
+                .with_message("The hold token was created with another session."))
         }
         _ => Ok(()),
     }

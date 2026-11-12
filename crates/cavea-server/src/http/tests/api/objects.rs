@@ -38,12 +38,15 @@ async fn walk(app: &Router, sk: &str, query: &str) -> (Vec<Value>, usize) {
     }
 }
 
+/// The object's keys but its details, which every object has.
 fn keys(object: &Value) -> Vec<&str> {
+    let details = ["category", "kind", "row", "seat", "section"];
     object
         .as_object()
         .unwrap()
         .keys()
         .map(String::as_str)
+        .filter(|k| !details.contains(k))
         .collect()
 }
 
@@ -83,6 +86,13 @@ async fn objects_query() {
         assert!(
             all.iter()
                 .all(|o| o["status"] == "free" && keys(o) == ["label", "oid", "status"])
+        );
+        // Every object has its details (`seats::tests` checks them against
+        // the chart).
+        let details = ["category", "kind", "row", "seat", "section"];
+        assert!(
+            all.iter()
+                .all(|o| details.iter().all(|d| o.get(d).is_some()))
         );
         let label = |idx: usize| all[idx]["label"].as_str().unwrap().to_owned();
         let labels = |idx: &[usize]| idx.iter().map(|&i| label(i)).collect::<Vec<_>>();

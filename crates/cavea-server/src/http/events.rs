@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tracing::Instrument as _;
 
+use super::Reason;
 use super::charts::Version;
 use super::extract::{
     Json, Page, Path, Query, check_text, invalid, invalid_field, object, optional_object,
@@ -53,6 +54,18 @@ character matches itself (no wildcards).",
                     serde_json::json!({ "enum": ["oldest", "newest"] }),
                     "By creation: `oldest` first (the default) or `newest` first.",
                 )
+                .query(
+                    "created_after",
+                    serde_json::json!({ "type": "string" }),
+                    "Events created at or after this time: `YYYY-MM-DD` (00:00 UTC) or \
+`YYYY-MM-DDTHH:MM:SSZ`, with optional fractions of a second.",
+                )
+                .query(
+                    "created_before",
+                    serde_json::json!({ "type": "string" }),
+                    "Events created before this time, in the same forms. With \
+`created_after`, a range: `created_after=2027-03-01&created_before=2027-04-01` is March.",
+                )
                 .reply(200, "EventList", "A page of events")
                 .errors(&[404]),
             list,
@@ -81,8 +94,7 @@ character matches itself (no wildcards).",
                 "The event's seat state for staff",
             ))
             .about(
-                "08 §8.3, §8.4 for staff: the realtime frames in domain statuses (0 to 15, \
-02 §4.1). Without `after_seq`, or with 0: the manager SNAPSHOT. With it: one manager DELTA from \
+                "For staff: the realtime frames in domain statuses (0 to 15). Without `after_seq`, or with 0: the manager SNAPSHOT. With it: one manager DELTA from \
 it, the SNAPSHOT when the deltas from it are no longer kept (about 60 s), or `204` when nothing \
 was published after it. Encoding 0 or 1, never 2. `Cache-Control: no-store`.",
             )
@@ -93,7 +105,7 @@ was published after it. Encoding 0 or 1, never 2. `Cache-Control: no-store`.",
             )
             .response(
                 200,
-                "A frame (08 §8.6)",
+                "A frame",
                 Some(serde_json::json!({ super::realtime::FRAME_TYPE: {} })),
             )
             .response(204, "Nothing published after `after_seq`", None)
@@ -306,7 +318,7 @@ fn not_found() -> ApiError {
 
 pub(super) fn archived() -> ApiError {
     invalid(
-        "archived",
+        Reason::Archived,
         "The event is archived: it is read-only and takes no seat operations.",
     )
 }
@@ -314,7 +326,8 @@ pub(super) fn archived() -> ApiError {
 /// A page of events in creation order (`$cmp` `>` and `$dir` `ASC` for
 /// oldest first). `after` ($2) is an event key; when not null, `$4` a chart
 /// key, `$5` text the key or name contains (ignoring case, no wildcards:
-/// `strpos`, not `LIKE`), `$6` whether archived.
+/// `strpos`, not `LIKE`), `$6` whether archived, `$7` and `$8` the creation
+/// range in microseconds since the epoch, from inclusive, to exclusive.
 macro_rules! list_events {
     ($cmp:literal, $dir:literal) => {
         concat!(
@@ -331,6 +344,8 @@ macro_rules! list_events {
    AND ($5::text IS NULL OR strpos(lower(e.key), lower($5)) > 0
         OR strpos(lower(coalesce(e.name, '')), lower($5)) > 0)
    AND ($6::bool IS NULL OR (e.archived_at IS NOT NULL) = $6)
+   AND ($7::int8 IS NULL OR e.created_at >= timestamptz 'epoch' + $7 * interval '1 microsecond')
+   AND ($8::int8 IS NULL OR e.created_at < timestamptz 'epoch' + $8 * interval '1 microsecond')
  ORDER BY e.created_at ",
             $dir,
             ", e.id ",
@@ -350,7 +365,7 @@ const MAX_SEARCH: usize = 128;
 const CHART_EXISTS: &str =
     "SELECT EXISTS (SELECT FROM charts WHERE workspace_id = $1::uuid AND key = $2)";
 
-/// `?limit=&after=&chart=&q=&archived=&order=`.
+/// `?limit=&after=&chart=&q=&archived=&order=&created_after=&created_before=`.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ListQuery {
@@ -360,6 +375,55 @@ struct ListQuery {
     q: Option<String>,
     archived: Option<bool>,
     order: Option<Order>,
+    created_after: Option<String>,
+    created_before: Option<String>,
+}
+
+/// A time of the creation filter, in microseconds since the epoch:
+/// `YYYY-MM-DD` (its 00:00 UTC) or `YYYY-MM-DDTHH:MM:SS[.fraction]Z`, from
+/// 1970 to 9999. Anything else, offsets included, is `None`.
+fn instant(text: &str) -> Option<i64> {
+    let (date, time) = match text.split_once('T') {
+        Some((date, time)) => (date, Some(time.strip_suffix('Z')?)),
+        None => (text, None),
+    };
+    let day = i64::from(cavea_licence::Date::parse(date)?.days());
+    let Some(time) = time else {
+        return Some(day * 86_400_000_000);
+    };
+    let (hms, fraction) = match time.split_once('.') {
+        Some((hms, fraction)) => (hms, Some(fraction)),
+        None => (time, None),
+    };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit());
+    let parts: Vec<&str> = hms.split(':').collect();
+    let [h, m, sec] = parts.as_slice() else {
+        return None;
+    };
+    let two = |s: &str| (s.len() == 2 && digits(s)).then(|| s.parse::<i64>().ok())?;
+    let (h, m, sec) = (two(h)?, two(m)?, two(sec)?);
+    if h > 23 || m > 59 || sec > 59 {
+        return None;
+    }
+    let micros = match fraction {
+        None => 0,
+        Some(f) if f.len() <= 9 && digits(f) => format!("{:0<6}", f.get(..f.len().min(6))?)
+            .parse::<i64>()
+            .ok()?,
+        Some(_) => return None,
+    };
+    Some(day * 86_400_000_000 + ((h * 60 + m) * 60 + sec) * 1_000_000 + micros)
+}
+
+fn created(text: Option<&str>, name: &str) -> Result<Option<i64>, ApiError> {
+    text.map(|t| {
+        instant(t).ok_or_else(|| {
+            ApiError::from(Reason::Query).with_message(format!(
+                "`{name}` must be `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SSZ`."
+            ))
+        })
+    })
+    .transpose()
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -378,8 +442,10 @@ async fn list(
     let limit = Page::new(query.limit, None).limit()?;
     let search = query.q.as_deref().filter(|q| !q.is_empty());
     if search.is_some_and(|q| q.chars().count() > MAX_SEARCH) {
-        return Err(invalid("query", "`q` is longer than 128 characters."));
+        return Err(invalid(Reason::Query, "`q` is longer than 128 characters."));
     }
+    let after = created(query.created_after.as_deref(), "created_after")?;
+    let before = created(query.created_before.as_deref(), "created_before")?;
     let sql = match query.order.unwrap_or_default() {
         Order::Oldest => LIST_OLDEST,
         Order::Newest => LIST_NEWEST,
@@ -391,6 +457,8 @@ async fn list(
         .bind(query.chart.as_deref())
         .bind(search)
         .bind(query.archived)
+        .bind(after)
+        .bind(before)
         .fetch_all(&state.db)
         .instrument(cavea_telemetry::db_span("list_events"))
         .await?;
@@ -476,7 +544,7 @@ async fn create(
         }
         Some((true, _)) => {
             return Err(invalid(
-                "archived",
+                Reason::Archived,
                 "The chart is archived: events can no longer be created on it.",
             ));
         }
@@ -488,7 +556,7 @@ async fn create(
         }
         Some((false, None)) => {
             return Err(invalid(
-                "unpublished",
+                Reason::Unpublished,
                 "The chart has no published version.",
             ));
         }
@@ -719,4 +787,39 @@ async fn archive(
     let event = Event::new(row.ok_or_else(not_found)?)?;
     tracing::info!("event archived");
     Ok(axum::Json(event))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::instant;
+
+    #[test]
+    fn creation_times_parse_strictly() {
+        let day = 20_513 * 86_400_000_000; // 2026-03-01
+        assert_eq!(instant("2026-03-01"), Some(day));
+        assert_eq!(instant("2026-03-01T00:00:00Z"), Some(day));
+        assert_eq!(instant("2026-03-01T01:02:03Z"), Some(day + 3_723_000_000));
+        assert_eq!(instant("2026-03-01T00:00:00.5Z"), Some(day + 500_000));
+        assert_eq!(
+            instant("2026-03-01T00:00:00.123456789Z"),
+            Some(day + 123_456)
+        );
+        for bad in [
+            "",
+            "2026-02-30",
+            "2026-3-01",
+            "1969-12-31",
+            "2026-03-01T00:00:00",
+            "2026-03-01T00:00:00+01:00",
+            "2026-03-01T24:00:00Z",
+            "2026-03-01T00:60:00Z",
+            "2026-03-01T0:00:00Z",
+            "2026-03-01T00:00:00.Z",
+            "2026-03-01T00:00:00.1234567890Z",
+            "2026-03-01T+1:00:00Z",
+            "2026-03-01 00:00:00Z",
+        ] {
+            assert_eq!(instant(bad), None, "{bad}");
+        }
+    }
 }

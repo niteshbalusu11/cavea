@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::Instrument as _;
 
+use super::Reason;
 use super::auth::ClientIp;
 use super::extract::{Json, Secret, check_text, invalid_field, optional_object};
 use super::openapi::{Needs, Op, Routes};
@@ -41,7 +42,7 @@ pub(super) fn routes() -> Routes {
                 "Create the owner with the one-time setup token",
             )
             .about(
-                "09 §2. Works while no user exists, once, with the token of the link the \
+                "Works while no user exists, once, with the token of the link the \
 server logged at start-up (valid one hour; a restart makes a new one). The owner becomes owner \
 of every workspace; with none, `workspace` (default `main`) is created. Signs the owner in. A \
 wrong, expired or used token, or a server that has an owner, is `401` `setup_token`.",
@@ -57,11 +58,17 @@ wrong, expired or used token, or a server that has an owner, is `401` `setup_tok
                 .about(
                     "A new session every time (any presented one is ended). A wrong email or \
 password is `401` `credentials`, the same for both; repeated failures wait (`429`, `backoff`, \
-`Retry-After`).",
+`Retry-After`). A user with a second factor gets `202` and a `challenge` instead of a session, \
+for `/console/api/session/second-factor`.",
                 )
                 .body("ConsoleSignIn")
                 .reply(200, "ConsoleMe", "Signed in")
                 .sets_cookie()
+                .reply(
+                    202,
+                    "ConsoleSecondFactor",
+                    "The password is right; now the second step",
+                )
                 .errors(&[401, 403, 429]),
             sign_in,
         )
@@ -99,7 +106,7 @@ A wrong current password is `403` `credentials`.",
         )
 }
 
-fn now_ms(state: &AppState) -> u64 {
+pub(super) fn now_ms(state: &AppState) -> u64 {
     state.seats.clock.now().0
 }
 
@@ -109,40 +116,35 @@ pub(super) fn budget(state: &AppState, addr: Option<IpAddr>) -> Result<(), ApiEr
         .limiter
         .check(Budget::SignIn, 0, addr, now_ms(state))
         .map_err(|Limited(seconds)| {
-            ApiError::new(Code::RateLimited)
+            ApiError::from(Reason::SignInRate)
                 .with_message("Too many sign-in attempts from this address; retry later.")
-                .with_detail("reason", "sign_in")
                 .with_retry_after(seconds)
         })
 }
 
-fn backoff(Wait(seconds): Wait) -> ApiError {
-    ApiError::new(Code::RateLimited)
+pub(super) fn backoff(Wait(seconds): Wait) -> ApiError {
+    ApiError::from(Reason::Backoff)
         .with_message("Too many failed attempts; retry later.")
-        .with_detail("reason", "backoff")
         .with_retry_after(seconds)
 }
 
 pub(super) fn busy(busy: Busy) -> ApiError {
     match busy {
-        Busy::Timeout => ApiError::new(Code::Overloaded)
-            .with_message("Too many sign-ins at once; retry shortly.")
-            .with_detail("reason", "password_hashing"),
+        Busy::Timeout => ApiError::from(Reason::PasswordHashing)
+            .with_message("Too many sign-ins at once; retry shortly."),
         Busy::Failed(cause) => ApiError::internal(cause),
     }
 }
 
 fn credentials() -> ApiError {
-    ApiError::new(Code::Unauthorized)
-        .with_message("The email or password is wrong.")
-        .with_detail("reason", "credentials")
+    ApiError::from(Reason::Credentials).with_message("The email or password is wrong.")
 }
 
 const WORKSPACES: &str = "SELECT replace(w.id::text, '-', ''), w.key, w.name, m.role
   FROM memberships m JOIN workspaces w ON w.id = m.workspace_id
  WHERE m.user_id = $1::uuid
  ORDER BY w.created_at, w.id";
-const EMAIL: &str = "SELECT email FROM users WHERE id = $1::uuid";
+const EMAIL: &str = "SELECT email, totp_enabled_at IS NOT NULL FROM users WHERE id = $1::uuid";
 
 /// `ConsoleMe`: the user, their workspaces with roles and permissions, the
 /// CSRF token, the session's ends and the licence (`http::licence`).
@@ -152,7 +154,7 @@ pub(super) async fn me_json(
     session: &sessions::Found,
 ) -> Result<Value, ApiError> {
     let read = async {
-        let email: String = sqlx::query_scalar(EMAIL)
+        let (email, second_factor): (String, bool) = sqlx::query_as(EMAIL)
             .bind(&session.user)
             .fetch_one(&state.db)
             .await?;
@@ -160,9 +162,9 @@ pub(super) async fn me_json(
             .bind(&session.user)
             .fetch_all(&state.db)
             .await?;
-        Ok::<_, sqlx::Error>((email, rows))
+        Ok::<_, sqlx::Error>((email, second_factor, rows))
     };
-    let (email, rows) = read
+    let (email, second_factor, rows) = read
         .instrument(cavea_telemetry::db_span("read_console_user"))
         .await?;
     let workspaces: Vec<Value> = rows
@@ -177,7 +179,11 @@ pub(super) async fn me_json(
         .collect();
     let licence = super::licence::for_user(state, &session.user).await?;
     Ok(json!({
-        "user": { "id": format!("usr_{}", session.user), "email": email },
+        "user": {
+            "id": format!("usr_{}", session.user),
+            "email": email,
+            "second_factor": second_factor,
+        },
         "workspaces": workspaces,
         "csrf_token": id.csrf(),
         "session": {
@@ -231,9 +237,8 @@ struct FirstWorkspace {
 }
 
 fn setup_refused() -> ApiError {
-    ApiError::new(Code::Unauthorized)
+    ApiError::from(Reason::SetupToken)
         .with_message("The setup link is wrong, expired or used, or setup is done.")
-        .with_detail("reason", "setup_token")
 }
 
 async fn setup(
@@ -327,7 +332,7 @@ async fn sign_in(
     };
     // The account's id when the email is one's: a row for it, off the
     // reply's path; nothing for an address that is no account's (`audit`).
-    let known = user.as_ref().map(|(id, _)| id.clone());
+    let known = user.as_ref().map(|(id, ..)| id.clone());
     let Some((user, _)) = user.filter(|_| verified) else {
         state.sign_in.failed(&account, addr, now);
         tracing::info!("console sign-in refused");
@@ -336,7 +341,6 @@ async fn sign_in(
         }
         return Err(credentials());
     };
-    state.sign_in.succeeded(&account, addr, now);
     // Rotation (12 §3 T9): a session presented with the sign-in ends; the
     // user gets a new identifier.
     let presented = session_cookie(&headers, &state).flatten();
@@ -347,8 +351,22 @@ async fn sign_in(
         // The password verified must still be the user's: a change committed
         // meanwhile (which ended every session) refuses this sign-in, and one
         // starting now waits for it and then ends this session too.
-        if !still_current(&mut tx, &user, stored.as_deref()).await? {
-            return Ok(false);
+        let Some(verified) = stored.as_deref() else {
+            return Ok(Started::Refused);
+        };
+        if !still_current(&mut tx, &user, Some(verified)).await? {
+            return Ok(Started::Refused);
+        }
+        // Whether a code is needed is read under the same lock, so a second
+        // factor turned on meanwhile is asked for (D-89).
+        let two_step: bool = sqlx::query_scalar(SECOND_FACTOR_ON)
+            .bind(&user)
+            .fetch_one(&mut *tx)
+            .await?;
+        if two_step {
+            let made = super::accounts::challenge(&mut tx, &user, verified).await?;
+            tx.commit().await?;
+            return Ok(Started::SecondStep(made.0, made.1));
         }
         if let Some(old) = &presented {
             sessions::revoke(&mut tx, &old.hash()).await?;
@@ -356,18 +374,40 @@ async fn sign_in(
         sessions::insert(&mut tx, &id.hash(), &user).await?;
         audit::record(&mut tx, Entry::console(&actor, &user, "console.sign_in")).await?;
         tx.commit().await?;
-        Ok::<_, sqlx::Error>(true)
+        Ok::<_, ApiError>(Started::SignedIn)
     };
     let started = start
         .instrument(cavea_telemetry::db_span("start_console_session"))
         .await?;
-    if !started {
-        tracing::info!("console sign-in refused");
-        return Err(credentials());
+    match started {
+        Started::Refused => {
+            tracing::info!("console sign-in refused");
+            Err(credentials())
+        }
+        Started::SecondStep(challenge, expires_at) => {
+            // The password is right, the sign-in not done: the address's
+            // failures stay until the code is right too (D-89).
+            tracing::info!(user = %actor, "console sign-in waits for its second step");
+            super::accounts::second_step_reply(challenge, expires_at)
+        }
+        Started::SignedIn => {
+            state.sign_in.succeeded(&account, addr, now);
+            tracing::info!(user = %actor, "console sign-in");
+            signed_in(&state, StatusCode::OK, &id).await
+        }
     }
-    tracing::info!(user = %format!("usr_{user}"), "console sign-in");
-    signed_in(&state, StatusCode::OK, &id).await
 }
+
+/// How the first step of a sign-in ended, its password verified.
+enum Started {
+    /// The password changed meanwhile.
+    Refused,
+    /// A second factor is on: its challenge and when it ends.
+    SecondStep(Secret, String),
+    SignedIn,
+}
+
+const SECOND_FACTOR_ON: &str = "SELECT totp_enabled_at IS NOT NULL FROM users WHERE id = $1::uuid";
 
 async fn sign_out(
     State(state): State<AppState>,
@@ -454,9 +494,9 @@ async fn change_password(
     };
     if !verified {
         state.sign_in.failed(&email, addr, now);
-        return Err(ApiError::new(Code::Forbidden)
-            .with_message("The current password is wrong.")
-            .with_detail("reason", "credentials"));
+        return Err(
+            ApiError::from(Reason::CurrentPassword).with_message("The current password is wrong.")
+        );
     }
     let hash = password::hash_bounded(body.new_password.into_inner())
         .await
@@ -486,9 +526,9 @@ async fn change_password(
         .instrument(cavea_telemetry::db_span("change_console_password"))
         .await?;
     if !changed {
-        return Err(ApiError::new(Code::Forbidden)
-            .with_message("The current password is wrong.")
-            .with_detail("reason", "credentials"));
+        return Err(
+            ApiError::from(Reason::CurrentPassword).with_message("The current password is wrong.")
+        );
     }
     tracing::info!(user = %format!("usr_{user}"), "console password changed; every session ended");
     signed_in(&state, StatusCode::OK, &id).await

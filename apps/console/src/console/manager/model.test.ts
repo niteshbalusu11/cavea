@@ -135,6 +135,11 @@ test("counts come from the codes, custom statuses by code", () => {
 const booked = (ref: string): EventObject => ({
   label: "A-1",
   oid: 1,
+  kind: "seat",
+  category: { key: "standard", label: "Standard" },
+  section: null,
+  row: "A",
+  seat: "1",
   status: "booked",
   order_ref: ref,
 });

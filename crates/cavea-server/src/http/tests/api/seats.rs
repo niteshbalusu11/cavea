@@ -262,6 +262,14 @@ async fn book_and_status() {
         assert_eq!(response.status(), 200, "{held}");
         let seat = labels(&held["objects"]);
         let object = |n: usize| held["objects"][n].clone();
+        // What a backend prices and prints from: the label's parts and the
+        // category, beside the label (the chart's template is the default).
+        for o in held["objects"].as_array().unwrap() {
+            assert_eq!(o["kind"], "seat");
+            let parts = ["section", "row", "seat"].map(|p| o[p].as_str().unwrap().to_owned());
+            assert_eq!(o["label"], parts.join("-"));
+            assert!(o["category"]["key"].is_string() && o["category"]["label"].is_string());
+        }
         let before = counts().await;
 
         // Booking needs a secret key: a publishable key never reaches the engine.
@@ -277,14 +285,16 @@ async fn book_and_status() {
         let body = json!({ "hold_token": first, "objects": [&seat[0], &other["objects"][0]["label"]], "order_ref": "x" });
         let (response, p) = post(&app, sk, &ev("book"), body).await;
         assert_problem(&response, &p, Code::ObjectNotHeldByToken);
-        let mut refused = other["objects"][0].clone();
-        refused["reason"] = json!("not_held_by_token");
+        // A refusal names each object by `label` and `oid` only.
+        let refusal = |o: &Value, reason: &str| {
+            json!({ "label": o["label"], "oid": o["oid"], "reason": reason })
+        };
+        let refused = refusal(&other["objects"][0], "not_held_by_token");
         assert_eq!(p["details"]["objects"], json!([refused]));
         let body = json!({ "objects": [&seat[1]], "order_ref": "x" });
         let (response, p) = post(&app, sk, &ev("book"), body).await;
         assert_problem(&response, &p, Code::ObjectNotFree);
-        let mut refused = object(1);
-        refused["reason"] = json!("not_free");
+        let refused = refusal(&object(1), "not_free");
         assert_eq!(p["details"]["objects"], json!([refused]));
         for (body, field) in [
             (json!({ "hold_token": first, "objects": [], "order_ref": "x" }), "objects"),
@@ -342,8 +352,7 @@ async fn book_and_status() {
         assert_eq!(released["objects"], json!([object(0), object(1)]));
         let (response, p) = post(&app, sk, &ev("release"), body).await;
         assert_problem(&response, &p, Code::ObjectStatusConflict);
-        let mut refused = object(0);
-        refused["reason"] = json!("not_booked");
+        let refused = refusal(&object(0), "not_booked");
         assert_eq!(p["details"]["objects"][0], refused);
         // A held seat is not released without its token.
         let body = json!({ "objects": [&other["objects"][0]["label"]] });

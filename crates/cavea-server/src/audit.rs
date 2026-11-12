@@ -26,16 +26,22 @@ use tracing::Instrument as _;
 use crate::http::Auth;
 
 /// Every action recorded (`audit_log.action`).
-pub const ACTIONS: [&str; 20] = [
+pub const ACTIONS: [&str; 26] = [
     "console.setup",
     "console.sign_in",
     "console.sign_in_failed",
     "console.sign_out",
     "console.password_changed",
+    "console.password_reset",
+    "console.second_factor_enabled",
+    "console.second_factor_disabled",
+    "console.recovery_code_used",
     "member.invited",
     "member.joined",
     "member.role_changed",
     "member.removed",
+    "member.second_factor_reset",
+    "member.password_reset_created",
     "invitation.revoked",
     "workspace.created",
     "workspace.renamed",

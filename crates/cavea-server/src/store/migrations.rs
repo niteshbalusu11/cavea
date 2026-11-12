@@ -56,6 +56,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "licence",
         include_str!("../../migrations/0008_licence.sql"),
     ),
+    (
+        9,
+        "second_factor",
+        include_str!("../../migrations/0009_second_factor.sql"),
+    ),
 ];
 
 /// Where applied migrations are recorded, with each one's SHA-384.

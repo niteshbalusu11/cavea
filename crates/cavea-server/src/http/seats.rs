@@ -25,6 +25,7 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use tracing::Instrument as _;
 
+use super::Reason;
 use super::auth::{Auth, PublishableKey, has_hex_tail, push_hex, sha256};
 use super::events::{Settings, archived};
 use super::extract::{Json, Path, Secret, check_object_count, invalid, invalid_field, object};
@@ -167,7 +168,7 @@ pub(super) fn public_routes() -> Routes {
             .hold_token()
             .reply(
                 200,
-                "HoldTokenState",
+                "PublicHoldTokenState",
                 "Its expiry and held objects, as committed",
             )
             .errors(&[404]),
@@ -181,7 +182,7 @@ pub(super) fn public_routes() -> Routes {
             ))
             .session()
             .body("Hold")
-            .reply(200, "HoldReply", "The held objects")
+            .reply(200, "PublicHoldReply", "The held objects")
             .errors(&[409, 422, 503]),
             public_hold,
         )
@@ -193,7 +194,7 @@ pub(super) fn public_routes() -> Routes {
             ))
             .session()
             .body("PublicRelease")
-            .reply(200, "SeatReply", "The released objects")
+            .reply(200, "PublicSeatReply", "The released objects")
             .errors(&[409, 503]),
             public_release,
         )
@@ -346,7 +347,7 @@ fn idempotency_key(
         })
         .ok_or_else(|| {
             invalid(
-                "idempotency_key",
+                Reason::IdempotencyKey,
                 "`Idempotency-Key` must be 1 to 255 printable ASCII characters.",
             )
         })?;
@@ -492,12 +493,43 @@ async fn dispatch(
 
 // ---- rendering ----
 
-fn objects_json(chart: &Chart, idxs: &[Idx]) -> Result<Value, ApiError> {
+/// How a reply names its objects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Shape {
+    /// The buyer's routes: `{label, oid}`; the renderer has the rest from the
+    /// chart it drew.
+    Public,
+    /// The secret-key routes: also what a backend needs to price and print
+    /// each object without another call (`ObjectDetails`, 08 §6.2).
+    Staff,
+}
+
+/// One object of a reply, in `shape`; the details come from the chart in
+/// memory, never from a query.
+pub(super) fn object_json(chart: &Chart, idx: Idx, shape: Shape) -> Result<Value, ApiError> {
+    let missing = || ApiError::internal("reply names an object not in the chart");
+    let (label, oid) = (chart.label(idx), chart.view.oid(idx));
+    let (Some(label), Some(oid)) = (label, oid) else {
+        return Err(missing());
+    };
+    if shape == Shape::Public {
+        return Ok(json!({ "label": label, "oid": oid }));
+    }
+    let details = chart.details(idx).ok_or_else(missing)?;
+    Ok(json!({
+        "label": label,
+        "oid": oid,
+        "kind": details.kind,
+        "category": { "key": details.category.0, "label": details.category.1 },
+        "section": details.section,
+        "row": details.row,
+        "seat": details.seat.as_ref().map(|s| s.as_str()),
+    }))
+}
+
+fn objects_json(chart: &Chart, idxs: &[Idx], shape: Shape) -> Result<Value, ApiError> {
     idxs.iter()
-        .map(|&idx| match (chart.label(idx), chart.view.oid(idx)) {
-            (Some(label), Some(oid)) => Ok(json!({ "label": label, "oid": oid })),
-            _ => Err(ApiError::internal("reply names an object not in the chart")),
-        })
+        .map(|&idx| object_json(chart, idx, shape))
         .collect()
 }
 
@@ -527,7 +559,7 @@ fn failure(chart: &Chart, failure: Failure) -> ApiError {
 }
 
 /// `200` with the outcome, or the refusal.
-fn respond(done: Done) -> Result<Response, ApiError> {
+fn respond(done: Done, shape: Shape) -> Result<Response, ApiError> {
     let chart = &done.chart;
     let outcome = done.reply.map_err(|f| failure(chart, f))?;
     let body = match &outcome {
@@ -538,12 +570,12 @@ fn respond(done: Done) -> Result<Response, ApiError> {
         } => json!({
             "seq": seq,
             "expires_at": rfc3339(*expires_at),
-            "objects": objects_json(chart, objects)?,
+            "objects": objects_json(chart, objects, shape)?,
         }),
         Outcome::Released { seq, objects }
         | Outcome::Booked { seq, objects }
         | Outcome::StatusChanged { seq, objects } => {
-            json!({ "seq": seq, "objects": objects_json(chart, objects)? })
+            json!({ "seq": seq, "objects": objects_json(chart, objects, shape)? })
         }
         Outcome::Extended { seq, expires_at } => {
             json!({ "seq": seq, "expires_at": rfc3339(*expires_at) })
@@ -756,7 +788,7 @@ async fn read_token(
     Path(token): Path<String>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<Value>, ApiError> {
-    read_hold(&state, &auth, &path_token(&token)?).await
+    read_hold(&state, &auth, &path_token(&token)?, Shape::Staff).await
 }
 
 /// The buyer's token, from `Cavea-Hold-Token`: a header, not the path, so
@@ -770,7 +802,7 @@ async fn public_read_token(
         .get("cavea-hold-token")
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
-    let mut response = read_hold(&state, &auth, &path_token(token)?)
+    let mut response = read_hold(&state, &auth, &path_token(token)?, Shape::Public)
         .await?
         .into_response();
     // The answer depends on a header no cache keys on.
@@ -785,6 +817,7 @@ async fn read_hold(
     state: &AppState,
     auth: &Auth,
     hash: &TokenHash,
+    shape: Shape,
 ) -> Result<axum::Json<Value>, ApiError> {
     let row: Option<TokenRow> = sqlx::query_as(READ_TOKEN)
         .bind(hash.0.as_slice())
@@ -807,7 +840,7 @@ async fn read_hold(
         "event": event,
         "expires_at": rfc3339(Timestamp(u64::try_from(expires_ms).unwrap_or(0))),
         "max_objects": max_objects,
-        "objects": objects_json(&chart, &idxs)?,
+        "objects": objects_json(&chart, &idxs, shape)?,
     })))
 }
 
@@ -841,7 +874,7 @@ async fn extend_token(
         })
     })
     .await?;
-    respond(done)
+    respond(done, Shape::Staff)
 }
 
 /// Release everything the token holds. The token stays valid until it expires.
@@ -860,7 +893,7 @@ async fn release_token(
         })
     })
     .await?;
-    respond(done)
+    respond(done, Shape::Staff)
 }
 
 // ---- seat operations ----
@@ -897,6 +930,7 @@ async fn public_hold(
             hold_command(target, &body)
         })
         .await?,
+        Shape::Public,
     )
 }
 
@@ -934,7 +968,7 @@ async fn hold_objects(
         hold_command(target, body)
     })
     .await?;
-    respond(done)
+    respond(done, Shape::Staff)
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -985,6 +1019,7 @@ async fn public_release(
             release_command(target, &body)
         })
         .await?,
+        Shape::Public,
     )
 }
 
@@ -999,7 +1034,7 @@ async fn release_objects(
         release_command(target, body)
     })
     .await?;
-    respond(done)
+    respond(done, Shape::Staff)
 }
 
 fn release_command(target: &Target, body: &ReleaseBody) -> Result<Command, ApiError> {
@@ -1098,7 +1133,7 @@ async fn book(
         })
     })
     .await?;
-    respond(done)
+    respond(done, Shape::Staff)
 }
 
 /// `free`, `blocked` (or `held` and `booked`, for the engine to refuse), or a
@@ -1154,7 +1189,7 @@ async fn change_status(
         })
     })
     .await?;
-    respond(done)
+    respond(done, Shape::Staff)
 }
 
 #[cfg(test)]

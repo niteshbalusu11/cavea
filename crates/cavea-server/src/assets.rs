@@ -69,18 +69,6 @@ pub enum Refused {
     Dimensions,
 }
 
-impl Refused {
-    /// `details.reason` of the `400` (08 §6.4).
-    #[must_use]
-    pub fn reason(self) -> &'static str {
-        match self {
-            Self::Type => "asset_type",
-            Self::Malformed => "asset_malformed",
-            Self::Dimensions => "asset_dimensions",
-        }
-    }
-}
-
 /// Decide what `bytes` are.
 pub fn sniff(bytes: &[u8]) -> Result<Image, Refused> {
     let (kind, (width, height)) = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {

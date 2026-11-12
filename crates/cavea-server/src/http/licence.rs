@@ -16,10 +16,11 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use tracing::Instrument as _;
 
+use super::Reason;
 use super::extract::Json;
 use super::openapi::{Needs, Op, Routes};
 use super::staff::ConsoleUser;
-use super::{ApiError, AppState, Code};
+use super::{ApiError, AppState};
 use crate::audit::{self, Entry};
 use crate::licence::{Found, State as LicenceState};
 
@@ -31,7 +32,7 @@ pub(super) fn routes() -> Routes {
             "Upload a licence file",
         )
         .about(
-            "12 §7.3. The file's text in `licence`. Only a user who owns every workspace on \
+            "The file's text in `licence`. Only a user who owns every workspace on \
 the server may (`403` `instance_owner`). A file that is not a licence signed by a key this \
 build trusts is `400` `invalid_field` (`licence`) with `details.problem` saying why; nothing \
 is stored. Otherwise it is stored for every node (each reads it within 30 s) and answered \
@@ -116,22 +117,19 @@ async fn upload(
 ) -> Result<Response, ApiError> {
     let user = console.session.user;
     if !instance_owner(&state.db, &user).await? {
-        return Err(ApiError::new(Code::Forbidden)
-            .with_message(
-                "Only a user who owns every workspace on this server may change its licence.",
-            )
-            .with_detail("reason", "instance_owner"));
+        return Err(ApiError::from(Reason::InstanceOwner).with_message(
+            "Only a user who owns every workspace on this server may change its licence.",
+        ));
     }
     let bytes = body.licence.into_bytes();
     let found = Found::of(state.licences.verifier(), &bytes);
     let licence = match &found {
         Found::Licence(licence) => licence.clone(),
         Found::Invalid(problem) => {
-            return Err(ApiError::new(Code::InvalidRequest)
+            return Err(ApiError::from(Reason::InvalidField)
                 .with_message(format!(
                     "`licence` is not a licence this server accepts ({problem})."
                 ))
-                .with_detail("reason", "invalid_field")
                 .with_detail("field", "licence")
                 .with_detail("problem", *problem));
         }

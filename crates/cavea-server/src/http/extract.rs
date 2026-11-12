@@ -8,6 +8,7 @@ use axum::http::request::Parts;
 use axum::http::{StatusCode, header};
 use serde::de::DeserializeOwned;
 
+use super::Reason;
 use super::{ApiError, Code};
 
 /// The body limit of every route unless it sets its own: room for a command
@@ -28,10 +29,11 @@ pub use cavea_engine::limits::MAX_OBJECTS_PER_COMMAND;
 /// engine would.
 pub fn check_object_count(count: usize) -> Result<(), ApiError> {
     if count > MAX_OBJECTS_PER_COMMAND {
-        return Err(ApiError::new(Code::InvalidRequest)
-            .with_message("Too many objects in one request.")
-            .with_detail("reason", "too_many_objects")
-            .with_detail("limit", MAX_OBJECTS_PER_COMMAND));
+        return Err(
+            ApiError::from(Reason::Engine(cavea_engine::InvalidReason::TooManyObjects))
+                .with_message("Too many objects in one request.")
+                .with_detail("limit", MAX_OBJECTS_PER_COMMAND),
+        );
     }
     Ok(())
 }
@@ -59,9 +61,9 @@ where
         if bytes.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{') {
             return Err(
                 if serde_json::from_slice::<serde::de::IgnoredAny>(&bytes).is_ok() {
-                    invalid("json_data", "The body must be a JSON object.")
+                    invalid(Reason::JsonData, "The body must be a JSON object.")
                 } else {
-                    invalid("json_syntax", "The body is not JSON.")
+                    invalid(Reason::JsonSyntax, "The body is not JSON.")
                 },
             );
         }
@@ -87,21 +89,21 @@ where
     async fn from_request(request: Request, state: &S) -> Result<Self, ApiError> {
         if !json_content_type(&request) {
             return Err(invalid(
-                "content_type",
+                Reason::ContentType,
                 "Expected `Content-Type: application/json`.",
             ));
         }
         // Reads at most the route's body limit.
         let bytes = Bytes::from_request(request, state).await.map_err(|r| {
             if r.status() == StatusCode::PAYLOAD_TOO_LARGE {
-                invalid("body_too_large", "The body is over the size limit.")
+                invalid(Reason::BodyTooLarge, "The body is over the size limit.")
             } else {
-                invalid("body_unreadable", "The body could not be read.")
+                invalid(Reason::BodyUnreadable, "The body could not be read.")
             }
         })?;
         if too_deep(&bytes) {
             return Err(invalid(
-                "json_depth",
+                Reason::JsonDepth,
                 "The body nests arrays and objects too deeply.",
             )
             .with_detail("limit", MAX_JSON_DEPTH));
@@ -110,10 +112,9 @@ where
     }
 }
 
-pub(super) fn invalid(reason: &'static str, message: &'static str) -> ApiError {
-    ApiError::new(Code::InvalidRequest)
-        .with_message(message)
-        .with_detail("reason", reason)
+/// `invalid_request` with `reason` and a message.
+pub(super) fn invalid(reason: Reason, message: &'static str) -> ApiError {
+    ApiError::from(reason).with_message(message)
 }
 
 /// `application/json` or `application/*+json`, with any parameters.
@@ -169,14 +170,12 @@ fn too_deep(bytes: &[u8]) -> bool {
 
 fn json_rejection(rejection: &JsonRejection) -> ApiError {
     let reason = match rejection {
-        JsonRejection::JsonSyntaxError(_) => "json_syntax",
-        JsonRejection::JsonDataError(_) => "json_data",
-        _ => "body_unreadable",
+        JsonRejection::JsonSyntaxError(_) => Reason::JsonSyntax,
+        JsonRejection::JsonDataError(_) => Reason::JsonData,
+        _ => Reason::BodyUnreadable,
     };
     // axum's text may quote the body: it goes back to the caller, never to the log.
-    ApiError::new(Code::InvalidRequest)
-        .with_message(rejection.body_text())
-        .with_detail("reason", reason)
+    ApiError::from(reason).with_message(rejection.body_text())
 }
 
 /// A struct nested in a request body, as a field's
@@ -244,9 +243,7 @@ where
         }
         match axum::extract::Path::<T>::from_request_parts(parts, state).await {
             Ok(axum::extract::Path(value)) => Ok(Self(value)),
-            Err(rejection) => Err(ApiError::new(Code::InvalidRequest)
-                .with_message(rejection.body_text())
-                .with_detail("reason", "path")),
+            Err(rejection) => Err(ApiError::from(Reason::Path).with_message(rejection.body_text())),
         }
     }
 }
@@ -268,9 +265,7 @@ where
         // U+0000 is in no key, label or cursor, and PostgreSQL text cannot
         // hold it.
         if parts.uri.query().is_some_and(|q| q.contains("%00")) {
-            return Err(ApiError::new(Code::InvalidRequest)
-                .with_message("The query holds U+0000.")
-                .with_detail("reason", "query"));
+            return Err(ApiError::from(Reason::Query).with_message("The query holds U+0000."));
         }
         match axum::extract::Query::<T>::from_request_parts(parts, state).await {
             Ok(axum::extract::Query(value)) => Ok(Self(value)),
@@ -280,9 +275,7 @@ where
 }
 
 fn query_rejection(rejection: &QueryRejection) -> ApiError {
-    ApiError::new(Code::InvalidRequest)
-        .with_message(rejection.body_text())
-        .with_detail("reason", "query")
+    ApiError::from(Reason::Query).with_message(rejection.body_text())
 }
 
 /// A secret in a request or response body: a password, a setup, invitation
@@ -347,9 +340,7 @@ impl Page {
     pub fn limit(&self) -> Result<u32, ApiError> {
         match self.limit.unwrap_or(Self::DEFAULT_LIMIT) {
             n @ 1..=Self::MAX_LIMIT => Ok(n),
-            _ => Err(ApiError::new(Code::InvalidRequest)
-                .with_message("`limit` must be 1 to 100.")
-                .with_detail("reason", "query")),
+            _ => Err(ApiError::from(Reason::Query).with_message("`limit` must be 1 to 100.")),
         }
     }
 }
@@ -373,8 +364,7 @@ pub fn check_text(field: &'static str, value: &str) -> Result<(), ApiError> {
 
 /// `invalid_request` for one field of the body.
 pub fn invalid_field(field: &'static str, problem: &'static str) -> ApiError {
-    ApiError::new(Code::InvalidRequest)
+    ApiError::from(Reason::InvalidField)
         .with_message(format!("`{field}` {problem}."))
-        .with_detail("reason", "invalid_field")
         .with_detail("field", field)
 }

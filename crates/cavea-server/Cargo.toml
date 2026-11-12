@@ -46,6 +46,9 @@ http-body = "1.1.0"
 hmac = { version = "0.13.0", default-features = false }
 # SHA-256 of API keys and the admin key; already in the tree through sqlx-postgres.
 sha2 = { version = "0.11.1", default-features = false }
+# HMAC-SHA-1 for the console's second factor (RFC 6238 TOTP, 09 §2); already
+# in the tree through rustls and cavea-licence, so it adds no crate.
+ring = { version = "0.17.14", default-features = false }
 # Runtime queries only (no `macros`: they need a database or offline data at
 # build time); `migrate` adds no crates; one TLS backend for managed PostgreSQL.
 sqlx = { workspace = true, features = [

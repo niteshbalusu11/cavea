@@ -28,6 +28,7 @@ use sha2::{Digest as _, Sha256};
 use subtle::ConstantTimeEq as _;
 use tracing::Instrument as _;
 
+use super::Reason;
 use super::auth::{Auth, ClientIp};
 use super::console::{budget, busy, me_json, new_session, signed_in};
 use super::extract::{Json, Page, Path, Query, Secret, check_text, invalid_field};
@@ -177,22 +178,17 @@ fn user_uuid(id: &str) -> Result<&str, ApiError> {
 }
 
 fn query_refused(what: &'static str) -> ApiError {
-    ApiError::new(Code::InvalidRequest)
-        .with_message(what)
-        .with_detail("reason", "query")
+    ApiError::from(Reason::Query).with_message(what)
 }
 
 fn ownership() -> ApiError {
-    ApiError::new(Code::Forbidden)
+    ApiError::from(Reason::Role)
         .with_message("Only an owner can make or unmake an owner.")
-        .with_detail("reason", "role")
         .with_detail("permission", Permission::Ownership.as_str())
 }
 
 fn last_owner() -> ApiError {
-    ApiError::new(Code::InvalidRequest)
-        .with_message("A workspace keeps at least one owner.")
-        .with_detail("reason", "last_owner")
+    ApiError::from(Reason::LastOwner).with_message("A workspace keeps at least one owner.")
 }
 
 #[derive(Debug, Serialize)]
@@ -618,9 +614,8 @@ struct Accept {
 }
 
 fn invitation_refused() -> ApiError {
-    ApiError::new(Code::Unauthorized)
+    ApiError::from(Reason::Invitation)
         .with_message("The invitation link is wrong, expired or used.")
-        .with_detail("reason", "invitation")
 }
 
 const LIVE_INVITATION: &str =
@@ -700,9 +695,8 @@ async fn accept(
             .fetch_one(&mut *tx)
             .await?;
         if exists {
-            return Err(ApiError::new(Code::AlreadyExists)
-                .with_message("This email has an account: sign in, then open the link again.")
-                .with_detail("reason", "sign_in"));
+            return Err(ApiError::from(Reason::HasAccount)
+                .with_message("This email has an account: sign in, then open the link again."));
         }
         let created = sqlx::query_scalar(CREATE_USER)
             .bind(&email)
@@ -711,9 +705,9 @@ async fn accept(
             .await;
         let user: String = match created {
             Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-                return Err(ApiError::new(Code::AlreadyExists)
-                    .with_message("This email has an account: sign in, then open the link again.")
-                    .with_detail("reason", "sign_in"));
+                return Err(ApiError::from(Reason::HasAccount).with_message(
+                    "This email has an account: sign in, then open the link again.",
+                ));
             }
             other => other?,
         };
@@ -799,9 +793,8 @@ async fn accept_signed_in(state: &AppState, hash: &[u8; 32], user: &str) -> Resu
             .await?;
         if mine != email {
             // Rolled back: the invitation stays for its own email.
-            return Err(ApiError::new(Code::Forbidden)
-                .with_message("This invitation is for another email.")
-                .with_detail("reason", "invitation_email"));
+            return Err(ApiError::from(Reason::InvitationEmail)
+                .with_message("This invitation is for another email."));
         }
         join(&mut tx, &invitation, &workspace, user, &role).await?;
         tx.commit().await?;

@@ -12,8 +12,8 @@ use cavea_engine::{
     ActorConfig, ChartProvider, ChartVersionId, ChartView, Clock, EventId, Idx, Registry,
     RegistryConfig, StoreError, Timestamp,
 };
-use cavea_format::full_label::full_label;
-use cavea_format::{Artefact, NONE};
+use cavea_format::full_label::{full_label, seat_label};
+use cavea_format::{Artefact, NONE, ObjectKind};
 use sqlx::PgPool;
 use tracing::Instrument as _;
 
@@ -88,18 +88,81 @@ impl Clock for ServerClock {
 /// so dropping a version from the cache never takes it from a live event.
 pub const CHART_CACHE_OBJECTS: usize = 4_000_000;
 
-/// A chart version as the server uses it: the engine's view, and each `idx`'s
-/// full label for responses.
+/// A chart version as the server uses it: the engine's view, each `idx`'s
+/// full label for responses, and the decoded full artefact without its
+/// geometry, for what a backend needs of an object ([`Chart::details`]).
 #[derive(Debug)]
 pub struct Chart {
     pub view: Arc<ChartView>,
     labels: Box<[Box<str>]>,
+    parts: cavea_format::Chart,
+}
+
+/// What a backend needs to price and print an object without another call
+/// (08 §6.2): its kind, its category as the chart defines it, and the parts
+/// its full label was composed from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Details<'c> {
+    pub kind: &'static str,
+    /// The category's key and label.
+    pub category: (&'c str, &'c str),
+    /// `None` outside any section, or in a section without a label.
+    pub section: Option<&'c str>,
+    /// A seat's row label; `None` for any other object.
+    pub row: Option<&'c str>,
+    /// A seat's own label; `None` for any other object.
+    pub seat: Option<cavea_core::label::LabelBuf>,
 }
 
 impl Chart {
     #[must_use]
     pub fn label(&self, idx: Idx) -> Option<&str> {
         self.labels.get(idx as usize).map(|l| &**l)
+    }
+
+    /// Object `idx`'s details, read from memory: a few binary searches over
+    /// the rows and segments for a seat, two array reads for its category.
+    /// `None` for an `idx` the chart does not have.
+    #[must_use]
+    pub fn details(&self, idx: Idx) -> Option<Details<'_>> {
+        let c = &self.parts;
+        let text = |i: u32| (i != NONE).then(|| c.strings.get(i)).flatten();
+        let category = |i: usize| {
+            let category = c.categories.get(i)?;
+            Some((
+                text(category.key)?,
+                text(category.label).unwrap_or_default(),
+            ))
+        };
+        let section = |i: u32| {
+            c.sections
+                .get(i as usize)
+                .and_then(|s| text(s.label))
+                .filter(|l| !l.is_empty())
+        };
+        if idx < c.meta.seat_count {
+            let parts = seat_label(c, idx).ok()?;
+            let category = category(usize::from(*c.seat_category.get(idx as usize)?))?;
+            return Some(Details {
+                kind: "seat",
+                category,
+                section: Some(parts.section).filter(|s| !s.is_empty()),
+                row: Some(parts.row),
+                seat: Some(parts.seat),
+            });
+        }
+        let object = c.objects.get((idx - c.meta.seat_count) as usize)?;
+        Some(Details {
+            kind: match object.kind {
+                ObjectKind::Table => "table",
+                ObjectKind::Booth => "booth",
+                ObjectKind::Area => "area",
+            },
+            category: category(object.category as usize)?,
+            section: section(object.section),
+            row: None,
+            seat: None,
+        })
     }
 }
 
@@ -231,9 +294,23 @@ fn build(bytes: &[u8], hash: [u8; 16]) -> Result<Chart, String> {
     let view = ChartView::new(full.oids.iter().copied().zip(labels.iter().cloned()))
         .map_err(|e| e.to_string())?
         .with_hash(hash);
+    // Kept for `Chart::details`: categories, sections, rows, segments, label
+    // rules and exceptions, strings, per-seat categories and the objects,
+    // every reference in range (`decode` checked them). What only drawing or
+    // the view needs is dropped.
+    let mut parts = c;
+    parts.seat_pos = Vec::new();
+    parts.seat_flags = Vec::new();
+    parts.chunks = Vec::new();
+    parts.mesh = cavea_format::Mesh::default();
+    parts.texts = Vec::new();
+    parts.icons = Vec::new();
+    parts.images = Vec::new();
+    parts.full = None;
     Ok(Chart {
         view: Arc::new(view),
         labels: labels.into(),
+        parts,
     })
 }
 
@@ -330,4 +407,159 @@ impl Seats {
 #[must_use]
 pub fn event_id(hex: &str) -> Option<EventId> {
     u128::from_str_radix(hex, 16).ok().map(EventId)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, reason = "tests")]
+
+    use cavea_compiler::document::{ChartDocument, Node};
+    use cavea_format::full_label::compose;
+    use cavea_format::{Bounds, Object, Point};
+
+    use super::*;
+
+    fn chart(document: &ChartDocument) -> Chart {
+        let compiled = cavea_compiler::compile(document).unwrap();
+        build(&compiled.full, compiled.public_hash).unwrap()
+    }
+
+    /// The stadium, its categories labelled apart from their keys: each
+    /// section's category is the document's truth for its seats.
+    fn stadium() -> ChartDocument {
+        let mut document = cavea_testkit::synthetic::stadium(600, 7);
+        for category in &mut document.categories {
+            category.label = format!("{} seats", category.key);
+        }
+        document
+    }
+
+    /// Every seat: its parts compose its full label by the chart's template,
+    /// and its category is the one its section has in the document.
+    fn check_seats(chart: &Chart, document: &ChartDocument, sections: bool) {
+        let template = chart
+            .parts
+            .strings
+            .get(chart.parts.meta.label_template)
+            .unwrap();
+        let by_section: HashMap<String, String> = document
+            .nodes
+            .iter()
+            .filter_map(|node| match node {
+                Node::Section(s) => Some((s.label.clone()?, s.category.clone()?)),
+                _ => None,
+            })
+            .collect();
+        for idx in 0..u32::try_from(chart.view.len()).unwrap() {
+            let d = chart.details(idx).unwrap();
+            assert_eq!(d.kind, "seat");
+            let seat = d.seat.as_ref().unwrap();
+            let mut composed = String::new();
+            let section = d.section.unwrap_or_default();
+            compose(
+                template,
+                section,
+                d.row.unwrap(),
+                seat.as_str(),
+                &mut composed,
+            )
+            .unwrap();
+            assert_eq!(Some(composed.as_str()), chart.label(idx));
+            let key = if sections {
+                by_section[d.section.unwrap()].clone()
+            } else {
+                assert_eq!(d.section, None);
+                "standard".to_owned()
+            };
+            assert_eq!(d.category.0, key);
+            assert_eq!(d.category.1, format!("{key} seats"));
+        }
+    }
+
+    #[test]
+    fn details_follow_the_chart() {
+        let document = stadium();
+        check_seats(&chart(&document), &document, true);
+
+        // No sections: one block at the top level, `standard`; labels
+        // compose with a leading dash (`-A-1`), and `section` is null.
+        let mut flat = stadium();
+        flat.nodes = flat
+            .nodes
+            .into_iter()
+            .take(1)
+            .flat_map(|node| match node {
+                Node::Section(s) => s.children,
+                other => vec![other],
+            })
+            .map(|node| match node {
+                Node::RowBlock(mut block) => {
+                    block.category = Some("standard".to_owned());
+                    Node::RowBlock(block)
+                }
+                other => other,
+            })
+            .collect();
+        let flat_chart = chart(&flat);
+        assert!(flat_chart.label(0).unwrap().starts_with('-'));
+        check_seats(&flat_chart, &flat, false);
+    }
+
+    /// Tables booked whole, booths and areas: not compiled yet, so added to a
+    /// compiled chart by hand, as a later compiler will write them.
+    #[test]
+    fn other_kinds_have_a_category_and_section_but_no_row_or_seat() {
+        let compiled = cavea_compiler::compile(&stadium()).unwrap();
+        let mut c = cavea_format::decode(&compiled.full, Artefact::Full).unwrap();
+        let first_oid = c.full.as_ref().unwrap().oids.iter().max().unwrap() + 1;
+        let kinds = [
+            (ObjectKind::Table, "Table 1", 0, 3),
+            (ObjectKind::Booth, "Box A", NONE, 1),
+            (ObjectKind::Area, "Standing", 1, 2),
+        ];
+        for (oid, (kind, label, section, category)) in (first_oid..).zip(kinds) {
+            let label = c.strings.push(label).unwrap();
+            c.objects.push(Object {
+                kind,
+                label,
+                category,
+                capacity: if kind == ObjectKind::Area { 500 } else { 1 },
+                floor: 0,
+                section,
+                mesh_first: 0,
+                mesh_count: 0,
+                bounds: Bounds::default(),
+                label_anchor: Point::default(),
+            });
+            let full = c.full.as_mut().unwrap();
+            full.oids.push(oid);
+            full.ranks.push(0);
+        }
+        let bytes = cavea_format::encode(&c, Artefact::Full).unwrap();
+        let chart = build(&bytes, compiled.public_hash).unwrap();
+        let first = c.meta.seat_count;
+        let section = |i: usize| c.strings.get(c.sections[i].label).unwrap();
+        let category = |i: usize| {
+            let cat = &c.categories[i];
+            (
+                c.strings.get(cat.key).unwrap(),
+                c.strings.get(cat.label).unwrap(),
+            )
+        };
+        let expected = [
+            ("table", "Table 1", Some(section(0)), category(3)),
+            ("booth", "Box A", None, category(1)),
+            ("area", "Standing", Some(section(1)), category(2)),
+        ];
+        for (i, (kind, label, section, category)) in expected.into_iter().enumerate() {
+            let idx = first + u32::try_from(i).unwrap();
+            assert_eq!(chart.label(idx), Some(label));
+            let d = chart.details(idx).unwrap();
+            assert_eq!(
+                (d.kind, d.section, d.category, d.row, d.seat),
+                (kind, section, category, None, None)
+            );
+        }
+        assert_eq!(chart.details(first + 3), None);
+    }
 }

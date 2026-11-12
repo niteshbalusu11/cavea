@@ -11,6 +11,7 @@ pub mod guard;
 pub mod password;
 pub mod sessions;
 pub mod setup;
+pub mod totp;
 
 use std::fmt;
 use std::time::Duration;

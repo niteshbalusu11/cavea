@@ -5,6 +5,7 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument as _;
 
+use super::Reason;
 use super::auth::{KeyId, KeyKind, NewKey, normalise_origin};
 use super::extract::{Json, Page, Path, Query, Secret, check_text, invalid_field};
 use super::openapi::{Needs, Op, Routes};
@@ -149,9 +150,7 @@ async fn list(
     let after = match page.after.as_deref() {
         None => None,
         Some(after) => Some(KeyId::parse(after).ok_or_else(|| {
-            ApiError::new(Code::InvalidRequest)
-                .with_message("`after` is not a key id.")
-                .with_detail("reason", "query")
+            ApiError::from(Reason::Query).with_message("`after` is not a key id.")
         })?),
     };
     let rows: Vec<KeyRow> = sqlx::query_as(LIST)
@@ -301,7 +300,7 @@ async fn update_origins(
                 .await?;
             return Err(match found {
                 None => ApiError::new(Code::NotFound),
-                Some((_, true)) => super::extract::invalid("revoked", "The key is revoked."),
+                Some((_, true)) => super::extract::invalid(Reason::Revoked, "The key is revoked."),
                 Some(_) => invalid_field("allowed_origins", "is only for publishable keys"),
             });
         };
@@ -348,9 +347,8 @@ async fn revoke(
 ) -> Result<axum::Json<KeyView>, ApiError> {
     let id = KeyId::parse(&id).ok_or_else(|| ApiError::new(Code::NotFound))?;
     if auth.key_id() == Some(&id) {
-        return Err(ApiError::new(Code::Forbidden)
-            .with_message("A key cannot revoke itself; revoke it with another secret key.")
-            .with_detail("reason", "self_revocation"));
+        return Err(ApiError::from(Reason::SelfRevocation)
+            .with_message("A key cannot revoke itself; revoke it with another secret key."));
     }
     let actor = auth.actor();
     let revoke = async {
@@ -367,7 +365,7 @@ async fn revoke(
                 .fetch_one(&mut *tx)
                 .await?;
             if !active {
-                return Err(ApiError::new(Code::Unauthorized).with_detail("reason", "invalid"));
+                return Err(ApiError::from(Reason::Invalid));
             }
         }
         let live: Option<bool> = sqlx::query_scalar(LIVE)

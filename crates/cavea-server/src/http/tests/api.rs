@@ -964,6 +964,59 @@ const ROUTES: &[(Method, &str, u16, Option<&str>)] = &[
         Some(r#"{"name":"a"}"#),
     ),
     (Method::GET, "/console/api/audit", 200, None),
+    // No such challenge: refused for everyone alike.
+    (
+        Method::POST,
+        "/console/api/session/second-factor",
+        401,
+        Some(r#"{"challenge":"0000","code":"0000"}"#),
+    ),
+    // Every console user starts an enrolment, never confirmed: the code is
+    // no code. So nobody has a second factor to turn off.
+    (
+        Method::POST,
+        "/console/api/totp",
+        200,
+        Some(r#"{"password":"not-a-real-password-0000"}"#),
+    ),
+    (
+        Method::POST,
+        "/console/api/totp/confirm",
+        403,
+        Some(r#"{"code":"not-a-code"}"#),
+    ),
+    (
+        Method::POST,
+        "/console/api/totp/disable",
+        400,
+        Some(r#"{"password":"not-a-real-password-0000","code":"not-a-code"}"#),
+    ),
+    // `{user}` is the viewer: an owner or admin of A may reset them.
+    (
+        Method::DELETE,
+        "/console/api/members/{user}/second-factor",
+        204,
+        None,
+    ),
+    (
+        Method::POST,
+        "/console/api/members/{user}/password-reset",
+        201,
+        Some("{}"),
+    ),
+    (
+        Method::POST,
+        "/v1/workspaces/{workspace}/password-resets",
+        201,
+        Some(r#"{"email":"owner@a.example"}"#),
+    ),
+    // No such link: refused for everyone alike.
+    (
+        Method::POST,
+        "/console/api/password-reset",
+        401,
+        Some(r#"{"token":"0000","password":"not-a-real-password-1"}"#),
+    ),
     // No member of the matrix owns every workspace (A, B and C exist), so
     // each is refused alike (`instance_owner`); `licence.rs` uploads.
     (
@@ -1037,6 +1090,16 @@ const PERMISSIONS: &[(Method, &str, &str)] = &[
     ),
     (Method::PATCH, "/console/api/workspace", "settings"),
     (Method::GET, "/console/api/audit", "settings"),
+    (
+        Method::DELETE,
+        "/console/api/members/{user}/second-factor",
+        "settings",
+    ),
+    (
+        Method::POST,
+        "/console/api/members/{user}/password-reset",
+        "settings",
+    ),
 ];
 
 /// Every route a secret key or a console member may call declares exactly
@@ -1813,6 +1876,7 @@ async fn object_bodies_refuse_other_json() {
     .await;
 }
 
+mod accounts;
 mod assets;
 mod charts;
 mod console;

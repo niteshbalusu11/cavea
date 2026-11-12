@@ -17,11 +17,12 @@ use serde::Serialize;
 use serde_json::value::RawValue;
 use tracing::Instrument as _;
 
+use super::Reason;
 use super::extract::{Page, Path, Query, check_object_count};
 use super::openapi::{Needs, Op, Routes};
 use super::seats::{Find, chart, rfc3339, target};
 use super::staff::Staff;
-use super::{ApiError, AppState, Code};
+use super::{ApiError, AppState};
 use crate::console::Permission;
 use crate::seats::Chart;
 
@@ -85,6 +86,13 @@ fn status_code(wire: &str) -> Option<i16> {
 struct Object<'a> {
     label: &'a str,
     oid: u32,
+    /// What a backend needs of the object (`ObjectDetails`, 08 §6.2), from
+    /// the chart in memory.
+    kind: &'static str,
+    category: Category<'a>,
+    section: Option<&'a str>,
+    row: Option<&'a str>,
+    seat: Option<String>,
     /// `"free"`, `"held"`, `"booked"`, `"blocked"`, or a custom code.
     status: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -98,6 +106,12 @@ struct Object<'a> {
     ticket_type: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     extra: Option<Option<Box<RawValue>>>,
+}
+
+#[derive(Debug, Serialize)]
+struct Category<'a> {
+    key: &'a str,
+    label: &'a str,
 }
 
 /// Typed, not `json!`: `extra` is returned as stored, byte for byte.
@@ -143,9 +157,7 @@ const ROWS: &str = "SELECT o.oid, o.status, o.order_ref, o.ticket_type, o.extra:
  WHERE o.event_id = $1::uuid AND o.oid = ANY($2::int4[])";
 
 fn query_error(message: &'static str) -> ApiError {
-    ApiError::new(Code::InvalidRequest)
-        .with_message(message)
-        .with_detail("reason", "query")
+    ApiError::from(Reason::Query).with_message(message)
 }
 
 /// `label` (repeated), or `status`, `limit` and `after`.
@@ -287,9 +299,21 @@ impl Read<'_> {
             .chart
             .label(idx)
             .ok_or_else(|| ApiError::internal("an object of the chart has no label"))?;
+        let details = self
+            .chart
+            .details(idx)
+            .ok_or_else(|| ApiError::internal("an object of the chart has no details"))?;
         let mut object = Object {
             label,
             oid: self.oid(idx)?,
+            kind: details.kind,
+            category: Category {
+                key: details.category.0,
+                label: details.category.1,
+            },
+            section: details.section,
+            row: details.row,
+            seat: details.seat.map(|s| s.as_str().to_owned()),
             status: "free".into(),
             seq: None,
             expires_at: None,

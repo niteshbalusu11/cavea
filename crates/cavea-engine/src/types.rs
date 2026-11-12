@@ -362,6 +362,14 @@ pub enum ObjectReason {
 }
 
 impl ObjectReason {
+    /// Every reason, for the server's API description.
+    pub const ALL: [Self; 4] = [
+        Self::NotFree,
+        Self::NotHeldByToken,
+        Self::NotBooked,
+        Self::NotBlocked,
+    ];
+
     #[must_use]
     pub fn code(self) -> &'static str {
         match self {
@@ -414,6 +422,21 @@ pub enum InvalidReason {
 }
 
 impl InvalidReason {
+    /// Every reason, for the server's API description.
+    pub const ALL: [Self; 11] = [
+        Self::NoObjects,
+        Self::TooManyObjects,
+        Self::TtlOutOfRange,
+        Self::ZeroObjectLimit,
+        Self::TokenAlreadyExists,
+        Self::OrderRefLength,
+        Self::TicketTypeLength,
+        Self::ExtraTooLarge,
+        Self::DetailMismatch,
+        Self::BadStatus,
+        Self::IdempotencyKeyLength,
+    ];
+
     /// `details.reason` of `invalid_request` (08 §6.4).
     #[must_use]
     pub fn code(self) -> &'static str {

@@ -21,6 +21,7 @@ use sha2::{Digest as _, Sha256};
 use subtle::ConstantTimeEq as _;
 use tracing::Instrument as _;
 
+use super::Reason;
 use super::{ApiError, AppState, Code};
 use crate::console::Role;
 use crate::limiter::{Budget, Limited};
@@ -430,13 +431,11 @@ fn limit(parts: &Parts, state: &AppState, auth: &Auth) -> Result<(), ApiError> {
 }
 
 pub(super) fn wrong_kind(message: &'static str) -> ApiError {
-    ApiError::new(Code::Forbidden)
-        .with_message(message)
-        .with_detail("reason", "key_kind")
+    ApiError::from(Reason::KeyKind).with_message(message)
 }
 
-pub(super) fn unauthorized(reason: &'static str) -> ApiError {
-    ApiError::new(Code::Unauthorized).with_detail("reason", reason)
+pub(super) fn unauthorized(reason: Reason) -> ApiError {
+    ApiError::from(reason)
 }
 
 /// Resolve the bearer token: `401` unless it is the admin key or an unrevoked
@@ -452,7 +451,7 @@ async fn resolve(token: &str, state: &AppState) -> Result<Credential, ApiError> 
         return Ok(Credential::Admin);
     }
     if !has_hex_tail(token, "sk_", 2 * KEY_BYTES) && !has_hex_tail(token, "pk_", 2 * KEY_BYTES) {
-        return Err(unauthorized("invalid"));
+        return Err(unauthorized(Reason::Invalid));
     }
     let row: Option<(String, String, String, Option<Vec<String>>)> = sqlx::query_as(LOOKUP)
         .bind(sha256(token).as_slice())
@@ -460,7 +459,7 @@ async fn resolve(token: &str, state: &AppState) -> Result<Credential, ApiError> 
         .instrument(cavea_telemetry::db_span("authenticate"))
         .await?;
     let Some((key, workspace, kind, allowed_origins)) = row else {
-        return Err(unauthorized("invalid"));
+        return Err(unauthorized(Reason::Invalid));
     };
     let auth = Auth {
         workspace: WorkspaceId(workspace),
@@ -496,13 +495,15 @@ fn bearer(parts: &Parts) -> Result<&str, ApiError> {
     let value = parts
         .headers
         .get(header::AUTHORIZATION)
-        .ok_or_else(|| unauthorized("missing"))?;
-    let value = value.to_str().map_err(|_| unauthorized("malformed"))?;
+        .ok_or_else(|| unauthorized(Reason::Missing))?;
+    let value = value
+        .to_str()
+        .map_err(|_| unauthorized(Reason::Malformed))?;
     let (scheme, token) = value
         .split_once(' ')
-        .ok_or_else(|| unauthorized("malformed"))?;
+        .ok_or_else(|| unauthorized(Reason::Malformed))?;
     if !scheme.eq_ignore_ascii_case("bearer") || !well_formed(token) {
-        return Err(unauthorized("malformed"));
+        return Err(unauthorized(Reason::Malformed));
     }
     Ok(token)
 }
@@ -516,9 +517,9 @@ fn query_key(parts: &Parts) -> Result<&str, ApiError> {
         .unwrap_or_default()
         .split('&')
         .filter_map(|pair| pair.strip_prefix("key="));
-    let token = keys.next().ok_or_else(|| unauthorized("missing"))?;
+    let token = keys.next().ok_or_else(|| unauthorized(Reason::Missing))?;
     if keys.next().is_some() || !well_formed(token) || token.contains('%') {
-        return Err(unauthorized("malformed"));
+        return Err(unauthorized(Reason::Malformed));
     }
     Ok(token)
 }
@@ -541,9 +542,8 @@ fn check_origin(parts: &Parts, allowed: Option<&[String]>) -> Result<(), ApiErro
     if permitted {
         Ok(())
     } else {
-        Err(ApiError::new(Code::Forbidden)
-            .with_message("The key may not be used from this origin.")
-            .with_detail("reason", "origin"))
+        Err(ApiError::from(Reason::Origin)
+            .with_message("The key may not be used from this origin."))
     }
 }
 

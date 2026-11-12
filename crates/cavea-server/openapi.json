@@ -92,7 +92,7 @@
         }
       },
       "IdempotencyKey": {
-        "description": "1 to 255 printable ASCII characters, kept 24 hours (08 §6.1). The same key with another request is `409 idempotency_mismatch`.",
+        "description": "1 to 255 printable ASCII characters, kept 24 hours. The same key with another request is `409 idempotency_mismatch`.",
         "in": "header",
         "name": "Idempotency-Key",
         "required": false,
@@ -210,7 +210,7 @@
             }
           }
         },
-        "description": "`already_exists`, `object_not_free`, `object_not_held_by_token`, `object_status_conflict`, `version_conflict`, `chart_locked`, `upgrade_conflict`, `idempotency_mismatch`",
+        "description": "`already_exists`, `object_not_free`, `object_not_held_by_token`, `object_status_conflict`, `version_conflict`, `chart_locked`, `upgrade_conflict` (reserved: not sent by this version), `idempotency_mismatch`",
         "headers": {
           "Cavea-Request-Id": {
             "$ref": "#/components/headers/RequestId"
@@ -321,7 +321,7 @@
             }
           }
         },
-        "description": "`hold_limit_exceeded`, `channel_not_allowed`, `orphan_rule_violated`, `not_enough_objects`, `chart_invalid`",
+        "description": "`hold_limit_exceeded`, `channel_not_allowed` (reserved: not sent by this version), `orphan_rule_violated` (reserved: not sent by this version), `not_enough_objects` (reserved: not sent by this version), `chart_invalid`",
         "headers": {
           "Cavea-Request-Id": {
             "$ref": "#/components/headers/RequestId"
@@ -401,10 +401,16 @@
               "console.sign_in_failed",
               "console.sign_out",
               "console.password_changed",
+              "console.password_reset",
+              "console.second_factor_enabled",
+              "console.second_factor_disabled",
+              "console.recovery_code_used",
               "member.invited",
               "member.joined",
               "member.role_changed",
               "member.removed",
+              "member.second_factor_reset",
+              "member.password_reset_created",
               "invitation.revoked",
               "workspace.created",
               "workspace.renamed",
@@ -624,7 +630,7 @@
         "type": "object"
       },
       "ChartDocument": {
-        "description": "A chart document (`docs/03-chart-format.md` §2), stored as sent.",
+        "description": "A chart document, stored as sent.",
         "type": "object"
       },
       "ChartList": {
@@ -697,6 +703,19 @@
         },
         "required": [
           "lock"
+        ],
+        "type": "object"
+      },
+      "ConsoleCode": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "Six digits from the authenticator app.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
         ],
         "type": "object"
       },
@@ -862,11 +881,16 @@
               "id": {
                 "description": "`usr_` and 32 hex digits: the actor in event logs.",
                 "type": "string"
+              },
+              "second_factor": {
+                "description": "Whether signing in asks for a code as well.",
+                "type": "boolean"
               }
             },
             "required": [
               "id",
-              "email"
+              "email",
+              "second_factor"
             ],
             "type": "object"
           },
@@ -954,6 +978,91 @@
         ],
         "type": "object"
       },
+      "ConsolePasswordProof": {
+        "additionalProperties": false,
+        "properties": {
+          "password": {
+            "description": "The user's current password.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "type": "object"
+      },
+      "ConsolePasswordReset": {
+        "additionalProperties": false,
+        "properties": {
+          "password": {
+            "description": "The new password: 15 to 128 characters; no other rule.",
+            "maxLength": 128,
+            "minLength": 15,
+            "type": "string"
+          },
+          "token": {
+            "description": "The 64 hex digits of the link's fragment.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "password"
+        ],
+        "type": "object"
+      },
+      "ConsoleRecoveryCodes": {
+        "additionalProperties": false,
+        "properties": {
+          "recovery_codes": {
+            "description": "Ten codes, shown only here, each usable once instead of a code.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "recovery_codes"
+        ],
+        "type": "object"
+      },
+      "ConsoleSecondFactor": {
+        "additionalProperties": false,
+        "description": "The password is right and the user has a second factor: no session yet.",
+        "properties": {
+          "challenge": {
+            "description": "64 hex digits, shown only here: send it with a code to `/console/api/session/second-factor`.",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "challenge",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "ConsoleSecondStep": {
+        "additionalProperties": false,
+        "properties": {
+          "challenge": {
+            "type": "string"
+          },
+          "code": {
+            "description": "Six digits from the authenticator app, or a recovery code (`abcde-fghij`; spaces, dashes and case do not matter).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "challenge",
+          "code"
+        ],
+        "type": "object"
+      },
       "ConsoleSetup": {
         "additionalProperties": false,
         "properties": {
@@ -1012,6 +1121,57 @@
         "required": [
           "email",
           "password"
+        ],
+        "type": "object"
+      },
+      "ConsoleTotpDisable": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "Six digits from the authenticator app, or a recovery code.",
+            "type": "string"
+          },
+          "password": {
+            "description": "The user's current password.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "password",
+          "code"
+        ],
+        "type": "object"
+      },
+      "ConsoleTotpSecret": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "enum": [
+              "SHA1"
+            ]
+          },
+          "digits": {
+            "type": "integer"
+          },
+          "period": {
+            "description": "Seconds per code.",
+            "type": "integer"
+          },
+          "secret": {
+            "description": "The secret in base32, shown only here, for typing in.",
+            "type": "string"
+          },
+          "uri": {
+            "description": "`otpauth://totp/Cavea:<email>?secret=…`, shown only here: draw it as a QR code for the authenticator app.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "secret",
+          "uri",
+          "algorithm",
+          "digits",
+          "period"
         ],
         "type": "object"
       },
@@ -1189,6 +1349,33 @@
         ],
         "type": "object"
       },
+      "CreateOwnerPasswordReset": {
+        "additionalProperties": false,
+        "properties": {
+          "clear_second_factor": {
+            "description": "Using the link also removes the owner's second factor. Default `false`.",
+            "type": "boolean"
+          },
+          "email": {
+            "description": "The email of an owner of the workspace.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "type": "object"
+      },
+      "CreatePasswordReset": {
+        "additionalProperties": false,
+        "properties": {
+          "clear_second_factor": {
+            "description": "Using the link also removes the member's second factor. Default `false`: a lost password and a lost phone are separate.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "CreateWorkspace": {
         "additionalProperties": false,
         "properties": {
@@ -1284,6 +1471,23 @@
       "EventObject": {
         "additionalProperties": false,
         "properties": {
+          "category": {
+            "additionalProperties": false,
+            "description": "The object's category: its key and label as the chart defines them.",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "label"
+            ],
+            "type": "object"
+          },
           "expires_at": {
             "format": "date-time",
             "type": "string"
@@ -1294,7 +1498,17 @@
               "null"
             ]
           },
+          "kind": {
+            "description": "`table` is a table booked whole.",
+            "enum": [
+              "seat",
+              "table",
+              "booth",
+              "area"
+            ]
+          },
           "label": {
+            "description": "The full label, composed by the chart's template.",
             "type": "string"
           },
           "oid": {
@@ -1302,6 +1516,27 @@
           },
           "order_ref": {
             "type": "string"
+          },
+          "row": {
+            "description": "A seat's row label; `null` for other kinds.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seat": {
+            "description": "A seat's own label within its row; `null` for other kinds.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "section": {
+            "description": "The section's label; `null` outside a section or for a section without one.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "seq": {
             "type": "integer"
@@ -1334,6 +1569,11 @@
         "required": [
           "label",
           "oid",
+          "kind",
+          "category",
+          "section",
+          "row",
+          "seat",
           "status"
         ],
         "type": "object"
@@ -1442,7 +1682,7 @@
         "additionalProperties": false,
         "properties": {
           "code": {
-            "description": "An E or W code (03 §3.2), or `unsupported`.",
+            "description": "An E or W code of the compiler's findings, or `unsupported`.",
             "type": "string"
           },
           "message": {
@@ -1501,7 +1741,7 @@
           },
           "objects": {
             "items": {
-              "$ref": "#/components/schemas/ObjectLabel"
+              "$ref": "#/components/schemas/ObjectDetails"
             },
             "type": "array"
           },
@@ -1567,7 +1807,7 @@
           },
           "objects": {
             "items": {
-              "$ref": "#/components/schemas/ObjectLabel"
+              "$ref": "#/components/schemas/ObjectDetails"
             },
             "type": "array"
           }
@@ -1896,6 +2136,76 @@
         ],
         "type": "object"
       },
+      "ObjectDetails": {
+        "additionalProperties": false,
+        "description": "An object as the secret-key routes return it: what a backend needs to price and print a ticket without another call, from the event's chart version.",
+        "properties": {
+          "category": {
+            "additionalProperties": false,
+            "description": "The object's category: its key and label as the chart defines them.",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "label"
+            ],
+            "type": "object"
+          },
+          "kind": {
+            "description": "`table` is a table booked whole.",
+            "enum": [
+              "seat",
+              "table",
+              "booth",
+              "area"
+            ]
+          },
+          "label": {
+            "description": "The full label, composed by the chart's template.",
+            "type": "string"
+          },
+          "oid": {
+            "type": "integer"
+          },
+          "row": {
+            "description": "A seat's row label; `null` for other kinds.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seat": {
+            "description": "A seat's own label within its row; `null` for other kinds.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "section": {
+            "description": "The section's label; `null` outside a section or for a section without one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "oid",
+          "kind",
+          "category",
+          "section",
+          "row",
+          "seat"
+        ],
+        "type": "object"
+      },
       "ObjectLabel": {
         "additionalProperties": false,
         "properties": {
@@ -1913,7 +2223,7 @@
         "type": "object"
       },
       "ObjectRefs": {
-        "description": "Labels, or `idx` in the event's chart version (08 §6.1). At most 1,000.",
+        "description": "Labels, or `idx` in the event's chart version. At most 1,000.",
         "oneOf": [
           {
             "items": {
@@ -1994,9 +2304,50 @@
           }
         ]
       },
+      "PasswordResetCreated": {
+        "additionalProperties": false,
+        "properties": {
+          "link": {
+            "description": "`{CAVEA_PUBLIC_URL}/console/reset#token=<64 hex digits>`, shown only here: give it to the person. It works once, for an hour. The console's page posts the token and a new password to `/console/api/password-reset`.",
+            "type": "string"
+          },
+          "reset": {
+            "additionalProperties": false,
+            "properties": {
+              "clear_second_factor": {
+                "type": "boolean"
+              },
+              "expires_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "id": {
+                "description": "`pwr_` and 32 hex digits.",
+                "type": "string"
+              },
+              "user": {
+                "description": "`usr_` and 32 hex digits.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "user",
+              "expires_at",
+              "clear_second_factor"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "reset",
+          "link"
+        ],
+        "type": "object"
+      },
       "Problem": {
         "additionalProperties": false,
-        "description": "An error (08 §6.4).",
+        "description": "An error. `x-cavea-reasons` maps each code to the `details.reason` values it may carry; `x-cavea-object-reasons` each code to the `reason` of each object in `details.objects`. A code missing from a map carries none. `x-cavea-reserved-codes` are listed so that clients can handle them, but this version never sends them: `hold_token_expired` (an expired token is `not_found`), and the codes of features not built yet (upgrading an event, channels, the orphan rule, best-available).",
         "properties": {
           "code": {
             "enum": [
@@ -2025,7 +2376,12 @@
             ]
           },
           "details": {
-            "description": "Empty, or what the code adds (08 §6.4): `reason`, `missing`, `objects`, `field`, `limit`, `requested`, `session`, `findings`, `draft_etag`, `version`.",
+            "description": "Empty, or what the code adds: `reason`, `missing`, `objects`, `field`, `limit`, `requested`, `session`, `findings`, `draft_etag`, `version`, `lock`, `permission`.",
+            "properties": {
+              "reason": {
+                "$ref": "#/components/schemas/ProblemReason"
+              }
+            },
             "type": "object"
           },
           "message": {
@@ -2047,7 +2403,176 @@
           "details",
           "request_id"
         ],
-        "type": "object"
+        "type": "object",
+        "x-cavea-object-reasons": {
+          "object_not_free": [
+            "not_free"
+          ],
+          "object_not_held_by_token": [
+            "not_held_by_token"
+          ],
+          "object_status_conflict": [
+            "not_booked",
+            "not_blocked"
+          ]
+        },
+        "x-cavea-reasons": {
+          "already_exists": [
+            "second_factor",
+            "sign_in"
+          ],
+          "forbidden": [
+            "credentials",
+            "csrf",
+            "instance_owner",
+            "invitation_email",
+            "key_kind",
+            "licence_expired",
+            "origin",
+            "other_workspaces",
+            "own_account",
+            "role",
+            "second_factor",
+            "self_revocation",
+            "session",
+            "workspace"
+          ],
+          "hold_limit_exceeded": [
+            "tokens_per_sub"
+          ],
+          "invalid_request": [
+            "archived",
+            "asset_dimensions",
+            "asset_malformed",
+            "asset_type",
+            "bad_status",
+            "body_too_large",
+            "body_unreadable",
+            "content_type",
+            "detail_mismatch",
+            "document",
+            "extra_too_large",
+            "idempotency_key",
+            "idempotency_key_length",
+            "if_match",
+            "invalid_field",
+            "json_data",
+            "json_depth",
+            "json_syntax",
+            "last_event_id",
+            "last_owner",
+            "no_objects",
+            "no_second_factor",
+            "order_ref_length",
+            "path",
+            "query",
+            "revoked",
+            "ticket_type_length",
+            "token_already_exists",
+            "too_many_objects",
+            "ttl_out_of_range",
+            "unpublished",
+            "upgrade",
+            "workspace",
+            "zero_object_limit"
+          ],
+          "overloaded": [
+            "asset_memory",
+            "compile_timeout",
+            "password_hashing"
+          ],
+          "rate_limited": [
+            "backoff",
+            "sign_in"
+          ],
+          "unauthorized": [
+            "challenge",
+            "console_session",
+            "credentials",
+            "invalid",
+            "invitation",
+            "malformed",
+            "missing",
+            "reset_token",
+            "second_factor",
+            "session_token",
+            "setup_token"
+          ]
+        },
+        "x-cavea-reserved-codes": [
+          "upgrade_conflict",
+          "hold_token_expired",
+          "channel_not_allowed",
+          "orphan_rule_violated",
+          "not_enough_objects"
+        ]
+      },
+      "ProblemReason": {
+        "description": "Why, when the code says: `details.reason`. `Problem`'s `x-cavea-reasons` lists which reasons each code may carry; a reason is never sent with any other code.",
+        "enum": [
+          "archived",
+          "asset_dimensions",
+          "asset_malformed",
+          "asset_memory",
+          "asset_type",
+          "backoff",
+          "bad_status",
+          "body_too_large",
+          "body_unreadable",
+          "challenge",
+          "compile_timeout",
+          "console_session",
+          "content_type",
+          "credentials",
+          "csrf",
+          "detail_mismatch",
+          "document",
+          "extra_too_large",
+          "idempotency_key",
+          "idempotency_key_length",
+          "if_match",
+          "instance_owner",
+          "invalid",
+          "invalid_field",
+          "invitation",
+          "invitation_email",
+          "json_data",
+          "json_depth",
+          "json_syntax",
+          "key_kind",
+          "last_event_id",
+          "last_owner",
+          "licence_expired",
+          "malformed",
+          "missing",
+          "no_objects",
+          "no_second_factor",
+          "order_ref_length",
+          "origin",
+          "other_workspaces",
+          "own_account",
+          "password_hashing",
+          "path",
+          "query",
+          "reset_token",
+          "revoked",
+          "role",
+          "second_factor",
+          "self_revocation",
+          "session",
+          "session_token",
+          "setup_token",
+          "sign_in",
+          "ticket_type_length",
+          "token_already_exists",
+          "tokens_per_sub",
+          "too_many_objects",
+          "ttl_out_of_range",
+          "unpublished",
+          "upgrade",
+          "workspace",
+          "zero_object_limit"
+        ]
       },
       "PublicCreateHoldToken": {
         "additionalProperties": false,
@@ -2116,9 +2641,64 @@
         ],
         "type": "object"
       },
+      "PublicHoldReply": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/ObjectLabel"
+            },
+            "type": "array"
+          },
+          "seq": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "expires_at",
+          "objects"
+        ],
+        "type": "object"
+      },
+      "PublicHoldTokenState": {
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "max_objects": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/ObjectLabel"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "event",
+          "expires_at",
+          "max_objects",
+          "objects"
+        ],
+        "type": "object"
+      },
       "PublicLicence": {
         "additionalProperties": false,
-        "description": "What the renderer needs of the server's licence to decide its mark (12 §7.4): `licensed` (valid or in grace), `expired`, or `unlicensed` (missing or invalid).",
+        "description": "What the renderer needs of the server's licence to decide its mark: `licensed` (valid or in grace), `expired`, or `unlicensed` (missing or invalid).",
         "properties": {
           "domains": {
             "description": "While `licensed`: the host names the renderer runs on unmarked, lowercase; `*.example.com` is every name under `example.com`, not the name itself. Empty otherwise.",
@@ -2163,6 +2743,25 @@
         ],
         "type": "object"
       },
+      "PublicSeatReply": {
+        "additionalProperties": false,
+        "properties": {
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/ObjectLabel"
+            },
+            "type": "array"
+          },
+          "seq": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "objects"
+        ],
+        "type": "object"
+      },
       "Release": {
         "additionalProperties": false,
         "description": "With `hold_token`: held objects, all of the token's if `objects` is left out. Without: booked objects.",
@@ -2203,7 +2802,7 @@
         "properties": {
           "objects": {
             "items": {
-              "$ref": "#/components/schemas/ObjectLabel"
+              "$ref": "#/components/schemas/ObjectDetails"
             },
             "type": "array"
           },
@@ -2563,12 +3162,12 @@
     },
     "securitySchemes": {
       "adminKey": {
-        "description": "The operator's `CAVEA_ADMIN_KEY` (08 §11).",
+        "description": "The operator's `CAVEA_ADMIN_KEY`.",
         "scheme": "bearer",
         "type": "http"
       },
       "consoleSession": {
-        "description": "A staff member's console session (09 §2), set by `POST /console/api/session` or `/console/api/setup`; `cavea_console` when `CAVEA_CONSOLE_COOKIE_SECURE=false`. Not the buyer's session token. With it, a non-safe method sends `Cavea-Csrf-Token`, and a `/v1` route names its workspace in `Cavea-Workspace`.",
+        "description": "A staff member's console session, set by `POST /console/api/session` or `/console/api/setup`; `cavea_console` when `CAVEA_CONSOLE_COOKIE_SECURE=false`. Not the buyer's session token. With it, a non-safe method sends `Cavea-Csrf-Token`, and a `/v1` route names its workspace in `Cavea-Workspace`.",
         "in": "cookie",
         "name": "__Host-cavea_console",
         "type": "apiKey"
@@ -2586,7 +3185,7 @@
         "type": "http"
       },
       "publishableKeyQuery": {
-        "description": "A publishable key in the URL: the realtime routes (D-31).",
+        "description": "A publishable key in the URL: the realtime routes, whose clients cannot set headers.",
         "in": "query",
         "name": "key",
         "type": "apiKey"
@@ -2598,7 +3197,7 @@
         "type": "http"
       },
       "sessionToken": {
-        "description": "A session token signed by the customer's backend (08 §11). Required when the event sets `require_session`; verified whenever sent.",
+        "description": "A session token signed by the customer's backend. Required when the event sets `require_session`; verified whenever sent.",
         "in": "header",
         "name": "Cavea-Session",
         "type": "apiKey"
@@ -2606,7 +3205,7 @@
     }
   },
   "info": {
-    "description": "The Cavea server's REST API (`docs/08-server.md` §6). JSON bodies with `snake_case` fields; times are RFC 3339 UTC. Routes under `/v1` that take a secret key also take a console session (the cookie `/console/api/session` sets, 09 §10): the request names its workspace in `Cavea-Workspace`, a non-safe method carries `Cavea-Csrf-Token`, and the member's role must grant the operation's `x-cavea-permission` (`x-cavea-roles` lists the roles that do, 09 §2). Every response carries `Cavea-Request-Id`; a caller may send its own (1 to 64 characters of `A-Z a-z 0-9 . _ -`). Errors are `application/problem+json` with a stable `code` (08 §6.4): match on `code`, not on `message`. Lists are `{\"data\": [..], \"next\": <cursor or null>}`, oldest first; pass `next` back as `after`. The WebSocket protocol of `GET /v1/public/rt` is 08 §8, which OpenAPI cannot describe.",
+    "description": "The Cavea server's REST API. JSON bodies with `snake_case` fields; times are RFC 3339 UTC. Routes under `/v1` that take a secret key also take a console session (the cookie `/console/api/session` sets): the request names its workspace in `Cavea-Workspace`, a non-safe method carries `Cavea-Csrf-Token`, and the member's role must grant the operation's `x-cavea-permission` (`x-cavea-roles` lists the roles that do). Every response carries `Cavea-Request-Id`; a caller may send its own (1 to 64 characters of `A-Z a-z 0-9 . _ -`). Errors are `application/problem+json` with a stable `code`: match on `code`, not on `message`. Lists are `{\"data\": [..], \"next\": <cursor or null>}`, oldest first; pass `next` back as `after`. The WebSocket protocol of `GET /v1/public/rt` is a binary protocol, which OpenAPI cannot describe.",
     "title": "Cavea server API",
     "version": "0.0.0"
   },
@@ -2861,7 +3460,7 @@
     },
     "/console/api/licence": {
       "put": {
-        "description": "12 §7.3. The file's text in `licence`. Only a user who owns every workspace on the server may (`403` `instance_owner`). A file that is not a licence signed by a key this build trusts is `400` `invalid_field` (`licence`) with `details.problem` saying why; nothing is stored. Otherwise it is stored for every node (each reads it within 30 s) and answered with the licence as `me` shows it; if `CAVEA_LICENCE` holds a better one, that one still counts. Works in every licence state.",
+        "description": "The file's text in `licence`. Only a user who owns every workspace on the server may (`403` `instance_owner`). A file that is not a licence signed by a key this build trusts is `400` `invalid_field` (`licence`) with `details.problem` saying why; nothing is stored. Otherwise it is stored for every node (each reads it within 30 s) and answered with the licence as `me` shows it; if `CAVEA_LICENCE` holds a better one, that one still counts. Works in every licence state.",
         "operationId": "consoleLicence",
         "parameters": [
           {
@@ -3232,6 +3831,141 @@
         ]
       }
     },
+    "/console/api/members/{user}/password-reset": {
+      "post": {
+        "description": "A one-time link, shown only here (nothing is sent), that sets the member's password, for one hour; it replaces any earlier link for them. Using it ends every session of theirs; it clears their second factor only with `clear_second_factor`. The same rules as resetting a second factor.",
+        "operationId": "createMemberPasswordReset",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePasswordReset"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordResetCreated"
+                }
+              }
+            },
+            "description": "The link, shown only here",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Make a password reset link for a member",
+        "tags": [
+          "console"
+        ],
+        "x-cavea-permission": "settings",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/console/api/members/{user}/second-factor": {
+      "delete": {
+        "description": "For someone who lost their authenticator: removes their secret and recovery codes; they sign in with the password alone and may enrol again. Resetting an owner needs `ownership`. The person must be one the caller may manage in every workspace they belong to (`403` `other_workspaces`), and not the caller (`403` `own_account`). Idempotent.",
+        "operationId": "resetMemberSecondFactor",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserPath"
+          },
+          {
+            "$ref": "#/components/parameters/Workspace"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Reset",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Reset a member's second factor",
+        "tags": [
+          "console"
+        ],
+        "x-cavea-permission": "settings",
+        "x-cavea-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
     "/console/api/password": {
       "post": {
         "description": "Ends every session of the user, this one included, and starts a new one. A wrong current password is `403` `credentials`.",
@@ -3300,6 +4034,80 @@
         ]
       }
     },
+    "/console/api/password-reset": {
+      "post": {
+        "description": "With the token of a reset link and the new password. Ends every session of the user, then signs in (`200`), or answers `202` with the second step's challenge while the user has a second factor. A wrong, expired or used token is `401` `reset_token`.",
+        "operationId": "consolePasswordReset",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsolePasswordReset"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleMe"
+                }
+              }
+            },
+            "description": "Signed in",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "Set-Cookie": {
+                "$ref": "#/components/headers/SetCookie"
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleSecondFactor"
+                }
+              }
+            },
+            "description": "The password is set; now the second step",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [],
+        "summary": "Set a new password with a reset link",
+        "tags": [
+          "console"
+        ]
+      }
+    },
     "/console/api/session": {
       "delete": {
         "description": "Ends the session on the server and clears the cookie.",
@@ -3345,13 +4153,87 @@
         ]
       },
       "post": {
-        "description": "A new session every time (any presented one is ended). A wrong email or password is `401` `credentials`, the same for both; repeated failures wait (`429`, `backoff`, `Retry-After`).",
+        "description": "A new session every time (any presented one is ended). A wrong email or password is `401` `credentials`, the same for both; repeated failures wait (`429`, `backoff`, `Retry-After`). A user with a second factor gets `202` and a `challenge` instead of a session, for `/console/api/session/second-factor`.",
         "operationId": "consoleSignIn",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ConsoleSignIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleMe"
+                }
+              }
+            },
+            "description": "Signed in",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "Set-Cookie": {
+                "$ref": "#/components/headers/SetCookie"
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleSecondFactor"
+                }
+              }
+            },
+            "description": "The password is right; now the second step",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [],
+        "summary": "Sign in",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/console/api/session/second-factor": {
+      "post": {
+        "description": "With the `challenge` of a sign-in that answered `202`, and a code from the authenticator app or an unused recovery code. A wrong code is `401` `second_factor` (after five, or once the challenge is used or five minutes old, `401` `challenge`: sign in again); repeated failures wait (`429`, `backoff`), as wrong passwords do.",
+        "operationId": "consoleSignInSecondFactor",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsoleSecondStep"
               }
             }
           },
@@ -3396,7 +4278,7 @@
           }
         },
         "security": [],
-        "summary": "Sign in",
+        "summary": "Sign in: the second step",
         "tags": [
           "console"
         ]
@@ -3404,7 +4286,7 @@
     },
     "/console/api/setup": {
       "post": {
-        "description": "09 §2. Works while no user exists, once, with the token of the link the server logged at start-up (valid one hour; a restart makes a new one). The owner becomes owner of every workspace; with none, `workspace` (default `main`) is created. Signs the owner in. A wrong, expired or used token, or a server that has an owner, is `401` `setup_token`.",
+        "description": "Works while no user exists, once, with the token of the link the server logged at start-up (valid one hour; a restart makes a new one). The owner becomes owner of every workspace; with none, `workspace` (default `main`) is created. Signs the owner in. A wrong, expired or used token, or a server that has an owner, is `401` `setup_token`.",
         "operationId": "consoleSetup",
         "requestBody": {
           "content": {
@@ -3459,6 +4341,207 @@
         },
         "security": [],
         "summary": "Create the owner with the one-time setup token",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/console/api/totp": {
+      "post": {
+        "description": "Needs the password. Returns a new secret, shown only here, as the `otpauth://` URI for a QR code and as text; it signs nothing in until confirmed with a code (`/console/api/totp/confirm`). Starting again replaces an unconfirmed secret. A user who has a second factor is `409` `second_factor`; a wrong password `403` `credentials`.",
+        "operationId": "consoleTotpEnrol",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsolePasswordProof"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleTotpSecret"
+                }
+              }
+            },
+            "description": "The secret, shown only here",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Start turning on a second factor",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/console/api/totp/confirm": {
+      "post": {
+        "description": "With a current code of the secret from `/console/api/totp`: turns the second factor on and returns ten recovery codes, shown only here, each usable once instead of a code. A wrong code is `403` `second_factor`; nothing started `400` `no_second_factor`; a second factor already on `409` `second_factor`.",
+        "operationId": "consoleTotpConfirm",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsoleCode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleRecoveryCodes"
+                }
+              }
+            },
+            "description": "The recovery codes, shown only here",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Turn on the second factor",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/console/api/totp/disable": {
+      "post": {
+        "description": "Needs the password and a current code or a recovery code. Removes the secret and the recovery codes. A wrong password is `403` `credentials`, a wrong code `403` `second_factor`; none on `400` `no_second_factor`.",
+        "operationId": "consoleTotpDisable",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsoleTotpDisable"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleMe"
+                }
+              }
+            },
+            "description": "The user, without a second factor",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "consoleSession": []
+          }
+        ],
+        "summary": "Turn off the second factor",
         "tags": [
           "console"
         ]
@@ -4238,7 +5321,7 @@
         ]
       },
       "get": {
-        "description": "07 §9: the designer's editing lock, or `null` when nobody holds a live one.",
+        "description": "The designer's editing lock, or `null` when nobody holds a live one.",
         "operationId": "getChartLock",
         "parameters": [
           {
@@ -4305,7 +5388,7 @@
         ]
       },
       "post": {
-        "description": "07 §9. Takes the lock, or renews it for its holder, for 60 seconds by the database's clock; renew every 20. Held by another and live: `409 chart_locked` with the lock in `details.lock`, unless `take_over` is true. While another holds a live lock, saving the draft and publishing are `409 chart_locked`.",
+        "description": "Takes the lock, or renews it for its holder, for 60 seconds by the database's clock; renew every 20. Held by another and live: `409 chart_locked` with the lock in `details.lock`, unless `take_over` is true. While another holds a live lock, saving the draft and publishing are `409 chart_locked`.",
         "operationId": "lockChart",
         "parameters": [
           {
@@ -4758,6 +5841,24 @@
                 "oldest",
                 "newest"
               ]
+            }
+          },
+          {
+            "description": "Events created at or after this time: `YYYY-MM-DD` (00:00 UTC) or `YYYY-MM-DDTHH:MM:SSZ`, with optional fractions of a second.",
+            "in": "query",
+            "name": "created_after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Events created before this time, in the same forms. With `created_after`, a range: `created_after=2027-03-01&created_before=2027-04-01` is March.",
+            "in": "query",
+            "name": "created_before",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -5566,7 +6667,7 @@
     },
     "/v1/events/{event}/state": {
       "get": {
-        "description": "08 §8.3, §8.4 for staff: the realtime frames in domain statuses (0 to 15, 02 §4.1). Without `after_seq`, or with 0: the manager SNAPSHOT. With it: one manager DELTA from it, the SNAPSHOT when the deltas from it are no longer kept (about 60 s), or `204` when nothing was published after it. Encoding 0 or 1, never 2. `Cache-Control: no-store`.",
+        "description": "For staff: the realtime frames in domain statuses (0 to 15). Without `after_seq`, or with 0: the manager SNAPSHOT. With it: one manager DELTA from it, the SNAPSHOT when the deltas from it are no longer kept (about 60 s), or `204` when nothing was published after it. Encoding 0 or 1, never 2. `Cache-Control: no-store`.",
         "operationId": "eventState",
         "parameters": [
           {
@@ -5591,7 +6692,7 @@
             "content": {
               "application/vnd.cavea.frame": {}
             },
-            "description": "A frame (08 §8.6)",
+            "description": "A frame",
             "headers": {
               "Cavea-Request-Id": {
                 "$ref": "#/components/headers/RequestId"
@@ -6334,7 +7435,7 @@
     },
     "/v1/public/charts/{file}": {
       "get": {
-        "description": "03 §4.6. No credential: the content hash names the file. Brotli when `Accept-Encoding` allows it. Immutable; CORS open.",
+        "description": "No credential: the content hash names the file. Brotli when `Accept-Encoding` allows it. Immutable; CORS open.",
         "operationId": "publicChart",
         "parameters": [
           {
@@ -6467,7 +7568,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HoldReply"
+                  "$ref": "#/components/schemas/PublicHoldReply"
                 }
               }
             },
@@ -6544,7 +7645,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SeatReply"
+                  "$ref": "#/components/schemas/PublicSeatReply"
                 }
               }
             },
@@ -6597,7 +7698,7 @@
     },
     "/v1/public/events/{event}/state": {
       "get": {
-        "description": "08 §8.4, §8.5. Without `after_seq`: the public SNAPSHOT frame with `ETag: \"<seq>\"`. With it: one DELTA from it, the SNAPSHOT, or `204` when nothing was published after it. Cacheable for `CAVEA_SNAPSHOT_MAX_AGE` seconds.",
+        "description": "Without `after_seq`: the public SNAPSHOT frame with `ETag: \"<seq>\"`. With it: one DELTA from it, the SNAPSHOT, or `204` when nothing was published after it. Cacheable for `CAVEA_SNAPSHOT_MAX_AGE` seconds.",
         "operationId": "publicState",
         "parameters": [
           {
@@ -6619,7 +7720,7 @@
             "content": {
               "application/vnd.cavea.frame": {}
             },
-            "description": "A frame (08 §8.6)",
+            "description": "A frame",
             "headers": {
               "Cavea-Request-Id": {
                 "$ref": "#/components/headers/RequestId"
@@ -6683,7 +7784,7 @@
     },
     "/v1/public/events/{event}/stream": {
       "get": {
-        "description": "08 §8.4: each `data:` line is a base64 frame (08 §8.6).",
+        "description": "Each `data:` line is a base64 frame.",
         "operationId": "publicStream",
         "parameters": [
           {
@@ -6812,7 +7913,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HoldTokenState"
+                  "$ref": "#/components/schemas/PublicHoldTokenState"
                 }
               }
             },
@@ -6856,7 +7957,7 @@
     },
     "/v1/public/rt": {
       "get": {
-        "description": "Upgrades to a WebSocket speaking the binary protocol of 08 §8, which OpenAPI cannot describe: frames are in 08 §8.1 to §8.6. Without an upgrade request it is `400`.",
+        "description": "Upgrades to a WebSocket speaking the binary realtime protocol, which OpenAPI cannot describe. Without an upgrade request it is `400`.",
         "operationId": "publicRealtime",
         "responses": {
           "101": {
@@ -7010,7 +8111,7 @@
     },
     "/v1/workspaces/{workspace}/invitations": {
       "post": {
-        "description": "How a workspace the admin key made gets its first member (and the operator's recovery for one whose owners are gone): a one-time link making `email` an owner, shown only here, accepted in the console as any invitation (09 §7). `409` if the email is already a member's.",
+        "description": "How a workspace the admin key made gets its first member (and the operator's recovery for one whose owners are gone): a one-time link making `email` an owner, shown only here, accepted in the console as any invitation. `409` if the email is already a member's.",
         "operationId": "inviteWorkspaceOwner",
         "parameters": [
           {
@@ -7135,6 +8236,71 @@
           }
         ],
         "summary": "Mint a secret key for a workspace",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace}/password-resets": {
+      "post": {
+        "description": "The operator's recovery for an owner who cannot sign in: a one-time link for `email`, an owner of the workspace, as an owner or admin makes for a member. With `clear_second_factor`, using it also removes their second factor. An email that is not an owner's is `404` (`missing: \"owner\"`).",
+        "operationId": "createOwnerPasswordReset",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspacePath"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOwnerPasswordReset"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordResetCreated"
+                }
+              }
+            },
+            "description": "The link, shown only here",
+            "headers": {
+              "Cavea-Request-Id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "adminKey": []
+          }
+        ],
+        "summary": "Make a password reset link for a workspace's owner",
         "tags": [
           "workspaces"
         ]

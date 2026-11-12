@@ -922,6 +922,22 @@ fn openapi_document_is_complete() {
     let problem = &doc["components"]["schemas"]["Problem"]["properties"]["code"]["enum"];
     let codes: Vec<&str> = Code::ALL.iter().map(|c| c.as_str()).collect();
     assert_eq!(problem, &json!(codes));
+    // Customers read the document: no internal spec reference reaches it
+    // (`08 §6.4`, `D-31`, `docs/…`).
+    let mut strings = vec![doc];
+    while let Some(value) = strings.pop() {
+        match value {
+            Value::String(s) => {
+                let decision = s
+                    .match_indices("D-")
+                    .any(|(at, _)| s[at + 2..].starts_with(|c: char| c.is_ascii_digit()));
+                assert!(!s.contains('§') && !s.contains("docs/") && !decision, "{s}");
+            }
+            Value::Array(items) => strings.extend(items),
+            Value::Object(map) => strings.extend(map.values()),
+            _ => {}
+        }
+    }
     let mut ids = std::collections::HashSet::new();
     for (path, item) in doc["paths"].as_object().unwrap() {
         for (method, op) in item.as_object().unwrap() {

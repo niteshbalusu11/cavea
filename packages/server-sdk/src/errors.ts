@@ -3,7 +3,7 @@
 // request id and `Retry-After`. It never holds the key, the request's body,
 // its headers, its URL (a hold token travels in some paths) or the server's
 // free-text message, so printing or logging it is safe.
-import type { OperationId, Problem } from "./generated.ts";
+import type { OperationId, Problem, ProblemReason } from "./generated.ts";
 
 /** What went wrong: a problem's `code`, or the client's own for a call that
  * got no usable answer: `network` (no answer), `timeout` (no answer in
@@ -44,8 +44,10 @@ export class CaveaError extends Error {
   /** The HTTP status, or 0 when no answer arrived. */
   readonly status: number;
   readonly code: ErrorCode;
-  /** `details.reason`, when the problem gives one (`invalid_field`, `archived`, …). */
-  readonly reason: string | null;
+  /** `details.reason`, when the problem gives one (`invalid_field`, `archived`, …): one of
+   * the reasons the API description lists for `code` (`Problem`'s
+   * `x-cavea-reasons`). A newer server's new reason still arrives, as its text. */
+  readonly reason: ProblemReason | null;
   /** The problem's `details`; `{}` when it has none. */
   readonly details: Readonly<Record<string, unknown>>;
   /** `Cavea-Request-Id`, to find the request in the server's logs; `null`
@@ -58,7 +60,7 @@ export class CaveaError extends Error {
     operation: OperationId;
     status: number;
     code: ErrorCode;
-    reason?: string | null;
+    reason?: ProblemReason | null;
     details?: Readonly<Record<string, unknown>>;
     requestId?: string | null;
     retryAfter?: number | null;
@@ -121,7 +123,8 @@ export function problem(operation: OperationId, response: Response, text: string
     "details" in body && typeof body.details === "object" && body.details !== null
       ? (body.details as Record<string, unknown>)
       : {};
-  const reason = typeof details["reason"] === "string" ? details["reason"] : null;
+  const reason =
+    typeof details["reason"] === "string" ? (details["reason"] as ProblemReason) : null;
   const field = typeof details["field"] === "string" ? details["field"] : null;
   const id =
     requestId ??
