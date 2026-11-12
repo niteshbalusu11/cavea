@@ -7,6 +7,7 @@ import type { Chart, ChartDocument, Finding, Version } from "../api/generated.ts
 import { asApiError } from "../api/query.ts";
 import { describe } from "../console/errors.ts";
 import type { LockInfo, LockReply, SaveReply } from "./autosave.ts";
+import { browserEditor } from "./lockPeers.ts";
 import { infoOf, lockOf, lockReplyOf, saveReply, unreachable } from "./replies.ts";
 import type { Sent } from "./thumbnail.ts";
 
@@ -55,13 +56,17 @@ export async function currentEtag(ref: ChartRef, signal: AbortSignal): Promise<s
 /** A failed save as what the autosave does next (`replies.ts`). */
 export const saveReplyOf = (e: unknown): SaveReply => saveReply(e, describe);
 
-/** Takes or renews the editing lock (07 §9), or takes it over. Never
- * rejects; an archived chart is `refused`. */
+/** Takes or renews the editing lock (07 §9), or takes it over, as this
+ * browser's editor (D-94). Never rejects; an archived chart is `refused`. */
 export async function takeLock(ref: ChartRef, takeOver = false): Promise<LockReply> {
   try {
     const lock = await call(
       "lockChart",
-      { path: { chart: ref.key }, body: takeOver ? { take_over: true } : {} },
+      {
+        path: { chart: ref.key },
+        query: { editor: browserEditor() },
+        body: takeOver ? { take_over: true } : {},
+      },
       new AbortController().signal,
       { workspace: ref.workspace },
     );
@@ -74,10 +79,12 @@ export async function takeLock(ref: ChartRef, takeOver = false): Promise<LockRep
 /** Releases the lock if it is the caller's (`204` either way), as the page
  * is left: the request outlives it. Never rejects. */
 export function releaseLock(ref: ChartRef): void {
-  call("unlockChart", { path: { chart: ref.key } }, new AbortController().signal, {
-    workspace: ref.workspace,
-    keepalive: true,
-  }).catch(() => {});
+  call(
+    "unlockChart",
+    { path: { chart: ref.key }, query: { editor: browserEditor() } },
+    new AbortController().signal,
+    { workspace: ref.workspace, keepalive: true },
+  ).catch(() => {});
 }
 
 /** Who holds the lock, for a role that only reads; `null` for nobody (or
@@ -102,7 +109,12 @@ export async function saveDraft(ref: ChartRef, draft: string, etag: string): Pro
     const body = new Blob([draft], { type: "application/json" }) as unknown as ChartDocument;
     const chart = await call(
       "saveDraft",
-      { path: { chart: ref.key }, headers: { "If-Match": etag }, body },
+      {
+        path: { chart: ref.key },
+        query: { editor: browserEditor() },
+        headers: { "If-Match": etag },
+        body,
+      },
       // Never cancelled from here: a save on its way is answered or fails.
       new AbortController().signal,
       { workspace: ref.workspace },
@@ -132,7 +144,11 @@ export async function publish(
   try {
     const got = await callWithHeaders(
       "publishChart",
-      { path: { chart: ref.key }, headers: { "If-Match": etag } },
+      {
+        path: { chart: ref.key },
+        query: { editor: browserEditor() },
+        headers: { "If-Match": etag },
+      },
       signal,
       { workspace: ref.workspace },
     );

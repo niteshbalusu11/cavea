@@ -1753,6 +1753,16 @@ const designerLock = {
   "lock.key": "an API key",
   "lock.member": "another member",
   "lock.editing": "Read-only: {who} is editing (since {since})",
+  "lock.editingSelf": "Read-only: you are editing this chart in another browser (since {since})",
+  "lock.takenOverSelf": "Read-only: you took over in another browser at {since}",
+  "lock.roleEditingSelf": "Read-only · you are editing in another browser",
+  "lock.refusedSelf":
+    "You are editing this chart in another browser: it is open read-only here. Take over to edit here instead.",
+  "lock.confirmTitleSelf": "Edit here instead of your other browser?",
+  "lock.confirmBodySelf":
+    "Your other browser will be switched to read-only at once. Changes it has not saved stay in that browser, offered there when you edit there again. The chart then opens here as it is on the server.",
+  "lock.lostTitleSelf": "You took over this chart in another browser",
+  "lock.lapsedTitleSelf": "You are editing this chart in another browser now",
   "lock.takenOver": "Read-only: {who} took over at {since}",
   "lock.roleEditing": "Read-only · {who} is editing",
   "lock.archived": "Read-only: archived",

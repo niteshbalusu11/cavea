@@ -18,7 +18,7 @@ import type { Chart, Version } from "../api/generated.ts";
 import { asApiError, componentSignal } from "../api/query.ts";
 import { describe, reference } from "../console/errors.ts";
 import { here, signInFor } from "../console/paths.ts";
-import { formatTime, msg } from "../i18n/messages.ts";
+import { formatTime, msg, type MessageId, type Params } from "../i18n/messages.ts";
 import { loadSession, session as consoleSession } from "../session.ts";
 import { Button } from "../ui/controls.tsx";
 import { Confirm, Dialog, notify } from "../ui/overlays.tsx";
@@ -108,12 +108,39 @@ export interface ServerChart {
   dialogs(): JSX.Element;
 }
 
+/** Messages naming a lock's holder as `{who}`, each with a `…Self`
+ * sentence of its own for the person themself in another browser, which
+ * holds the lock apart from this one (D-94). */
+type LockMessage =
+  | "lock.editing"
+  | "lock.takenOver"
+  | "lock.roleEditing"
+  | "lock.refused"
+  | "lock.confirmTitle"
+  | "lock.confirmBody"
+  | "lock.lostTitle"
+  | "lock.lapsedTitle";
+
+/** `id` about `lock`, as `me` reads it. */
+export function lockMessage(
+  id: LockMessage,
+  lock: LockInfo,
+  me: string,
+  params: Params = {},
+): string {
+  if (lock.holder === me) return msg(`${id}Self` satisfies MessageId, params);
+  return msg(id, { ...params, who: holderName(lock, me) });
+}
+
 /** Who holds a lock, in words: their email, else what they are. */
 export function holderName(lock: LockInfo, me: string): string {
   if (lock.holder === me) return msg("lock.you");
   if (lock.email !== null) return lock.email;
   return lock.holder.startsWith("key_") ? msg("lock.key") : msg("lock.member");
 }
+
+/** No lock: what a closing dialog names while its lock is gone. */
+const NOBODY: LockInfo = { holder: "", email: null, since: "" };
 
 /** The lock a replaced editor held, for the next one's start. */
 const held = (info: LockInfo | null): { lock?: LockInfo } => (info === null ? {} : { lock: info });
@@ -175,7 +202,8 @@ export function serverChart(props: {
   /** Taking over would lose changes the browser could not keep. */
   const [unkept, setUnkept] = createSignal(false);
   const peers = canWrite ? lockPeers(props.setup.user, ref.workspace, ref.key) : null;
-  const who = (l: LockInfo) => holderName(l, props.setup.user);
+  const says = (id: LockMessage, l: LockInfo, params: Params = {}) =>
+    lockMessage(id, l, props.setup.user, params);
   let autosave: Autosave | null = null;
   let designer: Designer | null = null;
   /** The draft's etag as opened: the base for a restored record. */
@@ -307,7 +335,7 @@ export function serverChart(props: {
   /** Another holds the lock now (`lost` by the save machine): the session
    * becomes read-only; the work is in the store already. */
   const lost = (session: Session, l: LockState & { kind: "lost" }, stored: boolean) => {
-    makeReadOnly(session, msg("lock.refused", { who: who(l.lock) }));
+    makeReadOnly(session, says("lock.refused", l.lock));
     setAccess({ kind: "elsewhere", lock: l.lock, takenOver: l.takenOver, kept: stored });
     setLostOpen(true);
   };
@@ -392,7 +420,7 @@ export function serverChart(props: {
     if (lockReply?.kind === "locked") {
       // Someone else is editing: read-only, with Take over. Changes kept
       // here before stay in the store, offered once this page edits.
-      makeReadOnly(session, msg("lock.refused", { who: who(lockReply.lock) }));
+      makeReadOnly(session, says("lock.refused", lockReply.lock));
       attach(session, null);
       setAccess({ kind: "elsewhere", lock: lockReply.lock, takenOver: false, kept: false });
       return void setPhase({ kind: "ready" });
@@ -695,7 +723,7 @@ export function serverChart(props: {
           access={access()}
           role={props.setup.role}
           closed={closed()}
-          who={who}
+          says={says}
           onTakeOver={() => setTakeOverOpen(true)}
         />
       }
@@ -771,9 +799,10 @@ export function serverChart(props: {
       </Dialog>
       <Dialog
         open={lostOpen() && elsewhere() !== null}
-        title={msg(elsewhere()?.takenOver === true ? "lock.lostTitle" : "lock.lapsedTitle", {
-          who: who(elsewhere()?.lock ?? { holder: "", email: null, since: "" }),
-        })}
+        title={says(
+          elsewhere()?.takenOver === true ? "lock.lostTitle" : "lock.lapsedTitle",
+          elsewhere()?.lock ?? NOBODY,
+        )}
         heading
         onClose={() => setLostOpen(false)}
         class="max-w-lg"
@@ -803,12 +832,8 @@ export function serverChart(props: {
       </Dialog>
       <Confirm
         open={takeOverOpen() && elsewhere() !== null}
-        title={msg("lock.confirmTitle", {
-          who: who(elsewhere()?.lock ?? { holder: "", email: null, since: "" }),
-        })}
-        description={msg("lock.confirmBody", {
-          who: who(elsewhere()?.lock ?? { holder: "", email: null, since: "" }),
-        })}
+        title={says("lock.confirmTitle", elsewhere()?.lock ?? NOBODY)}
+        description={says("lock.confirmBody", elsewhere()?.lock ?? NOBODY)}
         confirm={msg("lock.takeOverConfirm")}
         variant="danger"
         onConfirm={() => void takeOver()}
@@ -871,7 +896,7 @@ export function serverChart(props: {
     whyReadOnly() {
       const a = access();
       if (a.kind === "archived") return msg("lock.archivedRefused");
-      if (a.kind === "elsewhere") return msg("lock.refused", { who: who(a.lock) });
+      if (a.kind === "elsewhere") return says("lock.refused", a.lock);
       return closed() ?? msg("readOnly.refused");
     },
     load,
@@ -937,7 +962,7 @@ function AccessIndicator(props: {
   access: Access;
   role: string;
   closed: string | undefined;
-  who: (lock: LockInfo) => string;
+  says: (id: LockMessage, lock: LockInfo, params?: Params) => string;
   onTakeOver: () => void;
 }) {
   const text = () => {
@@ -948,12 +973,11 @@ function AccessIndicator(props: {
       case "role":
         return a.lock === null
           ? msg("save.readOnly")
-          : msg("lock.roleEditing", { who: props.who(a.lock) });
+          : props.says("lock.roleEditing", a.lock);
       case "archived":
         return msg("lock.archived");
       case "elsewhere":
-        return msg(a.takenOver ? "lock.takenOver" : "lock.editing", {
-          who: props.who(a.lock),
+        return props.says(a.takenOver ? "lock.takenOver" : "lock.editing", a.lock, {
           since: since(a.lock),
         });
     }

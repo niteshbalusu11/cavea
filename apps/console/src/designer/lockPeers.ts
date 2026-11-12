@@ -1,6 +1,9 @@
-// Two tabs of one person on one chart are one holder of its editing lock
-// (D-73): the server cannot tell them apart, and releasing it from one tab
-// would free it under the other. So a tab that is left releases the lock
+// Two tabs of one person on one chart, in one browser, are one holder of
+// its editing lock (D-73): every tab names the server the same editor, this
+// browser's (`browserEditor`, D-94), so the server cannot tell them apart,
+// and releasing it from one tab would free it under the other. Two
+// browsers are two editors: the server keeps them apart itself, and one
+// releases only its own lock. So a tab that is left releases the lock
 // only when no other tab of this browser says it holds it. Tabs say so on
 // a `BroadcastChannel` named by person, workspace and chart: "holding"
 // when they hold it, "gone" when they stop or are left, and "hello" when
@@ -82,4 +85,24 @@ export function lockPeers(user: string, workspace: string, chart: string): LockP
     },
     tab,
   );
+}
+
+const EDITOR_KEY = "cavea.designer.editor";
+let editor: string | null = null;
+
+/** This browser's editor id (D-94): one random id for every tab of this
+ * browser profile, kept in its storage, so that the server tells this
+ * browser's lock from another browser's of the same person. Where storage
+ * is refused, the page's own (each such tab is then an editor apart). */
+export function browserEditor(): string {
+  if (editor !== null) return editor;
+  try {
+    const kept = localStorage.getItem(EDITOR_KEY);
+    if (kept !== null && /^[A-Za-z0-9_-]{1,64}$/.test(kept)) return (editor = kept);
+    const made = crypto.randomUUID();
+    localStorage.setItem(EDITOR_KEY, made);
+    return (editor = made);
+  } catch {
+    return (editor = crypto.randomUUID());
+  }
 }
