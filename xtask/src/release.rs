@@ -9,7 +9,7 @@
 //!   dirty tree, a commit not on `origin/main`, versions that disagree, a
 //!   missing changelog section, licence file, security policy or registry
 //!   name; runs the audits and the test suites 13 §13 names; builds the image
-//!   for x86-64 and arm64, runs the image's smoke test and the quick start
+//!   for x86-64 and arm64, runs the image's smoke test, the quick start and the deployment guide
 //!   against it, packs the npm packages and checks their contents, writes the
 //!   SBOMs and checksums; prints the checklist with each item's result and
 //!   writes everything under `target/release/<version>/`. Without
@@ -1243,6 +1243,22 @@ fn artefacts(
                 &mut sh(&["bun", "apps/docs/quickstart/check.ts", "--image", tag]),
             )?;
             Ok(Outcome::Pass("console and API paths".to_owned()))
+        },
+    )?;
+    list.step(
+        "deployment",
+        "The docs' deployment guide against the release's image",
+        || {
+            let tag = amd64.as_deref().context("no x86-64 image")?;
+            logged(
+                &out,
+                "deployment",
+                &mut sh(&["bun", "apps/docs/deployment/check.ts", "--image", tag]),
+            )?;
+            Ok(Outcome::Pass(
+                "TLS proxy, setup, a live seat through it, reconciler, backup and restore"
+                    .to_owned(),
+            ))
         },
     )?;
     list.step(

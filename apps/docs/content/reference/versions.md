@@ -34,15 +34,7 @@ The two newest minor versions receive security fixes. When `1.6` is released, `1
 
 ## Upgrading the server
 
-1. Read the version's section of the [changelog](changelog.md), and its **Upgrading** notes for every version between yours and the new one.
-2. Back up the database.
-3. Change the image's tag to the new version and restart the server: in Compose, set `image: {{image}}` and run `docker compose up -d`.
-4. The server upgrades the database schema as it starts and logs `database schema up to date`. With several servers on one database, the first one to start does it and the others wait for it.
-5. Once `/readyz` answers `ready`, holds, bookings and the console work as before: holds that were live keep their tokens and expiry, and people signed in to the console stay signed in.
-
-An upgrade that cannot run while the server takes traffic says so under **Upgrading**, with what to do instead.
-
-To go back to the older version, restore the backup taken in step 2: an older server does not start on an upgraded database.
+Change the image's tag to the new version and restart, as [Upgrades and restarts](../deployment/upgrades.md) describes, after reading the **Upgrading** notes of every version between yours and the new one. The server upgrades the database schema as it starts; holds that were live keep their tokens and expiry, and people signed in to the console stay signed in. With several servers on one database, the first to start upgrades it and the others wait.
 
 ## Upgrading the seat map
 
