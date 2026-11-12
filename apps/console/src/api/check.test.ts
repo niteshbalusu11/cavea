@@ -53,6 +53,7 @@ const chart = {
   published_version: null,
   archived_at: null,
   created_at: "2026-11-11T00:00:00Z",
+  events: { active: 2, archived: 1 },
 };
 
 test("a page of charts is checked before the list shows it", () => {
@@ -65,6 +66,9 @@ test("a page of charts is checked before the list shows it", () => {
     { data: [], next: "" },
     { data: [{ ...chart, name: 3 }], next: null },
     { data: [{ ...chart, published_version: { number: 1 } }], next: null },
+    // A card's events count is drawn as a number: an older server has none.
+    { data: [{ ...chart, events: undefined }], next: null },
+    { data: [{ ...chart, events: { active: "2", archived: 1 } }], next: null },
     "<html>",
   ]) {
     expect(() => checkChartList(bad)).toThrow(ApiError);

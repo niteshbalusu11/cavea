@@ -45,6 +45,7 @@ function isWorkspace(v: unknown): boolean {
 
 const isNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const isTextOrNull = (v: unknown): boolean => v === null || isText(v);
+const isCount = (v: unknown): boolean => Number.isSafeInteger(v) && (v as number) >= 0;
 
 /** The answer as a `ConsoleMe`, or an `unexpected` error. */
 export function checkMe(v: unknown): ConsoleMe {
@@ -120,7 +121,10 @@ function isChart(v: unknown): boolean {
     isText(v["name"]) &&
     isText(v["draft_updated_at"]) &&
     isTextOrNull(v["archived_at"]) &&
-    (version === null || isVersion(version))
+    (version === null || isVersion(version)) &&
+    isRecord(v["events"]) &&
+    isCount(v["events"]["active"]) &&
+    isCount(v["events"]["archived"])
   );
 }
 
@@ -191,7 +195,8 @@ function isMember(v: unknown): boolean {
     isRole(v["role"]) &&
     isRecord(v["user"]) &&
     isText(v["user"]["id"]) &&
-    isText(v["user"]["email"])
+    isText(v["user"]["email"]) &&
+    typeof v["user"]["second_factor"] === "boolean"
   );
 }
 
