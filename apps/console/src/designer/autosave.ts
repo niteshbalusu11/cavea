@@ -11,6 +11,13 @@
 // change during a save is followed by one more), and never overwrites a
 // draft it has not seen: the etag is the server's, sent back as it came, and
 // a conflict stops saving until the person chooses.
+//
+// The editing lock (07 §9, DSN-037, D-73) is coordination, not safety: the
+// machine renews it every 20 seconds while the page is in use, and stops
+// saving when another holds it (a renewal or a save answered
+// `chart_locked`), keeping the work in the store as for a conflict. The
+// etag stays the guard: a lock that lapsed and was taken again has the
+// draft's etag checked, and a draft changed meanwhile is a conflict.
 
 /** How long after the last change the draft is sent (07 §9). */
 export const SAVE_DELAY_MS = 2_000;
@@ -18,6 +25,54 @@ export const SAVE_DELAY_MS = 2_000;
 export const LOCAL_DELAY_MS = 1_000;
 /** Retries after a failure wait 2 s, 4 s, … up to this. */
 export const MAX_RETRY_MS = 60_000;
+/** The lock is renewed this often (08 §6.2: it lasts 60 s unless renewed). */
+export const RENEW_MS = 20_000;
+/** How long the server keeps a lock nobody renews. */
+export const LOCK_MS = 60_000;
+
+/** Who holds a chart's editing lock (the server's `ChartLock`). */
+export interface LockInfo {
+  /** `usr_…`, or `key_…` for an API key. */
+  holder: string;
+  /** For those whose role may edit charts; otherwise `null`. */
+  email: string | null;
+  /** RFC 3339: when the holder took it. A renewal keeps it. */
+  since: string;
+}
+
+/** The answer to taking or renewing the lock. */
+export type LockReply =
+  | { kind: "held"; lock: LockInfo }
+  /** Another holds it (`409 chart_locked`). */
+  | { kind: "locked"; lock: LockInfo }
+  | { kind: "offline" }
+  | { kind: "signedOut" }
+  /** Refused for a reason retrying will not change (an archived chart). */
+  | { kind: "refused" };
+
+export type LockState =
+  /** No lock: a machine started without one, or the page let it go. */
+  | { kind: "none" }
+  | { kind: "held"; lock: LockInfo }
+  /** A renewal got no answer: editing goes on, kept locally if the saves
+   * fail too; renewed again at `retryAt`. */
+  | { kind: "unrenewed"; lock: LockInfo; retryAt: number }
+  /** Another holds it now: saving stopped, the work kept locally.
+   * `takenOver`: it was taken while this editor held it live; otherwise
+   * this editor had let it lapse (a sleeping or idle tab, an outage). */
+  | { kind: "lost"; lock: LockInfo; takenOver: boolean };
+
+/** The lock's side of the network and the page. */
+export interface LockDeps {
+  /** `POST …/lock` with `{}`. Never rejects. */
+  take(): Promise<LockReply>;
+  /** The draft's etag on the server now, or `null` when it cannot be read. */
+  draftEtag(): Promise<string | null>;
+  /** Whether the page is in use (visible). A hidden page with nothing to
+   * save stops renewing, so an idle tab does not hold a chart for ever. */
+  active(): boolean;
+  onLock(state: LockState): void;
+}
 
 /** The answer to one save. */
 export type SaveReply =
@@ -31,7 +86,9 @@ export type SaveReply =
   | { kind: "signedOut" }
   /** Refused for a reason retrying will not change (the role, an archived
    * chart, a draft too large): `message` says it. */
-  | { kind: "refused"; message: string };
+  | { kind: "refused"; message: string }
+  /** Another holds the editing lock (`409 chart_locked`). */
+  | { kind: "locked"; lock: LockInfo };
 
 export type SaveState =
   | { kind: "saved"; at: number | null }
@@ -40,7 +97,9 @@ export type SaveState =
   | { kind: "offline"; retryAt: number }
   | { kind: "conflict"; etag: string | null }
   | { kind: "signedOut" }
-  | { kind: "refused"; message: string };
+  | { kind: "refused"; message: string }
+  /** Another holds the lock: nothing more is saved (`LockState` says who). */
+  | { kind: "locked" };
 
 export interface Clock {
   now(): number;
@@ -67,6 +126,8 @@ export interface AutosaveDeps {
   store: LocalStore;
   /** Told of every change of state. */
   onState(state: SaveState): void;
+  /** The editing lock, when the editor holds one. */
+  lock?: LockDeps;
 }
 
 export interface AutosaveStart {
@@ -77,6 +138,8 @@ export interface AutosaveStart {
   /** Not the server's draft: recovered from the local store (`stored`),
    * or a file imported over it. Saved without waiting for an edit. */
   unsaved?: { stored: boolean };
+  /** The lock as just taken or renewed (with `deps.lock`). */
+  lock?: LockInfo;
 }
 
 export class Autosave {
@@ -104,6 +167,14 @@ export class Autosave {
   #disposed = false;
   /** Waiters for the server to hold the latest revision (`flush`). */
   #waiters: ((saved: boolean) => void)[] = [];
+  #lock: LockState = { kind: "none" };
+  /** When the server last said the lock was this editor's. */
+  #heldAt = 0;
+  #renewTimer: unknown = null;
+  #renewing = false;
+  #lockAttempts = 0;
+  /** Not renewing: the page was hidden with nothing to save. */
+  #resting = false;
 
   constructor(deps: AutosaveDeps, start: AutosaveStart) {
     this.#deps = deps;
@@ -112,6 +183,11 @@ export class Autosave {
     this.#saved = start.unsaved === undefined ? start.revision : -1;
     this.#local = start.unsaved?.stored === true ? start.revision : null;
     this.#state = { kind: "saved", at: null };
+    if (deps.lock !== undefined && start.lock !== undefined) {
+      this.#lock = { kind: "held", lock: start.lock };
+      this.#heldAt = deps.clock.now();
+      this.#scheduleRenew(RENEW_MS);
+    }
     if (start.unsaved === undefined) return;
     this.#schedule();
     if (!start.unsaved.stored) {
@@ -145,6 +221,37 @@ export class Autosave {
   /** The local store refused a write (private mode, no space). */
   get localFailed(): boolean {
     return this.#localFailed;
+  }
+
+  get lock(): LockState {
+    return this.#lock;
+  }
+
+  /** The lock, while this editor holds it (or believes it does). */
+  get held(): LockInfo | null {
+    const l = this.#lock;
+    return l.kind === "held" || l.kind === "unrenewed" ? l.lock : null;
+  }
+
+  /** The page is in use again (shown, back from the back-forward cache,
+   * online): a lock not renewed lately is renewed now. */
+  wake(): void {
+    if (this.#disposed || this.held === null) return;
+    const overdue = this.#deps.clock.now() - this.#heldAt >= RENEW_MS;
+    if (this.#resting || overdue || this.#lock.kind === "unrenewed") this.#renew();
+  }
+
+  /** Stops renewing: the page lets the lock go (the caller releases it on
+   * the server). Saving goes on while the page lasts. */
+  letGo(): void {
+    this.#clear("renew");
+    this.#resting = true;
+  }
+
+  /** Another holds the lock: a refusal seen elsewhere (publishing). */
+  lost(lock: LockInfo): void {
+    if (this.#disposed || this.#lock.kind === "lost") return;
+    this.#lose(lock);
   }
 
   /** Call when the document may have changed (once a frame is fine). */
@@ -181,6 +288,7 @@ export class Autosave {
    * Retry), or after a refusal the person has dealt with. */
   retry(): void {
     if (this.#disposed) return;
+    this.wake();
     const k = this.#state.kind;
     if (k !== "offline" && k !== "refused") return;
     this.#clear("retry");
@@ -198,6 +306,9 @@ export class Autosave {
     if (this.#disposed || this.#state.kind !== "conflict") return;
     this.#etag = etag;
     this.#saved = -1;
+    // Unsaved now, if it was not (a conflict found by a lapsed lock's
+    // check): kept until the server has it.
+    this.#writeLocal();
     this.#setState({ kind: "saving" });
     this.#send();
   }
@@ -241,12 +352,13 @@ export class Autosave {
     this.#clear("save");
     this.#clear("local");
     this.#clear("retry");
+    this.#clear("renew");
     this.#settle(false);
   }
 
   #stopped(): boolean {
     const k = this.#state.kind;
-    return k === "conflict" || k === "signedOut" || k === "refused";
+    return k === "conflict" || k === "signedOut" || k === "refused" || k === "locked";
   }
 
   #schedule(): void {
@@ -294,6 +406,17 @@ export class Autosave {
     if (reply.kind === "saved") this.#etag = reply.etag;
     if (this.#disposed) return;
     const now = this.#deps.clock.now();
+    // The lock was lost while this save was on its way: what it saved
+    // counts, and nothing more is sent.
+    if (this.#state.kind === "locked") {
+      if (reply.kind === "saved") {
+        this.#saved = revision;
+        if (this.#local !== null && this.#local <= revision) void this.discardLocal();
+      }
+      this.#writeLocal();
+      this.#settle(false);
+      return;
+    }
     switch (reply.kind) {
       case "saved": {
         this.#etag = reply.etag;
@@ -336,7 +459,95 @@ export class Autosave {
       case "refused":
         this.#stop({ kind: "refused", message: reply.message });
         return;
+      case "locked":
+        this.#lose(reply.lock);
+        return;
     }
+  }
+
+  #scheduleRenew(ms: number): void {
+    this.#clear("renew");
+    this.#renewTimer = this.#deps.clock.set(() => {
+      this.#renewTimer = null;
+      this.#renew();
+    }, ms);
+  }
+
+  /** Renews the lock, unless the page is idle and hidden. */
+  #renew(): void {
+    const lock = this.#deps.lock;
+    const held = this.held;
+    if (lock === undefined || held === null || this.#disposed || this.#renewing) return;
+    this.#clear("renew");
+    if (!lock.active() && !this.unsaved && this.#sending === null) {
+      this.#resting = true;
+      return;
+    }
+    this.#resting = false;
+    this.#renewing = true;
+    void lock.take().then((reply) => {
+      this.#renewing = false;
+      this.#renewed(held, reply);
+    });
+  }
+
+  #renewed(was: LockInfo, reply: LockReply): void {
+    if (this.#disposed || this.held === null) return;
+    const now = this.#deps.clock.now();
+    switch (reply.kind) {
+      case "held": {
+        this.#heldAt = now;
+        this.#lockAttempts = 0;
+        this.#setLock({ kind: "held", lock: reply.lock });
+        if (!this.#resting) this.#scheduleRenew(RENEW_MS);
+        // A renewal keeps `since`: a new one means the lock lapsed and was
+        // taken again, and the draft may have changed meanwhile.
+        if (reply.lock.since !== was.since) this.#checkDraft();
+        return;
+      }
+      case "locked":
+        this.#lose(reply.lock);
+        return;
+      case "offline": {
+        this.#lockAttempts += 1;
+        const wait = Math.min(SAVE_DELAY_MS * 2 ** (this.#lockAttempts - 1), RENEW_MS);
+        this.#setLock({ kind: "unrenewed", lock: was, retryAt: now + wait });
+        this.#scheduleRenew(wait);
+        return;
+      }
+      case "signedOut":
+        this.#stop({ kind: "signedOut" });
+        return;
+      case "refused":
+        // The saves say why (an archived chart refuses them too).
+        this.#setLock({ kind: "none" });
+        return;
+    }
+  }
+
+  /** After a lapse: a draft saved by another meanwhile is a conflict. */
+  #checkDraft(): void {
+    const base = this.#etag;
+    void this.#deps.lock?.draftEtag().then((etag) => {
+      if (this.#disposed || this.#stopped() || this.#sending !== null) return;
+      // Saved meanwhile: that save's answer is the check.
+      if (etag === null || this.#etag !== base || etag === base) return;
+      this.#stop({ kind: "conflict", etag });
+    });
+  }
+
+  #lose(lock: LockInfo): void {
+    // Taken while this editor held it live, or after it let it lapse.
+    const takenOver =
+      !this.#resting && this.#deps.clock.now() - this.#heldAt < LOCK_MS && this.held !== null;
+    this.#clear("renew");
+    this.#setLock({ kind: "lost", lock, takenOver });
+    this.#stop({ kind: "locked" });
+  }
+
+  #setLock(state: LockState): void {
+    this.#lock = state;
+    this.#deps.lock?.onLock(state);
   }
 
   #stop(state: SaveState): void {
@@ -367,13 +578,20 @@ export class Autosave {
       );
   }
 
-  #clear(which: "save" | "local" | "retry"): void {
+  #clear(which: "save" | "local" | "retry" | "renew"): void {
     const handle =
-      which === "save" ? this.#saveTimer : which === "local" ? this.#localTimer : this.#retryTimer;
+      which === "save"
+        ? this.#saveTimer
+        : which === "local"
+          ? this.#localTimer
+          : which === "retry"
+            ? this.#retryTimer
+            : this.#renewTimer;
     if (handle !== null) this.#deps.clock.clear(handle);
     if (which === "save") this.#saveTimer = null;
     else if (which === "local") this.#localTimer = null;
-    else this.#retryTimer = null;
+    else if (which === "retry") this.#retryTimer = null;
+    else this.#renewTimer = null;
   }
 
   #settle(saved: boolean): void {

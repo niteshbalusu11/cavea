@@ -3,10 +3,10 @@
 // names the chart's workspace itself, so a workspace chosen elsewhere
 // meanwhile never redirects a save (09 §10).
 import { ApiError, call, callWithHeaders } from "../api/client.ts";
-import type { Chart, ChartDocument, Finding, Version } from "../api/generated.ts";
+import type { Chart, ChartDocument, ChartLock, Finding, Version } from "../api/generated.ts";
 import { asApiError } from "../api/query.ts";
 import { describe } from "../console/errors.ts";
-import type { SaveReply } from "./autosave.ts";
+import type { LockInfo, LockReply, SaveReply } from "./autosave.ts";
 
 /** Where a server chart lives. */
 export interface ChartRef {
@@ -47,15 +47,9 @@ export async function currentEtag(ref: ChartRef, signal: AbortSignal): Promise<s
 /** Statuses a proxy answers for a server that is down or restarting. */
 const UNREACHABLE = new Set([502, 503, 504]);
 
-/** A failed save as what the autosave does next. */
-export function saveReplyOf(e: unknown): SaveReply {
-  const error = asApiError(e);
-  if (error.status === 401) return { kind: "signedOut" };
-  if (error.code === "version_conflict") {
-    const etag = error.details["draft_etag"];
-    return { kind: "conflict", etag: typeof etag === "string" ? etag : null };
-  }
-  if (
+/** No answer, or the server cannot take it now: tried again later. */
+function unreachable(error: ApiError): boolean {
+  return (
     error.code === "network" ||
     error.code === "timeout" ||
     error.code === "rate_limited" ||
@@ -63,13 +57,88 @@ export function saveReplyOf(e: unknown): SaveReply {
     error.code === "unavailable" ||
     error.code === "internal_error" ||
     (error.code === "unexpected" && UNREACHABLE.has(error.status))
-  ) {
+  );
+}
+
+/** The lock a `409 chart_locked` names (`details.lock`), if it is one. */
+export function lockOf(error: ApiError): LockInfo | null {
+  if (error.code !== "chart_locked") return null;
+  const l = error.details["lock"];
+  if (typeof l !== "object" || l === null) return null;
+  const { holder, email, since } = l as Record<string, unknown>;
+  if (typeof holder !== "string" || typeof since !== "string") return null;
+  return { holder, email: typeof email === "string" ? email : null, since };
+}
+
+const infoOf = (l: ChartLock): LockInfo => ({ holder: l.holder, email: l.email, since: l.since });
+
+/** A failed save as what the autosave does next. `409` is two things told
+ * apart by `code`: another holds the lock (`chart_locked`), or the draft
+ * changed since the etag sent (`version_conflict`). */
+export function saveReplyOf(e: unknown): SaveReply {
+  const error = asApiError(e);
+  if (error.status === 401) return { kind: "signedOut" };
+  if (error.code === "version_conflict") {
+    const etag = error.details["draft_etag"];
+    return { kind: "conflict", etag: typeof etag === "string" ? etag : null };
+  }
+  const lock = lockOf(error);
+  if (lock !== null) return { kind: "locked", lock };
+  if (unreachable(error)) {
     return {
       kind: "offline",
       retryAfterMs: error.retryAfter === null ? null : error.retryAfter * 1000,
     };
   }
   return { kind: "refused", message: describe(error) };
+}
+
+/** A failed lock request as what the designer does next. */
+export function lockReplyOf(e: unknown): LockReply {
+  const error = asApiError(e);
+  if (error.status === 401) return { kind: "signedOut" };
+  const lock = lockOf(error);
+  if (lock !== null) return { kind: "locked", lock };
+  if (unreachable(error)) return { kind: "offline" };
+  return { kind: "refused" };
+}
+
+/** Takes or renews the editing lock (07 §9), or takes it over. Never
+ * rejects; an archived chart is `refused`. */
+export async function takeLock(ref: ChartRef, takeOver = false): Promise<LockReply> {
+  try {
+    const lock = await call(
+      "lockChart",
+      { path: { chart: ref.key }, body: takeOver ? { take_over: true } : {} },
+      new AbortController().signal,
+      { workspace: ref.workspace },
+    );
+    return { kind: "held", lock: infoOf(lock) };
+  } catch (e) {
+    return lockReplyOf(e);
+  }
+}
+
+/** Releases the lock if it is the caller's (`204` either way), as the page
+ * is left: the request outlives it. Never rejects. */
+export function releaseLock(ref: ChartRef): void {
+  call("unlockChart", { path: { chart: ref.key } }, new AbortController().signal, {
+    workspace: ref.workspace,
+    keepalive: true,
+  }).catch(() => {});
+}
+
+/** Who holds the lock, for a role that only reads; `null` for nobody (or
+ * when it cannot be read). */
+export async function readLock(ref: ChartRef, signal: AbortSignal): Promise<LockInfo | null> {
+  try {
+    const got = await call("getChartLock", { path: { chart: ref.key } }, signal, {
+      workspace: ref.workspace,
+    });
+    return got.lock === null ? null : infoOf(got.lock);
+  } catch {
+    return null;
+  }
 }
 
 /** Saves `draft` (chart document JSON from the session) over the draft
@@ -97,6 +166,8 @@ export type Published =
   /** The compile found errors (`422 chart_invalid`). */
   | { kind: "invalid"; findings: Finding[] }
   | { kind: "conflict" }
+  /** Another holds the editing lock. */
+  | { kind: "locked"; lock: LockInfo }
   | { kind: "failed"; error: ApiError };
 
 /** Publishes the draft whose etag is `etag` (08 §6.2): what is compiled is
@@ -117,6 +188,8 @@ export async function publish(
   } catch (e) {
     const error = asApiError(e);
     if (error.code === "version_conflict") return { kind: "conflict" };
+    const lock = lockOf(error);
+    if (lock !== null) return { kind: "locked", lock };
     const findings = error.details["findings"];
     if (error.code === "chart_invalid" && Array.isArray(findings)) {
       return { kind: "invalid", findings: findings.filter(isFinding) };

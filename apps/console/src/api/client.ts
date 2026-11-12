@@ -82,6 +82,9 @@ export interface CallOptions {
   /** The workspace to act in (`ws_…`) instead of the selected one: for a
    * page pinned to one workspace's object, such as the designer's chart. */
   workspace?: string;
+  /** Outlives the page (`fetch`'s `keepalive`): a request sent as it is
+   * left, such as releasing the designer's lock. */
+  keepalive?: boolean;
 }
 
 /** Calls operation `op`; rejects with an `ApiError`, or with the abort when
@@ -133,6 +136,7 @@ export async function callWithHeaders<Op extends OperationId>(
       headers,
       ...(body === undefined ? {} : { body }),
       credentials: "same-origin",
+      ...(options.keepalive === true ? { keepalive: true } : {}),
       signal: AbortSignal.any([signal, timeout]),
     });
   } catch (e) {
