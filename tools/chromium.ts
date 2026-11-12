@@ -43,6 +43,9 @@ export async function pinned(root: string): Promise<{ chromium: string; fonts: s
   return { chromium: join(chromium, "bin/chromium"), fonts };
 }
 
+/** The longest a DevTools request may go unanswered. */
+const REQUEST_MS = 60_000;
+
 /** The faces of the golden fonts the browser sees. */
 const FACES = ["DejaVuSans.ttf", "DejaVuSans-Bold.ttf"];
 
@@ -72,6 +75,8 @@ export interface LaunchOptions {
 export class Browser {
   private id = 0;
   private readonly pending = new Map<number, (m: Message) => void>();
+  /** Why the DevTools connection ended, once it has: every request then fails. */
+  private gone: string | undefined;
   private readonly listeners = new Set<(m: Message) => void>();
   private readonly exceptions: string[] = [];
 
@@ -81,6 +86,17 @@ export class Browser {
     private readonly scratch: string,
     readonly version: string,
   ) {
+    // A browser that dies, or a connection that drops, fails what waits on
+    // it instead of leaving it waiting.
+    const end = (why: string): void => {
+      this.gone ??= why;
+      for (const [id, settle] of this.pending) {
+        this.pending.delete(id);
+        settle({ id, error: { message: `the DevTools connection ${why}` } });
+      }
+    };
+    ws.addEventListener("close", () => end("closed"));
+    ws.addEventListener("error", () => end("failed"));
     ws.addEventListener("message", (event) => {
       const message = JSON.parse(String(event.data)) as Message;
       if (message.id !== undefined) {
@@ -153,8 +169,18 @@ export class Browser {
       const deadline = Date.now() + 30_000;
       while (url === undefined) {
         const left = deadline - Date.now();
+        let timer: ReturnType<typeof setTimeout> | undefined;
         const read =
-          left <= 0 ? null : await Promise.race([reader.read(), Bun.sleep(left).then(() => null)]);
+          left <= 0
+            ? null
+            : await Promise.race([
+                reader.read(),
+                new Promise<null>((resolve) => {
+                  timer = setTimeout(() => resolve(null), left);
+                }),
+              ]);
+        // Cleared, so a pending timer never keeps the caller's process alive.
+        clearTimeout(timer);
         if (read === null || read.done) {
           break;
         }
@@ -200,16 +226,24 @@ export class Browser {
     params: Record<string, unknown> = {},
     sessionId?: string,
   ): Promise<Record<string, unknown>> {
+    if (this.gone !== undefined) {
+      return Promise.reject(new Error(`${method}: the DevTools connection ${this.gone}`));
+    }
     const id = ++this.id;
     this.ws.send(
       JSON.stringify({ id, method, params, ...(sessionId === undefined ? {} : { sessionId }) }),
     );
     return new Promise((resolve, reject) => {
-      this.pending.set(id, (m) =>
-        m.error === undefined
-          ? resolve(m.result ?? {})
-          : reject(new Error(`${method}: ${m.error.message}`)),
-      );
+      // No request of these checks takes a minute: one that does is a hung browser.
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`${method}: no answer from the browser in ${REQUEST_MS / 1000} s`));
+      }, REQUEST_MS);
+      this.pending.set(id, (m) => {
+        clearTimeout(timer);
+        if (m.error === undefined) resolve(m.result ?? {});
+        else reject(new Error(`${method}: ${m.error.message}`));
+      });
     });
   }
 
