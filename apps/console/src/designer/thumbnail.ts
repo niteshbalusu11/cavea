@@ -47,7 +47,10 @@ export async function renderThumbnail(
   session: Session,
   editor: Canvas | null,
   images: ImageSource | undefined,
-): Promise<Blob | null> {
+  /** Whether the session still shows what is pictured: checked before
+   * each draw, `"changed"` (nothing encoded) once it does not. */
+  same: () => boolean = () => true,
+): Promise<Blob | null | "changed"> {
   const element = document.createElement("canvas");
   // Kept after the frame that drew it, so it can be read at the end: this
   // canvas is thrown away, the editor's keeps the cheaper default.
@@ -78,10 +81,12 @@ export async function renderThumbnail(
     const box = canvas.sceneBounds() ?? session.fit();
     if (box === null) return null;
     await later(FRAME_MS);
+    if (!same()) return "changed";
     canvas.setView(fitView(base, grown(box, 0.1), PADDING));
     const start = performance.now();
     let quiet = start;
     for (;;) {
+      if (!same()) return "changed";
       const busy = canvas.draw() || arrived;
       arrived = false;
       const now = performance.now();
@@ -89,6 +94,7 @@ export async function renderThumbnail(
       if (now - quiet >= QUIET_MS || now - start >= LIMIT_MS) break;
       await later(FRAME_MS);
     }
+    if (!same()) return "changed";
     return await new Promise<Blob | null>((resolve) => element.toBlob(resolve, "image/webp", 0.9));
   } finally {
     canvas.dispose();

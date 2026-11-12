@@ -114,6 +114,13 @@ export function holderName(lock: LockInfo, me: string): string {
 /** The lock a replaced editor held, for the next one's start. */
 const held = (info: LockInfo | null): { lock?: LockInfo } => (info === null ? {} : { lock: info });
 
+/** The draft a publish compiled, as the editor's session had it. */
+interface Published_ {
+  draft: string;
+  revision: number;
+  floor: number | null;
+}
+
 /** When a lock was taken, as a time of day. */
 const since = (l: LockInfo) => formatTime(new Date(l.since));
 
@@ -159,6 +166,8 @@ export function serverChart(props: {
   const [lostOpen, setLostOpen] = createSignal(false);
   /** The take-over confirmation, naming who loses the lock. */
   const [takeOverOpen, setTakeOverOpen] = createSignal(false);
+  /** Taking over would lose changes the browser could not keep. */
+  const [unkept, setUnkept] = createSignal(false);
   const peers = canWrite ? lockPeers(props.setup.user, ref.workspace, ref.key) : null;
   const who = (l: LockInfo) => holderName(l, props.setup.user);
   let autosave: Autosave | null = null;
@@ -297,6 +306,12 @@ export function serverChart(props: {
     setLostOpen(true);
   };
 
+  /** Tells the other tabs whether this page holds the lock, as its save
+   * machine says (none: it does not). */
+  const announce = () => {
+    if (peers !== null) peers.holding = (autosave?.held ?? null) !== null;
+  };
+
   const load = async (d: Designer): Promise<void> => {
     const mine = ++generation;
     designer = d;
@@ -307,9 +322,16 @@ export function serverChart(props: {
     let opened;
     try {
       opened = await openChart(ref, signal, async (c) => {
-        if (canWrite && c.archived_at === null && !stale(mine)) taken = await takeLock(ref);
+        if (canWrite && c.archived_at === null && !stale(mine)) {
+          const reply = await takeLock(ref);
+          taken = reply;
+          // Said at once, so another tab of this person closing meanwhile
+          // leaves it be; unsaid below if this page does not edit.
+          if (reply.kind === "held" && peers !== null) peers.holding = true;
+        }
       });
     } catch (e) {
+      announce();
       return void fail(e);
     }
     if (stale(mine)) return;
@@ -326,6 +348,7 @@ export function serverChart(props: {
     if (stale(mine)) return;
     const session = open(opened.draft);
     if (typeof session === "string") {
+      announce();
       return void setPhase({
         kind: "failed",
         title: msg("serverChart.badDraft", { message: session }),
@@ -373,17 +396,35 @@ export function serverChart(props: {
 
   /** A published version's thumbnail, made in the background: a failure
    * is a quiet note, never the publish's. */
-  const thumbnail = async (version: Version) => {
+  const thumbnail = async (version: Version, published: Published_) => {
     const e = props.editor();
     if (e === null) return;
     const images = e.images;
+    const source = images === null ? undefined : (hash: string) => images.source(hash);
+    const render = async (): Promise<Blob | null> => {
+      // The editor's own session while it still shows what was published
+      // (its compiled pieces are reused); else a session of the published
+      // draft, opened for the picture and closed after.
+      const same = () =>
+        !e.session.disposed &&
+        e.session.status().revision === published.revision &&
+        e.session.floors().shown === published.floor;
+      if (same()) {
+        const blob = await renderThumbnail(e.session, e.canvas, source, same);
+        if (blob !== "changed") return blob;
+      }
+      const copy = designer?.open(published.draft);
+      if (copy === undefined) return null;
+      try {
+        if (published.floor !== null) copy.setFloor(published.floor);
+        const blob = await renderThumbnail(copy, null, source);
+        return blob === "changed" ? null : blob;
+      } finally {
+        copy.dispose();
+      }
+    };
     const done = await attachThumbnail<Version>({
-      render: () =>
-        renderThumbnail(
-          e.session,
-          e.canvas,
-          images === null ? undefined : (hash) => images.source(hash),
-        ),
+      render,
       upload: (blob) => uploadImage(ref, blob),
       attach: (hash) => attachTo(ref, version.number, hash),
       wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -395,9 +436,16 @@ export function serverChart(props: {
 
   /** The person takes the lock from whoever holds it, then edits the
    * draft as it is now; their own kept changes, if any, are offered. */
-  const takeOver = async () => {
+  const takeOver = async (withoutMine = false) => {
     setTakeOverOpen(false);
     setLostOpen(false);
+    setUnkept(false);
+    // Reopening replaces this page's session with the server's draft: its
+    // unsaved work must be in the store first, else the person downloads
+    // it or chooses to go on without it.
+    if (autosave !== null && !withoutMine && !(await autosave.keep().then(() => autosave?.kept))) {
+      return void setUnkept(true);
+    }
     const reply = await takeLock(ref, true);
     if (gone) return;
     if (reply.kind === "offline") return notify(msg("lock.unreachable"), "error");
@@ -572,7 +620,10 @@ export function serverChart(props: {
   };
   // Back from the back-forward cache: the lock is taken again.
   const pageshow = (e: PageTransitionEvent) => {
-    if (e.persisted) autosave?.wake();
+    if (!e.persisted) return;
+    // Said "gone" as it was hidden: holding again, for the other tabs.
+    if (peers !== null && (autosave?.held ?? null) !== null) peers.holding = true;
+    autosave?.wake();
   };
   const online = () => autosave?.retry();
   window.addEventListener("beforeunload", beforeUnload);
@@ -735,6 +786,21 @@ export function serverChart(props: {
         onClose={() => setTakeOverOpen(false)}
       />
       <Confirm
+        open={unkept()}
+        title={msg("lock.unkeptTitle")}
+        description={msg("lock.unkeptBody")}
+        confirm={msg("lock.unkeptConfirm")}
+        variant="danger"
+        onConfirm={() => void takeOver(true)}
+        onClose={() => setUnkept(false)}
+      >
+        <div class="mt-4">
+          <Button onClick={downloadMine} icon="download">
+            {msg("conflict.download")}
+          </Button>
+        </div>
+      </Confirm>
+      <Confirm
         open={stranded() !== null}
         blocking
         title={msg("stranded.title")}
@@ -801,11 +867,20 @@ export function serverChart(props: {
     },
     async publish() {
       if (autosave === null || !(await autosave.flush())) return { kind: "notSaved" };
+      // What is published: the draft as just saved, which the person may
+      // go on editing while the server compiles it.
+      const s = props.editor()?.session;
+      const published =
+        s === undefined || s.disposed
+          ? null
+          : { draft: s.export(), revision: s.status().revision, floor: s.floors().shown };
       const result = await publish(ref, autosave.etag, signal);
       if (result.kind === "published") {
         setChart((c) => (c === null ? c : { ...c, published_version: result.version }));
         // A new version, or one published again before it had a picture.
-        if (result.version.thumbnail === null) void thumbnail(result.version);
+        if (result.version.thumbnail === null && published !== null) {
+          void thumbnail(result.version, published);
+        }
       }
       if (result.kind === "locked") autosave.lost(result.lock);
       return result;

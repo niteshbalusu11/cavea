@@ -1416,6 +1416,10 @@ const designerLock = {
     "{who} will be switched to read-only at once. Changes they have not saved stay in their browser, offered to them when they edit again. The chart then opens here as it is on the server.",
   "lock.takeOverConfirm": "Take over",
   "lock.takeOverFailed": "The chart could not be taken over.",
+  "lock.unkeptTitle": "Your changes could not be kept in this browser",
+  "lock.unkeptBody":
+    "Taking over opens the chart as it is on the server, and this browser could not store your unsaved changes (a private window, or no space left). Download them first, or they are lost.",
+  "lock.unkeptConfirm": "Take over without them",
   "lock.lostTitle": "{who} took over this chart",
   "lock.lapsedTitle": "{who} is editing this chart now",
   "lock.lostBody":
