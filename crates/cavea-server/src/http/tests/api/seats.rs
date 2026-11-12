@@ -549,7 +549,8 @@ async fn public_flow() {
         assert_eq!(response.status(), 200, "{info}");
         let url = format!("/v1/public/charts/{}.ccf", t.hash);
         assert_eq!(info, json!({ "event": t.event, "chart": { "hash": t.hash, "url": url },
-            "hold_ttl_seconds": 600, "max_objects": 2, "require_session": false }));
+            "hold_ttl_seconds": 600, "max_objects": 2, "require_session": false,
+            "licence": { "status": "unlicensed", "domains": [] } }));
         assert_eq!(response.headers()[header::CACHE_CONTROL], "private, max-age=30");
         assert!(response.headers().get_all(header::VARY).iter().any(|v| v == "Authorization"));
         assert_eq!(response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");

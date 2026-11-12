@@ -22,7 +22,7 @@ export interface Asset {
 }
 
 export interface AuditEntry {
-  action: "console.setup" | "console.sign_in" | "console.sign_in_failed" | "console.sign_out" | "console.password_changed" | "member.invited" | "member.joined" | "member.role_changed" | "member.removed" | "invitation.revoked" | "workspace.created" | "workspace.renamed" | "api_key.created" | "api_key.revoked" | "api_key.origins_changed" | "chart.published" | "chart.archived" | "event.created" | "event.archived";
+  action: "console.setup" | "console.sign_in" | "console.sign_in_failed" | "console.sign_out" | "console.password_changed" | "member.invited" | "member.joined" | "member.role_changed" | "member.removed" | "invitation.revoked" | "workspace.created" | "workspace.renamed" | "api_key.created" | "api_key.revoked" | "api_key.origins_changed" | "chart.published" | "chart.archived" | "event.created" | "event.archived" | "licence.uploaded";
   /** `usr_…`, `key_…`, `admin`, or `anonymous` (a failed sign-in). */
   actor: string;
   at: string;
@@ -92,9 +92,36 @@ export interface ChartLockState {
   lock: ChartLock | null;
 }
 
+export interface ConsoleLicence {
+  /** While `grace`: the last day of grace (UTC). */
+  grace_until: string | null;
+  licence: {
+    customer: string;
+    domains: string[];
+    /** Valid through this day (UTC); then `grace_days` days of grace. */
+    expires_at: string;
+    features: string[];
+    grace_days: number;
+    id: string;
+    issued_at: string;
+    key_id: string;
+    max_workspaces: number | null;
+    plan: string;
+  } | null;
+  /** Whether this user owns every workspace on the server: may upload a licence and sees the fields below, which are otherwise `null`. */
+  manage: boolean;
+  /** `expired`: the server refuses console writes to charts and events (`403` `licence_expired`); seat operations, keys, members and settings go on. */
+  read_only: boolean;
+  /** While `invalid`: why (`unreadable`, `too_large`, `not_utf8`, `malformed`, `version`, `unknown_key`, `signature`, `payload`, `dates`). */
+  reason: string | null;
+  source: "setting" | "upload" | null;
+  state: "valid" | "grace" | "expired" | "missing" | "invalid";
+}
+
 export interface ConsoleMe {
   /** Send it in `Cavea-Csrf-Token` with every non-safe request. */
   csrf_token: string;
+  licence: ConsoleLicence;
   session: {
     /** However it is used. */
     absolute_expires_at: string;
@@ -351,6 +378,11 @@ export interface KeyList {
   next: string | null;
 }
 
+export interface LicenceUpload {
+  /** The licence file's text, exactly as issued (at most 16 KiB). */
+  licence: string;
+}
+
 export interface LockChart {
   /** Take the lock from another who holds a live one. Default false. */
   take_over?: boolean;
@@ -411,8 +443,16 @@ export interface PublicEvent {
   };
   event: string;
   hold_ttl_seconds: number;
+  licence: PublicLicence;
   max_objects: number;
   require_session: boolean;
+}
+
+/** What the renderer needs of the server's licence to decide its mark (12 §7.4): `licensed` (valid or in grace), `expired`, or `unlicensed` (missing or invalid). */
+export interface PublicLicence {
+  /** While `licensed`: the host names the renderer runs on unmarked, lowercase; `*.example.com` is every name under `example.com`, not the name itself. Empty otherwise. */
+  domains: string[];
+  status: "licensed" | "expired" | "unlicensed";
 }
 
 export interface PublicRelease {
@@ -545,6 +585,10 @@ export interface Operations {
   revokeInvitation: {
     input: { path: { invitation: string } };
     reply: undefined;
+  };
+  consoleLicence: {
+    input: { body: LicenceUpload };
+    reply: ConsoleLicence;
   };
   consoleMe: {
     input: Record<string, never>;
@@ -802,6 +846,7 @@ export const OPERATIONS = {
   listInvitations: { method: "GET", path: "/console/api/invitations", permission: "settings", roles: ["owner", "admin"] },
   acceptInvitation: { method: "POST", path: "/console/api/invitations/accept", permission: null, roles: [] },
   revokeInvitation: { method: "DELETE", path: "/console/api/invitations/{invitation}", permission: "settings", roles: ["owner", "admin"] },
+  consoleLicence: { method: "PUT", path: "/console/api/licence", permission: null, roles: [] },
   consoleMe: { method: "GET", path: "/console/api/me", permission: null, roles: [] },
   listMembers: { method: "GET", path: "/console/api/members", permission: "settings", roles: ["owner", "admin"] },
   inviteMember: { method: "POST", path: "/console/api/members", permission: "settings", roles: ["owner", "admin"] },

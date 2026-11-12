@@ -141,7 +141,7 @@ A signed JSON document:
 }
 ```
 
-- Signed with Ed25519. The public keys are embedded in the server and the renderer; more than one key is accepted so that keys can be rotated.
+- Signed with Ed25519. The public keys are embedded in the server and the renderer; more than one key is accepted so that keys can be rotated. As built: §7.6.
 - Verified offline. No network call is ever made to check a licence.
 - Issued by a private command-line tool. The signing key is kept offline.
 
@@ -155,17 +155,70 @@ A signed JSON document:
 | Missing or invalid | Seat operations continue | "Development" banner | "Development licence" mark |
 | Unlicensed domain | — | — | Watermark |
 
-The rule behind the table: **a licence problem never stops a sale** (`DECISIONS.md` D-20).
+The rule behind the table: **a licence problem never stops a sale** (`DECISIONS.md` D-20). The server's column as built, and exactly what "read-only" refuses: §7.6.
 
 ### 7.4 Renderer licence check
 
-- For customers using the server, the public event endpoint includes the licence state; the renderer shows or hides the mark accordingly.
+- For customers using the server, the public event endpoint includes the licence state; the renderer shows or hides the mark accordingly. As built on the server: `licence: {status, domains}` (§7.6); the renderer's part is LIC-003.
 - For renderer-only customers, the licence string is passed in the options and verified in the browser with the platform's Ed25519 support. Where that is unavailable, the licence is treated as valid.
 - The check runs after the first interactive frame and never delays it.
 
 ### 7.5 Piracy
 
 A determined customer can remove a watermark. We accept that. The paid value is updates, support, the embeddable tools and the right to use the software commercially. No anti-tamper measures that could break a checkout will be added.
+
+### 7.6 As built (LIC-001, LIC-002, LIC-005, 2026-11-11)
+
+**The file** (`crates/cavea-licence`, D-80). One JSON object, at most 16 KiB, UTF-8:
+
+```json
+{"cavea_licence":1,"key_id":"<16 hex digits>","payload":"<base64>","signature":"<base64>"}
+```
+
+- `payload` is the licence document of §7.2, its exact bytes as issued, in standard base64 with padding. `signature` is the Ed25519 signature (64 bytes, base64) of the ASCII bytes `cavea-licence-v1`, one zero byte, and the payload's bytes. `key_id` is the first 8 bytes of the SHA-256 of the signing key's 32-byte public key, in lowercase hex: derived from the key, so it cannot name another.
+- What is signed is the payload's bytes; nothing is ever re-serialised. A verifier checks the envelope, finds the trusted key the id names, checks the signature, and only then reads the payload as JSON.
+- Strict about signatures, lenient about the rest. Unknown fields of the envelope and of the payload are ignored, so a licence issued with a field a later version adds still verifies on an older server; an unknown `plan` or feature name is carried as text. Required in the payload: `licence_id`, `customer`, `plan`, `issued_at`, `expires_at`; `features` and `domains` default to empty, `max_workspaces` to `null` (unlimited), `grace_days` to 0. `domains` are lowercased.
+- **Invalid**, with a reason for the log and the owner's screen (`cavea_licence::Invalid`): `too_large` (over 16 KiB), `not_utf8`, `malformed` (not the envelope: not JSON, nested deeper than 16, a field missing, duplicated or of the wrong type, base64 that does not decode), `version` (an envelope other than 1), `unknown_key`, `signature`, `payload` (signed, but not a licence document), `dates` (a date that does not exist, or expiry before issue); the server adds `unreadable` (the file named cannot be read). Nesting is checked by a scan before parsing; the size cap bounds the rest. None panics. Proof: `cavea-licence`'s tests (every byte of an issued file changed several ways is invalid; the issued bytes verify; hostile files; signed nonsense; newer fields).
+- **Time.** Dates are `YYYY-MM-DD` in UTC and must exist. A licence is valid from 00:00 UTC on `issued_at` through 23:59:59.999 UTC on `expires_at`; in grace for the `grace_days` whole days after; expired from 00:00 UTC on the day after the last day of grace. A clock before `issued_at` (a server whose clock is wrong, or a licence issued ahead of its term) counts as valid and is logged (`before_issue`): only expiry, never a clock alone, takes a licence away. The state is computed from the server's clock on every read, never cached, so a server running across a boundary changes state without a restart (`the_state_moves_with_the_clock`, on the engine's injected clock).
+
+**Trusted keys** (D-80). The public keys are compiled in: `TRUSTED` in `crates/cavea-licence/src/keys.rs`, a list of base64 keys. **It is empty**: no private key exists yet, so every build treats every licence as `invalid` (`unknown_key`), which is the "missing or invalid" state, and sells normally. No setting, file or environment variable adds a key: whoever runs the server controls those, and a key they could add would let them sign their own licences. Tests trust their own key, made at run time, through `Verifier::new`, which only code can call; a by-hand test build may add one key at compile time with the `trust-test-key` feature (below). Neither is in any release.
+
+**What the owner does before the first licence** (offline, on a machine that is not this one):
+
+1. Check out the repository on an offline machine with the flake (`nix develop`), and make a directory on encrypted storage that is backed up.
+2. `cargo xtask licence keygen --out <that directory>/2027a`. It writes `signing-key` (mode 0600, refused if it exists) and `public-key`, and prints the key id and a base64 line.
+3. Open a pull request that adds that one line to `TRUSTED` with a comment of its key id and the date, e.g. `"<base64>", // <key id>, added 2027-01-05`. Nothing else changes; every release after it accepts licences signed by the key.
+4. Issue: `cargo xtask licence issue --key <dir>/2027a/signing-key --id lic_2027_0001 --customer "<name>" --plan growth --expires 2028-01-10 --domain tickets.example.com --domain '*.example.com' --feature embed --dry-run`, read what it prints, then run it again with `--out lic_2027_0001.json` in place of `--dry-run`. `--issued` defaults to today, `--grace-days` to 30, `--max-workspaces` to unlimited; names are checked (lowercase), domains are checked, dates must exist, expiry must be after issue and within three years. The private key is read from the file only, never from an argument, and refused if others may read it; the tool writes no key material anywhere else and never overwrites a file.
+5. Check: `cargo xtask licence verify lic_2027_0001.json --public-key <dir>/2027a/public-key` (and, once a build trusts the key, without `--public-key`). `inspect` shows what any licence file says without checking it.
+6. Send the customer the `.json` file. They set `CAVEA_LICENCE` to its path or its contents, or upload it in the console.
+
+**Rotation.** Generate a second key the same way, add its line beside the first, ship a release, and sign new licences with it. A licence verifies on any server whose build has its key, so retire an old key (remove its line) only once every licence it signed has expired or been replaced, and only in a release made after that. A key that leaks is removed at once, and its customers are sent new licences with the release.
+
+**The server** (`crate::licence`, D-81).
+
+- **Source.** `CAVEA_LICENCE`: the file's path, or the file's contents when the value starts with `{`; and a licence uploaded through the console, stored as uploaded in the one-row table `licence` (migration 8), so every node reads the same one. When both exist the better counts: valid, then grace, then expired, then invalid, then missing; then the later `expires_at`; then the upload. An upload can therefore never make things worse than the setting, and a stale file cannot hide a renewal.
+- **Reading.** At start (after migrating), and every 30 s on each node, the file named and the stored upload are read again; the node that takes an upload uses it at once. Every node reaches the same licence within 30 s of an upload or of a file replaced on disk, and the public event's `max-age=30` adds at most 30 s in a browser. A database that cannot be read keeps the upload last read. The state itself is computed per request from memory: a read lock and a clone of a few small fields.
+- **Logs.** One record at start and one whenever the state or the licence's id changes (the clock crossing a boundary included, within 30 s): `licence` with `state`, `licence` (the id), `source` and, when invalid, `reason`; `info` while valid or in grace, `warn` otherwise with "seat operations are unaffected". Never the file, the payload or the signature. An upload logs `licence uploaded` with the user and the id, and writes the audit row `licence.uploaded` (target the licence's id, detail its expiry) in its transaction.
+
+**Behaviour by state, as built.**
+
+| State | Server | Refused |
+|---|---|---|
+| Valid, grace | Normal | Nothing |
+| Expired | Seat operations, the public routes and every secret-key call as always | With a **console session only**, the routes whose permission is `charts.write`, `charts.archive` or `events.write`: `POST /v1/charts`, `PUT /v1/charts/{chart}/draft`, `POST /v1/charts/{chart}/validate`, `POST /v1/charts/{chart}/publish`, `PUT /v1/charts/{chart}/versions/{number}/thumbnail`, `POST` and `DELETE /v1/charts/{chart}/lock`, `DELETE /v1/charts/{chart}`, `POST /v1/assets`, `POST /v1/events`, `PATCH /v1/events/{event}`, `DELETE /v1/events/{event}`: `403` with `reason: "licence_expired"`, after the role check |
+| Missing or invalid | Normal | Nothing |
+
+Never refused in any state: every seat operation (holds, releases, bookings, status changes, hold tokens) by any credential, the console's event manager included; the public routes, the snapshot, polling, the stream and the WebSocket; every call with a secret key or the admin key (a backend creating tomorrow's event is selling); reads; API keys (a leaked key must be revocable); members, invitations, the workspace's name, the audit log; setup, sign-in, sign-out, a password change; and the licence upload. Structure: the refusal is one check in the console-member extractor (`http::staff`), reached only when the route's permission is one of the three (`Permission::closed_while_expired`); no seat route's permission is, so no seat route reads the licence, and no seat route can fail on it. `Licences::status` and `public` cannot fail.
+
+**What the public event endpoint discloses** (`GET /v1/public/events/{event}`, `PublicLicence`): `"licence": {"status": "licensed" | "expired" | "unlicensed", "domains": [..]}`. `licensed` is valid or in grace (grace is not disclosed); `unlicensed` is missing or invalid; `domains` are the licence's domain patterns while licensed, else empty. Nothing else: not the customer, plan, id, features, dates or key. A verdict from `Origin` was rejected: the server sees no `Origin` on a same-origin `GET`, and the renderer knows its own host for certain. Older renderers ignore the field (they read only the fields they know); the snapshot and the stream are unchanged.
+
+**What the console reads** (`ConsoleMe.licence`, `ConsoleLicence`): for every signed-in user `state`, `read_only` (expired), `grace_until` (the last day of grace, while in grace) and `manage`; for a user who owns every workspace on the server (`manage: true`) also `source`, `reason` (while invalid) and `licence` (id, customer, plan, features, domains, max workspaces, dates, grace days, key id); `null` for others. `PUT /console/api/licence` `{licence: "<the file's text>"}` takes a console session of such a user (`403` `instance_owner` otherwise, so that on a server shared by several organisations no workspace's owner can change what all run under); a file that does not verify is `400` `invalid_field` (`field: "licence"`, `problem`: the reason) and nothing is stored; a verified one, even expired, is stored and answered as `ConsoleLicence`. A server shared by organisations whose owners are not the operator keeps its licence in `CAVEA_LICENCE`.
+
+**`max_workspaces` and `features`** are reported to managers and enforce nothing yet: the features they name are not built. Later: `max_workspaces` at workspace creation (`POST /v1/workspaces`, a refusal the admin key sees, never a seat path), `embed` when embed tokens exist (SRV-038), `white_label` when the embeddable designer and manager can be branded, `webhooks` when they exist (SRV-032), each refusing the feature's own configuration and never a sale.
+
+**Proof** (LIC-005, `http/tests/api/licence.rs`): `seat_operations_ignore_the_licence` runs 25 seat operations (public hold token, its read, public hold and release; secret-key hold token, read, extend, hold, release, book by token, book, release booked, change status, delete a token; a console member's hold token, hold, book, change status, release; the objects list; the public event; the snapshot, a poll, the stream and a WebSocket's first snapshot) on a server of its own in each of ten states: valid, grace, expired years ago, missing, malformed, signed by another key, issued in the future, for another domain, a valid file replaced by garbage while the server runs, garbage stored as the upload. Every answer, normalised for tokens, times and the chart's hash, equals the valid run's. `expired_console_is_read_only_but_for_seats` checks the refusals above and what is not refused, with the upload restoring writes at once; `what_each_one_is_told` the public disclosure in each state, `me` for a manager and not, the upload's refusals, its audit row, and a second node reading it; `the_state_moves_with_the_clock` the boundaries on an injected clock. The authorisation matrix has the upload's row.
+
+**Trying it by hand.** A build that trusts a test key: `CAVEA_TEST_LICENCE_KEY=<base64 public key> cargo build -p cavea-server --features trust-test-key` (the key is compiled in; the build fails without the variable). A normal build given the same variable at run time trusts nothing.
 
 ## 8. Legal documents needed
 

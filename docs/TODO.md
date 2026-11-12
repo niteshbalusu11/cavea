@@ -338,11 +338,11 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 ### Licensing
 
-- [ ] **LIC-001** Licence file format and private signing tool (12 §7.2)
-- [ ] **LIC-002** Server verification and behaviour by state; seat operations never blocked (12 §7.3)
+- [x] **LIC-001** Licence file format and private signing tool (12 §7.2). `cavea-licence`, `cargo xtask licence` (12 §7.6, D-80); no key is trusted until the owner adds theirs
+- [x] **LIC-002** Server verification and behaviour by state; seat operations never blocked (12 §7.3). `CAVEA_LICENCE` or an upload, the state in `me` and the public event, console chart and event writes refused while expired (12 §7.6, D-81)
 - [ ] **LIC-003** Renderer watermark logic, checked after the first interactive frame (12 §7.4)
 - [ ] **LIC-004** Console licence screen and banners (09 §7)
-- [ ] **LIC-005** Test: expired and missing licences leave hold and book working (DECISIONS D-20)
+- [x] **LIC-005** Test: expired and missing licences leave hold and book working (DECISIONS D-20). `seat_operations_ignore_the_licence`: every seat operation in ten licence states
 
 ### Security
 
