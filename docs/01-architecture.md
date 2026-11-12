@@ -87,7 +87,7 @@ cavea/
 ├─ apps/
 │  ├─ console/                # SolidJS SPA: console + designer + event manager
 │  ├─ demo/                   # public demo and benchmark page
-│  └─ docs/                   # documentation site
+│  └─ docs/                   # public documentation site: Markdown to static files (D-83)
 ├─ mobile/
 │  ├─ ios/  android/          # Swift package, Android library
 │  └─ react-native/  flutter/

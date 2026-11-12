@@ -135,6 +135,8 @@ Switching cost is the main obstacle, so reduce it:
 | Guides | Hold, pay, book; bring your own backend; best-available; channels; migrating from seats.io |
 | Reference | Error codes, limits, changelog, security |
 
+The site's sources are `apps/docs/` (D-83): Markdown pages, a build to static files, the API reference generated from the OpenAPI document, and a check that runs the quick start end to end. As built: the quick start, concepts, the server API reference, error codes, limits and the changelog; the other sections are in its navigation file, to come.
+
 ## 8. Support policy
 
 Realistic for one person:

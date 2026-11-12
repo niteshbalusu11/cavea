@@ -4,6 +4,7 @@ A seat-map toolkit for ticketing platforms: a buyer-facing seat picker for web a
 
 **Status:** early development. Nothing here is usable yet. "Cavea" is a placeholder name.
 
+- Customer documentation (the public docs site's sources): [`apps/docs/content/`](apps/docs/content/index.md); build it with `bun apps/docs/src/build.ts`
 - Specs: [`docs/README.md`](docs/README.md)
 - Build order: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - Task list: [`docs/TODO.md`](docs/TODO.md)

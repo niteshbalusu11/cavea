@@ -359,16 +359,16 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 ### Documentation
 
-- [ ] **DOC-001** Docs site scaffold and deployment (14 §7)
-- [ ] **DOC-002** Quick start: Docker to a rendered chart in ten minutes (14 §7)
-- [ ] **DOC-003** Concepts pages (14 §7)
+- [x] **DOC-001** Docs site scaffold and deployment (14 §7). `apps/docs`: Markdown in `content/`, `bun apps/docs/src/build.ts` to static files in `dist/` with search, navigation for the sections still to come, a link and anchor check, in CI as a build check (D-83). Deployment is copying `dist/` to a static host: the host and domain are the owner's choice (D-83, "Hosting"), not done here
+- [x] **DOC-002** Quick start: Docker to a rendered chart in ten minutes (14 §7). Docker to a seat held in a browser: one compose file, the setup link, a chart drawn and published in the console (or the API), an event, a publishable key, a script-tag page; run end to end by `bun apps/docs/quickstart/check.ts`. Until the image and the package are published, "Before the first release" builds both from the repository (OPS-001)
+- [x] **DOC-003** Concepts pages (14 §7). Charts and versions, events, objects and statuses, holds and hold tokens, bookings, session tokens, keys, workspaces and roles, the realtime stream; channels, best-available, areas and webhooks as "not yet"
 - [ ] **DOC-004** Renderer reference: options, callbacks, methods, theming, adapters (05)
-- [ ] **DOC-005** Server API reference generated from OpenAPI (08 §6)
+- [x] **DOC-005** Server API reference generated from OpenAPI (08 §6). Built from `openapi.json` at site build time, never committed: every operation with its credential, permission and roles, parameters, body, replies and error statuses, grouped by what a reader looks for, and every schema; an operation no group claims fails the build
 - [ ] **DOC-006** Deployment guide: sizing, PostgreSQL, TLS and WebSocket, backups, upgrades, monitoring (08 §14)
 - [ ] **DOC-007** Guides: hold, pay, book; bring your own backend; React (14 §7)
 - [ ] **DOC-008** Designer user guide for venue staff (07)
 - [ ] **DOC-009** Examples repository: plain page, React, Next.js, Node backend (14 §5)
-- [ ] **DOC-010** Error code, limits and changelog reference (08 §6.4, 02 §14)
+- [x] **DOC-010** Error code, limits and changelog reference (08 §6.4, 02 §14). Every `code` and `reason` with its meaning and remedy, checked both ways against the OpenAPI document and a scan of the server's source; the limits a customer can reach; the changelog from `CHANGELOG.md`
 - [ ] **DOC-011** Bot protection guide (12 §3 T1): `require_session` with session tokens from the customer's backend, `max_tokens_per_sub` and `max_objects`, and the pattern for a challenge (a CAPTCHA or a queue) at the customer's gateway before it signs a session token
 
 ### Build and release
