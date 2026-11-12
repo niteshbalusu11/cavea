@@ -1,9 +1,21 @@
 // Dialogs, toasts and menu styles. Kobalte traps focus in a dialog and
-// returns it to where it was on close; Escape closes.
+// returns it to where it was on close (or, when that is gone, `focusReturn`
+// finds where); Escape closes.
 import { AlertDialog } from "@kobalte/core/alert-dialog";
-import { Dialog as KDialog } from "@kobalte/core/dialog";
+// The dialog's parts by name: Kobalte builds `Dialog` and `AlertDialog` by
+// assigning their parts onto one shared root function, so with both
+// imported `Dialog.Content` would be the alert dialog's (role
+// `alertdialog`) for every dialog.
+import {
+  Content as DialogContent,
+  Overlay as DialogOverlay,
+  Portal as DialogPortal,
+  Root as DialogRoot,
+  Title as DialogTitle,
+} from "@kobalte/core/dialog";
 import { Toast, toaster } from "@kobalte/core/toast";
-import { Show, type JSX, type ParentProps } from "solid-js";
+import { createComputed, on, Show, type JSX, type ParentProps } from "solid-js";
+import { documentPage, focusOn, opener, replacement, type Opener } from "./focus.ts";
 import { msg } from "../i18n/messages.ts";
 import { Button, type Variant } from "./controls.tsx";
 import { Icon } from "./Icon.tsx";
@@ -15,10 +27,52 @@ export const menuItem =
 export const menuSeparator = "my-1 h-px border-0 bg-line";
 export const menuKeys = "ml-auto pl-4 text-sm text-faint";
 
-/** A menu item's action that opens a dialog: run once the menu has closed
- * and put focus back on its trigger, so the dialog takes focus and returns
- * it there. */
-export const afterMenu = (run: () => void) => () => void setTimeout(run, 0);
+/** The trigger of the menu whose item opened the next dialog: that dialog's
+ * opener, taken by `focusReturn` (while the menu closes, the page around
+ * it is still inert, so the trigger cannot simply be focused). */
+let menuOpener: HTMLElement | null = null;
+
+/** A menu item's action that opens a dialog: run once the menu has closed;
+ * the dialog returns focus to the menu's trigger. */
+export const afterMenu = (run: () => void) => () => {
+  const item = document.activeElement;
+  const menu = item instanceof HTMLElement ? item.closest("[role=menu]") : null;
+  const by = menu?.getAttribute("aria-labelledby");
+  const trigger = by === null || by === undefined ? null : document.getElementById(by);
+  setTimeout(() => {
+    menuOpener = trigger;
+    run();
+    menuOpener = null;
+  }, 0);
+};
+
+/** A dialog's focus on open and close: back to the element that opened it,
+ * or, when that is gone (its row drawn again or deleted), to what took its
+ * place or the page's heading, never to the page's body. The opener is
+ * read when `open` turns true, before the dialog mounts and takes focus. */
+function focusReturn(open: () => boolean, initial?: () => HTMLElement | undefined) {
+  let from: Opener<HTMLElement> | null = null;
+  createComputed(
+    on(open, (now) => {
+      if (now) from = opener(menuOpener);
+    }),
+  );
+  return {
+    onOpenAutoFocus: (e: Event) => {
+      const el = initial?.();
+      if (el === undefined) return;
+      e.preventDefault();
+      el.focus();
+    },
+    onCloseAutoFocus: (e: Event) => {
+      const back = from;
+      from = null;
+      e.preventDefault();
+      const target = replacement(back, documentPage) ?? back?.el ?? null;
+      if (target !== null) focusOn(target);
+    },
+  };
+}
 
 /**
  * A modal dialog that asks before something: a title, what it will do,
@@ -48,7 +102,10 @@ export function Confirm(
       <AlertDialog.Portal>
         <AlertDialog.Overlay class="fixed inset-0 z-40 bg-scrim" />
         <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <AlertDialog.Content class="w-full max-w-md rounded-lg bg-raised p-5 shadow-menu outline-none">
+          <AlertDialog.Content
+            class="w-full max-w-md rounded-lg bg-raised p-5 shadow-menu outline-none"
+            {...focusReturn(() => props.open)}
+          >
             <AlertDialog.Title class="text-lg font-semibold text-fg">
               {props.title}
             </AlertDialog.Title>
@@ -102,9 +159,9 @@ export function Dialog(
   }>,
 ) {
   return (
-    <KDialog open={props.open} onOpenChange={(open) => !open && props.onClose()}>
-      <KDialog.Portal>
-        <KDialog.Overlay class="fixed inset-0 z-40 bg-scrim" />
+    <DialogRoot open={props.open} onOpenChange={(open) => !open && props.onClose()}>
+      <DialogPortal>
+        <DialogOverlay class="fixed inset-0 z-40 bg-scrim" />
         <div
           class="fixed inset-0 z-50 flex justify-center p-4"
           classList={{
@@ -112,16 +169,14 @@ export function Dialog(
             "items-center": props.top !== true,
           }}
         >
-          <KDialog.Content
+          <DialogContent
             class={`flex max-h-full w-full flex-col rounded-lg bg-raised shadow-menu outline-none ${props.class ?? "max-w-md"}`}
-            onOpenAutoFocus={(e) => {
-              const el = props.initial?.();
-              if (el === undefined) return;
-              e.preventDefault();
-              el.focus();
-            }}
+            {...focusReturn(
+              () => props.open,
+              () => props.initial?.(),
+            )}
           >
-            <KDialog.Title
+            <DialogTitle
               class={
                 props.heading === true
                   ? "shrink-0 px-5 pt-4 pb-1 text-lg font-semibold text-fg"
@@ -129,12 +184,12 @@ export function Dialog(
               }
             >
               {props.title}
-            </KDialog.Title>
+            </DialogTitle>
             {props.children}
-          </KDialog.Content>
+          </DialogContent>
         </div>
-      </KDialog.Portal>
-    </KDialog>
+      </DialogPortal>
+    </DialogRoot>
   );
 }
 

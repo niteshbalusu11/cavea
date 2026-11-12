@@ -1,11 +1,10 @@
 // The events list (09 §4.1, CON-007): a table of the workspace's events,
-// paged as the API pages it (oldest first, archived included, 08 §6.2),
-// with search and filters over the pages loaded (the API has no filter or
-// search yet, so the screen says how far they reach), each event's seat
-// counts, the create form, and archive.
+// paged as the API pages it (08 §6.2), searched, filtered and ordered by the
+// server (`eventFilters.ts`, kept in the URL), each row with the seat counts
+// the list carries, the create form, and archive.
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
-import { A } from "@solidjs/router";
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { A, useSearchParams } from "@solidjs/router";
+import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { checkChartList, checkEvent, checkEventList } from "../api/check.ts";
 import { call } from "../api/client.ts";
 import type { Chart, Counts, Event } from "../api/generated.ts";
@@ -14,14 +13,27 @@ import { allows } from "../api/permissions.ts";
 import { componentSignal, createQuery } from "../api/query.ts";
 import { formatNumber, msg } from "../i18n/messages.ts";
 import { workspace } from "../session.ts";
+import { Button } from "../ui/controls.tsx";
 import { fieldInputClass } from "../ui/form.tsx";
 import { Icon } from "../ui/Icon.tsx";
 import { afterMenu, Confirm, menuContent, menuItem, notify } from "../ui/overlays.tsx";
 import { report } from "./errors.ts";
+import {
+  clip,
+  DEFAULTS,
+  eventsQuery,
+  filtered,
+  fromParams,
+  MAX_Q,
+  toParams,
+  type Filters,
+  type Order,
+  type Shown,
+} from "./eventFilters.ts";
 import { EventForm } from "./EventForm.tsx";
-import { Action, Empty, formatDateTime, LoadMore, Paged, table, td, th } from "./kit.tsx";
+import { Action, Empty, formatDateTime, LoadMore, Paged, table, tableBox, td, th } from "./kit.tsx";
 
-/** Events per page: each row asks for its counts. */
+/** Events per page. */
 const PAGE = 25;
 /** At most this many pages of charts are read for names and the form. */
 const CHART_PAGES = 20;
@@ -45,18 +57,41 @@ export const roleName = () => msg(`role.${workspace()?.role ?? "viewer"}`);
 const cannotCreate = () =>
   allows(workspace(), "createEvent") ? null : msg("events.roleCannot", { role: roleName() });
 
+/** How long typing pauses before the list is asked again. */
+const TYPING_MS = 300;
+
 export function Events() {
   const signal = componentSignal();
+  const [params, setParams] = useSearchParams();
+  const filters = createMemo(() => fromParams(params), undefined, {
+    equals: (a, b) => JSON.stringify(a) === JSON.stringify(b),
+  });
+  const set = (patch: Partial<Filters>) =>
+    setParams(toParams({ ...filters(), ...patch }), { replace: true });
+  // The search box shows what is typed at once; the list follows a pause.
+  const [typed, setTyped] = createSignal(filters().q);
+  let typing: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(typing));
+  const onType = (value: string) => {
+    setTyped(value);
+    clearTimeout(typing);
+    typing = setTimeout(() => set({ q: clip(value) }), TYPING_MS);
+  };
+  const clear = () => {
+    clearTimeout(typing);
+    setTyped("");
+    setParams(toParams(DEFAULTS), { replace: true });
+  };
+
+  // A new search, filter or order is a new list: the request for the one
+  // before is cancelled (`createQuery`).
   const events = createPages(
-    () => workspace()?.id ?? null,
-    async (_ws, after, s) =>
-      checkEventList(
-        await call(
-          "listEvents",
-          { query: after === undefined ? { limit: PAGE } : { limit: PAGE, after } },
-          s,
-        ),
-      ),
+    () => {
+      const ws = workspace()?.id;
+      return ws === undefined ? null : JSON.stringify([ws, filters()]);
+    },
+    async (_key, after, s) =>
+      checkEventList(await call("listEvents", { query: eventsQuery(filters(), PAGE, after) }, s)),
   );
   const charts = createQuery(
     () => workspace()?.id ?? null,
@@ -68,41 +103,20 @@ export function Events() {
   };
   const chartName = (key: string) => chartList().find((c) => c.key === key)?.name ?? key;
 
-  const [search, setSearch] = createSignal("");
-  const [chart, setChart] = createSignal("");
-  const [archived, setArchived] = createSignal(false);
   const [creating, setCreating] = createSignal(false);
   const [archiving, setArchiving] = createSignal<Event | null>(null);
 
-  const loaded = (): Event[] => {
-    const s = events.state();
-    return s.status === "ready" ? s.data.data : [];
-  };
   const more = () => {
     const s = events.state();
     return s.status === "ready" && s.data.next !== null;
   };
-  const shown = createMemo(() => {
-    const q = search().trim().toLocaleLowerCase();
-    return loaded().filter(
-      (e) =>
-        (archived() || e.archived_at === null) &&
-        (chart() === "" || e.chart === chart()) &&
-        (q === "" ||
-          e.key.toLocaleLowerCase().includes(q) ||
-          (e.name ?? "").toLocaleLowerCase().includes(q)),
-    );
-  });
-  const filtered = () => search().trim() !== "" || chart() !== "" || !archived();
-  const chartsInList = createMemo(() =>
-    // oxlint-disable-next-line unicorn/no-array-sort -- sorts a copy of ours; `toSorted` is ES2023, past the lib (ES2022).
-    [...new Set(loaded().map((e) => e.chart))].sort(),
-  );
 
   const archive = async (event: Event) => {
     try {
       const answer = checkEvent(await call("archiveEvent", { path: { event: event.key } }, signal));
       events.update((rows) => rows.map((r) => (r.key === answer.key ? answer : r)));
+      // The list is the server's view: an archived event leaves "active".
+      events.refetch();
       notify(msg("events.archived", { name: event.name ?? event.key }));
     } catch (e) {
       report(e);
@@ -121,118 +135,165 @@ export function Events() {
           onClick={() => setCreating(true)}
         />
       </div>
+      <div
+        role="search"
+        class="mt-5 flex flex-wrap items-center gap-3"
+        aria-label={msg("events.filters")}
+      >
+        <div class="relative w-72 max-w-full">
+          <span class="pointer-events-none absolute inset-y-0 left-2 flex items-center text-faint">
+            <Icon name="search" />
+          </span>
+          <input
+            type="search"
+            class={`${fieldInputClass} pl-7`}
+            placeholder={msg("events.searchPlaceholder")}
+            aria-label={msg("events.search")}
+            maxLength={MAX_Q}
+            value={typed()}
+            onInput={(e) => onType(e.currentTarget.value)}
+          />
+        </div>
+        <label class="flex items-center gap-2 text-base whitespace-nowrap text-fg">
+          {msg("events.chartFilter")}
+          <select
+            class={`${fieldInputClass} w-auto max-w-56`}
+            value={filters().chart}
+            onChange={(e) => set({ chart: e.currentTarget.value })}
+          >
+            <option value="">{msg("events.allCharts")}</option>
+            {/* Each option says whether it is chosen: the options are made
+                again when the charts load, after the select's value was set. */}
+            <For each={chartList()}>
+              {(c) => (
+                <option value={c.key} selected={c.key === filters().chart}>
+                  {c.name}
+                </option>
+              )}
+            </For>
+            <Show
+              when={filters().chart !== "" && !chartList().some((c) => c.key === filters().chart)}
+            >
+              <option value={filters().chart} selected>
+                {filters().chart}
+              </option>
+            </Show>
+          </select>
+        </label>
+        <label class="flex items-center gap-2 text-base whitespace-nowrap text-fg">
+          {msg("events.shownFilter")}
+          <select
+            class={`${fieldInputClass} w-auto`}
+            value={filters().shown}
+            onChange={(e) => set({ shown: e.currentTarget.value as Shown })}
+          >
+            <option value="active">{msg("events.shownActive")}</option>
+            <option value="archived">{msg("events.shownArchived")}</option>
+            <option value="all">{msg("events.shownAll")}</option>
+          </select>
+        </label>
+        <label class="flex items-center gap-2 text-base whitespace-nowrap text-fg">
+          {msg("events.order")}
+          <select
+            class={`${fieldInputClass} w-auto`}
+            value={filters().order}
+            onChange={(e) => set({ order: e.currentTarget.value as Order })}
+          >
+            <option value="oldest">{msg("events.orderOldest")}</option>
+            <option value="newest">{msg("events.orderNewest")}</option>
+          </select>
+        </label>
+        <Show when={filtered(filters())}>
+          <Button class="h-8" onClick={clear}>
+            {msg("events.clearFilters")}
+          </Button>
+        </Show>
+      </div>
       <Paged pages={events} loading={msg("events.loading")} failed={msg("events.failed")}>
         {(rows) => (
           <Show
             when={rows().length > 0}
             fallback={
-              <Empty
-                icon="calendar"
-                title={msg("events.emptyTitle")}
-                body={cannotCreate() === null ? msg("events.emptyBody") : msg("events.emptyReader")}
+              <Show
+                when={!filtered(filters())}
+                fallback={
+                  <div class="mt-8" role="status">
+                    <p class="text-base text-muted">{msg("events.noMatch")}</p>
+                    <Button class="mt-3 h-8" onClick={clear}>
+                      {msg("events.clearFilters")}
+                    </Button>
+                  </div>
+                }
               >
-                <Show when={cannotCreate() === null}>
-                  <Action
-                    label={msg("events.new")}
-                    icon="plus"
-                    variant="primary"
-                    blocked={null}
-                    onClick={() => setCreating(true)}
-                  />
-                </Show>
-              </Empty>
+                <Empty
+                  icon="calendar"
+                  title={msg("events.emptyTitle")}
+                  body={
+                    cannotCreate() === null ? msg("events.emptyBody") : msg("events.emptyReader")
+                  }
+                >
+                  <Show when={cannotCreate() === null}>
+                    <Action
+                      label={msg("events.new")}
+                      icon="plus"
+                      variant="primary"
+                      blocked={null}
+                      onClick={() => setCreating(true)}
+                    />
+                  </Show>
+                </Empty>
+              </Show>
             }
           >
-            <div class="mt-5 flex flex-wrap items-center gap-3">
-              <div class="relative w-72 max-w-full">
-                <span class="pointer-events-none absolute inset-y-0 left-2 flex items-center text-faint">
-                  <Icon name="search" />
-                </span>
-                <input
-                  type="search"
-                  class={`${fieldInputClass} pl-7`}
-                  placeholder={msg("events.searchPlaceholder")}
-                  aria-label={msg("events.search")}
-                  value={search()}
-                  onInput={(e) => setSearch(e.currentTarget.value)}
-                />
-              </div>
-              <label class="flex items-center gap-2 text-base whitespace-nowrap text-fg">
-                {msg("events.chartFilter")}
-                <select
-                  class={`${fieldInputClass} w-auto max-w-56`}
-                  value={chart()}
-                  onChange={(e) => setChart(e.currentTarget.value)}
-                >
-                  <option value="">{msg("events.allCharts")}</option>
-                  <For each={chartsInList()}>
-                    {(key) => <option value={key}>{chartName(key)}</option>}
+            <p class="mt-3 text-sm text-muted" role="status">
+              {more()
+                ? msg("events.countMore", { n: rows().length })
+                : rows().length === 1
+                  ? msg("events.countOne")
+                  : msg("events.count", { n: rows().length })}
+            </p>
+            <div class={`mt-2 ${tableBox}`}>
+              <table class={table}>
+                <caption class="sr-only">
+                  {filters().order === "newest"
+                    ? msg("events.captionNewest")
+                    : msg("events.caption")}
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col" class={th}>
+                      {msg("events.colEvent")}
+                    </th>
+                    <th scope="col" class={th}>
+                      {msg("events.colChart")}
+                    </th>
+                    <th scope="col" class={th}>
+                      {msg("events.colSeats")}
+                    </th>
+                    <th scope="col" class={th}>
+                      {msg("events.colCreated")}
+                    </th>
+                    <th scope="col" class={th}>
+                      {msg("events.colStatus")}
+                    </th>
+                    <th scope="col" class={th}>
+                      <span class="sr-only">{msg("events.colActions")}</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <For each={rows()}>
+                    {(event) => (
+                      <EventRow
+                        event={event}
+                        chartName={chartName(event.chart)}
+                        onArchive={() => setArchiving(event)}
+                      />
+                    )}
                   </For>
-                </select>
-              </label>
-              <label class="flex items-center gap-2 text-base text-fg">
-                <input
-                  type="checkbox"
-                  class="size-4 accent-accent-fill"
-                  checked={archived()}
-                  onChange={(e) => setArchived(e.currentTarget.checked)}
-                />
-                {msg("events.showArchived")}
-              </label>
-              <p class="ml-auto text-sm text-muted" role="status">
-                {more()
-                  ? msg("events.countPartial", { n: shown().length, loaded: rows().length })
-                  : shown().length === 1
-                    ? msg("events.countOne")
-                    : msg("events.count", { n: shown().length })}
-              </p>
+                </tbody>
+              </table>
             </div>
-            <Show when={more() && filtered()}>
-              <p class="mt-2 text-sm text-muted">{msg("events.filterReach")}</p>
-            </Show>
-            <Show
-              when={shown().length > 0}
-              fallback={<p class="mt-8 text-base text-muted">{msg("events.noMatch")}</p>}
-            >
-              <div class="mt-4 overflow-x-auto">
-                <table class={table}>
-                  <caption class="sr-only">{msg("events.caption")}</caption>
-                  <thead>
-                    <tr>
-                      <th scope="col" class={th}>
-                        {msg("events.colEvent")}
-                      </th>
-                      <th scope="col" class={th}>
-                        {msg("events.colChart")}
-                      </th>
-                      <th scope="col" class={th}>
-                        {msg("events.colSeats")}
-                      </th>
-                      <th scope="col" class={th}>
-                        {msg("events.colCreated")}
-                      </th>
-                      <th scope="col" class={th}>
-                        {msg("events.colStatus")}
-                      </th>
-                      <th scope="col" class={th}>
-                        <span class="sr-only">{msg("events.colActions")}</span>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <For each={shown()}>
-                      {(event) => (
-                        <EventRow
-                          event={event}
-                          chartName={chartName(event.chart)}
-                          onArchive={() => setArchiving(event)}
-                        />
-                      )}
-                    </For>
-                  </tbody>
-                </table>
-              </div>
-            </Show>
             <LoadMore pages={events} />
           </Show>
         )}
@@ -288,8 +349,8 @@ function EventRow(props: { event: Event; chartName: string; onArchive: () => voi
           {msg("events.versionShort", { number: props.event.version.number })}
         </span>
       </td>
-      <td class={`${td} w-64`}>
-        <EventCounts event={props.event.key} />
+      <td class={`${td} lg:w-64`}>
+        <CountsBar counts={props.event.counts} />
       </td>
       <td class={`${td} text-sm whitespace-nowrap text-muted`}>
         {formatDateTime(props.event.created_at)}
@@ -310,6 +371,7 @@ function EventRow(props: { event: Event; chartName: string; onArchive: () => voi
         <Show when={canArchive()}>
           <DropdownMenu gutter={4} placement="bottom-end">
             <DropdownMenu.Trigger
+              data-focus-id={`event-menu-${props.event.key}`}
               class="inline-flex size-7 items-center justify-center rounded-md text-muted hover:bg-hover hover:text-fg"
               aria-label={msg("events.menu", { name: props.event.name ?? props.event.key })}
             >
@@ -330,33 +392,6 @@ function EventRow(props: { event: Event; chartName: string; onArchive: () => voi
         </Show>
       </td>
     </tr>
-  );
-}
-
-/** Booked, held, blocked and free seats as a bar and in words. The list
- * does not carry counts; each row reads its event's (08 §6.2). */
-function EventCounts(props: { event: string }) {
-  const counts = createQuery(
-    () => {
-      const ws = workspace()?.id;
-      return ws === undefined ? null : props.event;
-    },
-    async (event, s) => checkEvent(await call("getEvent", { path: { event } }, s)).counts ?? null,
-  );
-  return (
-    <Show
-      when={(() => {
-        const s = counts.state();
-        return s.status === "ready" ? s.data : null;
-      })()}
-      fallback={
-        <span class="text-sm text-faint">
-          {counts.state().status === "error" ? msg("events.countsFailed") : "…"}
-        </span>
-      }
-    >
-      {(c) => <CountsBar counts={c()} />}
-    </Show>
   );
 }
 

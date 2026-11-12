@@ -1,0 +1,118 @@
+// Where keyboard focus goes when the element that had it goes away (09 §8,
+// 11 §8; WCAG 2.4.3): a dialog closing after its opener's row was replaced
+// or deleted, or a route change that removed the link followed. Focus
+// never falls back to the page's body: it goes to the element that took the
+// opener's place (the same `data-focus-id`), else to the page's heading.
+
+/** What is remembered of the element that had focus. */
+export interface Opener<E> {
+  el: E;
+  /** `data-focus-id`: the same control in a row drawn again. */
+  focusId: string | null;
+}
+
+export interface Page<E> {
+  connected(el: E): boolean;
+  byFocusId(id: string): E | null;
+  /** The page's main heading (`h1`), or its main region. */
+  heading(): E | null;
+}
+
+/** The element to focus in place of `opener`, or `null` when the opener
+ * itself is still there (focus can return to it as usual). */
+export function replacement<E>(from: Opener<E> | null, page: Page<E>): E | null {
+  if (from !== null && page.connected(from.el)) return null;
+  const id = from?.focusId ?? null;
+  const same = id === null ? null : page.byFocusId(id);
+  return same ?? page.heading();
+}
+
+const FOCUSABLE = "button, a[href], input, select, textarea, [tabindex]";
+
+/** The browser's page for `replacement`. A `data-focus-id` may be on the
+ * control or on an element around it. */
+export const documentPage: Page<HTMLElement> = {
+  connected: (el) => el.isConnected,
+  byFocusId: (id) => {
+    const el = document.querySelector<HTMLElement>(`[data-focus-id="${CSS.escape(id)}"]`);
+    return el === null || el.matches(FOCUSABLE) ? el : el.querySelector<HTMLElement>(FOCUSABLE);
+  },
+  heading: () =>
+    document.querySelector<HTMLElement>("main h1, h1") ?? document.querySelector("main"),
+};
+
+/** What to remember of `given`, else of the element focused now. */
+export function opener(given: HTMLElement | null = null): Opener<HTMLElement> | null {
+  const el = given ?? document.activeElement;
+  if (!(el instanceof HTMLElement) || el === document.body) return null;
+  const owner = el.closest<HTMLElement>("[data-focus-id]");
+  return { el, focusId: owner?.dataset["focusId"] ?? null };
+}
+
+/** Focuses `el`, making a heading focusable by script only. */
+export function focusOn(el: HTMLElement): void {
+  if (el.tabIndex < 0 && !el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+  el.focus({ preventScroll: el.tagName !== "H1" });
+}
+
+/**
+ * After a route change, focus on the new page's heading when the element
+ * that had it went with the old page (a link followed from a list, the
+ * event page's back link). Polled for a second: a page may load its code
+ * or its data first. Focus a person moved meanwhile is left alone.
+ */
+export function focusNewPage(): void {
+  const start = performance.now();
+  const step = () => {
+    const now = document.activeElement;
+    if (now !== null && now !== document.body) return;
+    const heading = documentPage.heading();
+    if (heading !== null && heading.tagName === "H1") focusOn(heading);
+    else if (performance.now() - start < 1_000) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+/**
+ * Every form: a submit its own checks refused moves focus to the first
+ * field marked invalid, whose error is then read with it (its
+ * `aria-describedby`), instead of leaving it on the button. Runs after the
+ * form's handler has checked its fields.
+ */
+export function watchForms(): void {
+  document.addEventListener("submit", (e) => {
+    const form = e.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    queueMicrotask(() => {
+      const bad = form.querySelector<HTMLElement>('[aria-invalid="true"]');
+      const now = document.activeElement;
+      if (
+        bad === null ||
+        (now instanceof HTMLElement && now.getAttribute("aria-invalid") === "true")
+      )
+        return;
+      bad.focus();
+    });
+  });
+}
+
+/**
+ * Every page: when the element that had focus leaves the page (its row
+ * archived, revoked or removed by a list read again after a dialog had
+ * already returned focus to it) and focus has fallen to the body, it goes
+ * to the same control drawn again or the page's heading.
+ */
+export function keepFocus(): void {
+  let last: Opener<HTMLElement> | null = null;
+  document.addEventListener("focusin", () => {
+    last = opener();
+  });
+  new MutationObserver(() => {
+    if (last === null || last.el.isConnected) return;
+    const now = document.activeElement;
+    if (now !== null && now !== document.body) return;
+    const instead = replacement(last, documentPage);
+    last = null;
+    if (instead !== null) focusOn(instead);
+  }).observe(document.body, { childList: true, subtree: true });
+}

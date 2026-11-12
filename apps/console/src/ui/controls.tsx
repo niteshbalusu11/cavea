@@ -48,10 +48,18 @@ export function Tip(
     label: string;
     keys?: string | null | undefined;
     placement?: Placement | undefined;
+    /** `false` keeps it closed (a control that needs no hint just now). */
+    open?: false | undefined;
   }>,
 ) {
   return (
-    <Tooltip placement={props.placement ?? "bottom"} openDelay={500} closeDelay={0} gutter={6}>
+    <Tooltip
+      placement={props.placement ?? "bottom"}
+      openDelay={500}
+      closeDelay={0}
+      gutter={6}
+      {...(props.open === false ? { open: false } : {})}
+    >
       {props.children}
       <Tooltip.Portal>
         <Tooltip.Content class="z-50 max-w-72 rounded-md bg-raised px-2 py-1 text-sm text-fg shadow-menu">

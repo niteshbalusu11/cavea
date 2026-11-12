@@ -28,6 +28,10 @@ export const table = "w-full border-collapse text-left text-base";
 export const th =
   "sticky top-0 z-10 border-b border-line bg-surface px-3 py-2 text-sm font-medium text-muted";
 export const td = "border-b border-line px-3 py-2 align-middle text-fg";
+/** Around a table: its own scroll box, both ways and at most about a
+ * window high, so its sticky header stays in view (09 §8) and a table wider
+ * than the window (from 768 px) scrolls sideways without the page. */
+export const tableBox = "max-h-[calc(100dvh-12rem)] overflow-auto";
 
 /** Shown while a list's first page loads. */
 export function ListLoading(props: { label: string; rows?: number }) {
@@ -144,7 +148,9 @@ export function LoadMore<T>(props: { pages: Pages<T> }) {
 
 /**
  * A button for an action the role may lack: enabled, or shown disabled and
- * still focusable with the reason in its name and a tooltip.
+ * still focusable with the reason in its name and a tooltip. One element
+ * either way, so focus stays on it when it becomes unavailable (the
+ * manager's Block, once the selection it took is cleared).
  */
 export function Action(props: {
   label: string;
@@ -156,34 +162,21 @@ export function Action(props: {
   class?: string;
 }) {
   return (
-    <Show
-      when={props.blocked}
-      fallback={
-        <Button
-          variant={props.variant ?? "secondary"}
-          {...(props.icon === undefined ? {} : { icon: props.icon })}
-          class={props.class ?? "h-8"}
-          onClick={() => props.onClick()}
-        >
-          {props.label}
-        </Button>
-      }
-    >
-      {(reason) => (
-        <Tip label={reason()}>
-          <Tooltip.Trigger
-            as="button"
-            type="button"
-            aria-disabled="true"
-            aria-label={`${props.label}: ${reason()}`}
-            class={buttonClass(props.variant ?? "secondary", props.class ?? "h-8")}
-          >
-            <Show when={props.icon}>{(name) => <Icon name={name()} />}</Show>
-            {props.label}
-          </Tooltip.Trigger>
-        </Tip>
-      )}
-    </Show>
+    <Tip label={props.blocked ?? props.label} open={props.blocked === null ? false : undefined}>
+      <Tooltip.Trigger
+        as="button"
+        type="button"
+        aria-disabled={props.blocked === null ? undefined : "true"}
+        aria-label={props.blocked === null ? undefined : `${props.label}: ${props.blocked}`}
+        class={buttonClass(props.variant ?? "secondary", props.class ?? "h-8")}
+        onClick={() => {
+          if (props.blocked === null) props.onClick();
+        }}
+      >
+        <Show when={props.icon}>{(name) => <Icon name={name()} />}</Show>
+        {props.label}
+      </Tooltip.Trigger>
+    </Tip>
   );
 }
 

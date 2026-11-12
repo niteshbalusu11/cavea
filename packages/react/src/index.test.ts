@@ -2,7 +2,7 @@
 // so `installDom` fakes the little React needs to mount one `<div>`; the map
 // is a recording fake standing in for `createSeatMap`, whose own behaviour is
 // tested in `@cavea/renderer`.
-import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import type { SeatMap as SeatMapInstance, SeatMapOptions } from "@cavea/renderer";
 
 interface Created {
@@ -12,6 +12,15 @@ interface Created {
   map: SeatMapInstance;
 }
 const created: Created[] = [];
+
+// Bun's module mocks are process-wide and outlive this file: every later
+// importer of `@cavea/renderer` (its own tests import it as `./index.ts`)
+// would get the fake. A copy of the real exports, taken before mocking, is
+// put back after the last test.
+const real = { ...(await import("@cavea/renderer")) };
+afterAll(() => {
+  mock.module("@cavea/renderer", () => real);
+});
 
 mock.module("@cavea/renderer", () => ({
   createSeatMap(_element: unknown, options: SeatMapOptions): Promise<SeatMapInstance> {

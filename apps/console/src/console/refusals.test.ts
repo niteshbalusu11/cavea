@@ -5,9 +5,12 @@ import { expect, test } from "bun:test";
 import { ApiError, type ErrorCode } from "../api/client.ts";
 import { OPERATIONS } from "../api/generated.ts";
 import type { Permission, Role } from "../api/permissions.ts";
+import { msg } from "../i18n/messages.ts";
 import {
   acceptRefusal,
   badOrigins,
+  originsProblem,
+  originsRefusal,
   eventRefusal,
   inviteRefusal,
   keyRefusal,
@@ -161,4 +164,36 @@ test("origins are read one per line and checked for a bare origin", () => {
     "a.example",
     "https://user@a.example",
   ]);
+  // As the server's rule: case is the server's to fold, IPv6 and ports are
+  // origins, an empty host, a non-ASCII host and over 255 characters are not.
+  expect(
+    badOrigins([
+      "HTTPS://Tickets.Example.com",
+      "http://[::1]:8080",
+      "https://",
+      "https://exämple.com",
+      `https://${"a".repeat(248)}`,
+    ]),
+  ).toEqual(["https://", "https://exämple.com", `https://${"a".repeat(248)}`]);
+});
+
+/** `originsRefusal` of a `400 invalid_request` with `reason`. */
+const refusal = (reason: string, details: Record<string, unknown>) =>
+  originsRefusal(new ApiError(400, "invalid_request", reason, details, null, null, ""));
+
+test("a key's origins are 1 to 50 good ones, or every origin by choice; refusals land where they belong", () => {
+  expect(originsProblem(true, "")).toBeNull();
+  expect(originsProblem(false, " \n ")).toBe(msg("keys.originsNone"));
+  expect(originsProblem(false, "https://a.example\nhttps://b.example")).toBeNull();
+  const many = Array.from({ length: 51 }, (_, i) => `https://s${i}.example`).join("\n");
+  expect(originsProblem(false, many)).toBe(msg("keys.originsTooMany"));
+  expect(originsProblem(false, "https://a.example/")).toBe(
+    msg("keys.originsBad", { list: "https://a.example/" }),
+  );
+  expect(refusal("invalid_field", { field: "allowed_origins" })).toEqual({
+    field: true,
+    message: msg("keys.originsRule"),
+  });
+  expect(refusal("revoked", {})).toEqual({ field: false, message: msg("keys.originsRevoked") });
+  expect(refusal("invalid_field", { field: "name" })).toBeNull();
 });

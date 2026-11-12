@@ -54,15 +54,9 @@ function check(ok: boolean, expected: string, found: unknown): void {
   }
 }
 
-/**
- * A new page in a context of its own. On the console's origin every page
- * load also asks for `/favicon.ico`, which the console does not have (it
- * names no icon, so the browser asks): a 404 the check allows, and a finding
- * (docs/13-testing-benchmarks.md §9, "What the run found").
- */
-async function tab(r: Run, name: string, console = true): Promise<Tab> {
+/** A new page in a context of its own. */
+async function tab(r: Run, name: string): Promise<Tab> {
   const t = await Tab.open(r.browser, name);
-  if (console) t.allow("GET", /^\/favicon\.ico$/, 404);
   r.tabs.set(name, t);
   return t;
 }
@@ -587,8 +581,8 @@ export const STEPS: Step[] = [
     name: "Buy: two buyers on another origin; a click holds a seat the other sees taken; the backend books it",
     async run(r) {
       const url = `${r.buyer}/?${new URLSearchParams({ server: r.base, key: keys.publishable, event: event.key })}`;
-      const one = await tab(r, "buyer-1", false);
-      const two = await tab(r, "buyer-2", false);
+      const one = await tab(r, "buyer-1");
+      const two = await tab(r, "buyer-2");
       for (const b of [one, two]) {
         await b.goto(url);
         await until(

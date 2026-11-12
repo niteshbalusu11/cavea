@@ -39,6 +39,7 @@ import {
   SelectField,
   Tabs,
   table,
+  tableBox,
   td,
   th,
 } from "./kit.tsx";
@@ -276,7 +277,7 @@ function MembersTab() {
         <Paged pages={members} loading={msg("members.loading")} failed={msg("members.failed")}>
           {(rows) => (
             <>
-              <div class="mt-3 overflow-x-auto">
+              <div class={`mt-3 ${tableBox}`}>
                 <table class={table}>
                   <caption class="sr-only">{msg("members.title")}</caption>
                   <thead>
@@ -322,7 +323,7 @@ function MembersTab() {
               when={rows().length > 0}
               fallback={<p class="mt-3 text-base text-muted">{msg("invite.none")}</p>}
             >
-              <div class="mt-3 overflow-x-auto">
+              <div class={`mt-3 ${tableBox}`}>
                 <table class={table}>
                   <caption class="sr-only">{msg("invite.pendingTitle")}</caption>
                   <thead>
@@ -631,7 +632,7 @@ function AuditTab() {
               <Empty icon="report" title={msg("audit.emptyTitle")} body={msg("audit.emptyBody")} />
             }
           >
-            <div class="mt-3 overflow-x-auto">
+            <div class={`mt-3 ${tableBox}`}>
               <table class={table}>
                 <caption class="sr-only">{msg("settings.audit")}</caption>
                 <thead>
