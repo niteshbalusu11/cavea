@@ -12,7 +12,7 @@
 // failure the drawn image and a difference image go to `target/golden/`.
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Browser, pinned, sh } from "./chromium.ts";
+import { Browser, pinned, sh } from "../chromium.ts";
 import { decode, encode, type Image } from "./png.ts";
 import type { Panel, Rendered } from "./page.ts";
 
@@ -201,7 +201,12 @@ const server = Bun.serve({
 /** Draws every panel of every chosen case in one browser start; images by case name. */
 async function drawAll(): Promise<{ version: string; images: Map<string, Image[]> }> {
   const { chromium, fonts } = await pinned(ROOT);
-  const browser = await Browser.launch(chromium, fonts);
+  const browser = await Browser.launch({
+    chromium,
+    fonts,
+    name: "cavea-golden",
+    args: ["--disable-lcd-text", "--force-color-profile=srgb"],
+  });
   try {
     const page = await browser.open(`http://127.0.0.1:${server.port}/`);
     await page.waitFor("window.render");

@@ -22,7 +22,8 @@ use super::{Mode, build_designer, build_web, cargo, root, run};
 /// Brotli forms are kept only when at most this share (in tenths) of the file.
 const KEEP_TENTHS: usize = 9;
 
-pub fn build_server(target: Option<&str>) -> Result<()> {
+/// Returns the binary built.
+pub fn build_server(target: Option<&str>) -> Result<PathBuf> {
     build_designer()?;
     build_web(Mode::Gate)?;
     let root = root();
@@ -60,7 +61,7 @@ pub fn build_server(target: Option<&str>) -> Result<()> {
         table.files,
         table.bytes
     );
-    Ok(())
+    Ok(binary)
 }
 
 struct Table {

@@ -1,13 +1,14 @@
-// Headless Chromium over the DevTools protocol, for the renderer's golden
-// images (docs/13-testing-benchmarks.md §6.1): the flake's Chromium and fonts
-// (`nix build .#chromium .#golden-fonts`, pinned by flake.lock), WebGL2 on
-// SwiftShader (software rendering), and a fontconfig that sees the pinned
-// fonts only, so the text the page draws does not depend on the machine's
-// fonts. Launched as `fixtures/run.ts` launches it; stopped by process id.
+// Headless Chromium over the DevTools protocol, shared by the renderer's
+// golden images (tools/golden, docs/13-testing-benchmarks.md §6.1), the
+// compatibility checks (fixtures/run.ts, §8) and the end-to-end check
+// (tools/e2e, §9). WebGL2 on SwiftShader (software rendering). With `fonts`,
+// a fontconfig that sees the pinned fonts only, so the text a page draws does
+// not depend on the machine's fonts. Stopped by process id, never by name.
 import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-type Message = {
+/** One message of the protocol: a reply (`id`) or an event (`method`). */
+export type Message = {
   id?: number;
   method?: string;
   params?: Record<string, unknown>;
@@ -45,9 +46,28 @@ export async function pinned(root: string): Promise<{ chromium: string; fonts: s
 /** The faces of the golden fonts the browser sees. */
 const FACES = ["DejaVuSans.ttf", "DejaVuSans-Bold.ttf"];
 
+export interface LaunchOptions {
+  /** The browser's executable. */
+  chromium: string;
+  /**
+   * Its scratch directory is `/tmp/<name>-<pid>`: the sockets need a short
+   * path, and a worktree's is too long. Removed at `close`.
+   */
+  name: string;
+  /** The golden fonts' store path: the browser then sees their two faces only. */
+  fonts?: string;
+  /** The profile; default inside the scratch directory (removed with it). */
+  profile?: string;
+  /** A visible window instead of headless (needs a display). */
+  headed?: boolean;
+  /** More command-line switches. */
+  args?: string[];
+}
+
 export class Browser {
   private id = 0;
   private readonly pending = new Map<number, (m: Message) => void>();
+  private readonly listeners = new Set<(m: Message) => void>();
   private readonly exceptions: string[] = [];
 
   private constructor(
@@ -61,30 +81,37 @@ export class Browser {
       if (message.id !== undefined) {
         this.pending.get(message.id)?.(message);
         this.pending.delete(message.id);
-      } else if (message.method === "Runtime.exceptionThrown") {
+        return;
+      }
+      if (message.method === "Runtime.exceptionThrown") {
         this.exceptions.push(JSON.stringify(message.params).slice(0, 500));
+      }
+      for (const listener of this.listeners) {
+        listener(message);
       }
     });
   }
 
   /**
-   * Starts `chromium` headless with a fresh profile and a fontconfig that
-   * sees two faces of `fonts` only, DejaVu Sans and its bold, so every
-   * family a page names, and every fallback, is one of them. Its sockets need a short path: the worktree's is
-   * too long, so a directory under /tmp named by this process, removed at `close`.
+   * Starts the browser with a fresh profile and waits for its DevTools
+   * endpoint. With `fonts`, a fontconfig that sees two faces of them only,
+   * DejaVu Sans and its bold, so every family a page names, and every
+   * fallback, is one of them.
    */
-  static async launch(chromium: string, fonts: string): Promise<Browser> {
-    const scratch = `/tmp/cavea-golden-${process.pid}`;
+  static async launch(options: LaunchOptions): Promise<Browser> {
+    const scratch = `/tmp/${options.name}-${process.pid}`;
     await mkdir(scratch, { recursive: true });
-    const faces = join(scratch, "fonts");
-    await mkdir(faces, { recursive: true });
-    for (const face of FACES) {
-      await symlink(join(fonts, "share/fonts/truetype", face), join(faces, face));
-    }
-    const fontconfig = join(scratch, "fonts.conf");
-    await writeFile(
-      fontconfig,
-      `<?xml version="1.0"?>
+    const env: Record<string, string | undefined> = { ...process.env, TMPDIR: scratch };
+    if (options.fonts !== undefined) {
+      const faces = join(scratch, "fonts");
+      await mkdir(faces, { recursive: true });
+      for (const face of FACES) {
+        await symlink(join(options.fonts, "share/fonts/truetype", face), join(faces, face));
+      }
+      const fontconfig = join(scratch, "fonts.conf");
+      await writeFile(
+        fontconfig,
+        `<?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
 <fontconfig>
   <dir>${faces}</dir>
@@ -92,27 +119,23 @@ export class Browser {
   <config></config>
 </fontconfig>
 `,
-    );
+      );
+      env["FONTCONFIG_FILE"] = fontconfig;
+    }
     const proc = Bun.spawn(
       [
-        chromium,
-        "--headless",
+        options.chromium,
+        ...(options.headed === true ? [] : ["--headless"]),
         "--no-sandbox",
         "--remote-debugging-port=0",
-        `--user-data-dir=${join(scratch, "profile")}`,
+        `--user-data-dir=${options.profile ?? join(scratch, "profile")}`,
         "--use-angle=swiftshader",
         "--enable-unsafe-swiftshader",
         "--no-first-run",
-        "--disable-lcd-text",
-        "--force-color-profile=srgb",
+        ...(options.args ?? []),
         "about:blank",
       ],
-      {
-        env: { ...process.env, TMPDIR: scratch, FONTCONFIG_FILE: fontconfig },
-        stdin: "ignore",
-        stdout: "ignore",
-        stderr: "pipe",
-      },
+      { env, stdin: "ignore", stdout: "ignore", stderr: "pipe" },
     );
     let output = "";
     const decoder = new TextDecoder();
@@ -137,6 +160,7 @@ export class Browser {
     })();
     if (url === undefined) {
       proc.kill();
+      await proc.exited;
       await rm(scratch, { recursive: true, force: true });
       throw new Error(`Chromium did not start:\n${output.slice(-1000)}`);
     }
@@ -148,6 +172,11 @@ export class Browser {
     const browser = new Browser(ws, proc, scratch, "");
     const version = String((await browser.send("Browser.getVersion"))["product"]);
     return Object.assign(browser, { version });
+  }
+
+  /** The browser's process id, for a caller that must stop it on an abrupt exit. */
+  get pid(): number {
+    return this.proc.pid;
   }
 
   send(
@@ -168,15 +197,31 @@ export class Browser {
     });
   }
 
-  /** Opens `url` in a fresh browser context and returns a session on it once loaded. */
-  async open(url: string): Promise<Page> {
+  /** Calls `listener` with every event (not replies) until the returned function is called. */
+  on(listener: (m: Message) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  /** A fresh browser context (its own cookies and storage) with one blank page attached. */
+  async context(): Promise<{ session: string; context: string; target: string }> {
     const { browserContextId } = await this.send("Target.createBrowserContext");
     const { targetId } = await this.send("Target.createTarget", {
       url: "about:blank",
       browserContextId,
     });
     const { sessionId } = await this.send("Target.attachToTarget", { targetId, flatten: true });
-    const page = new Page(this, String(sessionId), String(browserContextId));
+    return {
+      session: String(sessionId),
+      context: String(browserContextId),
+      target: String(targetId),
+    };
+  }
+
+  /** Opens `url` in a fresh browser context and returns a session on it once loaded. */
+  async open(url: string): Promise<Page> {
+    const { session, context } = await this.context();
+    const page = new Page(this, session, context);
     await this.send("Runtime.enable", {}, page.session);
     await this.send("Page.enable", {}, page.session);
     await this.send("Page.navigate", { url }, page.session);
