@@ -1,12 +1,14 @@
-//! Tests only: hold requests and responses to the document. The router tests'
-//! `send` calls [`exchange`] for every request it makes, so every response a
-//! test receives, and every JSON body the server accepted, is validated
-//! against the document's schema for its route and status.
+//! Tests and the HTTP fuzz target only (feature `fuzzing`): hold requests and
+//! responses to the document. The router tests' `send` calls [`exchange`] for
+//! every request it makes, so every response a test receives, and every JSON
+//! body the server accepted, is validated against the document's schema for
+//! its route and status; the fuzz target does the same for each request it
+//! generates.
 //!
 //! The JSON Schema check covers the keywords the document uses and refuses any
 //! other, so the document cannot use one this check would ignore.
 
-#![allow(clippy::unwrap_used, reason = "tests only")]
+#![allow(clippy::unwrap_used, reason = "tests and the fuzz target only")]
 
 use std::sync::OnceLock;
 
@@ -21,7 +23,7 @@ pub(crate) fn doc() -> &'static Value {
 
 /// The operation of `method` on a concrete `path`: literal segments before
 /// parameters, as the router matches.
-pub(crate) fn operation(method: &str, path: &str) -> Option<(&'static str, &'static Value)> {
+pub fn operation(method: &str, path: &str) -> Option<(&'static str, &'static Value)> {
     let segments: Vec<&str> = path.split('/').collect();
     let mut best: Option<(usize, &str, &Value)> = None;
     for (template, item) in doc()["paths"].as_object()? {
@@ -78,7 +80,7 @@ fn is_json(media: &str) -> bool {
 /// Check one exchange. `request` is the JSON body sent, if any; it is checked
 /// only when the server accepted it (2xx). Requests to paths the document
 /// does not have (test-only routes) are not checked.
-pub(crate) fn exchange(
+pub fn exchange(
     method: &str,
     path: &str,
     request: Option<&[u8]>,

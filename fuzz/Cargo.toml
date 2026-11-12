@@ -22,6 +22,22 @@ cavea-core = { path = "../crates/cavea-core" }
 cavea-format = { path = "../crates/cavea-format" }
 cavea-render = { path = "../crates/cavea-render" }
 libfuzzer-sys = "0.4"
+# The HTTP target (`http_api`): the server's router in process, with the
+# router tests' OpenAPI check (feature `fuzzing`), over a database of its own.
+# Each at the main workspace's version, already in its tree.
+axum = { version = "0.8.9", default-features = false }
+cavea-server = { path = "../crates/cavea-server", features = ["fuzzing"] }
+cavea-telemetry = { path = "../crates/cavea-telemetry" }
+# Signs the session tokens the requests carry (08 §11).
+hmac = { version = "0.13.0", default-features = false }
+# `atexit`, to drop the run's database when libFuzzer exits.
+libc = { version = "0.2.191", default-features = false }
+serde_json = "1"
+sha2 = { version = "0.11.1", default-features = false }
+# Creating and dropping the run's database.
+sqlx = { version = "0.9.0", default-features = false, features = ["postgres", "runtime-tokio"] }
+tokio = { version = "1.54", default-features = false, features = ["rt", "time"] }
+tower = { version = "0.5.3", default-features = false, features = ["util"] }
 
 [dev-dependencies]
 cavea-testkit = { path = "../crates/cavea-testkit" }
@@ -56,6 +72,13 @@ bench = false
 [[bin]]
 name = "snapshot_apply"
 path = "fuzz_targets/snapshot_apply.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "http_api"
+path = "fuzz_targets/http_api.rs"
 test = false
 doc = false
 bench = false

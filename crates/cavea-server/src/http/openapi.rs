@@ -26,8 +26,11 @@ use serde_json::{Map, Value, json};
 use super::{AppState, Code};
 use crate::console::{Permission, Role};
 
-#[cfg(test)]
-pub(crate) mod check;
+/// The router tests' check of every exchange against the document, also
+/// built for the HTTP fuzz target (`fuzz/`, feature `fuzzing`; never in the
+/// release server).
+#[cfg(any(test, feature = "fuzzing"))]
+pub mod check;
 mod schemas;
 
 /// The credential an operation takes (08 §11).

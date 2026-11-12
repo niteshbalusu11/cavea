@@ -6,6 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# Exposes `http::openapi::check` to the HTTP fuzz target (`fuzz/`,
+# docs/13-testing-benchmarks.md §5). Off in every build of the server.
+fuzzing = []
+
 [dependencies]
 anyhow.workspace = true
 # argon2id for console passwords (09 §2, 12 §3 T9): the hash itself, without

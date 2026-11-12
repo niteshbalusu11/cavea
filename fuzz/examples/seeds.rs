@@ -237,4 +237,75 @@ fn main() {
         cavea_fuzz::run(ops);
         write("snapshot_apply", name, &bytes);
     }
+
+    // `http_api`: each operation alone, then ordinary flows (`cavea_fuzz::http`).
+    let doc: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/cavea-server/openapi.json"),
+        )
+        .expect("the OpenAPI document"),
+    )
+    .expect("the document parses");
+    let ops = cavea_fuzz::http::operations(&doc);
+    for op in &ops {
+        write(
+            "http_api",
+            &format!("op-{}", op.id),
+            &cavea_fuzz::http::seed(&ops, &[&op.id]),
+        );
+    }
+    let flows: [(&str, &[&str]); 6] = [
+        (
+            "hold-book",
+            &["createHoldToken", "hold", "book", "listObjects", "getEvent"],
+        ),
+        (
+            "release",
+            &[
+                "hold",
+                "releaseHoldToken",
+                "book",
+                "release",
+                "changeStatus",
+            ],
+        ),
+        (
+            "draft",
+            &[
+                "getDraft",
+                "saveDraft",
+                "validateDraft",
+                "publishChart",
+                "listVersions",
+            ],
+        ),
+        ("keys", &["createKey", "listKeys", "revokeKey", "listKeys"]),
+        (
+            "public",
+            &[
+                "publicEvent",
+                "publicCreateHoldToken",
+                "publicHold",
+                "publicGetHoldToken",
+                "publicRelease",
+            ],
+        ),
+        (
+            "events",
+            &[
+                "createEvent",
+                "updateEvent",
+                "listEvents",
+                "archiveEvent",
+                "getEvent",
+            ],
+        ),
+    ];
+    for (name, ids) in flows {
+        write(
+            "http_api",
+            &format!("flow-{name}"),
+            &cavea_fuzz::http::seed(&ops, ids),
+        );
+    }
 }
