@@ -37,11 +37,13 @@ import { LicenceTab } from "./Licence.tsx";
 import {
   Action,
   CheckField,
+  complete,
   CopyField,
   Empty,
   formatDateTime,
   LoadMore,
   Paged,
+  pageSort,
   SelectField,
   Tabs,
   table,
@@ -56,8 +58,14 @@ import {
   memberLock,
   memberRefusal,
   roleChoices,
+  ROLES,
   type InviteField,
 } from "./refusals.ts";
+import { optimisticRows } from "./optimistic.ts";
+import { by, rove, rowKeys } from "./tables.ts";
+
+/** A role's rank, for sorting: the owner highest. */
+const rank = (r: Role) => ROLES.length - ROLES.indexOf(r);
 
 type Tab = "workspace" | "members" | "audit" | "licence";
 const TABS: Tab[] = ["workspace", "members", "audit", "licence"];
@@ -106,6 +114,10 @@ function WorkspaceTab() {
     if (!check() || busy() || ws === null) return;
     setBusy(true);
     setFailure(null);
+    // Shown at once wherever the name is (the frame, the switcher), and
+    // put back if the server refuses it (09 §8).
+    const before = ws.name;
+    adoptWorkspaceName(ws.id, name().trim());
     try {
       const answer = checkWorkspace(
         await call("renameWorkspace", { body: { name: name().trim() } }, signal),
@@ -113,8 +125,10 @@ function WorkspaceTab() {
       adoptWorkspaceName(answer.id, answer.name);
       notify(msg("workspace.renamed", { name: answer.name }));
     } catch (err) {
+      adoptWorkspaceName(ws.id, before);
       const refusal = asApiError(err);
       if (signal.aborted || refusal.sessionLost) return;
+      notify(msg("workspace.renameBack", { name: before }), "error", reference(refusal));
       if (refusal.reason === "invalid_field") {
         setError(msg("charts.textRule"));
       } else {
@@ -178,6 +192,17 @@ function MembersTab() {
     async (_ws, after, s) =>
       checkInvitationList(await call("listInvitations", { query: pageQuery(after, 100) }, s)),
   );
+  // Neither route orders by a column: sorted in the page once every row is loaded.
+  const memberSort = pageSort<WorkspaceMember, "email" | "role">({
+    email: { label: "members.colEmail", kind: "text", compare: by.text((m) => m.user.email) },
+    role: { label: "members.colRole", kind: "number", compare: by.number((m) => rank(m.role)) },
+  });
+  const inviteSort = pageSort<Invitation, "email" | "role" | "created" | "expires">({
+    email: { label: "members.colEmail", kind: "text", compare: by.text((i) => i.email) },
+    role: { label: "members.colRole", kind: "number", compare: by.number((i) => rank(i.role)) },
+    created: { label: "invite.colCreated", kind: "time", compare: by.time((i) => i.created_at) },
+    expires: { label: "invite.colExpires", kind: "time", compare: by.time((i) => i.expires_at) },
+  });
   const [inviting, setInviting] = createSignal(false);
   const [pending, setPending] = createSignal<Pending | null>(null);
   const [revoking, setRevoking] = createSignal<Invitation | null>(null);
@@ -195,20 +220,40 @@ function MembersTab() {
     return s.data.data.filter((m) => m.role === "owner").length;
   });
 
-  /** A refusal: said in a toast; a member gone, or a role that may have
-   * changed under the person, reloads. */
-  const refused = (e: unknown) => {
+  /** A refusal: said in a toast, after `before` (a change taken back); a
+   * member gone, or a role that may have changed under the person, reloads. */
+  const refused = (e: unknown, before?: string) => {
     const error = asApiError(e);
     const known = memberRefusal(error);
-    if (known === null) return report(e);
-    notify(known.message, "error", reference(error));
+    if (known === null) return report(e, before);
+    notify(
+      before === undefined ? known.message : `${before} ${known.message}`,
+      "error",
+      reference(error),
+    );
     members.refetch();
     if (error.code === "forbidden") void loadSession();
   };
 
+  // A role change shows at once (09 §8) and is taken back, visibly, if the
+  // server refuses it; two in flight for one member end on the server's
+  // word (the list is read again).
+  const roleOf = optimisticRows<Role>(
+    (id, role) =>
+      members.update((rows) => rows.map((r) => (r.user.id === id ? { ...r, role } : r))),
+    () => members.refetch(),
+  );
+
   const apply = async (p: Pending) => {
-    try {
-      if (p.kind === "role") {
+    if (p.kind === "role") {
+      // The role as the list shows it now, not as the dialog was opened
+      // with: an earlier change may have been taken back since.
+      const s = members.state();
+      const row =
+        s.status === "ready" ? s.data.data.find((r) => r.user.id === p.member.user.id) : undefined;
+      const change = roleOf(p.member.user.id, row?.role ?? p.member.role);
+      const id = change.begin(p.to);
+      try {
         const answer = checkMember(
           await call(
             "changeMemberRole",
@@ -216,14 +261,22 @@ function MembersTab() {
             signal,
           ),
         );
-        members.update((rows) => rows.map((r) => (r.user.id === answer.user.id ? answer : r)));
+        change.confirm(id, answer.role);
         notify(msg("members.changed", { email: p.member.user.email, role: roleLabel(p.to) }));
-      } else {
-        await call("removeMember", { path: { user: p.member.user.id } }, signal);
-        members.update((rows) => rows.filter((r) => r.user.id !== p.member.user.id));
-        notify(msg("members.removed", { email: p.member.user.email }));
+        if (isMe(p.member)) void loadSession();
+      } catch (e) {
+        const back = change.fail(id);
+        if (signal.aborted) return;
+        refused(e, msg("members.roleBack", { email: p.member.user.email, role: roleLabel(back) }));
       }
-      // One's own role or membership: the console follows it.
+      return;
+    }
+    // Removing waits for the server: access that looks gone must be gone.
+    try {
+      await call("removeMember", { path: { user: p.member.user.id } }, signal);
+      members.update((rows) => rows.filter((r) => r.user.id !== p.member.user.id));
+      notify(msg("members.removed", { email: p.member.user.email }));
+      // One's own membership: the console follows it.
       if (isMe(p.member)) void loadSession();
     } catch (e) {
       refused(e);
@@ -318,21 +371,18 @@ function MembersTab() {
                   <caption class="sr-only">{msg("members.title")}</caption>
                   <thead>
                     <tr>
-                      <th scope="col" class={th}>
-                        {msg("members.colEmail")}
-                      </th>
-                      <th scope="col" class={th}>
-                        {msg("members.colRole")}
-                      </th>
+                      {memberSort.header("email", complete(members))}
+                      {memberSort.header("role", complete(members))}
                       <th scope="col" class={th}>
                         <span class="sr-only">{msg("events.colActions")}</span>
                       </th>
                     </tr>
                   </thead>
-                  <tbody>
-                    <For each={rows()}>
-                      {(m) => (
+                  <tbody onKeyDown={rowKeys}>
+                    <For each={memberSort.rows(rows(), complete(members))}>
+                      {(m, i) => (
                         <MemberRow
+                          first={i() === 0}
                           member={m}
                           self={isMe(m)}
                           owners={owners()}
@@ -345,6 +395,7 @@ function MembersTab() {
                   </tbody>
                 </table>
               </div>
+              {memberSort.note(complete(members))}
               <LoadMore pages={members} />
             </>
           )}
@@ -365,28 +416,27 @@ function MembersTab() {
                   <caption class="sr-only">{msg("invite.pendingTitle")}</caption>
                   <thead>
                     <tr>
-                      <th scope="col" class={th}>
-                        {msg("members.colEmail")}
-                      </th>
-                      <th scope="col" class={th}>
-                        {msg("members.colRole")}
-                      </th>
-                      <th scope="col" class={th}>
-                        {msg("invite.colCreated")}
-                      </th>
-                      <th scope="col" class={th}>
-                        {msg("invite.colExpires")}
-                      </th>
+                      {inviteSort.header("email", complete(invitations))}
+                      {inviteSort.header("role", complete(invitations))}
+                      {inviteSort.header("created", complete(invitations))}
+                      {inviteSort.header("expires", complete(invitations))}
                       <th scope="col" class={th}>
                         <span class="sr-only">{msg("events.colActions")}</span>
                       </th>
                     </tr>
                   </thead>
-                  <tbody>
-                    <For each={rows()}>
-                      {(inv) => (
+                  <tbody onKeyDown={rowKeys}>
+                    <For each={inviteSort.rows(rows(), complete(invitations))}>
+                      {(inv, i) => (
                         <tr>
-                          <td class={td}>{inv.email}</td>
+                          <td
+                            class={td}
+                            data-row-stop
+                            tabIndex={i() === 0 ? 0 : -1}
+                            onFocus={(e) => rove(e.currentTarget)}
+                          >
+                            {inv.email}
+                          </td>
                           <td class={td}>{roleLabel(inv.role)}</td>
                           <td class={`${td} text-sm text-muted`}>
                             {formatDateTime(inv.created_at)}
@@ -409,6 +459,7 @@ function MembersTab() {
                   </tbody>
                 </table>
               </div>
+              {inviteSort.note(complete(invitations))}
               <LoadMore pages={invitations} />
             </Show>
           )}
@@ -471,6 +522,7 @@ function MembersTab() {
 }
 
 function MemberRow(props: {
+  first: boolean;
   member: WorkspaceMember;
   self: boolean;
   owners: number | null;
@@ -498,7 +550,12 @@ function MemberRow(props: {
   const choices = () => roleChoices(permissions(), props.member.role);
   return (
     <tr>
-      <td class={td}>
+      <td
+        class={td}
+        data-row-stop
+        tabIndex={props.first ? 0 : -1}
+        onFocus={(e) => rove(e.currentTarget)}
+      >
         {props.member.user.email}
         <Show when={props.self}>
           <span class="ml-2 text-sm text-muted">{msg("members.you")}</span>
@@ -520,7 +577,8 @@ function MemberRow(props: {
             value={props.member.role}
             onChange={(e) => {
               const to = choices().find((r) => r === e.currentTarget.value);
-              // The list shows the role the server holds until it agrees.
+              // The role shown stays until the change is confirmed in its
+              // dialog; it then shows at once (and comes back if refused).
               e.currentTarget.value = props.member.role;
               if (to !== undefined && to !== props.member.role) props.onRole(to);
             }}
@@ -822,6 +880,13 @@ function AuditTab() {
         MEMBER_PAGES,
       ),
   );
+  // Newest first from the server, which orders by nothing else: sorted in
+  // the page once the whole log is loaded.
+  const sort = pageSort<AuditEntry, "when" | "actor" | "action">({
+    when: { label: "audit.colWhen", kind: "time", compare: by.time((e) => e.at) },
+    actor: { label: "audit.colActor", kind: "text", compare: by.text((e) => who(e.actor)) },
+    action: { label: "audit.colAction", kind: "text", compare: by.text((e) => actionName(e)) },
+  });
   const who = (id: string | null): string => {
     if (id === null) return "—";
     const s = members.state();
@@ -847,15 +912,9 @@ function AuditTab() {
                 <caption class="sr-only">{msg("settings.audit")}</caption>
                 <thead>
                   <tr>
-                    <th scope="col" class={th}>
-                      {msg("audit.colWhen")}
-                    </th>
-                    <th scope="col" class={th}>
-                      {msg("audit.colActor")}
-                    </th>
-                    <th scope="col" class={th}>
-                      {msg("audit.colAction")}
-                    </th>
+                    {sort.header("when", complete(entries))}
+                    {sort.header("actor", complete(entries))}
+                    {sort.header("action", complete(entries))}
                     <th scope="col" class={th}>
                       {msg("audit.colTarget")}
                     </th>
@@ -864,11 +923,14 @@ function AuditTab() {
                     </th>
                   </tr>
                 </thead>
-                <tbody>
-                  <For each={rows()}>{(entry) => <AuditRow entry={entry} who={who} />}</For>
+                <tbody onKeyDown={rowKeys}>
+                  <For each={sort.rows(rows(), complete(entries))}>
+                    {(entry, i) => <AuditRow entry={entry} who={who} first={i() === 0} />}
+                  </For>
                 </tbody>
               </table>
             </div>
+            {sort.note(complete(entries))}
             <LoadMore pages={entries} />
           </Show>
         )}
@@ -910,12 +972,25 @@ export function auditDetail(detail: AuditEntry["detail"]): string {
   return parts.join(" · ");
 }
 
-function AuditRow(props: { entry: AuditEntry; who: (id: string | null) => string }) {
+const actionName = (e: AuditEntry) => msgOf("audit.action", e.action) ?? e.action;
+
+function AuditRow(props: {
+  entry: AuditEntry;
+  who: (id: string | null) => string;
+  first: boolean;
+}) {
   return (
     <tr>
-      <td class={`${td} text-sm whitespace-nowrap text-muted`}>{formatDateTime(props.entry.at)}</td>
+      <td
+        class={`${td} text-sm whitespace-nowrap text-muted`}
+        data-row-stop
+        tabIndex={props.first ? 0 : -1}
+        onFocus={(e) => rove(e.currentTarget)}
+      >
+        {formatDateTime(props.entry.at)}
+      </td>
       <td class={`${td} text-sm`}>{props.who(props.entry.actor)}</td>
-      <td class={td}>{msgOf("audit.action", props.entry.action) ?? props.entry.action}</td>
+      <td class={td}>{actionName(props.entry)}</td>
       <td class={`${td} text-sm`}>
         {props.entry.target?.startsWith("usr_") === true
           ? props.who(props.entry.target)

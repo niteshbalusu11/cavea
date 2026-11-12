@@ -45,6 +45,8 @@ import { StatusBar, ToolRail } from "./Rails.tsx";
 import { PublishDialog } from "./Publish.tsx";
 import { serverChart, type ServerChart, type ServerSetup } from "./ServerChart.tsx";
 import { emptyChart, fileName, localSource, type ChartSource } from "./source.ts";
+import { offer, templateCommand } from "./startingPoints.ts";
+import type { Template } from "./templates.ts";
 import { TopBar } from "./TopBar.tsx";
 import { Tour } from "./Tour.tsx";
 import { TOUR_KEY } from "./tour.ts";
@@ -125,10 +127,13 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
           onPanic: setPanic,
           uploads: images,
         });
-  /** A file opened over a server draft always asks: it replaces the draft. */
+  /** Whether replacing the open chart asks first: the starting points'
+   * rule (`offer`), for a file opened too. */
   const dirty = () => {
     const e = editor();
-    return e !== null && (server !== null || e.views.status.revision !== e.saved().revision);
+    if (e === null) return false;
+    const unsaved = server === null && e.views.status.revision !== e.saved().revision;
+    return offer(true, { nodes: e.views.status.nodes, unsaved }) === "ask";
   };
   const replace = (session: Session) => {
     if (server === null) {
@@ -262,8 +267,66 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
   };
   /** Read-only by role, or while another holds the editing lock. */
   const readOnly = () => server?.readOnly() === true;
+
+  // A server chart's starting points (07 §16): a template is one edit of
+  // the open draft (saved by autosave, undone by undo), asking first when
+  // the draft has something in it; the reference image is placed in it.
+  /** A template waiting for the person to agree to replace the chart. */
+  const [replacing, setReplacing] = createSignal<{ template: Template; text: string } | null>(null);
+  /** The empty chart's panel was closed, or the person started drawing. */
+  const [startDone, setStartDone] = createSignal(false);
+  const applyTemplate = (template: Template, text: string) => {
+    const e = editor();
+    if (e === null || readOnly()) return;
+    const result = e.attempt((s) => s.apply(templateCommand(s.export(), text)));
+    if ("error" in result) {
+      return notify(msg("start.failed", { message: result.error }), "error");
+    }
+    setStartDone(true);
+    e.frame(e.run((s) => s.fit()) ?? null);
+    notify(msg("start.applied", { template: msg(`template.${template.id}`) }));
+  };
+  const serverChoices: Choices = {
+    empty: () => setStartDone(true),
+    template: (t) =>
+      void t.load().then(
+        (text) => {
+          const e = editor();
+          if (e === null || readOnly()) return;
+          const nodes = e.views.status.nodes;
+          const rule = offer(true, { nodes, unsaved: false });
+          if (rule === "ask") setReplacing({ template: t, text });
+          else applyTemplate(t, text);
+        },
+        () => setFailed({ file: msg(`template.${t.id}`), message: msg("new.loadFailed") }),
+      ),
+    open: () => picker?.click(),
+    image: () => imagePicker?.click(),
+  };
+  /** The empty server chart's panel: while it is empty, editable, and the
+   * person has not closed it or picked a drawing tool. */
+  const startShown = () => {
+    const e = editor();
+    if (server === null || e === null || readOnly() || startDone()) return false;
+    return offer(true, { nodes: e.views.status.nodes, unsaved: false }) === "apply";
+  };
+  createEffect(() => {
+    const e = editor();
+    if (e === null || startDone()) return;
+    if (e.views.status.nodes > 0 || e.views.tool.tool !== "select") setStartDone(true);
+  });
+
   const ui = {
-    onNew: server === null ? () => setNewOpen(true) : undefined,
+    get onNew() {
+      if (server === null) return () => setNewOpen(true);
+      return readOnly() ? undefined : () => setNewOpen(true);
+    },
+    newLabel: server === null ? msg("menu.new") : msg("start.menu"),
+    starting: {
+      label: server === null ? msg("menu.new") : msg("start.menu"),
+      run: () => setNewOpen(true),
+      reason: () => (readOnly() ? (server?.whyReadOnly() ?? null) : null),
+    },
     get onOpen() {
       return readOnly() ? undefined : () => picker?.click();
     },
@@ -364,7 +427,15 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
           <Centre title={msg("serverChart.loading")} />
         </Match>
         <Match when={editor()} keyed>
-          {(e) => <Shell editor={e} save={saveNow} ui={ui} publish={publishFor(e)} />}
+          {(e) => (
+            <Shell
+              editor={e}
+              save={saveNow}
+              ui={ui}
+              publish={publishFor(e)}
+              start={startShown() ? serverChoices : undefined}
+            />
+          )}
         </Match>
         <Match when={server !== null}>
           <Centre title={msg("serverChart.loading")} />
@@ -386,7 +457,28 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
         </div>
       </Show>
 
-      <NewChartDialog open={newOpen()} choices={choices} onClose={() => setNewOpen(false)} />
+      <NewChartDialog
+        open={newOpen()}
+        title={server === null ? msg("new.title") : msg("start.title")}
+        choices={server === null ? choices : serverChoices}
+        onClose={() => setNewOpen(false)}
+      />
+      <Confirm
+        open={replacing() !== null}
+        title={msg("start.replaceTitle", {
+          name: editor()?.views.title ?? "",
+          template: msg(`template.${replacing()?.template.id ?? "theatre"}`),
+        })}
+        description={msg("start.replaceBody")}
+        confirm={msg("start.replace")}
+        variant="danger"
+        onConfirm={() => {
+          const r = replacing();
+          setReplacing(null);
+          if (r !== null) applyTemplate(r.template, r.text);
+        }}
+        onClose={() => setReplacing(null)}
+      />
       <Confirm
         open={failed() !== null}
         title={msg("import.failed", { file: failed()?.file || msg("designer.empty") })}
@@ -500,6 +592,9 @@ function Shell(props: {
   save: () => void;
   ui: {
     onNew: (() => void) | undefined;
+    newLabel: string;
+    /** The palette's New chart, or a server chart's starting points. */
+    starting: { label: string; run: () => void; reason: () => string | null };
     onOpen: (() => void) | undefined;
     onSave: () => void;
     onExport: () => void;
@@ -509,6 +604,8 @@ function Shell(props: {
     onImage: (() => void) | undefined;
   };
   publish: { reason: string | null; run: () => void };
+  /** An empty server chart's starting points, while they are offered. */
+  start?: Choices | undefined;
 }) {
   const editor = props.editor;
   const [layout, setLayoutSignal] = createSignal<Layout>(
@@ -547,7 +644,7 @@ function Shell(props: {
     numbering: openNumbering,
     tab: (tab) => setLayout({ tab, panelsOpen: true }),
     inspector: () => setLayout({ inspectorOpen: !layout().inspectorOpen }),
-    newChart: props.ui.onNew,
+    newChart: props.ui.starting,
     open: props.ui.onOpen,
     tour: () => setTour(true),
   });
@@ -567,7 +664,10 @@ function Shell(props: {
       />
       <div class="flex min-h-0 flex-1">
         <ToolRail editor={editor} onInsert={() => setInsert(true)} onImage={props.ui.onImage} />
-        <CanvasHost editor={editor} rulers={layout().rulers} />
+        <div class="relative flex min-w-0 flex-1">
+          <CanvasHost editor={editor} rulers={layout().rulers} />
+          <Show when={props.start}>{(choices) => <StartPanel choices={choices()} />}</Show>
+        </div>
         <Splitter
           orientation="vertical"
           label={msg("panel.resize", { panel: msg("panel.panels") })}
@@ -686,6 +786,34 @@ function Shell(props: {
       <InsertForm editor={editor} open={insert()} onClose={() => setInsert(false)} />
       <Tour editor={editor} open={tour()} onClose={endTour} />
     </div>
+  );
+}
+
+/** The starting points over an empty server chart's canvas (07 §16): not
+ * modal, so the tools and the tour stay usable; closed by its button,
+ * by choosing a drawing tool, or by the first thing drawn. */
+function StartPanel(props: { choices: Choices }) {
+  return (
+    <section
+      aria-labelledby="start-title"
+      class="absolute inset-x-0 top-10 z-10 mx-auto w-[min(42rem,calc(100%-2rem))] rounded-lg border border-line bg-raised p-5 shadow-menu"
+    >
+      <div class="mb-3 flex items-start gap-3">
+        <div class="min-w-0 flex-1">
+          <h2 id="start-title" class="text-lg font-semibold text-fg">
+            {msg("start.title")}
+          </h2>
+          <p class="text-base text-muted">{msg("start.body")}</p>
+        </div>
+        <IconButton
+          icon="close"
+          label={msg("start.close")}
+          class="size-7"
+          onClick={() => props.choices.empty()}
+        />
+      </div>
+      <NewChart choices={props.choices} />
+    </section>
   );
 }
 

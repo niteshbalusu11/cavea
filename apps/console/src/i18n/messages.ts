@@ -318,6 +318,11 @@ const groups = {
   file: "File",
   theme: "Theme",
   tree: "Layers panel",
+  navigate: "Go to",
+  charts: "Chart",
+  events: "Event",
+  tables: "Tables",
+  palette: "Command palette",
 };
 
 const ui = {
@@ -385,6 +390,17 @@ const ui = {
   "new.templates": "Start from a template",
   "new.or": "Or",
   "new.loadFailed": "The template could not be loaded. Check the connection and try again.",
+  "start.title": "Start your chart",
+  "start.body":
+    "Draw it from scratch, trace a floor plan, or start from a template and change it. Undo takes a template back.",
+  "start.close": "Close the starting points",
+  "start.menu": "Starting points…",
+  "start.replaceTitle": "Replace {name} with the {template} template?",
+  "start.replaceBody":
+    "Everything on the chart is replaced by the template: its objects, floors, categories and settings. Undo brings them back.",
+  "start.replace": "Replace",
+  "start.applied": "Started from the {template} template.",
+  "start.failed": "The template could not be applied: {message}",
   "template.theatre": "Theatre",
   "template.theatreBody": "{seats} seats in curved stalls around a stage.",
   "template.arena": "Arena bowl",
@@ -665,6 +681,29 @@ const ui = {
   "palette.placeholder": "Type a command…",
   "palette.results": "Commands",
   "palette.none": "No command matches “{query}”.",
+  "palette.consolePlaceholder": "Type a command, or a chart or event to find…",
+  "palette.searching": "Searching charts and events…",
+  "palette.searchFailed": "Charts and events could not be searched: {message}",
+  "palette.chartsPartial": "Only the first {n} charts were searched.",
+  "palette.goCharts": "Go to Charts",
+  "palette.goEvents": "Go to Events",
+  "palette.goReports": "Go to Reports",
+  "palette.goDevelopers": "Go to Developers",
+  "palette.goSettings": "Go to Settings",
+  "palette.goAccount": "Go to your account",
+  "palette.designer": "Open the designer",
+  "palette.signOut": "Sign out",
+  "palette.shortcuts": "Show keyboard shortcuts",
+  "help.consoleBody":
+    "Keys act where focus is: a text field keeps its own, so these wait until you leave it.",
+  "help.console.palette": "Command palette: commands, charts and events",
+  "help.console.help": "These shortcuts",
+  "help.table.move": "Move to the row above or below",
+  "help.table.ends": "Move to the first or last row",
+  "help.table.enter": "Open the row's link, or go into its controls",
+  "help.palette.move": "Move through the results",
+  "help.palette.run": "Run the command, or open the chart or event",
+  "help.palette.close": "Close",
 
   "help.title": "Keyboard shortcuts",
   "help.body": "Keys act where focus is: a text field keeps its own.",
@@ -689,7 +728,7 @@ const ui = {
 
   "confirm.replaceTitle": "Replace the open chart?",
   "confirm.replaceBody":
-    "“{name}” has changes that have not been exported. Opening another chart discards them, with their undo history.",
+    "Opening another chart replaces “{name}”: what is in it and its undo history are discarded, unless you have exported it.",
   "import.failed": "Could not open {file}",
   "import.notJson": "Only chart document files (.json) can be opened.",
   "import.unreadable":
@@ -835,7 +874,7 @@ const consoleScreens = {
   "charts.failed": "The charts could not be loaded.",
   "charts.emptyTitle": "Draw your first chart",
   "charts.emptyBody":
-    "A chart is the seat map events are sold from. Start an empty chart, or import a chart file exported from the designer.",
+    "A chart is the seat map events are sold from. Draw one from scratch, trace a floor plan, or start from a template; you name it first.",
   "charts.emptyReader":
     "This workspace has no charts yet. An owner, an admin or an editor can create one.",
   "charts.showArchivedCount": "Show archived charts ({n})",
@@ -863,6 +902,7 @@ const consoleScreens = {
   "charts.archiveBody":
     "Its draft can no longer change and it cannot be used for new events. Published versions stay available to events that use them. Archiving cannot be undone here.",
   "charts.archiveConfirm": "Archive",
+  "charts.archiveBack": "“{name}” is not archived: the server refused.",
   "charts.archived": "“{name}” archived.",
   "charts.created": "“{name}” created.",
   "charts.roleCannot": "your role, {role}, cannot create charts",
@@ -877,12 +917,29 @@ const consoleScreens = {
   "charts.keyTaken": "A chart with this key already exists in this workspace, possibly archived.",
   "charts.badDocument": "The file is not a chart document the server takes: {message}",
   "charts.create": "Create chart",
+  "charts.start": "Start from",
+  "charts.startBlank": "An empty chart",
+  "charts.startTemplate": "{template} template ({seats} seats)",
+  "charts.startImage": "A reference image",
+  "charts.startHint": "A template is an ordinary chart: change anything in the designer.",
+  "charts.startImageHint":
+    "The designer opens on the new chart, where you choose the picture to trace.",
   "charts.creating": "Creating…",
   "charts.importTooLarge": "The file is larger than 16 MB, the most a chart may be.",
   "charts.importNotJson": "The file is not a chart document (JSON).",
   // CON-006, CON-007, CON-010 to CON-012: events, a chart's page, API keys,
   // the quick start, settings, members, invitations, the audit log.
   "list.loadMore": "Load more",
+  "table.sortPartial":
+    "Sorting by the other columns waits for the whole list: choose Load more until it ends.",
+  "table.sorted": "Sorted by {column}, {order}.",
+  "table.unsorted": "In the order the server gives.",
+  "table.text.ascending": "A to Z",
+  "table.text.descending": "Z to A",
+  "table.number.ascending": "lowest first",
+  "table.number.descending": "highest first",
+  "table.time.ascending": "oldest first",
+  "table.time.descending": "newest first",
   "list.loadingMore": "Loading…",
   "copy.copy": "Copy",
   "copy.copied": "Copied",
@@ -933,6 +990,7 @@ const consoleScreens = {
   "events.archiveBody":
     "The event becomes read-only: no seat can be held, booked or released, and its seat map stops changing. Archiving cannot be undone.",
   "events.archiveConfirm": "Archive event",
+  "events.archiveBack": "“{name}” is not archived: the server refused.",
   "events.archived": "“{name}” archived.",
   "events.created": "“{name}” created.",
   "events.newTitle": "New event",
@@ -991,7 +1049,14 @@ const consoleScreens = {
   "chart.settings": "Settings",
   "chart.versionsLoading": "Loading versions…",
   "chart.versionsFailed": "The versions could not be loaded.",
-  "chart.versionsPartial": "The newest {n} versions are shown.",
+  "chart.versionsPartial": "The first {n} versions are shown: the list stops there.",
+  "chart.versionsUnsortable":
+    "Not sortable: sorting only the versions shown would mislead while the list stops short.",
+  "chart.colAuthor": "Published by",
+  "chart.authorUnknown": "Not recorded",
+  "chart.authorKey": "An API key",
+  "chart.authorMember": "A member",
+  "chart.authorFormer": "A former member",
   "chart.noVersions":
     "No version has been published yet. Publish the chart from the designer to create events on it.",
   "chart.colVersion": "Version",
@@ -1096,6 +1161,7 @@ const consoleScreens = {
   "workspace.keyHint": "A workspace's key cannot be changed.",
   "workspace.save": "Save",
   "workspace.saving": "Saving…",
+  "workspace.renameBack": "The workspace is called “{name}” again: the new name was not saved.",
   "workspace.renamed": "Workspace renamed to “{name}”.",
 
   "members.title": "Members",
@@ -1116,6 +1182,7 @@ const consoleScreens = {
   "members.changeSelfBody":
     "This is your own role: you may lose access to parts of the console, and only an owner or an admin can give it back.",
   "members.changeConfirm": "Change role",
+  "members.roleBack": "{email} is {role} again: the change was not made.",
   "members.changed": "{email} is now {role}.",
   "members.removeTitle": "Remove {email} from this workspace?",
   "members.removeBody":
@@ -1644,7 +1711,11 @@ const serverDesigner = {
   "publish.unchanged": "Nothing changed since version {version}: it is the published version.",
   "publish.invalid": "The server found errors and did not publish:",
   "publish.notSaved": "The draft could not be saved, so nothing was published.",
-  "publish.conflict": "The draft changed elsewhere before it was published; nothing was published.",
+  "publish.conflict":
+    "The draft changed before it was published, not by this page (another tab or window, perhaps), so nothing was published.",
+  "publish.editedMeanwhile":
+    "You edited the chart while it was publishing. Your edit is saved, and the server published nothing, so that a version never misses it. Publish again to publish the chart as it is now.",
+  "publish.again": "Publish again",
   "publish.failed": "Publishing failed: {message}",
   "topbar.publishLocal": "Publishing needs a chart on the server: open one from the charts list.",
   "topbar.publishRole": "Your role ({role}) cannot publish.",

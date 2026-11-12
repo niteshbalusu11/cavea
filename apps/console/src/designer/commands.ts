@@ -10,7 +10,16 @@ import type { Editor } from "./editor.ts";
 import type { PanelTab } from "./layout.ts";
 import { display, isMac, SHORTCUTS, type Group } from "./shortcuts.ts";
 
-export type CommandGroup = Group | "insert" | "panels" | "file" | "theme";
+export type CommandGroup =
+  | Group
+  | "insert"
+  | "panels"
+  | "file"
+  | "theme"
+  // The console frame's palette (`console/Keys.tsx`).
+  | "navigate"
+  | "charts"
+  | "events";
 
 export interface Command {
   id: string;
@@ -18,6 +27,8 @@ export interface Command {
   group: CommandGroup;
   /** The shortcut, written the platform's way. */
   keys: string | null;
+  /** A search result's second line of identity: its key. */
+  detail?: string;
   /** Why it cannot run now, or `null` when it can. */
   reason: () => string | null;
   run: () => void;
@@ -30,8 +41,9 @@ export interface Hooks {
   numbering: () => void;
   tab: (tab: PanelTab) => void;
   inspector: () => void;
-  /** New chart and Open file, where they apply. */
-  newChart: (() => void) | undefined;
+  /** New chart (a server chart's starting points) and Open file, where
+   * they apply. */
+  newChart: { label: string; run: () => void; reason: () => string | null } | undefined;
   open: (() => void) | undefined;
   tour: () => void;
 }
@@ -195,7 +207,9 @@ export function commands(editor: Editor, act: Record<string, () => void>, hooks:
     add(`panel.${tab}`, msg(`command.panel.${tab}`), "panels", () => hooks.tab(tab));
   }
   add("panel.inspector", msg("command.panel.inspector"), "panels", hooks.inspector);
-  if (hooks.newChart !== undefined) add("newChart", msg("menu.new"), "file", hooks.newChart);
+  if (hooks.newChart !== undefined) {
+    add("newChart", hooks.newChart.label, "file", hooks.newChart.run, hooks.newChart.reason);
+  }
   if (hooks.open !== undefined) add("open", msg("menu.open"), "file", hooks.open);
   add("tour", msg("command.tour"), "general", hooks.tour);
   for (const theme of ["system", "light", "dark"] as const) {

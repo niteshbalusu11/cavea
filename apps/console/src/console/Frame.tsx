@@ -16,6 +16,7 @@ import { Icon, type IconName } from "../ui/Icon.tsx";
 import { menuContent, menuItem, menuSeparator } from "../ui/overlays.tsx";
 import { report } from "./errors.ts";
 import { LicenceBanner, LicencePill } from "./Licence.tsx";
+import { ConsoleKeys } from "./Keys.tsx";
 import { here, signInFor } from "./paths.ts";
 import { Failed, Loading } from "./states.tsx";
 
@@ -134,6 +135,7 @@ function Shell(props: { me: ConsoleMe; children: JSX.Element }) {
         <LicenceBanner />
         <div class="mx-auto max-w-[1280px] px-8 py-6">{props.children}</div>
       </main>
+      <ConsoleKeys />
     </div>
   );
 }

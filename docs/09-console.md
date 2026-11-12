@@ -75,13 +75,15 @@ As built (CON-001 to CON-004, SEC-003): the server side below, and the console's
 - Card menu: open, duplicate, export, archive.
 - Empty state: "Draw your first chart" with the three starting points from `07-designer.md` §16.
 
+As built (CON-005, D-95): the empty state shows the designer's starting-point cards (draw from scratch, a reference image, theatre, arena bowl, banquet, and import a chart file); each opens **New chart** with **Start from** set, which **New chart** also offers (an empty chart, a template with its seats, a reference image). A template creates the chart with the template's document under the name given; a reference image creates an empty chart and opens it in the designer, where the picture is chosen. Not built: the number of events on a card. `GET /v1/charts` has no count, and `GET /v1/events?chart=` pages without a total, so a count would be a request per card that stops at a page; the server would need `events: {active, archived}` on each chart in the list (or `total` on the events list).
+
 ### 3.2 Chart detail
 
 - Header: name, key (copyable), published version, draft state ("unpublished changes").
 - Tabs: **Versions** (number, date, author, seat count, diff link, "create event from this version"), **Events** using the chart, **Settings** (key, archive).
 - Primary action: Open designer.
 
-As built (CON-006, in part): `/charts/{key}`, opened from a chart card's name. The header has the name, the key with a copy button, the published version and its seats, "Unpublished changes" when the draft was saved after the published version was made, and Archived. **Versions** lists every version, newest first (read whole up to 20 pages of 100, and says when it stopped short), with its number, date and seats, the published one marked, and "Create event" opening the event form with the chart and version chosen. **Events** pages `GET /v1/events?chart=` like the events list (oldest first, "load more"), each event linking to its page. **Settings**: the key (it cannot change) and archive, with a confirmation. Not built: Open designer for a server chart (DSN-035), and a version's author and diff link (the API has neither).
+As built (CON-006, in part): `/charts/{key}`, opened from a chart card's name. The header has the name, the key with a copy button, the published version and its seats, "Unpublished changes" when the draft was saved after the published version was made, and Archived. **Versions** lists every version, newest first (read whole up to 20 pages of 100, and says when it stopped short), with its number, date and seats, the published one marked, and "Create event" opening the event form with the chart and version chosen. **Events** pages `GET /v1/events?chart=` like the events list (oldest first, "load more"), each event linking to its page. **Settings**: the key (it cannot change) and archive, with a confirmation. **Versions** also say who published each one (**Published by**): the email to a role that sees the members, while the publisher is one (`created_by_email`); otherwise "A member", "A former member" (to such a role, when the publisher has left), "An API key", or "Not recorded" for a version published before authors were. The table sorts by version, date, seats or author once it is whole, and not while it stops short; **Events** is a table sorting by creation through the server (D-94). Open designer is in the header (DSN-035). Not built: the diff link, for want of server support (`GET …/versions/{number}/diff`, SRV-036).
 
 ## 4. Events
 
@@ -219,21 +221,22 @@ As built (CON-014, in part), checked in headless Chromium at 1,440 × 900 and 76
 | Invitation | ✓ | — | ✓ | ✓ | — | ✓ | ✓ | ✓ |
 | Account, two-step sign-in, recovery codes | ✓ | — | ✓ | ✓ | — | ✓ | ✓ | ✓ |
 | Reset link | ✓ | — | ✓ | ✓ | — | ✓ | ✓ | ✓ |
-| Charts list | ✓ | — (cards; sort by name or last edited) | ✓ | ✓ | ✓ | ✓ | ✗ palette, `?` | ✓ |
-| Chart detail | ✓ | ✗ sorting, row keys | ✓ | ✓ | ✓ | ✓ | ✗ palette, `?` | ✓ |
-| Events list and create | ✓ | ✗ sorting (order by creation only), row keys | ✓ | ✓ | ✓ | ✓ | ✗ palette, `?` | ✓ |
-| Event manager | ✓ (full window) | — | ✓ (Book) | ✓ | ✓ | ✓ | ✓ (map by arrows and Enter, D-52) | — (1,280 px) |
+| Charts list | ✓ | — (cards; sort by name or last edited, the list being whole) | ✓ | ✓ (archive at once) | ✓ (the starting points) | ✓ | ✓ | ✓ |
+| Chart detail | ✓ | ✓ (versions in the page once whole; events by creation through the server) | ✓ | ✓ (archive at once) | ✓ | ✓ | ✓ | ✓ |
+| Events list and create | ✓ | ✓ (creation only, through the server) | ✓ | ✓ (archive at once) | ✓ | ✓ | ✓ | ✓ |
+| Event manager | ✓ (full window) | — | ✓ (Book) | ✓ (seat actions wait for the server, D-82) | ✓ | ✓ | ✓ (map by arrows and Enter, D-52; palette and `?`) | — (1,280 px) |
 | Event settings | ✓ | — | ✓ | ✓ | — | ✓ | ✓ | ✓ |
-| API keys, quick start | ✓ | ✗ sorting, row keys | ✓ | ✓ | ✓ | ✓ | ✗ palette, `?` | ✓ |
-| Settings: workspace, members, invitations, audit | ✓ | ✗ sorting, row keys | ✓ | ✓ | ✓ | ✓ | ✗ palette, `?` | ✓ |
+| API keys, quick start | ✓ | ✓ (in the page once whole) | ✓ | ✓ (revoke waits, below) | ✓ | ✓ | ✓ | ✓ |
+| Settings: workspace, members, invitations, audit | ✓ | ✓ (in the page once whole; a long audit log not at all) | ✓ | ✓ (name and role at once) | ✓ | ✓ | ✓ | ✓ |
 | Settings: licence, and the licence banners | ✓ | — | ✓ | ✓ | — | ✓ | ✓ | ✓ |
+| Designer's starting points (07 §16) | ✓ (full window) | — | — | ✓ (one edit, undone by undo) | ✓ | ✓ | ✓ (its own palette and `?`, 07 §8) | — (1,280 px) |
 
-What the table marks ✗, and what is met only in part:
+As built (CON-014), after the tables, the palette and optimistic updates (checked again in headless Chromium against the production build, 1,440 × 900 and 768 × 900, light and dark: every touched screen Tabbed through from its top with a visible focus ring on each stop; the palette and the help opened by their keys and closed with Escape, focus back where it was; no Content Security Policy violation):
 
-- **Tables:** sticky headers and "load more" everywhere; no column sorting (the charts list sorts by a choice, the events list orders by creation, as the API does) and no keyboard row navigation (rows are reached by Tab through their controls).
-- **Keyboard:** every action is reachable and operable by keyboard, with no trap; the console frame has neither `?` for shortcuts nor a Ctrl+K palette (the designer has both, 07).
-- **Feedback:** results and refusals are toasts or alerts and loading lists show skeletons, but actions wait for the server's answer instead of updating optimistically with a rollback (the manager shows its own action from the reply until the state catches up, D-82).
-- **Accessibility:** what the walk checks (keyboard, focus, roles and names, contrast of the tokens by `tokens.test.ts`) holds on every screen above; not proven: a screen reader, a second browser engine, zoom to 400 % and reflow at 320 px, and the designer (07).
+- **Tables** (D-94): every table has a sticky header and "load more" where the server pages. A column sorts through the server when the route orders by it (creation on the events list and a chart's Events, `order`), in the page once the list is whole (API keys, members, invitations, the audit log, a chart's versions), and not at all while a longer list is partly loaded, which a line under the table says. A sortable header is a button in a `th` with `aria-sort`; a polite status says the order in words. Rows: a plain table with one stop per row (the row's link, or its first cell with a roving `tabindex`); Up and Down, Home and End move between rows; Enter follows the link or moves into the row's first control. The charts list is cards, sorted by a choice over the whole list; its cards are reached by Tab.
+- **Keyboard:** `?` shows the console's shortcuts and Ctrl+K (Cmd+K) opens a command palette from every screen of the frame and the event page (`console/Keys.tsx`, sharing the designer's `Palette.tsx`, `Help.tsx` and chord table): go to a section the role may open, the account, the designer, a theme, sign out, the shortcuts; and search, in the workspace selected when it opened, the charts (with `charts.read`: the list read once per opening and matched in the page, since `GET /v1/charts` has no search; archived charts left out) and the events (with `events.read`: `GET /v1/events?q=`, active and archived, newest first, eight at most, sent 250 ms after typing pauses, the request before cancelled). Neither key fires in a text field or over a dialog or menu; the designer, outside the frame, keeps its own palette and help, so the two never meet.
+- **Feedback:** optimistic with a visible rollback (`console/optimistic.ts`): a member's role (after its confirmation), the workspace's name (shown at once in the frame), archiving a chart (list and chart page) and an event (list). A refusal puts the server's value back and a toast says what is back and why; two changes to one member's role in flight end on the newer, and the list is read again once both have answered. Not optimistic, on purpose: revoking a key or an invitation, removing a member and the sign-in help (access that looks gone must be gone), creations (the server's ids, keys shown once), forms whose refusals land on fields (event settings, origins, the licence), and seat actions (D-82).
+- **Accessibility:** what the walk checks (keyboard, focus, roles and names, contrast of the tokens by `tokens.test.ts`) holds on every screen above. Not proven: a screen reader (so how the row stops and the sort status are announced is untested), a second browser engine, zoom to 400 % and reflow at 320 px, and the designer (07). The designer's canvases and layers tree draw their own focus, which the walk's check cannot read.
 
 ## 9. Technology
 

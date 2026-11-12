@@ -21,11 +21,13 @@ import { describe, reference, report } from "./errors.ts";
 import { roleName } from "./Events.tsx";
 import {
   Action,
+  complete,
   CopyField,
   Empty,
   formatDateTime,
   LoadMore,
   Paged,
+  pageSort,
   Tabs,
   table,
   tableBox,
@@ -42,6 +44,7 @@ import {
   type KeyField,
 } from "./refusals.ts";
 import { pastedKey, snippets, type Snippet } from "./snippets.ts";
+import { by, rove, rowKeys } from "./tables.ts";
 
 type Tab = "keys" | "quickstart";
 
@@ -82,6 +85,14 @@ function Keys() {
         ),
       ),
   );
+  // The route orders by nothing a person chooses: sorted in the page once
+  // every key is loaded.
+  const sort = pageSort<Key, "name" | "kind" | "created" | "used">({
+    name: { label: "keys.colName", kind: "text", compare: by.text((k) => k.name) },
+    kind: { label: "keys.colType", kind: "text", compare: by.text((k) => kindName(k)) },
+    created: { label: "keys.colCreated", kind: "time", compare: by.time((k) => k.created_at) },
+    used: { label: "keys.colLastUsed", kind: "time", compare: by.time((k) => k.last_used_at) },
+  });
   const [revoked, setRevoked] = createSignal(false);
   const [creating, setCreating] = createSignal(false);
   const [revoking, setRevoking] = createSignal<Key | null>(null);
@@ -141,33 +152,31 @@ function Keys() {
                 <caption class="sr-only">{msg("keys.title")}</caption>
                 <thead>
                   <tr>
-                    <th scope="col" class={th}>
-                      {msg("keys.colName")}
-                    </th>
-                    <th scope="col" class={th}>
-                      {msg("keys.colType")}
-                    </th>
+                    {sort.header("name", complete(keys))}
+                    {sort.header("kind", complete(keys))}
                     <th scope="col" class={th}>
                       {msg("keys.colPrefix")}
                     </th>
                     <th scope="col" class={th}>
                       {msg("keys.colOrigins")}
                     </th>
-                    <th scope="col" class={th}>
-                      {msg("keys.colCreated")}
-                    </th>
-                    <th scope="col" class={th}>
-                      {msg("keys.colLastUsed")}
-                    </th>
+                    {sort.header("created", complete(keys))}
+                    {sort.header("used", complete(keys))}
                     <th scope="col" class={th}>
                       <span class="sr-only">{msg("events.colActions")}</span>
                     </th>
                   </tr>
                 </thead>
-                <tbody>
-                  <For each={rows().filter((k) => revoked() || k.revoked_at === null)}>
-                    {(key) => (
+                <tbody onKeyDown={rowKeys}>
+                  <For
+                    each={sort.rows(
+                      rows().filter((k) => revoked() || k.revoked_at === null),
+                      complete(keys),
+                    )}
+                  >
+                    {(key, i) => (
                       <KeyRow
+                        first={i() === 0}
                         key={key}
                         onRevoke={() => setRevoking(key)}
                         onEdit={() => setEditing(key)}
@@ -177,6 +186,7 @@ function Keys() {
                 </tbody>
               </table>
             </div>
+            {sort.note(complete(keys))}
             <Show when={!revoked() && rows().every((k) => k.revoked_at !== null)}>
               <p class="mt-3 text-base text-muted">{msg("keys.allRevoked")}</p>
             </Show>
@@ -217,11 +227,18 @@ function Keys() {
   );
 }
 
-function KeyRow(props: { key: Key; onRevoke: () => void; onEdit: () => void }) {
+const kindName = (k: Key) => msg(k.kind === "secret" ? "keys.secret" : "keys.publishable");
+
+function KeyRow(props: { key: Key; first: boolean; onRevoke: () => void; onEdit: () => void }) {
   const live = () => props.key.revoked_at === null;
   return (
     <tr classList={{ "text-muted": !live() }}>
-      <td class={td}>
+      <td
+        class={td}
+        data-row-stop
+        tabIndex={props.first ? 0 : -1}
+        onFocus={(e) => rove(e.currentTarget)}
+      >
         <span class="font-medium">{props.key.name}</span>
         <Show when={!live()}>
           <span class="ml-2 rounded-sm bg-warning-soft px-1.5 text-xs text-warning">
@@ -229,7 +246,7 @@ function KeyRow(props: { key: Key; onRevoke: () => void; onEdit: () => void }) {
           </span>
         </Show>
       </td>
-      <td class={td}>{msg(props.key.kind === "secret" ? "keys.secret" : "keys.publishable")}</td>
+      <td class={td}>{kindName(props.key)}</td>
       <td class={`${td} font-mono text-sm`}>{props.key.prefix}…</td>
       <td class={`${td} text-sm`}>
         <Show when={props.key.kind === "publishable"} fallback="—">

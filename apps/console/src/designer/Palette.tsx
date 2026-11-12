@@ -3,11 +3,11 @@
 // cannot run now stays listed, dimmed, with the reason. Searching charts
 // and events (09 §8) needs the server: it is another list of `Command`s
 // handed to the same palette.
-import { createMemo, createSignal, createUniqueId, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, createUniqueId, For, Show } from "solid-js";
 import { msg } from "../i18n/messages.ts";
 import { Dialog } from "../ui/overlays.tsx";
 import type { Command } from "./commands.ts";
-import { rank } from "./match.ts";
+import { match, rank } from "./match.ts";
 
 /** Highlights the matched characters of `text`. */
 function Marked(props: { text: string; at: number[] }) {
@@ -29,21 +29,47 @@ function Marked(props: { text: string; at: number[] }) {
   );
 }
 
-export function Palette(props: { open: boolean; commands: () => Command[]; onClose: () => void }) {
+export function Palette(props: {
+  open: boolean;
+  commands: () => Command[];
+  onClose: () => void;
+  /** The console's search of charts and events (`console/Keys.tsx`):
+   * told what is typed, its results listed after the commands, its state
+   * said. */
+  search?: {
+    onQuery: (query: string) => void;
+    results: () => Command[];
+    status: () => string | null;
+  };
+  placeholder?: string;
+}) {
   const id = createUniqueId();
   const [query, setQuery] = createSignal("");
   const [active, setActive] = createSignal(0);
   let input: HTMLInputElement | undefined;
   let list: HTMLUListElement | undefined;
 
-  const shown = createMemo(() =>
-    props.open ? rank(props.commands(), query(), (c) => c.label) : [],
-  );
-  const current = () => shown()[Math.min(active(), shown().length - 1)];
+  const shown = createMemo(() => {
+    if (!props.open) return [];
+    const found = (props.search?.results() ?? []).map((item) => ({
+      item,
+      match: match(query(), item.label) ?? { score: 0, at: [] },
+    }));
+    return [...rank(props.commands(), query(), (c) => c.label), ...found];
+  });
+  // Results can change under the active row (a search answering): the
+  // active index stays within them, so what is highlighted, announced and
+  // run is one row.
+  createEffect(() => {
+    const n = shown().length;
+    if (active() > Math.max(0, n - 1)) setActive(Math.max(0, n - 1));
+  });
+  const current = () => shown()[active()];
   const optionId = (i: number) => `${id}-${i}`;
 
   const close = () => {
     setQuery("");
+    props.search?.onQuery("");
     setActive(0);
     props.onClose();
   };
@@ -97,11 +123,12 @@ export function Palette(props: { open: boolean; commands: () => Command[]; onClo
           aria-autocomplete="list"
           aria-activedescendant={current() ? optionId(active()) : undefined}
           aria-label={msg("palette.title")}
-          placeholder={msg("palette.placeholder")}
+          placeholder={props.placeholder ?? msg("palette.placeholder")}
           class="h-full w-full bg-transparent text-lg text-fg outline-none placeholder:text-faint"
           value={query()}
           onInput={(e) => {
             setQuery(e.currentTarget.value);
+            props.search?.onQuery(e.currentTarget.value);
             setActive(0);
             list?.scrollTo({ top: 0 });
           }}
@@ -137,6 +164,9 @@ export function Palette(props: { open: boolean; commands: () => Command[]; onClo
                 <Show when={reason()}>
                   {(r) => <span class="min-w-0 truncate text-sm text-faint">{r()}</span>}
                 </Show>
+                <Show when={row.item.detail}>
+                  {(d) => <span class="min-w-0 truncate font-mono text-sm text-muted">{d()}</span>}
+                </Show>
                 <span class="ml-auto flex shrink-0 items-center gap-3">
                   <span class="text-xs text-faint">{msg(`group.${row.item.group}`)}</span>
                   <Show when={row.item.keys}>
@@ -150,11 +180,10 @@ export function Palette(props: { open: boolean; commands: () => Command[]; onClo
           }}
         </For>
       </ul>
-      <Show when={shown().length === 0}>
-        <p class="px-4 pt-1 pb-4 text-base text-muted" role="status">
-          {msg("palette.none", { query: query() })}
-        </p>
-      </Show>
+      <p class="px-4 pt-1 pb-4 text-base text-muted empty:hidden" role="status">
+        {props.search?.status() ??
+          (shown().length === 0 ? msg("palette.none", { query: query() }) : "")}
+      </p>
     </Dialog>
   );
 }
