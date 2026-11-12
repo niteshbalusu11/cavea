@@ -224,13 +224,14 @@ pub(crate) struct Names {
     next: BTreeMap<&'static str, u32>,
 }
 
-/// Every name the nodes of `doc` have, and the names unnamed nodes are
-/// shown by: a copy takes none of them.
+/// Every name the nodes of `doc` have or are shown by (stored, label,
+/// text, or kind and number): a copy takes none of them.
 pub(crate) fn names(doc: &Document) -> Names {
     let mut taken: BTreeSet<String> = doc
         .ids()
         .filter_map(|id| doc.node(id))
-        .filter_map(|n| each_node!(n, x => x.name.clone()))
+        .flat_map(|n| [each_node!(n, x => x.name.clone()), own(n)])
+        .flatten()
         .collect();
     with_shown(doc, |s| {
         taken.extend(s.names.values().map(|(w, n)| format!("{w} {n}")));
@@ -344,6 +345,22 @@ mod tests {
         assert_eq!(name(&a).as_deref(), Some("Row block 2"));
         assert_eq!(name(&b).as_deref(), Some("Row block 3"));
         assert_eq!(name(&c).as_deref(), Some("Balcony"));
+
+        // A name shown from a label or text is taken too.
+        let doc = Document::load(
+            serde_json::from_value(serde_json::json!({
+                "schema": 1, "name": "n", "nextOid": 100,
+                "nodes": [
+                    { "id": 1, "type": "shape", "kind": "rect", "name": "Rectangle 1", "size": [1, 1] },
+                    { "id": 2, "type": "text", "text": "Rectangle 2", "size": 10, "color": "#000000" }
+                ]
+            }))
+            .expect("chart"),
+        )
+        .expect("load");
+        let mut rect = doc.node(1).cloned().expect("rect");
+        rename_copy(&mut rect, &mut names(&doc));
+        assert_eq!(name(&rect).as_deref(), Some("Rectangle 3"));
     }
 
     /// Unnamed nodes (a chart made by `cavea gen`, imported, made through
