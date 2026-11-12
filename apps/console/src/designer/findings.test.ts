@@ -171,13 +171,13 @@ test("on a real chart, findings name objects by name and rows and seats by label
   const codes = new Set(warned.map((f) => f.code));
   for (const code of ["W102", "W103", "W105", "W106", "W109"]) expect(codes).toContain(code);
   for (const f of warned) {
-    const place = f.node !== null && namesPlace(f) ? warnings.findingPlace(f.node, f.row, f.seat) : null;
-    plain(findingText(f, place));
+    const at = f.node !== null && namesPlace(f) ? warnings.findingPlace(f.node, f.row, f.seat) : null;
+    plain(findingText(f, at));
   }
   const single = warned.find((f) => f.code === "W103");
   if (single?.node !== null && single?.node !== undefined) {
-    const place = warnings.findingPlace(single.node, single.row, single.seat);
-    expect(findingText(single, place)).toStartWith("Row A of Front block");
+    const where = warnings.findingPlace(single.node, single.row, single.seat);
+    expect(findingText(single, where)).toStartWith("Row A of Front block");
   }
   expect(findingText(warned.find((f) => f.code === "W105") as FindingView)).toContain("Premium");
 });
