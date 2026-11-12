@@ -17,6 +17,7 @@ import {
   type Input,
   type Pointer,
   type PointerKind,
+  type TextField,
   type Theme,
 } from "@cavea/designer-core";
 import { createEffect, createSignal, onCleanup, onMount, Show, untrack } from "solid-js";
@@ -26,6 +27,7 @@ import type { Editor } from "./editor.ts";
 import { modifiers } from "./keys.ts";
 import { Painter } from "./paint.ts";
 import { guideNear, Rulers, type GuideDrag, type RulersHandle } from "./Rulers.tsx";
+import { TextOnCanvas } from "./TextOnCanvas.tsx";
 import { pinchStep, wheelStep, type Pinch } from "./wheel.ts";
 
 const BUTTONS: Record<number, Button> = { 0: "primary", 1: "middle", 2: "secondary" };
@@ -50,6 +52,8 @@ export function CanvasHost(props: { editor: Editor; rulers: boolean }) {
   };
   let region!: HTMLDivElement;
   let element!: HTMLCanvasElement;
+  /** The text field the tool asks for (07 §4, Text). */
+  const [textField, setTextField] = createSignal<TextField | null>(null);
   /** Why there is no canvas (no WebGL2, a failed draw), shown in its place. */
   const [failed, setFailed] = createSignal<string | null>(null);
   let canvas: Canvas | null = null;
@@ -231,6 +235,10 @@ export function CanvasHost(props: { editor: Editor; rulers: boolean }) {
           const o = drawing ? editor.run((s) => s.overlay()) : undefined;
           const shown = o !== undefined && (o.readout !== null || o.entry !== "");
           editor.setReadout(shown ? { readout: o.readout, entry: o.entry } : null);
+          // The text tool, and the select tool's double click, type text.
+          const tool = editor.views.tool.tool;
+          const typing = tool === "text" || tool === "select";
+          setTextField(typing ? (editor.run((s) => s.textField()) ?? null) : null);
         }
         // A new preview relabels the seat under a still pointer.
         if (names.has("numbering")) resample();
@@ -385,12 +393,43 @@ export function CanvasHost(props: { editor: Editor; rulers: boolean }) {
           over = null;
           setSample(null);
         }}
+        onKeyDown={(e) => {
+          // The keyboard's way to the text tool: Enter places a text in the
+          // middle of the view, as a click there would.
+          if (
+            e.key !== "Enter" ||
+            e.isComposing ||
+            e.shiftKey ||
+            e.altKey ||
+            e.ctrlKey ||
+            e.metaKey ||
+            editor.views.tool.tool !== "text" ||
+            textField() !== null
+          ) {
+            return;
+          }
+          e.preventDefault();
+          const view = editor.view();
+          const screen: [number, number] = [view.width / 2, view.height / 2];
+          const at = {
+            world: toChart(view, screen),
+            screen,
+            zoom: view.zoom,
+            button: "primary" as const,
+            kind: "mouse" as const,
+            mods: { shift: false, alt: false, ctrl: false },
+            time: e.timeStamp,
+          };
+          send({ kind: "pointerDown", data: at });
+          send({ kind: "pointerUp", data: at });
+        }}
         onContextMenu={(e) => e.preventDefault()}
         onMouseDown={(e) => {
           // No autoscroll on a middle press: it pans.
           if (e.button === 1) e.preventDefault();
         }}
       />
+      <TextOnCanvas editor={editor} field={textField()} canvas={() => element} />
       <Show when={props.rulers}>
         <Rulers editor={editor} guides={() => editor.views.guides} ref={(h) => (rulers = h)} />
       </Show>

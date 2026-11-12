@@ -186,8 +186,10 @@ pub(crate) fn paste(
             });
         }
     }
+    let mut names = crate::naming::names(view.doc);
     for (k, mut node) in clip.nodes.into_iter().enumerate() {
         strip(&mut node, &mut BTreeSet::new());
+        crate::naming::rename_copy(&mut node, &mut names);
         each_node!(&mut node, n => {
             let world = [n.origin[0] + d[0], n.origin[1] + d[1]];
             n.origin = place.invert(world);

@@ -56,6 +56,7 @@ const PATHS = {
   sortUp: "M8 12.5v-9M4.5 7 8 3.5 11.5 7",
   sortDown: "M8 3.5v9M4.5 9 8 12.5 11.5 9",
   sortable: "m5 6 3-3 3 3M5 10l3 3 3-3",
+  accessible: "M8.5 2.5h.01M8 4.8v4.2h3.2l1.6 3.3M8 6.8h3M5.6 6.6a3.6 3.6 0 1 0 5 5.1",
 } as const;
 
 export type IconName = keyof typeof PATHS;

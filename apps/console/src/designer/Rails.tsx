@@ -5,6 +5,7 @@ import { formatNumber, msg } from "../i18n/messages.ts";
 import { IconButton } from "../ui/controls.tsx";
 import { Icon } from "../ui/Icon.tsx";
 import type { Editor } from "./editor.ts";
+import { nodeName } from "./findings.ts";
 import { keyOf } from "./shortcuts.ts";
 
 const GROUPS: ToolId[][] = [
@@ -153,7 +154,15 @@ export function StatusBar(props: {
       <span class="tabular-nums">{msg("status.seats", { n: v.status.seats })}</span>
       <span class="tabular-nums">{msg("status.nodes", { n: v.status.nodes })}</span>
       <Show when={v.selection.count > 0}>
-        <span class="tabular-nums text-fg">{msg("status.selected", { n: v.selection.count })}</span>
+        <span class="truncate tabular-nums text-fg">
+          {v.selection.level.kind === "section"
+            ? // A new object drawn inside a section goes into it: say so.
+              msg("status.selectedIn", {
+                n: v.selection.count,
+                section: nodeName(v.selection.within, "section", v.selection.level.id),
+              })
+            : msg("status.selected", { n: v.selection.count })}
+        </span>
       </Show>
       <button
         type="button"

@@ -56,12 +56,17 @@ const settle = async () => {
 
 type Mode = "up" | "down" | "signedOut";
 
+/** Who holds the lock: `me`, this browser (every tab of it); `there`, the
+ * same person in another browser, a holder apart (D-97); `other`, another
+ * person. */
+type Holder = "me" | "there" | "other";
+
 /** The server's draft and etag, another writer, and requests the test
- * answers one at a time; the editing lock by the server's clock (D-73). */
+ * answers one at a time; the editing lock by the server's clock (D-73),
+ * held by person and editor (D-97). */
 class FakeServer {
   constructor(readonly clock: FakeClock) {}
-  /** `me` is this person (every tab of theirs); `other` another person. */
-  lock: { holder: "me" | "other"; since: number; until: number } | null = null;
+  lock: { holder: Holder; since: number; until: number } | null = null;
   locks: { resolve: (r: LockReply) => void }[] = [];
   maxLocks = 0;
   /** Saves that arrived while another held a live lock (refused). */
@@ -85,12 +90,14 @@ class FakeServer {
       this.maxPending = Math.max(this.maxPending, this.pending.length);
     });
 
-  live(): { holder: "me" | "other"; since: number; until: number } | null {
+  live(): { holder: Holder; since: number; until: number } | null {
     return this.lock !== null && this.lock.until > this.clock.t ? this.lock : null;
   }
 
-  info(l: { holder: "me" | "other"; since: number }): LockInfo {
-    return { holder: l.holder === "me" ? "usr_me" : "usr_other", email: null, since: `${l.since}` };
+  info(l: { holder: Holder; since: number }): LockInfo {
+    // The person's other browser is the person: the same holder id.
+    const holder = l.holder === "other" ? "usr_other" : "usr_me";
+    return { holder, email: null, since: `${l.since}` };
   }
 
   take = (): Promise<LockReply> =>
@@ -106,24 +113,29 @@ class FakeServer {
     if (this.mode === "down") return r.resolve({ kind: "offline" });
     if (this.mode === "signedOut") return r.resolve({ kind: "signedOut" });
     const live = this.live();
-    if (live?.holder === "other") return r.resolve({ kind: "locked", lock: this.info(live) });
+    if (live !== null && live.holder !== "me") {
+      return r.resolve({ kind: "locked", lock: this.info(live) });
+    }
     const since = live?.holder === "me" ? live.since : this.clock.t;
     this.lock = { holder: "me", since, until: this.clock.t + LOCK_MS };
     r.resolve({ kind: "held", lock: this.info(this.lock) });
   }
 
-  /** Another person takes the lock (over this one's, if live). */
-  otherTakesOver(): void {
-    this.lock = { holder: "other", since: this.clock.t, until: this.clock.t + LOCK_MS };
+  /** Another person, or this person in another browser, takes the lock
+   * (over this one's, if live). */
+  takesOver(who: "there" | "other"): void {
+    this.lock = { holder: who, since: this.clock.t, until: this.clock.t + LOCK_MS };
   }
 
-  /** The other person saves, as their designer may: only while theirs. */
-  otherSaves(): void {
-    if (this.live()?.holder === "other") this.otherTabSaves();
+  /** They save, as their designer may: only while the lock is theirs. */
+  saves(who: "there" | "other"): void {
+    if (this.live()?.holder === who) this.otherTabSaves();
   }
 
-  otherLeaves(): void {
-    if (this.lock?.holder === "other") this.lock = null;
+  /** They close the chart: their own lock is released, never another
+   * editor's, the same person's included (D-97). */
+  leaves(who: "there" | "other"): void {
+    if (this.lock?.holder === who) this.lock = null;
   }
 
   /** Answers the oldest request as the server would now. */
@@ -135,7 +147,7 @@ class FakeServer {
     if (this.mode === "signedOut") return r.resolve({ kind: "signedOut" });
     // The lock before the etag (08 §6.2).
     const live = this.live();
-    if (live?.holder === "other") {
+    if (live !== null && live.holder !== "me") {
       this.refusedLocked++;
       return r.resolve({ kind: "locked", lock: this.info(live) });
     }
@@ -304,14 +316,15 @@ test("random edits, outages, other tabs, the lock and choices: nothing lost, not
         case 10:
           r.server.answerLock();
           break;
-        case 11:
-          // Another person: takes over, saves while theirs, or leaves.
-          [
-            () => r.server.otherTakesOver(),
-            () => r.server.otherSaves(),
-            () => r.server.otherLeaves(),
-          ][next(3)]?.();
+        case 11: {
+          // Another person, or this person in another browser: takes over,
+          // saves while theirs, or leaves.
+          const who = next(2) === 0 ? "other" : "there";
+          [() => r.server.takesOver(who), () => r.server.saves(who), () => r.server.leaves(who)][
+            next(3)
+          ]?.();
           break;
+        }
         case 12:
           // The page hidden or shown (an idle hidden tab stops renewing).
           r.page.active = next(2) === 0;
@@ -593,7 +606,7 @@ test("taken over: saving stops, the work stays in the store, and the person lear
   const r = locked();
   r.edit();
   await r.clock.advance(LOCAL_DELAY_MS);
-  r.server.otherTakesOver();
+  r.server.takesOver("other");
   await r.clock.advance(SAVE_DELAY_MS);
   r.server.answer();
   await settle();
@@ -612,9 +625,33 @@ test("taken over: saving stops, the work stays in the store, and the person lear
   expect(r.server.refusedLocked).toBe(1);
 });
 
+test("the person's other browser is a holder apart (D-97): its leaving never frees this one's lock, and its take-over stops this one", async () => {
+  const r = locked();
+  r.edit();
+  // The other browser opened read-only and closes: this one's lock stays.
+  r.server.leaves("there");
+  expect(r.server.live()?.holder).toBe("me");
+  await r.clock.advance(SAVE_DELAY_MS);
+  r.server.answer();
+  await settle();
+  expect(r.save.state.kind).toBe("saved");
+  // It takes over: this one is refused at its next save, its work kept.
+  r.server.takesOver("there");
+  r.edit();
+  await r.clock.advance(SAVE_DELAY_MS);
+  r.server.answer();
+  await settle();
+  expect(r.save.lock).toMatchObject({ kind: "lost", lock: { holder: "usr_me" }, takenOver: true });
+  expect(r.store.record?.draft).toBe(r.latest());
+  // Even once the other browser has left, nothing more is sent from here.
+  r.server.leaves("there");
+  await r.clock.advance(RENEW_MS * 3);
+  expect([r.server.pending.length, r.server.locks.length]).toEqual([0, 0]);
+});
+
 test("a renewal refused is a take-over too; a lock that lapsed while the tab slept is not", async () => {
   const r = locked();
-  r.server.otherTakesOver();
+  r.server.takesOver("other");
   await r.clock.advance(RENEW_MS);
   r.server.answerLock();
   await settle();
@@ -623,7 +660,7 @@ test("a renewal refused is a take-over too; a lock that lapsed while the tab sle
   const s = locked();
   // Asleep for two minutes: the lock lapsed; another took it meanwhile.
   await s.clock.sleep(LOCK_MS * 2);
-  s.server.otherTakesOver();
+  s.server.takesOver("other");
   s.server.answerLock();
   await settle();
   expect(s.save.lock.kind === "lost" && !s.save.lock.takenOver).toBe(true);
@@ -642,9 +679,9 @@ test("a lock that lapsed is taken again; a draft saved meanwhile is a conflict, 
     r.server.answerLock();
   }
   expect(r.save.lock.kind).toBe("unrenewed");
-  r.server.otherTakesOver();
-  r.server.otherSaves();
-  r.server.otherLeaves();
+  r.server.takesOver("other");
+  r.server.saves("other");
+  r.server.leaves("other");
   r.server.mode = "up";
   r.save.retry();
   r.server.answerLock();
@@ -664,9 +701,9 @@ test("a lapse with nothing to save checks the draft: unchanged carries on, chang
     r.page.active = false;
     await r.clock.sleep(LOCK_MS * 3);
     if (changed) {
-      r.server.otherTakesOver();
-      r.server.otherSaves();
-      r.server.otherLeaves();
+      r.server.takesOver("other");
+      r.server.saves("other");
+      r.server.leaves("other");
     }
     r.page.active = true;
     r.save.wake();

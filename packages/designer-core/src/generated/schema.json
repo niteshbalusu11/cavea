@@ -181,6 +181,13 @@
       "call": "export",
       "returns": "string"
     },
+    "findingPlace": {
+      "call": "finding_place",
+      "returns": {
+        "args": [],
+        "ref": "FindingPlace"
+      }
+    },
     "fit": {
       "call": "fit",
       "returns": {
@@ -520,6 +527,18 @@
     "stepOut": {
       "call": "step_out",
       "returns": "null"
+    },
+    "textField": {
+      "call": "text_field",
+      "returns": {
+        "union": [
+          {
+            "args": [],
+            "ref": "TextField"
+          },
+          "null"
+        ]
+      }
     },
     "title": {
       "call": "title",
@@ -3786,6 +3805,691 @@
         ]
       }
     },
+    "FindingDetail": {
+      "params": [],
+      "type": {
+        "union": [
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "schema"
+                }
+              },
+              {
+                "name": "schema",
+                "optional": false,
+                "type": "number"
+              },
+              {
+                "name": "newest",
+                "optional": false,
+                "type": "number"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "migration"
+                }
+              },
+              {
+                "name": "from",
+                "optional": false,
+                "type": "number"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "duplicateLabel"
+                }
+              },
+              {
+                "name": "label",
+                "optional": false,
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "labelTooLong"
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "emptyLabel"
+                }
+              },
+              {
+                "name": "seat",
+                "optional": false,
+                "type": "boolean"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "noCategory"
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "unknownCategory"
+                }
+              },
+              {
+                "name": "key",
+                "optional": false,
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "unknownFloor"
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "unknownIcon"
+                }
+              },
+              {
+                "name": "key",
+                "optional": false,
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "floorConflict"
+                }
+              },
+              {
+                "name": "floor",
+                "optional": false,
+                "type": {
+                  "union": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              {
+                "name": "sectionFloor",
+                "optional": false,
+                "type": {
+                  "union": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "duplicateFloor"
+                }
+              },
+              {
+                "name": "floor",
+                "optional": false,
+                "type": {
+                  "union": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "duplicateCategory"
+                }
+              },
+              {
+                "name": "key",
+                "optional": false,
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "categoryColor"
+                }
+              },
+              {
+                "name": "category",
+                "optional": false,
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "focalPoint"
+                }
+              },
+              {
+                "name": "floor",
+                "optional": false,
+                "type": {
+                  "union": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "duplicateId"
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "invalidValue"
+                }
+              },
+              {
+                "name": "field",
+                "optional": false,
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "emptyText"
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "outOfRange"
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "geometry"
+                }
+              },
+              {
+                "name": "problem",
+                "optional": false,
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "tooMany"
+                }
+              },
+              {
+                "name": "what",
+                "optional": false,
+                "type": "string"
+              },
+              {
+                "name": "limit",
+                "optional": false,
+                "type": "number"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "unsupported"
+                }
+              },
+              {
+                "name": "nodeKind",
+                "optional": false,
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "overlap"
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "noFocalPoint"
+                }
+              },
+              {
+                "name": "floor",
+                "optional": false,
+                "type": {
+                  "union": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "singleSeat"
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "outsideOutline"
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "unusedCategory"
+                }
+              },
+              {
+                "name": "category",
+                "optional": false,
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "noAccessibleSeat"
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "similarColors"
+                }
+              },
+              {
+                "name": "category",
+                "optional": false,
+                "type": "string"
+              },
+              {
+                "name": "other",
+                "optional": false,
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "lowContrast"
+                }
+              },
+              {
+                "name": "category",
+                "optional": false,
+                "type": "string"
+              },
+              {
+                "name": "background",
+                "optional": false,
+                "type": "string"
+              },
+              {
+                "name": "ratio",
+                "optional": false,
+                "type": "number"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "textTooSmall"
+                }
+              },
+              {
+                "name": "px",
+                "optional": false,
+                "type": "number"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "noSectionLabel"
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "chartTooLarge"
+                }
+              },
+              {
+                "name": "extent",
+                "optional": false,
+                "type": "number"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "tooManySeatsInRow"
+                }
+              },
+              {
+                "name": "seats",
+                "optional": false,
+                "type": "number"
+              },
+              {
+                "name": "limit",
+                "optional": false,
+                "type": "number"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "tooManySeats"
+                }
+              },
+              {
+                "name": "limit",
+                "optional": false,
+                "type": "number"
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "seatIds"
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "removedOutOfRange"
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "arcRow"
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "pathTooShort"
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "directionNotForRows"
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "invalidLabelStart"
+                }
+              }
+            ]
+          },
+          {
+            "object": [
+              {
+                "name": "kind",
+                "optional": false,
+                "type": {
+                  "literal": "labels"
+                }
+              },
+              {
+                "name": "problem",
+                "optional": false,
+                "type": "string"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "FindingPlace": {
+      "params": [],
+      "type": {
+        "object": [
+          {
+            "name": "row",
+            "optional": false,
+            "type": {
+              "union": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "rowNumber",
+            "optional": false,
+            "type": {
+              "union": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "seat",
+            "optional": false,
+            "type": {
+              "union": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "seatNumber",
+            "optional": false,
+            "type": {
+              "union": [
+                "number",
+                "null"
+              ]
+            }
+          }
+        ]
+      }
+    },
     "FindingView": {
       "params": [],
       "type": {
@@ -3849,6 +4553,60 @@
             "name": "stale",
             "optional": false,
             "type": "boolean"
+          },
+          {
+            "name": "name",
+            "optional": false,
+            "type": {
+              "union": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "kind",
+            "optional": false,
+            "type": {
+              "union": [
+                {
+                  "args": [],
+                  "ref": "NodeKind"
+                },
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "relatedName",
+            "optional": false,
+            "type": {
+              "union": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "relatedKind",
+            "optional": false,
+            "type": {
+              "union": [
+                {
+                  "args": [],
+                  "ref": "NodeKind"
+                },
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "detail",
+            "optional": false,
+            "type": {
+              "args": [],
+              "ref": "FindingDetail"
+            }
           }
         ]
       }
@@ -7861,6 +8619,16 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "within",
+            "optional": false,
+            "type": {
+              "union": [
+                "string",
+                "null"
+              ]
+            }
           }
         ]
       }
@@ -8529,6 +9297,34 @@
           },
           {
             "name": "text",
+            "optional": false,
+            "type": "string"
+          },
+          {
+            "name": "size",
+            "optional": false,
+            "type": "number"
+          },
+          {
+            "name": "angle",
+            "optional": false,
+            "type": "number"
+          },
+          {
+            "name": "align",
+            "optional": false,
+            "type": {
+              "args": [],
+              "ref": "Align"
+            }
+          },
+          {
+            "name": "weight",
+            "optional": false,
+            "type": "number"
+          },
+          {
+            "name": "color",
             "optional": false,
             "type": "string"
           }

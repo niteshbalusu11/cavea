@@ -56,8 +56,9 @@ import { ValidationPanel } from "./ValidationPanel.tsx";
  * open in the inspector's place: it has more fields than the inspector. */
 const NUMBERING_SPLIT = 0.7;
 
-/** 09 §8: the designer needs 1,280 px. */
-const MIN_WIDTH = 1280;
+/** 09 §8: the designer needs a window 1,100 px wide (the viewport: a 1,280 px
+ * laptop's browser that is not full-screen). Laid out down to 1,024 px. */
+const MIN_WIDTH = 1100;
 
 /** The buyer's renderer, loaded when the preview first opens. */
 const Preview = lazy(() => import("./Preview.tsx"));

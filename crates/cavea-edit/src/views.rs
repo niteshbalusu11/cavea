@@ -128,6 +128,10 @@ pub struct SelectionView {
     /// The world box around the selected items' outlines: the box "zoom to
     /// selection" frames.
     pub bounds: Option<Rect>,
+    /// Inside a section (`level` names it): its name as the layers panel
+    /// shows it, `null` when it has none, so the status bar can say where
+    /// a new object went.
+    pub within: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

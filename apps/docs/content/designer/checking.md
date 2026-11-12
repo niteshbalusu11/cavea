@@ -16,7 +16,7 @@ There are two kinds of finding:
 
 ![The validation panel listing Duplicate label errors after a box was copied](../images/designer-validation.webp)
 
-The line of detail is written by the part of Cavea that builds the chart, and it is terse. A number in it, such as "node 123", is the designer's own number for an object, the one in its name in the **Layers** list until you give it a name of your own ("Row block 123"). "row 57" is an internal number for a row, which the screen does not show: click the finding to be taken to it.
+The line under the title says what is wrong and what to do about it. It names objects as the **Layers** list does ("Row block 2", or the name you gave it), and rows and seats by the labels on the tickets ("Row C of Stalls", "Seat Stalls-C-12"). Click the finding to be taken to it.
 
 ## Errors
 
@@ -96,7 +96,7 @@ Fix: move the blocks apart, make the pitch larger, or the curve gentler.
 
 Code W102. The chart does not say where the stage is. The focal point is the point the seats face; Cavea uses it to suggest the best available seats (nearest the stage first) and to read left and right in the numbering panel.
 
-A chart started in the console cannot have a focal point yet: this warning stays, and the best available seats are picked row by row from the front instead. A chart started from a template has one ([Starting from a template](start.md#starting-from-a-template-or-a-file)): there, choose **Focal point** (`F`) and click the middle of the stage to move it.
+Fix: choose **Focal point** (`F`) and click the middle of the stage. Until a chart has one, the best available seats are picked row by row from the front. A chart started from a template has one already ([Starting from a template](start.md#starting-from-a-template-or-a-file)); click elsewhere with the tool to move it.
 
 ### Single-seat row
 

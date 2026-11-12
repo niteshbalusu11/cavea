@@ -210,7 +210,7 @@ As built on the server (CON-012, CON-013; D-61):
 - **Keyboard:** every action reachable; `?` shows shortcuts; Ctrl+K opens a command palette that also searches charts and events.
 - **Accessibility:** WCAG 2.2 AA for all console screens (`11-accessibility.md` §8).
 - **Localisation:** English first; all strings in catalogues; dates and numbers through `Intl`.
-- **Responsiveness:** lists, reports and settings work from 768 px; designer and manager need 1,280 px.
+- **Responsiveness:** lists, reports and settings work from 768 px; the manager needs 1,280 px and the designer a window 1,100 px wide (the viewport, so that a 1,280 px laptop's browser that is not full-screen opens it; it lays out down to 1,024 px).
 
 As built (CON-014, in part), checked in headless Chromium at 1,440 × 900 and 768 × 900, light and dark, keyboard only: each screen Tabbed through from its top (every control reached, a visible focus ring on each stop, no trap), every dialog and menu opened with Enter (focus moves in and stays in, Escape closes, focus returns to the control that opened it), forms submitted empty, route changes followed. Shared fixes, so every screen gains them: a dialog is a `dialog` (Kobalte assigns `Dialog`'s and `AlertDialog`'s parts onto one root, so with both imported every form dialog was an `alertdialog`; `ui/overlays.tsx` now takes the parts by name); focus returns to a dialog's opener, or, when its row was drawn again or removed, to the same control in the new row (`data-focus-id`) or the page's heading, never to the body (`ui/focus.ts`), and a dialog opened from a menu returns it to the menu's trigger; when the focused element leaves the page later (its row archived and the list read again) and focus falls to the body, the same rule moves it; a gated action (`Action`) is one element whether available or not, so focus stays on it when it becomes unavailable; after a route change that removed the focused element, the new page's heading takes focus; a form whose own checks refuse a submit focuses its first invalid field; a section's screen is mounted as a component, so a screen that reads its URL is not made again (and focus lost) when its parameters change; tables keep their header in view in a scroll box of their own that also scrolls sideways. ✓ met, ✗ not met, — not applicable.
 
@@ -229,7 +229,7 @@ As built (CON-014, in part), checked in headless Chromium at 1,440 × 900 and 76
 | API keys, quick start | ✓ | ✓ (in the page once whole) | ✓ | ✓ (revoke waits, below) | ✓ | ✓ | ✓ | ✓ |
 | Settings: workspace, members, invitations, audit | ✓ | ✓ (in the page once whole; a long audit log not at all) | ✓ | ✓ (name and role at once) | ✓ | ✓ | ✓ | ✓ |
 | Settings: licence, and the licence banners | ✓ | — | ✓ | ✓ | — | ✓ | ✓ | ✓ |
-| Designer's starting points (07 §16) | ✓ (full window) | — | — | ✓ (one edit, undone by undo) | ✓ | ✓ | ✓ (its own palette and `?`, 07 §8) | — (1,280 px) |
+| Designer's starting points (07 §16) | ✓ (full window) | — | — | ✓ (one edit, undone by undo) | ✓ | ✓ | ✓ (its own palette and `?`, 07 §8) | — (1,100 px) |
 
 As built (CON-014), after the tables, the palette and optimistic updates (checked again in headless Chromium against the production build, 1,440 × 900 and 768 × 900, light and dark: every touched screen Tabbed through from its top with a visible focus ring on each stop; the palette and the help opened by their keys and closed with Escape, focus back where it was; no Content Security Policy violation):
 

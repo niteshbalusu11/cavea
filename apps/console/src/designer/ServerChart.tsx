@@ -18,7 +18,7 @@ import type { Chart, Version } from "../api/generated.ts";
 import { asApiError, componentSignal } from "../api/query.ts";
 import { describe, reference } from "../console/errors.ts";
 import { here, signInFor } from "../console/paths.ts";
-import { formatTime, msg } from "../i18n/messages.ts";
+import { formatTime, msg, type MessageId, type Params } from "../i18n/messages.ts";
 import { loadSession, session as consoleSession } from "../session.ts";
 import { Button } from "../ui/controls.tsx";
 import { Confirm, Dialog, notify } from "../ui/overlays.tsx";
@@ -108,12 +108,39 @@ export interface ServerChart {
   dialogs(): JSX.Element;
 }
 
+/** Messages naming a lock's holder as `{who}`, each with a `…Self`
+ * sentence of its own for the person themself in another browser, which
+ * holds the lock apart from this one (D-97). */
+type LockMessage =
+  | "lock.editing"
+  | "lock.takenOver"
+  | "lock.roleEditing"
+  | "lock.refused"
+  | "lock.confirmTitle"
+  | "lock.confirmBody"
+  | "lock.lostTitle"
+  | "lock.lapsedTitle";
+
+/** `id` about `lock`, as `me` reads it. */
+export function lockMessage(
+  id: LockMessage,
+  lock: LockInfo,
+  me: string,
+  params: Params = {},
+): string {
+  if (lock.holder === me) return msg(`${id}Self` satisfies MessageId, params);
+  return msg(id, { ...params, who: holderName(lock, me) });
+}
+
 /** Who holds a lock, in words: their email, else what they are. */
 export function holderName(lock: LockInfo, me: string): string {
   if (lock.holder === me) return msg("lock.you");
   if (lock.email !== null) return lock.email;
   return lock.holder.startsWith("key_") ? msg("lock.key") : msg("lock.member");
 }
+
+/** No lock: what a closing dialog names while its lock is gone. */
+const NOBODY: LockInfo = { holder: "", email: null, since: "" };
 
 /** The lock a replaced editor held, for the next one's start. */
 const held = (info: LockInfo | null): { lock?: LockInfo } => (info === null ? {} : { lock: info });
@@ -162,6 +189,23 @@ export function serverChart(props: {
   const [stranded, setStranded] = createSignal<string | null>(null);
   const [conflictOpen, setConflictOpen] = createSignal(false);
   const [leaving, setLeaving] = createSignal<(() => void) | null>(null);
+  /** The version whose picture for the charts list is being made (D-79),
+   * which leaving now would lose: said in the top bar, and leaving asks. */
+  const [picturing, setPicturing] = createSignal<number | null>(null);
+  /** Leaving while the picture is made: where to go once it is done, or
+   * if the person leaves without it. */
+  const [leavingPicture, setLeavingPicture] = createSignal<{
+    /** Leave now, without the picture. */
+    now: () => void;
+    /** Try leaving again, through every guard: once the picture is done,
+     * work changed meanwhile is asked about as on any leaving. */
+    again: () => void;
+  } | null>(null);
+  /** The question about it is shown; "Wait" hides it and keeps the way out. */
+  const [askingPicture, setAskingPicture] = createSignal(false);
+  /** Pictures being made: publishing again while one is made starts
+   * another, and the guard holds until the last is done. */
+  let pictures = 0;
   /** Why it is read-only when the role is not why: the expired licence. */
   const [closed, setClosed] = createSignal(props.setup.closed);
   const [access, setAccess] = createSignal<Access>(
@@ -175,7 +219,8 @@ export function serverChart(props: {
   /** Taking over would lose changes the browser could not keep. */
   const [unkept, setUnkept] = createSignal(false);
   const peers = canWrite ? lockPeers(props.setup.user, ref.workspace, ref.key) : null;
-  const who = (l: LockInfo) => holderName(l, props.setup.user);
+  const says = (id: LockMessage, l: LockInfo, params: Params = {}) =>
+    lockMessage(id, l, props.setup.user, params);
   let autosave: Autosave | null = null;
   let designer: Designer | null = null;
   /** The draft's etag as opened: the base for a restored record. */
@@ -307,7 +352,7 @@ export function serverChart(props: {
   /** Another holds the lock now (`lost` by the save machine): the session
    * becomes read-only; the work is in the store already. */
   const lost = (session: Session, l: LockState & { kind: "lost" }, stored: boolean) => {
-    makeReadOnly(session, msg("lock.refused", { who: who(l.lock) }));
+    makeReadOnly(session, says("lock.refused", l.lock));
     setAccess({ kind: "elsewhere", lock: l.lock, takenOver: l.takenOver, kept: stored });
     setLostOpen(true);
   };
@@ -392,7 +437,7 @@ export function serverChart(props: {
     if (lockReply?.kind === "locked") {
       // Someone else is editing: read-only, with Take over. Changes kept
       // here before stay in the store, offered once this page edits.
-      makeReadOnly(session, msg("lock.refused", { who: who(lockReply.lock) }));
+      makeReadOnly(session, says("lock.refused", lockReply.lock));
       attach(session, null);
       setAccess({ kind: "elsewhere", lock: lockReply.lock, takenOver: false, kept: false });
       return void setPhase({ kind: "ready" });
@@ -412,8 +457,19 @@ export function serverChart(props: {
   };
 
   /** A published version's thumbnail, made in the background: a failure
-   * is a quiet note, never the publish's. */
+   * is a quiet note, never the publish's. While it is made the top bar says
+   * so and leaving asks first (`picturing`). */
   const thumbnail = async (version: Version, published: Published_) => {
+    pictures += 1;
+    setPicturing(version.number);
+    try {
+      await picture(version, published);
+    } finally {
+      pictures -= 1;
+      if (pictures === 0) setPicturing(null);
+    }
+  };
+  const picture = async (version: Version, published: Published_) => {
     const e = props.editor();
     if (e === null) return;
     const images = e.images;
@@ -614,8 +670,9 @@ export function serverChart(props: {
   // changes the server lacks, the store written when the page is hidden,
   // a guard on the console's own links, and a retry when back online.
   const beforeUnload = (e: BeforeUnloadEvent) => {
-    if (autosave?.unsaved !== true) return;
-    void autosave.keep();
+    const unsaved = autosave?.unsaved === true;
+    if (!unsaved && picturing() === null) return;
+    if (unsaved) void autosave?.keep();
     e.preventDefault();
     // Older browsers show the warning only when this is set.
     e.returnValue = "";
@@ -659,12 +716,27 @@ export function serverChart(props: {
     window.removeEventListener("online", online);
   });
   useBeforeLeave((e) => {
-    if (left || e.defaultPrevented || autosave?.unsaved !== true) return;
-    e.preventDefault();
-    setLeaving(() => () => {
+    if (left || e.defaultPrevented) return;
+    const go = () => {
       left = true;
       e.retry(true);
-    });
+    };
+    if (autosave?.unsaved === true) {
+      e.preventDefault();
+      setLeaving(() => go);
+    } else if (picturing() !== null) {
+      e.preventDefault();
+      setLeavingPicture({ now: go, again: () => e.retry() });
+      setAskingPicture(true);
+    }
+  });
+  // The picture is done while the person waits to leave: on they go.
+  createEffect(() => {
+    const way = leavingPicture();
+    if (way === null || picturing() !== null) return;
+    setLeavingPicture(null);
+    setAskingPicture(false);
+    way.again();
   });
 
   // The session ended under the editor (it expired, or ended elsewhere):
@@ -695,7 +767,7 @@ export function serverChart(props: {
           access={access()}
           role={props.setup.role}
           closed={closed()}
-          who={who}
+          says={says}
           onTakeOver={() => setTakeOverOpen(true)}
         />
       }
@@ -707,6 +779,13 @@ export function serverChart(props: {
         onRetry={() => autosave?.retry()}
         onResolve={() => setConflictOpen(true)}
       />
+      <Show when={picturing()}>
+        {(n) => (
+          <span class="ml-2 truncate text-sm text-faint" role="status">
+            {msg("thumbnail.making", { version: n() })}
+          </span>
+        )}
+      </Show>
     </Show>
   );
   /** The store refused the work: read with the save state, which is
@@ -771,9 +850,10 @@ export function serverChart(props: {
       </Dialog>
       <Dialog
         open={lostOpen() && elsewhere() !== null}
-        title={msg(elsewhere()?.takenOver === true ? "lock.lostTitle" : "lock.lapsedTitle", {
-          who: who(elsewhere()?.lock ?? { holder: "", email: null, since: "" }),
-        })}
+        title={says(
+          elsewhere()?.takenOver === true ? "lock.lostTitle" : "lock.lapsedTitle",
+          elsewhere()?.lock ?? NOBODY,
+        )}
         heading
         onClose={() => setLostOpen(false)}
         class="max-w-lg"
@@ -803,12 +883,8 @@ export function serverChart(props: {
       </Dialog>
       <Confirm
         open={takeOverOpen() && elsewhere() !== null}
-        title={msg("lock.confirmTitle", {
-          who: who(elsewhere()?.lock ?? { holder: "", email: null, since: "" }),
-        })}
-        description={msg("lock.confirmBody", {
-          who: who(elsewhere()?.lock ?? { holder: "", email: null, since: "" }),
-        })}
+        title={says("lock.confirmTitle", elsewhere()?.lock ?? NOBODY)}
+        description={says("lock.confirmBody", elsewhere()?.lock ?? NOBODY)}
         confirm={msg("lock.takeOverConfirm")}
         variant="danger"
         onConfirm={() => void takeOver()}
@@ -849,6 +925,21 @@ export function serverChart(props: {
         </div>
       </Confirm>
       <Confirm
+        open={askingPicture() && leavingPicture() !== null}
+        title={msg("thumbnail.leaveTitle")}
+        description={msg("thumbnail.leaveBody", { version: picturing() ?? 0 })}
+        confirm={msg("thumbnail.leaveConfirm")}
+        cancel={msg("thumbnail.wait")}
+        onConfirm={() => {
+          const way = leavingPicture();
+          setLeavingPicture(null);
+          setAskingPicture(false);
+          way?.now();
+        }}
+        // Wait: the question goes, the way out stays, taken once it is done.
+        onClose={() => setAskingPicture(false)}
+      />
+      <Confirm
         open={leaving() !== null}
         title={msg("leave.title")}
         description={msg("leave.body")}
@@ -871,7 +962,7 @@ export function serverChart(props: {
     whyReadOnly() {
       const a = access();
       if (a.kind === "archived") return msg("lock.archivedRefused");
-      if (a.kind === "elsewhere") return msg("lock.refused", { who: who(a.lock) });
+      if (a.kind === "elsewhere") return says("lock.refused", a.lock);
       return closed() ?? msg("readOnly.refused");
     },
     load,
@@ -937,7 +1028,7 @@ function AccessIndicator(props: {
   access: Access;
   role: string;
   closed: string | undefined;
-  who: (lock: LockInfo) => string;
+  says: (id: LockMessage, lock: LockInfo, params?: Params) => string;
   onTakeOver: () => void;
 }) {
   const text = () => {
@@ -946,14 +1037,11 @@ function AccessIndicator(props: {
       case "editing":
         return "";
       case "role":
-        return a.lock === null
-          ? msg("save.readOnly")
-          : msg("lock.roleEditing", { who: props.who(a.lock) });
+        return a.lock === null ? msg("save.readOnly") : props.says("lock.roleEditing", a.lock);
       case "archived":
         return msg("lock.archived");
       case "elsewhere":
-        return msg(a.takenOver ? "lock.takenOver" : "lock.editing", {
-          who: props.who(a.lock),
+        return props.says(a.takenOver ? "lock.takenOver" : "lock.editing", a.lock, {
           since: since(a.lock),
         });
     }

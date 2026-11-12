@@ -839,11 +839,11 @@ export interface Operations {
     reply: ChartDocument;
   };
   saveDraft: {
-    input: { path: { chart: string }; headers: { "If-Match": string }; body: ChartDocument };
+    input: { path: { chart: string }; query?: { editor?: string }; headers: { "If-Match": string }; body: ChartDocument };
     reply: Chart;
   };
   unlockChart: {
-    input: { path: { chart: string } };
+    input: { path: { chart: string }; query?: { editor?: string } };
     reply: undefined;
   };
   getChartLock: {
@@ -851,11 +851,11 @@ export interface Operations {
     reply: ChartLockState;
   };
   lockChart: {
-    input: { path: { chart: string }; body: LockChart };
+    input: { path: { chart: string }; query?: { editor?: string }; body: LockChart };
     reply: ChartLock;
   };
   publishChart: {
-    input: { path: { chart: string }; headers?: { "If-Match"?: string } };
+    input: { path: { chart: string }; query?: { editor?: string }; headers?: { "If-Match"?: string } };
     reply: Version;
   };
   validateDraft: {

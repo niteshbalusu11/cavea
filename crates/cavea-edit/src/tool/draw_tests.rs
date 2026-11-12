@@ -215,6 +215,8 @@ fn row_block_tool() {
         (55.0, 95.0, Curve::None {})
     );
     assert_eq!(b.category.as_deref(), Some("std"));
+    // Named as a person would, in the same undo entry (07 §5.1).
+    assert_eq!(b.name.as_deref(), Some("Row block 1"));
     let rows: Vec<_> = b
         .rows
         .iter()
@@ -238,6 +240,7 @@ fn row_block_tool() {
     t.drag([400.0, 450.0], [103.0, 203.0], NONE);
     let b = block(&t.node(t.selected())).clone();
     assert_eq!(b.origin, [262.5, 212.5]);
+    assert_eq!(b.name.as_deref(), Some("Row block 2"));
     assert_eq!((b.rows.len(), b.rows[0].seats), (3, 5));
     // Shift squares the drag: 300 × 300.
     t.drag([0.0, 2_000.0], [300.0, 2_100.0], SHIFT);
@@ -679,6 +682,28 @@ fn text_tool() {
     t.key(Key::Enter);
     assert!(matches!(t.node(id), Node::Text(x) if x.text == "STAGE LEFT"));
     assert_eq!(t.s.editor().undo_len(), 3);
+    // One undo per edit restores the text exactly; one more removes it.
+    let typed = t.state();
+    t.s.undo().expect("undo");
+    assert!(matches!(t.node(id), Node::Text(x) if x.text == "STAGE"));
+    t.s.redo().expect("redo");
+    assert_eq!(t.state(), typed);
+    // The field follows the text as drawn: its size and its turn.
+    t.s.apply(Command::TransformNodes {
+        nodes: vec![NodeTransform {
+            id,
+            origin: [0.0, -500.0],
+            rotation: 30.0,
+        }],
+    })
+    .expect("turn");
+    t.click([0.0, -500.0]);
+    t.time -= 900.0;
+    t.click([0.0, -500.0]);
+    let field = t.s.overlay().text.expect("field");
+    assert_eq!((field.size, field.angle), (60.0, 30.0));
+    t.key(Key::Escape);
+    assert!(matches!(t.node(id), Node::Text(x) if x.text == "STAGE LEFT"));
 }
 
 /// `p` turned by `degrees` about `c` (clockwise, y down).

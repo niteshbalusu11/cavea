@@ -452,6 +452,12 @@ describe("the designer module", () => {
     while (!s.validate(500).done) steps += 1;
     expect(steps).toBeGreaterThan(0);
     expect(s.validation().complete).toBe(true);
+    // A finding's row and seat labels, read on request; no text being typed.
+    const firstNode = (JSON.parse(s.export()) as { nodes: { id: number }[] }).nodes[0];
+    if (firstNode !== undefined) {
+      expect(s.findingPlace(firstNode.id, null, null).seat).toBeNull();
+    }
+    expect(s.textField()).toBeNull();
 
     // Undo everything, then redo it: the same documents, byte for byte.
     const edited = s.export();

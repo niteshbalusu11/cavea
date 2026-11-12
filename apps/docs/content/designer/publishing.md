@@ -25,7 +25,7 @@ Publishing turns the draft, as it is now, into a version of the chart: a fixed c
 
 ![The Publish message after publishing version 1](../images/designer-published.webp)
 
-Publishing also takes a small picture of the chart for the console's **Charts** list. If that picture could not be made, the message says "published without a picture"; the version is published all the same.
+Publishing also takes a small picture of the chart for the console's **Charts** list. The top bar says so while it is being made, a few seconds; if you leave the designer then, it asks first, and takes you on as soon as the picture is done. If that picture could not be made, the message says "published without a picture"; the version is published all the same.
 
 Publishing what is already published changes nothing: the message says the draft is the published version.
 

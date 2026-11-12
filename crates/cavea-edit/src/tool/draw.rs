@@ -4,7 +4,7 @@
 use cavea_core::limits::MAX_OBJECTS;
 
 use super::{Context, Key, Pointer};
-use crate::command::Command;
+use crate::command::{Command, Property};
 use crate::draft::Draft;
 use crate::index::P;
 use crate::selection::{Level, Selection};
@@ -151,8 +151,18 @@ impl Live {
     }
 }
 
-/// Commits a drawing and selects the node it made, at its level.
+/// Commits a drawing and selects the node it made, at its level. The node
+/// is named in the same gesture (`naming.rs`): one undo entry.
 pub(crate) fn finish(cx: &mut Context<'_>, live: &mut Live, spot: &Spot) {
+    if let Some(id) = live.created() {
+        let doc = cx.editor.document();
+        if let Some(name) = doc.node(id).and_then(|n| crate::naming::fresh(doc, n)) {
+            let _ = cx.editor.apply(Command::SetProperty {
+                id,
+                property: Property::Name(Some(name)),
+            });
+        }
+    }
     if let Some(id) = live.commit(cx) {
         select(cx.selection, cx.editor.document(), spot.level(), id);
     }

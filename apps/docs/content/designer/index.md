@@ -33,5 +33,3 @@ So you do not look for them:
 - *Several floors.* A chart has one floor. A venue with a balcony is drawn on one plan, the balcony beside or behind the stalls, in sections of its own.
 - *Grouping drawings together.* Shapes and text cannot be grouped; seats are grouped into sections (see [Arrange the chart](arranging.md#sections)).
 - *Importing from other tools.* Charts from other seating systems, CAD drawings and spreadsheets cannot be read. Trace a picture of the plan instead ([Start a chart](start.md#trace-a-floor-plan)).
-- *Text on the chart.* The **Text** tool does nothing yet, so the stage cannot be named on the chart: draw it as a shape.
-- *The view from the seats (the focal point)* on a chart started in the console: see [Check the chart](checking.md#no-focal-point).

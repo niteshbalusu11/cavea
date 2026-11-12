@@ -89,7 +89,7 @@ struct List {
 }
 
 /// The node's own name, label or text.
-fn name(node: &Node) -> Option<String> {
+pub(crate) fn name(node: &Node) -> Option<String> {
     let label = match node {
         Node::Section(n) => n.label.as_ref(),
         Node::Row(n) => n.label.as_ref(),

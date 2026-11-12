@@ -85,6 +85,8 @@ export function Confirm(
     title: string;
     description: string;
     confirm?: string;
+    /** The other button's words: "Cancel" by default. */
+    cancel?: string;
     variant?: Variant;
     onConfirm?: () => boolean | void;
     onClose: () => void;
@@ -116,7 +118,9 @@ export function Confirm(
             <div class="mt-5 flex justify-end gap-2">
               <Show when={props.blocking !== true}>
                 <Button onClick={() => props.onClose()}>
-                  {props.onConfirm === undefined ? msg("action.close") : msg("action.cancel")}
+                  {props.onConfirm === undefined
+                    ? msg("action.close")
+                    : (props.cancel ?? msg("action.cancel"))}
                 </Button>
               </Show>
               <Show when={props.onConfirm}>

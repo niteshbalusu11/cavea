@@ -73,4 +73,4 @@ If you prefer typing numbers, or cannot use a mouse, the **Insert row block** fo
 
 ![The Insert row block form](../images/designer-insert-form.webp)
 
-> **Warning** After **Insert**, the designer may stop showing your changes until you reload the page: the block is saved, but nothing else you do appears. Reload the page (`F5`) after inserting a block, and carry on. The total at the bottom of the form ("200 seats") also stays at the count the form opened with; it does not follow what you type.
+The total at the bottom of the form ("12 seats") follows what you type, for a straight block.

@@ -3,16 +3,18 @@
 // while the full pass is pending. The list is virtual: a chart can have
 // thousands of findings. A finding selects what it names (`focus`), the
 // layers panel reveals it and the camera frames it. A finding's text is
-// the compiler's English under the catalogue's title for its code: the view
-// carries no data to compose the sentence from.
+// the catalogue's title for its code over its sentence in a person's words
+// (`findings.ts`): objects named as in the layers panel, rows and seats by
+// their labels, read for the rows shown only.
 import type { FindingView } from "@cavea/designer-core";
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { msg, msgOf } from "../i18n/messages.ts";
+import { findingText, namesPlace } from "./findings.ts";
 import { Icon } from "../ui/Icon.tsx";
 import { windowFor } from "../ui/window.ts";
 import type { Editor } from "./editor.ts";
 
-const ROW = 44;
+const ROW = 64;
 const HEAD = 28;
 const OVERSCAN = 6;
 type Severity = "error" | "warning";
@@ -144,6 +146,17 @@ export function ValidationPanel(props: { editor: Editor }) {
               {(f) => {
                 // Reactive: the store reuses a row's finding object for whatever lands at its place.
                 const title = () => msgOf("validation", f.code) ?? f.code;
+                const text = createMemo(() => {
+                  // Read again on every change of the document: a row
+                  // renumbered keeps its finding, not its label.
+                  void editor.views.status.revision;
+                  const node = f.node;
+                  const place =
+                    node !== null && namesPlace(f)
+                      ? (editor.run((s) => s.findingPlace(node, f.row, f.seat)) ?? null)
+                      : null;
+                  return findingText(f, place);
+                });
                 return (
                   <li
                     class="absolute inset-x-0"
@@ -152,7 +165,7 @@ export function ValidationPanel(props: { editor: Editor }) {
                     <button
                       type="button"
                       disabled={f.node === null}
-                      title={f.message}
+                      title={text()}
                       class="flex h-full w-full items-start gap-2 px-3 py-1.5 text-left enabled:hover:bg-hover"
                       classList={{ "opacity-70": f.stale }}
                       onClick={() => go(f)}
@@ -171,7 +184,7 @@ export function ValidationPanel(props: { editor: Editor }) {
                             </span>
                           </Show>
                         </span>
-                        <span class="block truncate text-sm text-muted">{f.message}</span>
+                        <span class="line-clamp-2 text-sm text-muted">{text()}</span>
                       </span>
                     </button>
                   </li>

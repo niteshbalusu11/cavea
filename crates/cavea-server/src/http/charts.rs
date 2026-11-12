@@ -73,11 +73,11 @@ pub(super) fn routes() -> Routes {
             read_draft,
         )
         .layered(
-            writing(Op::put(
+            editor_param(writing(Op::put(
                 "/v1/charts/{chart}/draft",
                 "saveDraft",
                 "Replace the draft",
-            ))
+            )))
             .about("At most 16 MiB. It must parse as a chart document; it need not validate.")
             .if_match(true)
             .raw_body(serde_json::json!({ "required": true, "content": draft() }))
@@ -98,11 +98,11 @@ pub(super) fn routes() -> Routes {
             validate,
         )
         .add(
-            writing(Op::post(
+            editor_param(writing(Op::post(
                 "/v1/charts/{chart}/publish",
                 "publishChart",
                 "Publish the draft",
-            ))
+            )))
             .if_match(false)
             .reply(201, "Version", "A new version")
             .reply(
@@ -153,11 +153,11 @@ Replaces any thumbnail the version had.",
             read_lock,
         )
         .add(
-            writing(Op::post(
+            editor_param(writing(Op::post(
                 "/v1/charts/{chart}/lock",
                 "lockChart",
                 "Take, renew or take over the editing lock",
-            ))
+            )))
             .about(
                 "Takes the lock, or renews it for its holder, for 60 seconds by the \
 database's clock; renew every 20. Held by another and live: `409 chart_locked` with the lock in \
@@ -170,11 +170,11 @@ publishing are `409 chart_locked`.",
             lock,
         )
         .add(
-            writing(Op::delete(
+            editor_param(writing(Op::delete(
                 "/v1/charts/{chart}/lock",
                 "unlockChart",
                 "Release the editing lock",
-            ))
+            )))
             .about("Releases the caller's lock; another's is left as it is. Idempotent.")
             .response(204, "Released, or not the caller's", None),
             unlock,
@@ -219,16 +219,17 @@ macro_rules! chart_columns {
     };
 }
 
-/// The lock's holder, the holder's email while a member, and its times;
-/// `NULL` when it has expired. For a chart aliased `c` joined with
-/// [`lock_joins`].
+/// The lock's holder, the holder's email while a member, its times, and
+/// the editor that took it (D-97); `NULL` when it has expired. For a chart
+/// aliased `c` joined with [`lock_joins`].
 macro_rules! lock_columns {
     () => {
         concat!(
             "CASE WHEN c.lock_expires_at > now() THEN c.lock_actor END, u.email, ",
             rfc3339!("c", ".lock_since"),
             ", ",
-            rfc3339!("c", ".lock_expires_at")
+            rfc3339!("c", ".lock_expires_at"),
+            ", c.lock_editor"
         )
     };
 }
@@ -700,7 +701,8 @@ const SAVE_DRAFT: &str = concat!(
          draft_updated_by = $5::uuid
    WHERE workspace_id = $1::uuid AND key = $2 AND archived_at IS NULL
      AND ($4::bigint IS NULL OR draft_etag = $4)
-     AND (lock_actor IS NULL OR lock_actor = $6 OR lock_expires_at <= now())
+     AND (lock_actor IS NULL OR lock_expires_at <= now()
+          OR (lock_actor = $6 AND ($7::text IS NULL OR lock_editor IS NULL OR lock_editor = $7)))
   RETURNING *
 )
 SELECT ",
@@ -723,10 +725,12 @@ const DRAFT_STATE: &str = concat!(
 async fn save_draft(
     Staff(auth): Staff,
     Path(key): Path<String>,
+    Query(query): Query<EditorQuery>,
     headers: HeaderMap,
     State(state): State<AppState>,
     RawJson(body): RawJson,
 ) -> Result<Response, ApiError> {
+    let editor = query.editor()?;
     let expected = if_match(&headers)?.ok_or_else(|| {
         invalid(
             Reason::IfMatch,
@@ -749,6 +753,7 @@ async fn save_draft(
             .bind(etag)
             .bind(auth.user())
             .bind(&*actor)
+            .bind(editor.as_deref())
             .fetch_optional(&state.db)
             .await?;
         if let Some(row) = row {
@@ -759,14 +764,14 @@ async fn save_draft(
             .bind(&key)
             .fetch_optional(&state.db)
             .await?;
-        let Some((current, is_archived, a, e, since, until)) = current else {
+        let Some((current, is_archived, a, e, since, until, ed)) = current else {
             return Err(not_found());
         };
         if is_archived {
             return Err(archived());
         }
-        match Lock::live(&auth, a, e, since, until) {
-            Some(lock) if lock.holder != *actor => Err(locked(lock)),
+        match Lock::live(&auth, a, e, since, until, ed) {
+            Some(lock) if !lock.held_by(&actor, editor.as_deref()) => Err(locked(lock)),
             _ => Err(version_conflict(current)),
         }
     };
@@ -791,6 +796,7 @@ type DraftRow = (String, String, i64, bool);
 type DraftState = (
     i64,
     bool,
+    Option<String>,
     Option<String>,
     Option<String>,
     Option<String>,
@@ -939,10 +945,12 @@ const SET_PUBLISHED: &str = "UPDATE charts SET published_version_id = $2::uuid W
 async fn publish(
     Staff(auth): Staff,
     Path(key): Path<String>,
+    Query(query): Query<EditorQuery>,
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Result<(StatusCode, axum::Json<Version>), ApiError> {
     let expected = if_match(&headers)?;
+    let editor = query.editor()?;
     let actor = auth.actor();
     let (chart_id, draft, etag, is_archived) = draft_for_compile(&state, &auth, &key).await?;
     if is_archived {
@@ -956,9 +964,9 @@ async fn publish(
         .fetch_optional(&state.db)
         .instrument(cavea_telemetry::db_span("read_lock"))
         .await?;
-    if let Some((_, _, a, e, since, until)) = lock
-        && let Some(lock) = Lock::live(&auth, a, e, since, until)
-        && lock.holder != *actor
+    if let Some((_, _, a, e, since, until, ed)) = lock
+        && let Some(lock) = Lock::live(&auth, a, e, since, until, ed)
+        && !lock.held_by(&actor, editor.as_deref())
     {
         return Err(locked(lock));
     }
@@ -976,7 +984,7 @@ async fn publish(
     let started = std::time::Instant::now();
     let store = async {
         let mut tx = state.db.begin().await?;
-        let (current, is_archived, a, e, since, until): DraftState = sqlx::query_as(LOCK_CHART)
+        let (current, is_archived, a, e, since, until, ed): DraftState = sqlx::query_as(LOCK_CHART)
             .bind(&chart_id)
             .fetch_one(&mut *tx)
             .await?;
@@ -984,8 +992,8 @@ async fn publish(
             // Archived while compiling.
             return Err(archived());
         }
-        if let Some(lock) = Lock::live(&auth, a, e, since, until)
-            && lock.holder != *actor
+        if let Some(lock) = Lock::live(&auth, a, e, since, until, ed)
+            && !lock.held_by(&actor, editor.as_deref())
         {
             // Another took the lock: the draft is theirs to publish.
             return Err(locked(lock));
@@ -1225,6 +1233,9 @@ struct Lock {
     email: Option<String>,
     since: String,
     expires_at: String,
+    /// The editor that took it, if it named one: never shown, only compared.
+    #[serde(skip)]
+    editor: Option<String>,
 }
 
 impl Lock {
@@ -1235,6 +1246,7 @@ impl Lock {
         email: Option<String>,
         since: Option<String>,
         expires_at: Option<String>,
+        editor: Option<String>,
     ) -> Option<Self> {
         let (holder, since, expires_at) = (holder?, since?, expires_at?);
         let emails = auth
@@ -1245,11 +1257,65 @@ impl Lock {
             email: email.filter(|_| emails),
             since,
             expires_at,
+            editor,
         })
+    }
+
+    /// Whether `actor`, as `editor`, holds it (D-97): the same person or key,
+    /// and the same editor when both the lock and the request name one. A
+    /// request naming none is any editor of its actor, as before editors.
+    fn held_by(&self, actor: &str, editor: Option<&str>) -> bool {
+        self.holder == actor
+            && match (self.editor.as_deref(), editor) {
+                (Some(held), Some(asked)) => held == asked,
+                _ => true,
+            }
     }
 }
 
+/// `?editor=`: the editor a request comes from (D-97). The console's
+/// designer names its browser with a random id, so that one person's two
+/// browsers are two holders of the lock and neither releases or saves
+/// under the other's.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditorQuery {
+    editor: Option<String>,
+}
+
+impl EditorQuery {
+    fn editor(self) -> Result<Option<String>, ApiError> {
+        match self.editor {
+            None => Ok(None),
+            Some(e)
+                if (1..=64).contains(&e.len())
+                    && e.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') =>
+            {
+                Ok(Some(e))
+            }
+            Some(_) => Err(invalid_field(
+                "editor",
+                "is 1 to 64 letters, digits, `-` or `_`",
+            )),
+        }
+    }
+}
+
+/// The `editor` query parameter in the API description.
+fn editor_param(op: Op) -> Op {
+    op.query(
+        "editor",
+        serde_json::json!({ "type": "string", "minLength": 1, "maxLength": 64 }),
+        "An id the client makes for itself, the same on every request of one editing \
+session (a browser, for the console's designer): letters, digits, `-` and `_`. With it, the lock is held by this actor *and* \
+this editor: another editor of the same person or key is refused as another holder would be, \
+and cannot release it. Without it, any editor of the actor holds it.",
+    )
+}
+
 type LockRow = (
+    Option<String>,
     Option<String>,
     Option<String>,
     Option<String>,
@@ -1259,6 +1325,7 @@ type LockRow = (
 /// Whether the chart is archived, and its lock as [`LockRow`].
 type LockState = (
     bool,
+    Option<String>,
     Option<String>,
     Option<String>,
     Option<String>,
@@ -1289,9 +1356,9 @@ async fn read_lock(
         .fetch_optional(&state.db)
         .instrument(cavea_telemetry::db_span("read_lock"))
         .await?;
-    let (_, a, e, since, until) = row.ok_or_else(not_found)?;
+    let (_, a, e, since, until, ed) = row.ok_or_else(not_found)?;
     Ok(axum::Json(LockReply {
-        lock: Lock::live(&auth, a, e, since, until),
+        lock: Lock::live(&auth, a, e, since, until, ed),
     }))
 }
 
@@ -1304,16 +1371,20 @@ struct LockChart {
 }
 
 /// Take the lock if it is free, expired, the caller's already (a renewal,
-/// keeping `since`), or `$4` says take over. An archived chart takes none.
+/// keeping `since`, and the editor that took it when `$6` names none), or
+/// `$4` says take over. The caller's is its actor's, by editor `$6` when
+/// both name one (D-97). An archived chart takes none.
 const TAKE_LOCK: &str = concat!(
     "WITH c AS (
   UPDATE charts
      SET lock_actor = $3,
-         lock_since = CASE WHEN lock_actor = $3 AND lock_expires_at > now()
+         lock_since = CASE WHEN (lock_actor = $3 AND ($6::text IS NULL OR lock_editor IS NULL OR lock_editor = $6)) AND lock_expires_at > now()
                            THEN lock_since ELSE now() END,
+         lock_editor = CASE WHEN (lock_actor = $3 AND ($6::text IS NULL OR lock_editor IS NULL OR lock_editor = $6)) AND lock_expires_at > now() AND $6::text IS NULL
+                            THEN lock_editor ELSE $6 END,
          lock_expires_at = now() + $5 * interval '1 second'
    WHERE workspace_id = $1::uuid AND key = $2 AND archived_at IS NULL
-     AND (lock_actor IS NULL OR lock_actor = $3 OR lock_expires_at <= now() OR $4)
+     AND (lock_actor IS NULL OR (lock_actor = $3 AND ($6::text IS NULL OR lock_editor IS NULL OR lock_editor = $6)) OR lock_expires_at <= now() OR $4)
   RETURNING *
 )
 SELECT ",
@@ -1328,10 +1399,12 @@ SELECT ",
 async fn lock(
     Staff(auth): Staff,
     Path(key): Path<String>,
+    Query(query): Query<EditorQuery>,
     State(state): State<AppState>,
     Json(body): Json<LockChart>,
 ) -> Result<axum::Json<Lock>, ApiError> {
     let take_over = body.take_over;
+    let editor = query.editor()?;
     let actor = auth.actor();
     let take = async {
         // Twice at most: a lock that expires between the two statements is
@@ -1343,10 +1416,11 @@ async fn lock(
                 .bind(&*actor)
                 .bind(take_over)
                 .bind(LOCK_SECS)
+                .bind(editor.as_deref())
                 .fetch_optional(&state.db)
                 .await?;
-            if let Some((a, e, since, until)) = row {
-                return Lock::live(&auth, a, e, since, until)
+            if let Some((a, e, since, until, ed)) = row {
+                return Lock::live(&auth, a, e, since, until, ed)
                     .ok_or_else(|| ApiError::internal("a lock just taken is not live"));
             }
             let row: Option<LockState> = sqlx::query_as(READ_LOCK)
@@ -1354,11 +1428,11 @@ async fn lock(
                 .bind(&key)
                 .fetch_optional(&state.db)
                 .await?;
-            let (is_archived, a, e, since, until) = row.ok_or_else(not_found)?;
+            let (is_archived, a, e, since, until, ed) = row.ok_or_else(not_found)?;
             if is_archived {
                 return Err(archived());
             }
-            if let Some(lock) = Lock::live(&auth, a, e, since, until) {
+            if let Some(lock) = Lock::live(&auth, a, e, since, until, ed) {
                 return Err(locked(lock));
             }
         }
@@ -1371,21 +1445,27 @@ async fn lock(
     Ok(axum::Json(lock))
 }
 
+/// The caller's lock: its actor's, and its editor's when both name one.
 const RELEASE_LOCK: &str = "UPDATE charts
-   SET lock_actor = NULL, lock_since = NULL, lock_expires_at = NULL
- WHERE workspace_id = $1::uuid AND key = $2 AND lock_actor = $3";
+   SET lock_actor = NULL, lock_since = NULL, lock_expires_at = NULL, lock_editor = NULL
+ WHERE workspace_id = $1::uuid AND key = $2 AND lock_actor = $3
+   AND ($4::text IS NULL OR lock_editor IS NULL OR lock_editor = $4)";
 
-/// Release the caller's lock; another's stays. `204` either way.
+/// Release the caller's lock; another's stays, another editor's of the same
+/// actor included (D-97). `204` either way.
 async fn unlock(
     Staff(auth): Staff,
     Path(key): Path<String>,
+    Query(query): Query<EditorQuery>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, ApiError> {
+    let editor = query.editor()?;
     let release = async {
         let done = sqlx::query(RELEASE_LOCK)
             .bind(auth.workspace().uuid())
             .bind(&key)
             .bind(&*auth.actor())
+            .bind(editor.as_deref())
             .execute(&state.db)
             .await?;
         if done.rows_affected() == 0 {

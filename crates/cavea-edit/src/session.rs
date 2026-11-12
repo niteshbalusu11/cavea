@@ -10,7 +10,7 @@ use crate::arrange::{self, AlignTo, ArrayStep, Order};
 use crate::categories::{self, CategoriesView};
 use crate::clipboard;
 use crate::command::{Axis, Command, CommandError, End, Property, SeatEdit};
-use crate::document::{Document, LoadError};
+use crate::document::{Document, LoadError, each_node};
 use crate::draft::Draft;
 use crate::editor::{Applied, Editor};
 use crate::guides::{FloorGuides, Guides, UserGuide};
@@ -241,7 +241,10 @@ impl Session {
     pub fn insert(&mut self, parent: Option<u32>, draft: &Draft) -> Result<u32, CommandError> {
         self.reset_tool();
         let spot = tool::Spot::new(self.editor.document(), parent, self.floor);
-        let node = draft.node(self.category.as_deref(), spot.floor)?;
+        let mut node = draft.node(self.category.as_deref(), spot.floor)?;
+        if let Some(name) = crate::naming::fresh(self.editor.document(), &node) {
+            each_node!(&mut node, n => n.name = Some(name));
+        }
         let result = self.editor.apply(Command::CreateNode {
             parent,
             index: spot.index,
@@ -644,6 +647,17 @@ impl Session {
         self.validator.view(self.document())
     }
 
+    /// The labels of the row `row` and seat `seat` of node `node` that a
+    /// finding names (07 §10), for the findings the panel shows.
+    pub fn finding_place(
+        &self,
+        node: u32,
+        row: Option<u32>,
+        seat: Option<u32>,
+    ) -> validation::FindingPlace {
+        validation::place(self.document(), node, row, seat)
+    }
+
     /// Selects what a finding names, on its floor (shown if it is not), and
     /// returns the world box to frame: a seat, a block's row, or the node.
     pub fn focus(&mut self, node: u32, row: Option<u32>, seat: Option<u32>) -> Option<Rect> {
@@ -894,6 +908,21 @@ impl Session {
         self.tool.cursor()
     }
 
+    /// The text field the tool asks for (07 §4, Text), alone: the
+    /// overlay's `text` without the rest, which validation's markers make
+    /// costly to read on every frame.
+    pub fn text_field(&self) -> Option<crate::tool::TextField> {
+        let view = selection::View {
+            doc: self.editor.document(),
+            index: &self.index,
+            floor: self.floor,
+            tol: 0.0,
+        };
+        let mut out = Overlay::default();
+        self.tool.overlay(&view, &self.selection, &mut out);
+        out.text
+    }
+
     /// What the canvas draws over the chart now.
     pub fn overlay(&self) -> Overlay {
         let view = selection::View {
@@ -1014,8 +1043,12 @@ impl Session {
         if !self.floor.is_some_and(listed) {
             let first = doc.floors().first().map(|f| f.id);
             if self.floor != first {
+                // A chart's implicit floor listed (the focal point tool)
+                // holds what was shown: the selection stays.
+                if self.floor.is_some() {
+                    self.selection = Selection::default();
+                }
                 self.floor = first;
-                self.selection = Selection::default();
             }
         }
     }

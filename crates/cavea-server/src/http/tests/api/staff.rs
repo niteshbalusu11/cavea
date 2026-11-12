@@ -682,6 +682,126 @@ async fn chart_lock_life_cycle() {
     .await;
 }
 
+/// D-97: one person's two editors (two browsers, `?editor=`) are two
+/// holders. The second is refused the lock, saves and publishing while the
+/// first holds it, and cannot release it; after a take-over the first is the
+/// one refused and its release leaves the second's lock. A request naming
+/// no editor (a client from before editors) is any editor of its person.
+#[tokio::test]
+#[ignore = "needs CAVEA_TEST_DATABASE_URL"]
+async fn chart_lock_two_editors_of_one_person() {
+    let _serial = serial();
+    with_db(async move |pool| {
+        let app = api(&pool, Some(ADMIN));
+        let t = Tenant::create(&app, "a").await;
+        let (anna, anna_id) = member(&pool, &t.id, Role::Editor, "anna@a.example").await;
+        let at = |path: &str, editor: Option<&str>| match editor {
+            Some(e) => format!("/v1/charts/{}/{path}?editor={e}", t.chart),
+            None => format!("/v1/charts/{}/{path}", t.chart),
+        };
+        let as_anna = async |method: Method,
+                             uri: String,
+                             headers: &[(header::HeaderName, String)],
+                             body: Option<Value>| {
+            let mut all = console(&anna_id, Some(&t.id));
+            all.extend_from_slice(headers);
+            call_with(&app, method, &uri, None, &refs(&all), body).await
+        };
+        let lock = async |editor: Option<&str>, body: Value| {
+            as_anna(Method::POST, at("lock", editor), &[], Some(body)).await
+        };
+        let release = async |editor: Option<&str>| {
+            let (response, _) = as_anna(Method::DELETE, at("lock", editor), &[], None).await;
+            assert_eq!(response.status(), 204);
+        };
+        let holder =
+            async || as_anna(Method::GET, at("lock", None), &[], None).await.1["lock"].clone();
+        let save = async |editor: Option<&str>| {
+            let headers = [
+                (header::IF_MATCH, "*".to_owned()),
+                (header::CONTENT_TYPE, "application/json".to_owned()),
+            ];
+            let mut all = console(&anna_id, Some(&t.id));
+            all.extend(headers);
+            let req = request(
+                Method::PUT,
+                &at("draft", editor),
+                None,
+                &refs(&all),
+                Some(t.document.clone()),
+            );
+            send(app.clone(), req).await
+        };
+        let publish = async |editor: Option<&str>| {
+            as_anna(Method::POST, at("publish", editor), &[], None).await
+        };
+        let me = format!("usr_{anna}");
+
+        let (response, first) = lock(Some("browser-a"), json!({})).await;
+        assert_eq!(response.status(), 200, "{first}");
+        // The other browser: refused, naming Anna herself.
+        let (response, problem) = lock(Some("browser-b"), json!({})).await;
+        assert_problem(&response, &problem, Code::ChartLocked);
+        assert_eq!(problem["details"]["lock"]["holder"], me);
+        let (response, problem) = save(Some("browser-b")).await;
+        assert_problem(&response, &problem, Code::ChartLocked);
+        let (response, problem) = publish(Some("browser-b")).await;
+        assert_problem(&response, &problem, Code::ChartLocked);
+        // Its release leaves the first's lock.
+        release(Some("browser-b")).await;
+        assert_eq!(holder().await["since"], first["since"]);
+        // The holder saves; so does a request naming no editor.
+        let (response, saved) = save(Some("browser-a")).await;
+        assert_eq!(response.status(), 200, "{saved}");
+        let (response, _) = save(None).await;
+        assert_eq!(response.status(), 200);
+        // A renewal naming no editor keeps the lock as it is.
+        let (response, renewed) = lock(None, json!({})).await;
+        assert_eq!(
+            (response.status(), &renewed["since"]),
+            (StatusCode::OK, &first["since"])
+        );
+        let (response, problem) = lock(Some("browser-b"), json!({})).await;
+        assert_problem(&response, &problem, Code::ChartLocked);
+
+        // The second browser takes over: now the first is refused.
+        let (response, taken) = lock(Some("browser-b"), json!({ "take_over": true })).await;
+        assert_eq!(response.status(), 200, "{taken}");
+        assert_eq!(taken["holder"], me);
+        let (response, problem) = lock(Some("browser-a"), json!({})).await;
+        assert_problem(&response, &problem, Code::ChartLocked);
+        let (response, problem) = save(Some("browser-a")).await;
+        assert_problem(&response, &problem, Code::ChartLocked);
+        let (response, problem) = publish(Some("browser-a")).await;
+        assert_problem(&response, &problem, Code::ChartLocked);
+        // Closing the first browser does not free the chart under the second.
+        release(Some("browser-a")).await;
+        assert_eq!(holder().await["since"], taken["since"]);
+        let (response, _) = save(Some("browser-b")).await;
+        assert_eq!(response.status(), 200);
+        release(Some("browser-b")).await;
+        assert_eq!(holder().await, Value::Null);
+
+        // Taken by a client naming no editor, the first browser renews it.
+        let (response, old) = lock(None, json!({})).await;
+        assert_eq!(response.status(), 200, "{old}");
+        let (response, renewed) = lock(Some("browser-a"), json!({})).await;
+        assert_eq!(
+            (response.status(), &renewed["since"]),
+            (StatusCode::OK, &old["since"])
+        );
+        // And from then on it is that browser's.
+        let (response, problem) = lock(Some("browser-b"), json!({})).await;
+        assert_problem(&response, &problem, Code::ChartLocked);
+
+        // An editor id is short and plain.
+        let (response, problem) = lock(Some("a%20b"), json!({})).await;
+        assert_eq!(response.status(), 400, "{problem}");
+        assert_eq!(problem["details"]["field"], "editor", "{problem}");
+    })
+    .await;
+}
+
 /// 09 §3.1, §3.2: a version's thumbnail and its publisher. The thumbnail is
 /// an image this workspace uploaded, shown on the charts list and the
 /// versions; the versions list names the publisher, and their email only to

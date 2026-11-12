@@ -177,8 +177,10 @@ export function TopBar(props: {
       </span>
 
       <div class="ml-auto flex items-center gap-2">
+        {/* One unnamed floor is the chart's implicit floor, listed by the
+            focal point tool (07 §4): still a single floor to a person. */}
         <Show
-          when={views.floors.floors.length > 0}
+          when={views.floors.floors.length > 1 || (views.floors.floors[0]?.name ?? "") !== ""}
           fallback={<span class="px-2 text-sm text-faint">{msg("topbar.singleFloor")}</span>}
         >
           <DropdownMenu gutter={4}>

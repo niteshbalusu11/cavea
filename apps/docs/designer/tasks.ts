@@ -166,6 +166,18 @@ async function saveState(t: Tab, what: string, ms = 30_000): Promise<string> {
   );
 }
 
+/** A small change to save: Box B nudged left by the keyboard. */
+async function nudgeBoxB(tab: Tab): Promise<void> {
+  await tab.click({ role: "tab", name: msg("panel.layers") });
+  await tab.click(
+    { role: "treeitem", name: /^Box B/ },
+    await tab.find({ role: "tree", name: msg("layers.label") }),
+  );
+  const c = await canvas(tab);
+  await tab.call(c.id, "function () { this.focus(); }");
+  await tab.key("ArrowLeft");
+}
+
 /** The chart's draft on the server, read with the console's own session. */
 async function draft(t: Tab): Promise<Record<string, unknown>> {
   return t.evaluate<Record<string, unknown>>(`(async () => {
@@ -461,7 +473,6 @@ export const TASKS: Task[] = [
       await t.click({ role: "button", name: msg("menu.label") }, banner);
       await t.click({ role: "menuitem", name: msg("command.insertRowBlock") });
       const form = await t.find({ role: DIALOG, name: msg("insert.title") });
-      // Its count of seats is the one it opened with: it does not follow the typing yet.
       await t.enter({ role: "textbox", name: msg("field.rows") }, "2", form);
       await t.key("Tab");
       await t.enter({ role: "textbox", name: msg("field.seats") }, "6", form);
@@ -473,36 +484,17 @@ export const TASKS: Task[] = [
       await t.enter({ role: "textbox", name: msg("field.rotation") }, "0", form);
       await t.key("Tab");
       await shoot(t, "insert-form", await around(t, [form], 0));
-      // The guide's warning: the form's total stays at what it opened with.
+      // The total follows the fields: 2 rows of 6.
       check(
-        (await t.text(form)).includes(msg("insert.total", { n: 200 })),
-        "the Insert row block form's total now follows the fields: remove the warning in seats.md",
+        (await t.text(form)).includes(msg("insert.total", { n: 12 })),
+        "the Insert row block form's total to read 12 seats",
       );
-      KNOWN.push("the Insert row block form's total does not follow the fields");
       await t.click({ role: "button", name: msg("insert.submit") }, form);
       await t.gone({ role: DIALOG });
       await status(t, "124 seats", (x) => x.includes(msg("status.seats", { n: 124 })));
-      // A product bug, written up in the guide: submitting the form can stop
-      // the designer's canvas and panels following edits ("Stale read from
-      // <Show>") until the page is reloaded; the block is saved. It does not
-      // happen every time, so the page is reloaded either way, as the guide
-      // says to.
-      await t.collect();
-      const stale = t.problems.filter((p) => p.text.includes("Stale read from <Show>"));
-      t.problems.splice(0);
-      KNOWN.push(
-        `Insert row block: the designer stops following edits until a reload (${stale.length > 0 ? "it happened" : "it did not happen"} this run)`,
-      );
+      // The designer goes on following edits (the problems check after the
+      // task fails on a "Stale read from <Show>"): no reload.
       await saveState(t, msg("save.saved"));
-      await t.goto(await t.evaluate<string>("location.href"));
-      await t.find(
-        { role: "application", name: msg("canvas.label", { name: CHART.name }) },
-        undefined,
-        30_000,
-      );
-      await status(t, "124 seats after the reload", (x) =>
-        x.includes(msg("status.seats", { n: 124 })),
-      );
     },
   },
   {
@@ -510,8 +502,9 @@ export const TASKS: Task[] = [
     async run({ t, look }) {
       const tree = await t.find({ role: "tree", name: msg("layers.label") });
       for (const [item, label] of [
-        [/^Row block 2/, "Stalls"],
-        [/^Row block 123/, "Box A"],
+        // New objects are named by kind and number, in the order drawn.
+        [/^Row block 1\b/, "Stalls"],
+        [/^Row block 2\b/, "Box A"],
       ] as const) {
         const row = await t.find({ role: "treeitem", name: item }, tree);
         const [x, y] = await t.centre(row);
@@ -667,7 +660,15 @@ export const TASKS: Task[] = [
       await status(t, "124 seats again", (x) => x.includes(msg("status.seats", { n: 124 })));
       await t.clickAt(...a1);
       await t.click({ role: "tab", name: msg("panel.categories") });
-      await t.click({ role: "button", name: `Wheelchair space: ${msg("categories.makeActive")}` });
+      await t.click({
+        role: "button",
+        name: `Wheelchair space: ${msg("categories.makeActive")}, ${msg("categories.accessible")}`,
+      });
+      // Announced as the current one, and named at the top of the list.
+      await t.find({
+        role: "button",
+        name: `Wheelchair space: ${msg("categories.active")}, ${msg("categories.accessible")}`,
+      });
       await t.click({ role: "button", name: msg("tool.brush") });
       for (const x of ends) await t.clickAt(...at(x, y));
       await until("the wheelchair category to count 2 seats", async () => {
@@ -701,28 +702,25 @@ export const TASKS: Task[] = [
           (await t.has({ role: "treeitem", name: /^Stalls 1/ })),
         "the stage was drawn at the top level, not into a section",
       );
-      // Two product gaps the guide states: the Text tool opens no field to
-      // type in, and a chart started from scratch has no floor to hold a
-      // focal point. Once either works, this fails: update arranging.md.
+      // The stage's name: the Text tool's field on the canvas, Enter to place it.
       await t.click({ role: "button", name: msg("tool.text") });
       await t.clickAt(...at(0, -480));
+      await t.find({ role: "textbox", name: msg("canvas.textField") });
       await t.type("STAGE");
       await t.key("Enter");
+      await status(t, "the stage's text as a seventh object", (x) =>
+        x.includes(msg("status.nodes", { n: 7 })),
+      );
+      // The focal point: a click on the stage. A chart started from scratch
+      // lists no floor; the tool lists its one floor as it sets the point.
       await t.click({ role: "button", name: msg("tool.focal") });
       await t.clickAt(...at(0, -480));
       await t.click({ role: "button", name: msg("tool.select") });
-      await Bun.sleep(500);
-      check(
-        (await t.text(await statusBar(t))).includes(msg("status.nodes", { n: 6 })),
-        "the Text tool now makes a text: update arranging.md",
-      );
-      KNOWN.push("the Text tool opens no field to type in");
-      const floors = (await draft(t))["floors"] as unknown[];
-      check(
-        floors.length === 0,
-        "a chart started from scratch now has a floor: update arranging.md and checking.md",
-      );
-      KNOWN.push("a chart started from scratch has no floor, so no focal point");
+      // Saved two seconds after the change: the server's draft has it.
+      await until("the focal point on the chart's one floor in the saved draft", async () => {
+        const floors = (await draft(t))["floors"] as Array<{ focalPoint?: unknown }>;
+        return floors.length === 1 && floors[0]?.focalPoint !== undefined;
+      });
       // A second box: Box A duplicated, moved across, its own label.
       await t.click({ role: "tab", name: msg("panel.layers") });
       const tree = await t.find({ role: "tree", name: msg("layers.label") });
@@ -832,13 +830,8 @@ export const TASKS: Task[] = [
         30_000,
       );
       await look(t, "checked");
-      // No error; the one warning left is the focal point the chart cannot hold.
-      check(
-        text.includes(`${msg("validation.errors")} 0`) &&
-          text.includes(`${msg("validation.warnings")} 1`) &&
-          text.includes("W102"),
-        `no errors and only W102 left, not: ${text}`,
-      );
+      // Nothing left: the focal point is set.
+      check(text.includes(msg("validation.valid")), `no errors and no warnings, not: ${text}`);
     },
   },
   {
@@ -934,68 +927,36 @@ export const TASKS: Task[] = [
         await tab.find({ role: "link", name: CHART.name }, undefined, 30_000);
         return tab;
       };
-      const nudge = async (tab: Tab): Promise<void> => {
-        await tab.click({ role: "tab", name: msg("panel.layers") });
-        await tab.click(
-          { role: "treeitem", name: /^Box B/ },
-          await tab.find({ role: "tree", name: msg("layers.label") }),
-        );
-        const c = await canvas(tab);
-        await tab.call(c.id, "function () { this.focus(); }");
-        await tab.key("ArrowLeft");
-      };
-      // The same person in a second browser: not read-only, and whichever saves
-      // second is told the chart changed elsewhere (the guide's note).
-      const same = await signIn("same-person", owner);
-      try {
-        await same.goto(url);
-        await canvas(same);
-        await Bun.sleep(3000);
-
-        const bar = await same.text(await same.find({ role: "banner" }));
-        check(
-          !bar.includes(msg("save.readOnly")),
-          `the same person's second browser opens the chart to edit, not: ${bar}`,
-        );
-        await nudge(same);
-        await saveState(same, msg("save.saved"));
-        await t.send("Page.bringToFront");
-        await nudge(t);
-        await saveState(t, msg("save.conflict"));
-        await look(t, "conflict");
-        // The choice opens by itself; Resolve… in the top bar opens it again.
-        const resolve = await t.find({ role: DIALOG, name: msg("conflict.title") });
-        await t.click({ role: "button", name: msg("conflict.keepMine") }, resolve);
-        await t.gone({ role: DIALOG });
-        await saveState(t, msg("save.saved"));
-        KNOWN.push(
-          "one person in two browsers can edit a chart in both, and the second save is refused",
-        );
-      } finally {
-        await same.close();
-        await t.send("Page.bringToFront");
-      }
-      // Closing the chart in the second browser released the editing lock the
-      // two share (one person is one holder, D-73), under this one, which
-      // goes on saving without it: a colleague would now open the chart to
-      // edit too. Reopening the chart here takes the lock again.
-      const lockNow = (): Promise<{ lock: { email: string | null } | null }> =>
+      const lockNow = (): Promise<{ lock: { email: string | null; since: string } | null }> =>
         t.evaluate(`(async () => {
           const me = await (await fetch("/console/api/me")).json();
           const r = await fetch("/v1/charts/${CHART.key}/lock", { headers: { "cavea-workspace": me.workspaces[0].id } });
           return r.json();
         })()`);
+      const held = await lockNow();
+      // The same person in a second browser is another holder (D-97): it
+      // opens read-only, saying so, and closing it leaves this one's lock.
+      const same = await signIn("same-person", owner);
+      // Its lock requests are refused while this one holds it.
+      same.allow("POST", /^\/v1\/charts\/[^/]+\/lock$/, 409);
+      try {
+        await same.goto(url);
+        await canvas(same);
+        const sameBanner = await same.find({ role: "banner" });
+        const elsewhere = msg("lock.editingSelf", { since: "" }).split(" (")[0] ?? "";
+        await until("the second browser to open read-only", async () =>
+          (await same.text(sameBanner)).includes(elsewhere),
+        );
+        await look(same, "same-person");
+      } finally {
+        await same.close();
+        await t.send("Page.bringToFront");
+      }
+      await nudgeBoxB(t);
+      await saveState(t, msg("save.saved"));
       check(
-        (await lockNow()).lock === null,
-        "closing the second browser no longer frees the lock: update the note in saving.md",
-      );
-      KNOWN.push(
-        "closing a chart in one of a person's two browsers frees the editing lock under the other, which saves on without it",
-      );
-      await t.goto(url);
-      await canvas(t);
-      await until("the reopened chart to hold the lock", async () =>
-        (await lockNow()).lock?.email === owner.email ? true : undefined,
+        (await lockNow()).lock?.since === held.lock?.since,
+        "closing the chart in the second browser to leave this one's lock as it was",
       );
       // A colleague: an editor invited from the console's Settings.
       const colleague = {
@@ -1197,6 +1158,18 @@ export const TASKS: Task[] = [
       check(
         events.length === 1 && events[0]?.version.number === 1,
         `the event still on version 1 after version 2: ${JSON.stringify(events)}`,
+      );
+      // Leaving waits for version 2's picture, which the top bar says is
+      // being made (publishing.md): as a person would, wait for it.
+      await until(
+        "version 2's picture to be made",
+        async () =>
+          (await t.text(await t.find({ role: "banner" }))).includes(
+            msg("thumbnail.making", { version: 2 }),
+          )
+            ? undefined
+            : true,
+        30_000,
       );
     },
   },

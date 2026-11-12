@@ -240,7 +240,10 @@ function Form(props: { editor: Editor; onClose: () => void }) {
             when={general()}
             fallback={
               <span class="text-muted">
-                <Show when={seats()}>{(n) => msg("insert.total", { n: formatNumber(n()) })}</Show>
+                {/* An expression, not a <Show> child: a child that returns a
+                    string is read once, and the total would never follow
+                    the fields. */}
+                {seats() === null ? "" : msg("insert.total", { n: formatNumber(seats() ?? 0) })}
               </span>
             }
           >
