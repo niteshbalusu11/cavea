@@ -2,7 +2,8 @@
 // searched by name or key, sorted, archived ones on request; create a chart,
 // import one from a chart document, and from a card's menu export, duplicate
 // or archive it. What the role cannot do is not offered (CON-004).
-// Thumbnails come with publishing (DSN-040): a card shows a placeholder.
+// A card shows its published version's thumbnail (DSN-040), made by the
+// designer as it publishes, or a placeholder.
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { A, useNavigate } from "@solidjs/router";
 import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
@@ -380,8 +381,24 @@ function ChartCard(props: {
   return (
     <li class="flex flex-col overflow-hidden rounded-lg border border-line bg-surface">
       <div class="flex aspect-[4/3] items-center justify-center border-b border-line bg-canvas text-faint">
-        <Icon name="chart" class="size-8" />
-        <span class="sr-only">{msg("charts.noThumbnail")}</span>
+        <Show
+          when={version()?.thumbnail}
+          fallback={
+            <>
+              <Icon name="chart" class="size-8" />
+              <span class="sr-only">{msg("charts.noThumbnail")}</span>
+            </>
+          }
+        >
+          {(t) => (
+            <img
+              src={t().url}
+              alt={msg("charts.thumbnail", { name: props.chart.name })}
+              class="size-full object-contain"
+              loading="lazy"
+            />
+          )}
+        </Show>
       </div>
       <div class="flex items-start gap-2 p-3">
         <div class="min-w-0 flex-1">

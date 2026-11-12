@@ -97,6 +97,31 @@ impl Canvas {
         true
     }
 
+    /// From now on draws what a buyer would see (a version's thumbnail,
+    /// 07 §11): no overlay and no reference image, reusing the pieces
+    /// `from` (the editor's canvas) has compiled.
+    #[wasm_bindgen(js_name = showBuyerFrom)]
+    pub fn show_buyer_from(&mut self, from: &Canvas) {
+        self.painter.show_buyer(Some(from.painter.sync()));
+    }
+
+    /// `showBuyerFrom` with nothing to start from: everything is compiled.
+    #[wasm_bindgen(js_name = showBuyer)]
+    pub fn show_buyer(&mut self) {
+        self.painter.show_buyer(None);
+    }
+
+    /// The bounds of what the last draw showed on its floor, in chart
+    /// units: `[minX, minY, maxX, maxY]`, or `[]` before a scene.
+    #[wasm_bindgen(js_name = sceneBounds)]
+    pub fn scene_bounds(&self) -> Vec<f64> {
+        self.painter.engine().scene().map_or_else(Vec::new, |s| {
+            let b = s.bounds;
+            let (x, y) = (f64::from(b.x), f64::from(b.y));
+            vec![x, y, x + f64::from(b.width), y + f64::from(b.height)]
+        })
+    }
+
     /// Light (`false`) or dark (`true`).
     #[wasm_bindgen(js_name = setTheme)]
     pub fn set_theme(&mut self, dark: bool) {

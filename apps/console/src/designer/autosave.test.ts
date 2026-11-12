@@ -5,8 +5,13 @@ import { expect, test } from "bun:test";
 import {
   Autosave,
   LOCAL_DELAY_MS,
+  LOCK_MS,
   MAX_RETRY_MS,
+  RENEW_MS,
   SAVE_DELAY_MS,
+  type LockInfo,
+  type LockReply,
+  type LockState,
   type SaveReply,
   type SaveState,
 } from "./autosave.ts";
@@ -38,6 +43,11 @@ class FakeClock {
     this.t = end;
     await settle();
   }
+  /** A laptop's sleep: no timer runs for `ms`, then those due run at once. */
+  async sleep(ms: number): Promise<void> {
+    this.t += ms;
+    await this.advance(0);
+  }
 }
 
 const settle = async () => {
@@ -47,8 +57,15 @@ const settle = async () => {
 type Mode = "up" | "down" | "signedOut";
 
 /** The server's draft and etag, another writer, and requests the test
- * answers one at a time. */
+ * answers one at a time; the editing lock by the server's clock (D-73). */
 class FakeServer {
+  constructor(readonly clock: FakeClock) {}
+  /** `me` is this person (every tab of theirs); `other` another person. */
+  lock: { holder: "me" | "other"; since: number; until: number } | null = null;
+  locks: { resolve: (r: LockReply) => void }[] = [];
+  maxLocks = 0;
+  /** Saves that arrived while another held a live lock (refused). */
+  refusedLocked = 0;
   draft = "doc-0";
   etag = '"1"';
   #etags = 1;
@@ -68,6 +85,47 @@ class FakeServer {
       this.maxPending = Math.max(this.maxPending, this.pending.length);
     });
 
+  live(): { holder: "me" | "other"; since: number; until: number } | null {
+    return this.lock !== null && this.lock.until > this.clock.t ? this.lock : null;
+  }
+
+  info(l: { holder: "me" | "other"; since: number }): LockInfo {
+    return { holder: l.holder === "me" ? "usr_me" : "usr_other", email: null, since: `${l.since}` };
+  }
+
+  take = (): Promise<LockReply> =>
+    new Promise((resolve) => {
+      this.locks.push({ resolve });
+      this.maxLocks = Math.max(this.maxLocks, this.locks.length);
+    });
+
+  /** Answers the oldest lock request as the server would now. */
+  answerLock(): void {
+    const r = this.locks.shift();
+    if (r === undefined) return;
+    if (this.mode === "down") return r.resolve({ kind: "offline" });
+    if (this.mode === "signedOut") return r.resolve({ kind: "signedOut" });
+    const live = this.live();
+    if (live?.holder === "other") return r.resolve({ kind: "locked", lock: this.info(live) });
+    const since = live?.holder === "me" ? live.since : this.clock.t;
+    this.lock = { holder: "me", since, until: this.clock.t + LOCK_MS };
+    r.resolve({ kind: "held", lock: this.info(this.lock) });
+  }
+
+  /** Another person takes the lock (over this one's, if live). */
+  otherTakesOver(): void {
+    this.lock = { holder: "other", since: this.clock.t, until: this.clock.t + LOCK_MS };
+  }
+
+  /** The other person saves, as their designer may: only while theirs. */
+  otherSaves(): void {
+    if (this.live()?.holder === "other") this.otherTabSaves();
+  }
+
+  otherLeaves(): void {
+    if (this.lock?.holder === "other") this.lock = null;
+  }
+
   /** Answers the oldest request as the server would now. */
   answer(): void {
     const r = this.pending.shift();
@@ -75,6 +133,12 @@ class FakeServer {
     if (!this.issued.has(r.etag)) throw new Error(`sent an etag never issued: ${r.etag}`);
     if (this.mode === "down") return r.resolve({ kind: "offline", retryAfterMs: null });
     if (this.mode === "signedOut") return r.resolve({ kind: "signedOut" });
+    // The lock before the etag (08 §6.2).
+    const live = this.live();
+    if (live?.holder === "other") {
+      this.refusedLocked++;
+      return r.resolve({ kind: "locked", lock: this.info(live) });
+    }
     if (r.etag !== this.etag) return r.resolve({ kind: "conflict", etag: this.etag });
     if (this.unseen && !this.overwriteChosen) this.silentOverwrites++;
     this.unseen = false;
@@ -112,9 +176,14 @@ class FakeStore {
   };
 }
 
-function rig(start: { unsaved?: { stored: boolean } } = {}) {
+function rig(start: { unsaved?: { stored: boolean } } = {}, locking = false) {
   const clock = new FakeClock();
-  const server = new FakeServer();
+  const server = new FakeServer(clock);
+  const page = { active: true };
+  const locks: LockState[] = [];
+  /** Saves sent after the machine said another holds the lock. */
+  let sentAfterLost = 0;
+  if (locking) server.lock = { holder: "me", since: 0, until: LOCK_MS };
   const store = new FakeStore();
   // Recovered: the record is the document the editor opens.
   if (start.unsaved?.stored === true) store.record = { draft: "doc-0", etag: server.etag };
@@ -132,18 +201,48 @@ function rig(start: { unsaved?: { stored: boolean } } = {}) {
         doc.exports++;
         return `doc-${doc.revision}`;
       },
-      send: server.send,
+      send: (draft, etag) => {
+        if (save.lock.kind === "lost") sentAfterLost++;
+        return server.send(draft, etag);
+      },
       store,
       onState: (s) => states.push(s),
+      ...(locking
+        ? {
+            lock: {
+              take: server.take,
+              draftEtag: () => Promise.resolve(server.mode === "up" ? server.etag : null),
+              active: () => page.active,
+              onLock: (l: LockState) => locks.push(l),
+            },
+          }
+        : {}),
     },
-    { etag: server.etag, revision: 0, ...start },
+    {
+      etag: server.etag,
+      revision: 0,
+      ...start,
+      ...(locking ? { lock: server.info({ holder: "me", since: 0 }) } : {}),
+    },
   );
   const edit = () => {
     doc.revision++;
     save.changed();
   };
   const latest = () => `doc-${doc.revision}`;
-  return { clock, server, store, doc, save, states, edit, latest };
+  return {
+    clock,
+    server,
+    store,
+    doc,
+    save,
+    states,
+    edit,
+    latest,
+    page,
+    locks,
+    sentAfterLost: () => sentAfterLost,
+  };
 }
 
 /** A small seeded generator, so a failure names its seed. */
@@ -157,15 +256,17 @@ function rng(seed: number) {
   };
 }
 
-test("random edits, outages, other tabs and choices: nothing lost, nothing overwritten silently", async () => {
+test("random edits, outages, other tabs, the lock and choices: nothing lost, nothing overwritten silently", async () => {
   const starts = [{}, { unsaved: { stored: true } }, { unsaved: { stored: false } }];
-  for (let seed = 1; seed <= 300; seed++) {
-    // Opened from the server, recovered from the store, or a file imported.
-    const r = rig(starts[seed % 3]);
+  for (let seed = 1; seed <= 600; seed++) {
+    // Opened from the server, recovered from the store, or a file imported;
+    // half of them holding the editing lock, which another person may take.
+    const locking = seed % 2 === 0;
+    const r = rig(starts[seed % 3], locking);
     if (seed % 3 !== 0) r.server.draft = "theirs";
     const next = rng(seed);
     for (let step = 0; step < 150; step++) {
-      switch (next(10)) {
+      switch (next(locking ? 14 : 10)) {
         case 0:
         case 1:
         case 2:
@@ -200,10 +301,33 @@ test("random edits, outages, other tabs and choices: nothing lost, nothing overw
           r.store.failing = next(8) === 0;
           if (!r.store.failing) void r.save.keep();
           break;
+        case 10:
+          r.server.answerLock();
+          break;
+        case 11:
+          // Another person: takes over, saves while theirs, or leaves.
+          [
+            () => r.server.otherTakesOver(),
+            () => r.server.otherSaves(),
+            () => r.server.otherLeaves(),
+          ][next(3)]?.();
+          break;
+        case 12:
+          // The page hidden or shown (an idle hidden tab stops renewing).
+          r.page.active = next(2) === 0;
+          if (r.page.active) r.save.wake();
+          break;
+        case 13:
+          // A long sleep: no timer runs, then everything due at once.
+          await r.clock.sleep((1 + next(3)) * LOCK_MS);
+          break;
       }
       await settle();
       expect(r.server.maxPending).toBeLessThanOrEqual(1);
+      expect(r.server.maxLocks).toBeLessThanOrEqual(1);
       expect(r.server.silentOverwrites).toBe(0);
+      // Once another holds the lock, nothing more is sent.
+      expect(r.sentAfterLost()).toBe(0);
       // Once the store's throttle has run: the latest edits are on the
       // server under the etag held, or in the store, or both.
       if (!r.store.failing) {
@@ -379,7 +503,7 @@ test("two editors of one chart in one browser: neither's save or choice removes 
   // One store, a record per editor, as `drafts.ts` keys them.
   const shared = new Map<string, string>();
   const clock = new FakeClock();
-  const server = new FakeServer();
+  const server = new FakeServer(clock);
   const editor = (id: string) => {
     const doc = { revision: 0 };
     const save = new Autosave(
@@ -427,4 +551,150 @@ test("signed out with a store that fails: not kept, so the page must not leave",
   await settle();
   await r.save.dispose();
   expect([r.save.unsaved, r.save.kept, r.save.localFailed]).toEqual([true, false, true]);
+});
+
+/** A rig holding the lock, its first renewal due in 20 s. */
+const locked = () => rig({}, true);
+
+test("the lock is renewed every 20 s while the page is in use, and rests while it is hidden and idle", async () => {
+  const r = locked();
+  await r.clock.advance(RENEW_MS - 1);
+  expect(r.server.locks).toHaveLength(0);
+  await r.clock.advance(1);
+  expect(r.server.locks).toHaveLength(1);
+  r.server.answerLock();
+  await r.clock.advance(RENEW_MS);
+  expect(r.server.locks).toHaveLength(1);
+  r.server.answerLock();
+  // Hidden with nothing to save: no more renewals, no timer left.
+  r.page.active = false;
+  await r.clock.advance(RENEW_MS);
+  expect(r.server.locks).toHaveLength(0);
+  expect(r.clock.timers.size).toBe(0);
+  // Hidden with changes on their way: renewed until they are saved.
+  r.edit();
+  r.save.wake();
+  expect(r.server.locks).toHaveLength(1);
+  r.server.answerLock();
+  // Shown again a minute later: renewed at once; nobody took it, so it is
+  // taken again, and the draft did not change: editing carries on.
+  await r.clock.advance(SAVE_DELAY_MS);
+  r.server.answer();
+  await r.clock.sleep(LOCK_MS * 2);
+  r.page.active = true;
+  r.save.wake();
+  r.server.answerLock();
+  await settle();
+  expect(r.save.lock.kind).toBe("held");
+  expect(r.save.state.kind).toBe("saved");
+});
+
+test("taken over: saving stops, the work stays in the store, and the person learns who", async () => {
+  const r = locked();
+  r.edit();
+  await r.clock.advance(LOCAL_DELAY_MS);
+  r.server.otherTakesOver();
+  await r.clock.advance(SAVE_DELAY_MS);
+  r.server.answer();
+  await settle();
+  expect(r.save.lock).toEqual({
+    kind: "lost",
+    lock: { holder: "usr_other", email: null, since: `${LOCAL_DELAY_MS}` },
+    takenOver: true,
+  });
+  expect(r.save.state).toEqual({ kind: "locked" });
+  expect(r.store.record?.draft).toBe("doc-1");
+  // Edits that slip in (a gesture ending) are kept, not sent; no renewal.
+  r.edit();
+  await r.clock.advance(RENEW_MS * 3);
+  expect([r.server.pending.length, r.server.locks.length]).toEqual([0, 0]);
+  expect(r.store.record?.draft).toBe("doc-2");
+  expect(r.server.refusedLocked).toBe(1);
+});
+
+test("a renewal refused is a take-over too; a lock that lapsed while the tab slept is not", async () => {
+  const r = locked();
+  r.server.otherTakesOver();
+  await r.clock.advance(RENEW_MS);
+  r.server.answerLock();
+  await settle();
+  expect(r.save.lock.kind === "lost" && r.save.lock.takenOver).toBe(true);
+
+  const s = locked();
+  // Asleep for two minutes: the lock lapsed; another took it meanwhile.
+  await s.clock.sleep(LOCK_MS * 2);
+  s.server.otherTakesOver();
+  s.server.answerLock();
+  await settle();
+  expect(s.save.lock.kind === "lost" && !s.save.lock.takenOver).toBe(true);
+});
+
+test("a lock that lapsed is taken again; a draft saved meanwhile is a conflict, never overwritten", async () => {
+  const r = locked();
+  r.edit();
+  await r.clock.advance(LOCAL_DELAY_MS);
+  r.server.mode = "down";
+  // Offline past the lock's minute: another person took it, saved and left.
+  await r.clock.advance(SAVE_DELAY_MS);
+  r.server.answer();
+  for (let i = 0; i < 8; i++) {
+    await r.clock.advance(RENEW_MS);
+    r.server.answerLock();
+  }
+  expect(r.save.lock.kind).toBe("unrenewed");
+  r.server.otherTakesOver();
+  r.server.otherSaves();
+  r.server.otherLeaves();
+  r.server.mode = "up";
+  r.save.retry();
+  r.server.answerLock();
+  await settle();
+  // The save that retry sent finds their draft: a conflict. Either way,
+  // theirs was not overwritten and mine is in the store.
+  r.server.answer();
+  await settle();
+  expect(r.save.state.kind).toBe("conflict");
+  expect(r.server.silentOverwrites).toBe(0);
+  expect(r.store.record?.draft).toBe("doc-1");
+});
+
+test("a lapse with nothing to save checks the draft: unchanged carries on, changed is a conflict", async () => {
+  for (const changed of [false, true]) {
+    const r = locked();
+    r.page.active = false;
+    await r.clock.sleep(LOCK_MS * 3);
+    if (changed) {
+      r.server.otherTakesOver();
+      r.server.otherSaves();
+      r.server.otherLeaves();
+    }
+    r.page.active = true;
+    r.save.wake();
+    r.server.answerLock();
+    await settle();
+    expect(r.save.lock.kind).toBe("held");
+    expect(r.save.state.kind).toBe(changed ? "conflict" : "saved");
+  }
+});
+
+test("a renewal without an answer: editing goes on, retried at 2, 4, 8, 16 s, then every 20 s", async () => {
+  const r = locked();
+  r.server.mode = "down";
+  await r.clock.advance(RENEW_MS);
+  const waits: number[] = [];
+  for (let i = 0; i < 6; i++) {
+    r.server.answerLock();
+    await settle();
+    const l = r.save.lock;
+    if (l.kind !== "unrenewed") throw new Error(l.kind);
+    waits.push(l.retryAt - r.clock.t);
+    await r.clock.advance(l.retryAt - r.clock.t);
+  }
+  expect(waits).toEqual([2_000, 4_000, 8_000, 16_000, RENEW_MS, RENEW_MS]);
+  r.edit();
+  await r.clock.advance(SAVE_DELAY_MS);
+  r.server.answer();
+  await settle();
+  expect(r.save.state.kind).toBe("offline");
+  expect(r.store.record?.draft).toBe("doc-1");
 });

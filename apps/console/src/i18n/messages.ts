@@ -849,6 +849,7 @@ const consoleScreens = {
   "charts.noMatch": "No chart matches “{query}”.",
   "charts.clearSearch": "Clear the search",
   "charts.noThumbnail": "No preview yet",
+  "charts.thumbnail": "{name}, as published",
   "charts.unpublished": "Not published yet",
   "charts.published": "{seats} seats · version {version}",
   "charts.edited": "Edited {when}",
@@ -1398,8 +1399,47 @@ const serverDesigner = {
   "charts.open": "Open in designer",
 };
 
+/** The designer's editing lock (07 §9, DSN-037). */
+const designerLock = {
+  "lock.you": "you, in another browser",
+  "lock.key": "an API key",
+  "lock.member": "another member",
+  "lock.editing": "Read-only: {who} is editing (since {since})",
+  "lock.takenOver": "Read-only: {who} took over at {since}",
+  "lock.roleEditing": "Read-only · {who} is editing",
+  "lock.archived": "Read-only: archived",
+  "lock.archivedRefused": "This chart is archived: it can no longer be changed.",
+  "lock.refused": "{who} is editing this chart: it is open read-only here. Take over to edit.",
+  "lock.takeOver": "Take over…",
+  "lock.confirmTitle": "Take over from {who}?",
+  "lock.confirmBody":
+    "{who} will be switched to read-only at once. Changes they have not saved stay in their browser, offered to them when they edit again. The chart then opens here as it is on the server.",
+  "lock.takeOverConfirm": "Take over",
+  "lock.takeOverFailed": "The chart could not be taken over.",
+  "lock.unkeptTitle": "Your changes could not be kept in this browser",
+  "lock.unkeptBody":
+    "Taking over opens the chart as it is on the server, and this browser could not store your unsaved changes (a private window, or no space left). Download them first, or they are lost.",
+  "lock.unkeptConfirm": "Take over without them",
+  "lock.lostTitle": "{who} took over this chart",
+  "lock.lapsedTitle": "{who} is editing this chart now",
+  "lock.lostBody":
+    "Only one person edits a chart at a time, so it is now read-only here. You can still look around.",
+  "lock.lostKept":
+    "Your changes that had not reached the server are kept in this browser. Take over again to carry on with them (they are offered as the chart reopens), or download them.",
+  "lock.lostNotKept":
+    "Your changes that had not reached the server could not be stored in this browser (a private window, or no space left): download them now, or they are lost when this page closes.",
+  "lock.unrenewed": "Offline — changes kept locally; others may take over until you are back",
+  "lock.unreachable": "The server could not be reached to start editing.",
+  "lock.reloaded":
+    "The chart was changed by someone else while this tab was away: it now shows their latest version.",
+  "topbar.publishReadOnly": "This chart is open read-only here.",
+  "publish.locked": "{who} is editing this chart, so nothing was published.",
+  "thumbnail.skipped": "Version {version} was published without a picture for the charts list.",
+};
+
 export const catalogue = {
   ...ui,
+  ...designerLock,
   ...consoleScreens,
   ...eventScreens,
   ...group("audit.action", auditActions),

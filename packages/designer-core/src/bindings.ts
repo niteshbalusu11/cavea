@@ -36,6 +36,12 @@ export interface CanvasHandle {
     dpr: number,
   ): boolean;
   setTheme(dark: boolean): void;
+  /** Draws what a buyer would see from now on, reusing `from`'s pieces. */
+  showBuyerFrom(from: CanvasHandle): void;
+  /** Draws what a buyer would see from now on. */
+  showBuyer(): void;
+  /** `[minX, minY, maxX, maxY]` of the scene drawn, or empty. */
+  sceneBounds(): Float64Array;
   /** Draws `designer`'s session if anything changed (`overlay`: whether
    * its overlay may have); whether to draw again. */
   draw(designer: Handle, timeMs: number, overlay: boolean): boolean;

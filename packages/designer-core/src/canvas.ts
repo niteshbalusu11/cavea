@@ -280,6 +280,18 @@ export class Canvas {
   }
 
   /**
+   * From now on draws what a buyer would see of the session (07 §11, a
+   * version's thumbnail): no overlay (selection, handles, guides, rulers'
+   * lines) and no reference image. Given `from`, the editor's own canvas,
+   * the pieces it has compiled are reused, so the first draw compiles
+   * nothing it already has.
+   */
+  showBuyer(from?: Canvas): void {
+    const source = from === undefined ? null : from.#handle;
+    this.#call((h) => (source === null ? h.showBuyer() : h.showBuyerFrom(source)));
+  }
+
+  /**
    * Brings the picture up to date with the session and draws it if
    * anything changed (the document, the overlay, the view, the theme, text
    * arriving); a call that finds nothing changed draws nothing. Call it
@@ -315,6 +327,14 @@ export class Canvas {
    */
   retryImages(): void {
     this.#call((h) => h.retryImages());
+  }
+
+  /** What the last draw showed on its floor, in chart units; `null`
+   * before a scene (nothing drawn yet, or an empty floor). */
+  sceneBounds(): Rect | null {
+    const [x0, y0, x1, y1] = this.#call((h) => h.sceneBounds());
+    if (x0 === undefined || y0 === undefined || x1 === undefined || y1 === undefined) return null;
+    return x1 > x0 && y1 > y0 ? { min: [x0, y0], max: [x1, y1] } : null;
   }
 
   /** The chart point under a canvas point, for the current view. */

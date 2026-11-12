@@ -286,6 +286,8 @@ pub struct Painter<B: GpuBackend> {
     overlay: Option<Overlay>,
     /// Events for the host: text and image requests and errors.
     events: Vec<Event>,
+    /// Draws what a buyer would see: no overlay, no reference image.
+    buyer: bool,
 }
 
 impl<B: GpuBackend> Painter<B> {
@@ -297,7 +299,19 @@ impl<B: GpuBackend> Painter<B> {
             dark: false,
             overlay: None,
             events: Vec::new(),
+            buyer: false,
         }
+    }
+
+    /// From now on draws what a buyer would see of the session (07 §11, a
+    /// version's thumbnail): no overlay (selection, handles, guides) and no
+    /// reference image. Given `from`, the editor's sync, its compiled
+    /// pieces are reused.
+    pub fn show_buyer(&mut self, from: Option<&LiveSync>) {
+        self.sync = from.map_or_else(|| LiveSync::new().for_buyer(), LiveSync::for_buyer);
+        self.buyer = true;
+        self.overlay = None;
+        self.engine.set_overlay(Vec::new());
     }
 
     /// Light or dark: the theme's palette and background (`#FAFAF9`,
@@ -357,7 +371,7 @@ impl<B: GpuBackend> Painter<B> {
     /// overlay is not built again (a pan, a baking frame, text arriving).
     pub fn draw_with(&mut self, session: &Session, time_ms: f64, overlay_changed: bool) -> bool {
         let baking = self.sync.sync(session, &mut self.engine);
-        if overlay_changed || self.overlay.is_none() {
+        if (overlay_changed || self.overlay.is_none()) && !self.buyer {
             let overlay = session.overlay();
             if self.overlay.as_ref() != Some(&overlay) {
                 let palette = if self.dark { &DARK } else { &LIGHT };

@@ -533,9 +533,18 @@ async fn create(
             charts::check_draft(draft.clone().into()).await?;
             draft
         }
-        None => {
-            json!({ "schema": cavea_compiler::SCHEMA, "name": body.name, "nextOid": 1 }).to_string()
-        }
+        // One category, as the designer's "draw from scratch" (07 §16): every
+        // object needs one (02, E002), and a chart with none compiles no
+        // seat, so the first block drawn would not show.
+        None => json!({
+            "schema": cavea_compiler::SCHEMA,
+            "name": body.name,
+            "nextOid": 1,
+            "categories": [
+                { "key": "standard", "label": "Standard", "color": "#2563EB", "accessible": false }
+            ],
+        })
+        .to_string(),
     };
     let row: Result<ChartRow, _> = sqlx::query_as(CREATE)
         .bind(auth.workspace().uuid())

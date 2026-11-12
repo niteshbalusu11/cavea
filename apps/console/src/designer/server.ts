@@ -6,7 +6,9 @@ import { ApiError, call, callWithHeaders } from "../api/client.ts";
 import type { Chart, ChartDocument, Finding, Version } from "../api/generated.ts";
 import { asApiError } from "../api/query.ts";
 import { describe } from "../console/errors.ts";
-import type { SaveReply } from "./autosave.ts";
+import type { LockInfo, LockReply, SaveReply } from "./autosave.ts";
+import { infoOf, lockOf, lockReplyOf, saveReply, unreachable } from "./replies.ts";
+import type { Sent } from "./thumbnail.ts";
 
 /** Where a server chart lives. */
 export interface ChartRef {
@@ -24,10 +26,16 @@ export interface OpenedChart {
 }
 
 /** The chart and its draft. The etag is the draft answer's own `ETag`, so
- * it names exactly the draft read. */
-export async function openChart(ref: ChartRef, signal: AbortSignal): Promise<OpenedChart> {
+ * it names exactly the draft read. `between` runs once the chart is read,
+ * before the draft is (taking the editing lock). */
+export async function openChart(
+  ref: ChartRef,
+  signal: AbortSignal,
+  between: (chart: Chart) => Promise<void> = () => Promise.resolve(),
+): Promise<OpenedChart> {
   const options = { workspace: ref.workspace };
   const chart = await call("getChart", { path: { chart: ref.key } }, signal, options);
+  await between(chart);
   const got = await callWithHeaders("getDraft", { path: { chart: ref.key } }, signal, options);
   const etag = got.headers.get("ETag");
   if (etag === null || typeof got.reply !== "object" || got.reply === null) {
@@ -44,32 +52,45 @@ export async function currentEtag(ref: ChartRef, signal: AbortSignal): Promise<s
   return chart.draft_etag;
 }
 
-/** Statuses a proxy answers for a server that is down or restarting. */
-const UNREACHABLE = new Set([502, 503, 504]);
+/** A failed save as what the autosave does next (`replies.ts`). */
+export const saveReplyOf = (e: unknown): SaveReply => saveReply(e, describe);
 
-/** A failed save as what the autosave does next. */
-export function saveReplyOf(e: unknown): SaveReply {
-  const error = asApiError(e);
-  if (error.status === 401) return { kind: "signedOut" };
-  if (error.code === "version_conflict") {
-    const etag = error.details["draft_etag"];
-    return { kind: "conflict", etag: typeof etag === "string" ? etag : null };
+/** Takes or renews the editing lock (07 §9), or takes it over. Never
+ * rejects; an archived chart is `refused`. */
+export async function takeLock(ref: ChartRef, takeOver = false): Promise<LockReply> {
+  try {
+    const lock = await call(
+      "lockChart",
+      { path: { chart: ref.key }, body: takeOver ? { take_over: true } : {} },
+      new AbortController().signal,
+      { workspace: ref.workspace },
+    );
+    return { kind: "held", lock: infoOf(lock) };
+  } catch (e) {
+    return lockReplyOf(e);
   }
-  if (
-    error.code === "network" ||
-    error.code === "timeout" ||
-    error.code === "rate_limited" ||
-    error.code === "overloaded" ||
-    error.code === "unavailable" ||
-    error.code === "internal_error" ||
-    (error.code === "unexpected" && UNREACHABLE.has(error.status))
-  ) {
-    return {
-      kind: "offline",
-      retryAfterMs: error.retryAfter === null ? null : error.retryAfter * 1000,
-    };
+}
+
+/** Releases the lock if it is the caller's (`204` either way), as the page
+ * is left: the request outlives it. Never rejects. */
+export function releaseLock(ref: ChartRef): void {
+  call("unlockChart", { path: { chart: ref.key } }, new AbortController().signal, {
+    workspace: ref.workspace,
+    keepalive: true,
+  }).catch(() => {});
+}
+
+/** Who holds the lock, for a role that only reads; `null` for nobody (or
+ * when it cannot be read). */
+export async function readLock(ref: ChartRef, signal: AbortSignal): Promise<LockInfo | null> {
+  try {
+    const got = await call("getChartLock", { path: { chart: ref.key } }, signal, {
+      workspace: ref.workspace,
+    });
+    return got.lock === null ? null : infoOf(got.lock);
+  } catch {
+    return null;
   }
-  return { kind: "refused", message: describe(error) };
 }
 
 /** Saves `draft` (chart document JSON from the session) over the draft
@@ -97,6 +118,8 @@ export type Published =
   /** The compile found errors (`422 chart_invalid`). */
   | { kind: "invalid"; findings: Finding[] }
   | { kind: "conflict" }
+  /** Another holds the editing lock. */
+  | { kind: "locked"; lock: LockInfo }
   | { kind: "failed"; error: ApiError };
 
 /** Publishes the draft whose etag is `etag` (08 §6.2): what is compiled is
@@ -117,6 +140,8 @@ export async function publish(
   } catch (e) {
     const error = asApiError(e);
     if (error.code === "version_conflict") return { kind: "conflict" };
+    const lock = lockOf(error);
+    if (lock !== null) return { kind: "locked", lock };
     const findings = error.details["findings"];
     if (error.code === "chart_invalid" && Array.isArray(findings)) {
       return { kind: "invalid", findings: findings.filter(isFinding) };
@@ -132,5 +157,40 @@ function isFinding(v: unknown): v is Finding {
     typeof f["code"] === "string" &&
     typeof f["message"] === "string" &&
     (f["severity"] === "error" || f["severity"] === "warning")
+  );
+}
+
+/** A request's outcome for the thumbnail: no answer is tried again. */
+async function sent<T>(send: () => Promise<T>): Promise<Sent<T>> {
+  try {
+    return { ok: await send() };
+  } catch (e) {
+    return unreachable(asApiError(e)) ? { offline: true } : { failed: true };
+  }
+}
+
+/** Uploads a thumbnail's picture (`POST /v1/assets`): its hash. */
+export function uploadImage(ref: ChartRef, blob: Blob): Promise<Sent<string>> {
+  return sent(async () => {
+    const asset = await call("uploadAsset", { body: blob }, new AbortController().signal, {
+      workspace: ref.workspace,
+    });
+    return asset.hash;
+  });
+}
+
+/** Attaches an uploaded picture to version `number` as its thumbnail. */
+export function attachThumbnail(
+  ref: ChartRef,
+  number: number,
+  hash: string,
+): Promise<Sent<Version>> {
+  return sent(() =>
+    call(
+      "setVersionThumbnail",
+      { path: { chart: ref.key, number: String(number) }, body: { asset: hash } },
+      new AbortController().signal,
+      { workspace: ref.workspace },
+    ),
   );
 }

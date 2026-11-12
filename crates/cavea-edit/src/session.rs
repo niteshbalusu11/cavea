@@ -996,15 +996,19 @@ impl Session {
         self.outlines.prune(doc);
         self.selection.reconcile(doc);
         // The active category is one of the chart's, also after an undo or
-        // redo of a category edit: else the first.
+        // redo of a category edit, and once a chart that had none gets one:
+        // else the first.
         let cats = doc.categories();
-        if self
+        if !self
             .category
             .as_ref()
-            .is_some_and(|k| !cats.iter().any(|c| &c.key == k))
+            .is_some_and(|k| cats.iter().any(|c| &c.key == k))
         {
-            self.watch.tools += 1;
-            self.category = cats.first().map(|c| c.key.clone());
+            let first = cats.first().map(|c| c.key.clone());
+            if self.category != first {
+                self.watch.tools += 1;
+                self.category = first;
+            }
         }
         let listed = |f| doc.floors().iter().any(|l| l.id == f);
         if !self.floor.is_some_and(listed) {
