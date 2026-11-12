@@ -50,8 +50,8 @@ Keep a scanned plan as **Reference**: its lines and notes would only confuse buy
 Distances in the designer are in chart units (**cu** beside a field). A new row block spaces its seats 55 units apart and its rows 95 apart, which suits a theatre seat. So that your rows sit on the plan's rows, change the picture's size until a row of seats drawn over it matches the plan:
 
 1. Draw one row block over the front row of the plan ([Draw seats](seats.md)).
-2. If the plan's seats are wider apart than yours, select the picture in the **Layers** list, untick **Locked**, and make **Width** larger; if they are closer, smaller. **Height** follows.
-3. Lock it again.
+2. If the plan's seats are further apart than yours, the picture is too large: make it smaller. If they are closer together, make it larger. Select the picture in the **Layers** list, untick **Locked**, and change both **Width** and **Height** by the same proportion, so that the plan keeps its shape: to make it a fifth smaller, multiply both by 0.8. Each field changes only its own side.
+3. Look again, repeat until the rows match, and lock the picture.
 
 You can also leave the picture as it is and change the block's **Seat pitch** and **Row pitch** to match it instead. Either way, what matters is that the seats on your chart line up with the room.
 

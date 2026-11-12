@@ -12,7 +12,7 @@ What you draw is a draft: buyers never see it, and events cannot use it, until y
 
 ![The preview at phone width, half sold](../images/designer-preview.webp)
 
-Nothing in the preview is saved or sold. The small "Development licence" mark in a corner of the map appears while your Cavea server has no licence; it goes when one is installed.
+Nothing in the preview is saved or sold. While your Cavea server has no licence, buyers' maps show a small "Development licence" mark in a corner; the preview never shows it, so do not be surprised to see it on the real page until a licence is installed.
 
 ## Publish
 

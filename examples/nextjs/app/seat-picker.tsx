@@ -49,15 +49,18 @@ export function SeatPicker() {
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
-  const run = async (step: () => Promise<Order>) => {
+  /** Runs a checkout step; whether it succeeded. */
+  const run = async (step: () => Promise<Order>): Promise<boolean> => {
     setBusy(true);
     setProblem(null);
     try {
       setOrder(await step());
+      return true;
     } catch (error) {
       const code = error instanceof Error ? error.message : "";
       setProblem(MESSAGES[code] ?? "Something went wrong. Please try again.");
       if (code === "hold_expired") setOrder(null);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -121,8 +124,10 @@ export function SeatPicker() {
               type="button"
               disabled={busy}
               onClick={() =>
-                void run(() => post(`/api/orders/${order.orderId}/cancel`)).then(() =>
-                  setOrder(null),
+                // Back to the map only once the seats are released: a paid
+                // order cannot be cancelled here, and stays to be retried.
+                void run(() => post(`/api/orders/${order.orderId}/cancel`)).then(
+                  (ok) => ok && setOrder(null),
                 )
               }
             >

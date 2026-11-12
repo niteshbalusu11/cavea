@@ -1272,7 +1272,12 @@ async function exampleNode(): Promise<void> {
     `checkout priced ${total} from the categories`,
   );
   const id = String(order.json["orderId"]);
-  const paid = await a(`/api/orders/${id}/pay`);
+  // A double click on Pay: two requests at once, one payment, one booking.
+  const [paid, again] = await Promise.all([a(`/api/orders/${id}/pay`), a(`/api/orders/${id}/pay`)]);
+  expect(
+    again.json["status"] === "booked" && (proc.output.match(/FAKE payment/g) ?? []).length === 1,
+    "two Pay requests at once take one payment",
+  );
   const statuses = await Promise.all(two.map((s) => seatStatus(server, s.label)));
   expect(
     paid.json["status"] === "booked" && statuses.every((s) => s === "booked"),
@@ -1296,12 +1301,16 @@ async function exampleNode(): Promise<void> {
     hold_token: tokenB,
     objects: [lost],
   });
-  const refused = await b(`/api/orders/${orderB}/pay`);
+  const [refused] = await Promise.all([
+    b(`/api/orders/${orderB}/pay`),
+    b(`/api/orders/${orderB}/pay`),
+  ]);
   expect(
     refused.status === 409 &&
       refused.json["error"] === "hold_expired" &&
-      (await seatStatus(server, lost)) === "free",
-    "a hold lost during payment is refunded, not booked",
+      (await seatStatus(server, lost)) === "free" &&
+      (proc.output.match(/FAKE refund/g) ?? []).length === 1,
+    "a hold lost during payment is refunded once (two Pay requests at once), not booked",
   );
   // Cancelled: released at once.
   const c = buyer();

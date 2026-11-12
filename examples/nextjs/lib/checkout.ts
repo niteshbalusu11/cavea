@@ -119,12 +119,22 @@ export async function cancel(order: Order): Promise<Order> {
 }
 
 // FAKE: stands in for your payment provider. Authorise the amount here and
-// capture it once the booking succeeds, if your provider can.
+// capture it once the booking succeeds, if your provider can. Give the
+// provider an idempotency key made from the order, as the booking has, so
+// that a retry after a lost reply never charges or refunds twice.
 async function takePayment(order: Order): Promise<void> {
-  console.log(`FAKE payment of ${order.total} pence for order ${order.id}`);
+  console.log(`FAKE payment of ${order.total} pence, key pay-${order.id}`);
 }
 async function refundPayment(order: Order): Promise<void> {
-  console.log(`FAKE refund of ${order.total} pence for order ${order.id}`);
+  console.log(`FAKE refund of ${order.total} pence, key refund-${order.id}`);
+}
+/** One step at a time per order: a second click on Pay waits for the first,
+ * then sees the order booked or refunded, so nothing is charged or refunded twice. */
+const queues = new Map<string, Promise<unknown>>();
+export function serially<T>(order: Order, step: () => Promise<T>): Promise<T> {
+  const next = (queues.get(order.id) ?? Promise.resolve()).catch(() => undefined).then(step);
+  queues.set(order.id, next);
+  return next;
 }
 
 /** The JSON answer for what a handler returned or threw. */
