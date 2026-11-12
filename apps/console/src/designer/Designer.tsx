@@ -272,9 +272,7 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
   // the open draft (saved by autosave, undone by undo), asking first when
   // the draft has something in it; the reference image is placed in it.
   /** A template waiting for the person to agree to replace the chart. */
-  const [replacing, setReplacing] = createSignal<{ template: Template; text: string } | null>(
-    null,
-  );
+  const [replacing, setReplacing] = createSignal<{ template: Template; text: string } | null>(null);
   /** The empty chart's panel was closed, or the person started drawing. */
   const [startDone, setStartDone] = createSignal(false);
   const applyTemplate = (template: Template, text: string) => {
@@ -668,9 +666,7 @@ function Shell(props: {
         <ToolRail editor={editor} onInsert={() => setInsert(true)} onImage={props.ui.onImage} />
         <div class="relative flex min-w-0 flex-1">
           <CanvasHost editor={editor} rulers={layout().rulers} />
-          <Show when={props.start}>
-            {(choices) => <StartPanel choices={choices()} />}
-          </Show>
+          <Show when={props.start}>{(choices) => <StartPanel choices={choices()} />}</Show>
         </div>
         <Splitter
           orientation="vertical"

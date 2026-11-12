@@ -901,6 +901,16 @@ const consoleScreens = {
   // CON-006, CON-007, CON-010 to CON-012: events, a chart's page, API keys,
   // the quick start, settings, members, invitations, the audit log.
   "list.loadMore": "Load more",
+  "table.sortPartial":
+    "Sorting by the other columns waits for the whole list: choose Load more until it ends.",
+  "table.sorted": "Sorted by {column}, {order}.",
+  "table.unsorted": "In the order the server gives.",
+  "table.text.ascending": "A to Z",
+  "table.text.descending": "Z to A",
+  "table.number.ascending": "lowest first",
+  "table.number.descending": "highest first",
+  "table.time.ascending": "oldest first",
+  "table.time.descending": "newest first",
   "list.loadingMore": "Loading…",
   "copy.copy": "Copy",
   "copy.copied": "Copied",
@@ -1009,7 +1019,14 @@ const consoleScreens = {
   "chart.settings": "Settings",
   "chart.versionsLoading": "Loading versions…",
   "chart.versionsFailed": "The versions could not be loaded.",
-  "chart.versionsPartial": "The newest {n} versions are shown.",
+  "chart.versionsPartial": "The first {n} versions are shown: the list stops there.",
+  "chart.versionsUnsortable":
+    "Not sortable: sorting only the versions shown would mislead while the list stops short.",
+  "chart.colAuthor": "Published by",
+  "chart.authorUnknown": "Not recorded",
+  "chart.authorKey": "An API key",
+  "chart.authorMember": "A member",
+  "chart.authorFormer": "A former member",
   "chart.noVersions":
     "No version has been published yet. Publish the chart from the designer to create events on it.",
   "chart.colVersion": "Version",

@@ -118,13 +118,7 @@ export function NewChartDialog(props: {
     setTimeout(run, 0);
   };
   return (
-    <Dialog
-      open={props.open}
-      title={props.title}
-      heading
-      onClose={props.onClose}
-      class="max-w-2xl"
-    >
+    <Dialog open={props.open} title={props.title} heading onClose={props.onClose} class="max-w-2xl">
       <div class="px-5 pt-1 pb-5">
         <NewChart
           choices={{

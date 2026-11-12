@@ -17,8 +17,7 @@ test("never offered to a chart the person cannot change; asks before replacing a
   expect(offer(true, { nodes: 0, unsaved: true })).toBe("ask");
 });
 
-const text = (id: string) =>
-  Bun.file(new URL(`./templates/${id}.json`, import.meta.url)).text();
+const text = (id: string) => Bun.file(new URL(`./templates/${id}.json`, import.meta.url)).text();
 
 /** What a template gives a chart, ids aside: settings, categories, floors,
  * seats and findings. */
@@ -43,7 +42,10 @@ test("each template applies to an empty chart and over another one, as one undo 
     const direct = d.open(template);
     const want = shape(direct.export());
     direct.dispose();
-    for (const start of [emptyChart("Grand Hall"), await text(t.id === "theatre" ? "arena" : "theatre")]) {
+    for (const start of [
+      emptyChart("Grand Hall"),
+      await text(t.id === "theatre" ? "arena" : "theatre"),
+    ]) {
       const s = d.open(start);
       const before = s.export();
       s.apply(templateCommand(before, template));

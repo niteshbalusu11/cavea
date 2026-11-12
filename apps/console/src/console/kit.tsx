@@ -7,11 +7,20 @@ import { Tooltip } from "@kobalte/core/tooltip";
 import { createSignal, createUniqueId, For, Show, type Accessor, type JSX } from "solid-js";
 import type { ApiError } from "../api/client.ts";
 import type { Pages } from "../api/pages.ts";
-import { msg } from "../i18n/messages.ts";
+import { msg, type MessageId } from "../i18n/messages.ts";
 import { Button, buttonClass, Tip, type Variant } from "../ui/controls.tsx";
 import { fieldInputClass } from "../ui/form.tsx";
 import { Icon, type IconName } from "../ui/Icon.tsx";
 import { describe, reference } from "./errors.ts";
+import {
+  ariaSort,
+  sortBy,
+  sorted,
+  toggle,
+  type Direction,
+  type Sort,
+  type SortBy,
+} from "./tables.ts";
 
 const dateTimes = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" });
 const dates = new Intl.DateTimeFormat("en", { dateStyle: "medium" });
@@ -32,6 +41,110 @@ export const td = "border-b border-line px-3 py-2 align-middle text-fg";
  * window high, so its sticky header stays in view (09 §8) and a table wider
  * than the window (from 768 px) scrolls sideways without the page. */
 export const tableBox = "max-h-[calc(100dvh-12rem)] overflow-auto";
+
+/** A column's header: a button that sorts by it when it can (`sortBy`),
+ * with `aria-sort` on the header naming the order. */
+export function SortHeader<C extends string>(props: {
+  label: string;
+  column: C;
+  sort: Sort<C> | null;
+  by: SortBy;
+  onSort: (sort: Sort<C>) => void;
+  /** The first direction a click asks for (dates: newest first). */
+  first?: Direction;
+}) {
+  const icon = (): IconName => {
+    const d = ariaSort(props.sort, props.column);
+    return d === "ascending" ? "sortUp" : d === "descending" ? "sortDown" : "sortable";
+  };
+  return (
+    <th scope="col" class={th} aria-sort={ariaSort(props.sort, props.column)}>
+      <Show when={props.by !== "none"} fallback={props.label}>
+        <button
+          type="button"
+          class="-mx-1 inline-flex items-center gap-1 rounded-sm px-1 hover:text-fg"
+          onClick={() => props.onSort(toggle(props.sort, props.column, props.first))}
+        >
+          {props.label}
+          <Icon
+            name={icon()}
+            class={props.sort?.column === props.column ? "shrink-0 text-fg" : "shrink-0 text-faint"}
+          />
+        </button>
+      </Show>
+    </th>
+  );
+}
+
+/** Says, to everyone, how a table is sorted now and, while it is only
+ * partly loaded, that sorting by its other columns waits for the rest. */
+export function SortNote(props: { said: string; partial?: string | undefined }) {
+  return (
+    <>
+      <p class="sr-only" role="status">
+        {props.said}
+      </p>
+      <Show when={props.partial}>{(text) => <p class="mt-2 text-sm text-muted">{text()}</p>}</Show>
+    </>
+  );
+}
+
+/** What a column holds, for how its order is said. */
+export type Kind = "text" | "number" | "time";
+/** "A to Z", "newest first": an order in words. */
+export const orderText = (kind: Kind, direction: Direction): string =>
+  msg(`table.${kind}.${direction}`);
+
+/** Every row of a paged list is loaded: its last page has come. */
+export const complete = <T,>(pages: Pages<T>): boolean => {
+  const s = pages.state();
+  return s.status === "ready" && s.data.next === null;
+};
+
+/**
+ * Sorting in the page for a list the server does not order (`tables.ts`):
+ * its columns sort once every row is loaded, and not before. In the
+ * server's order until a header is chosen.
+ */
+export function pageSort<T, C extends string>(
+  columns: Record<C, { label: MessageId; kind: Kind; compare: (a: T, b: T) => number }>,
+) {
+  const [sort, setSort] = createSignal<Sort<C> | null>(null);
+  const keys = Object.keys(columns) as C[];
+  const compare = Object.fromEntries(keys.map((k) => [k, columns[k].compare])) as Record<
+    C,
+    (a: T, b: T) => number
+  >;
+  return {
+    header: (column: C, whole: boolean) => (
+      <SortHeader
+        label={msg(columns[column].label)}
+        column={column}
+        by={sortBy(column, { server: [], page: keys, complete: whole })}
+        sort={whole ? sort() : null}
+        first={columns[column].kind === "text" ? "ascending" : "descending"}
+        onSort={setSort}
+      />
+    ),
+    rows: (rows: T[], whole: boolean): T[] => (whole ? sorted(rows, sort(), compare) : rows),
+    note: (whole: boolean) => {
+      const s = sort();
+      return (
+        <SortNote
+          said={
+            whole && s !== null
+              ? msg("table.sorted", {
+                  column: msg(columns[s.column].label),
+                  order: orderText(columns[s.column].kind, s.direction),
+                })
+              : msg("table.unsorted")
+          }
+          partial={whole ? undefined : msg("table.sortPartial")}
+        />
+      );
+    },
+  };
+}
 
 /** Shown while a list's first page loads. */
 export function ListLoading(props: { label: string; rows?: number }) {

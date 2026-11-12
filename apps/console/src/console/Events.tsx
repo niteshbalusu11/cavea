@@ -44,7 +44,21 @@ import {
 } from "./eventFilters.ts";
 import { EventForm } from "./EventForm.tsx";
 import { cannot } from "./licence.ts";
-import { Action, Empty, formatDateTime, LoadMore, Paged, table, tableBox, td, th } from "./kit.tsx";
+import {
+  Action,
+  Empty,
+  formatDateTime,
+  LoadMore,
+  Paged,
+  orderText,
+  SortHeader,
+  SortNote,
+  table,
+  tableBox,
+  td,
+  th,
+} from "./kit.tsx";
+import { rowKeys, type Sort } from "./tables.ts";
 
 /** Events per page. */
 const PAGE = 25;
@@ -139,6 +153,11 @@ export function Events() {
   };
   const chartName = (key: string) => chartList().find((c) => c.key === key)?.name ?? key;
 
+  /** The only sortable column: creation, as the server orders it. */
+  const createdSort = (): Sort<"created"> => ({
+    column: "created",
+    direction: filters().order === "newest" ? "descending" : "ascending",
+  });
   const [creating, setCreating] = createSignal(false);
   const [archiving, setArchiving] = createSignal<Event | null>(null);
 
@@ -343,9 +362,17 @@ export function Events() {
                     <th scope="col" class={th}>
                       {msg("events.colSeats")}
                     </th>
-                    <th scope="col" class={th}>
-                      {msg("events.colCreated")}
-                    </th>
+                    {/* The server orders by creation (`order`): every event, not only those loaded. */}
+                    <SortHeader
+                      label={msg("events.colCreated")}
+                      column="created"
+                      by="server"
+                      sort={createdSort()}
+                      first="descending"
+                      onSort={(s) =>
+                        set({ order: s.direction === "ascending" ? "oldest" : "newest" })
+                      }
+                    />
                     <th scope="col" class={th}>
                       {msg("events.colStatus")}
                     </th>
@@ -354,7 +381,7 @@ export function Events() {
                     </th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody onKeyDown={rowKeys}>
                   <For each={rows()}>
                     {(event) => (
                       <EventRow
@@ -367,6 +394,12 @@ export function Events() {
                 </tbody>
               </table>
             </div>
+            <SortNote
+              said={msg("table.sorted", {
+                column: msg("events.colCreated"),
+                order: orderText("time", filters().order === "newest" ? "descending" : "ascending"),
+              })}
+            />
             <LoadMore pages={events} />
           </Show>
         )}
@@ -411,6 +444,7 @@ function EventRow(props: { event: Event; chartName: string; onArchive: () => voi
         <A
           href={`/events/${encodeURIComponent(props.event.key)}`}
           class="block font-medium text-accent underline"
+          data-row-stop
         >
           {props.event.name ?? props.event.key}
         </A>

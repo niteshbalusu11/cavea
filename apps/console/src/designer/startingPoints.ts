@@ -18,10 +18,7 @@ export type Offer =
  * the chart open now (`null`: none, the local designer's empty state):
  * replacing one with nodes in it, or with changes not saved, asks first.
  */
-export function offer(
-  canEdit: boolean,
-  open: { nodes: number; unsaved: boolean } | null,
-): Offer {
+export function offer(canEdit: boolean, open: { nodes: number; unsaved: boolean } | null): Offer {
   if (!canEdit) return "none";
   if (open === null) return "apply";
   return open.nodes > 0 || open.unsaved ? "ask" : "apply";
