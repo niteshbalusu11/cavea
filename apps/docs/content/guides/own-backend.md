@@ -12,11 +12,11 @@ Use this when your ticketing platform already decides who has which seat and you
 
 | Endpoint | Answers |
 |---|---|
-| `GET /api/events/{event}/seats` | `{ "unavailable": [labels], "mine": [labels], "expiresAt": ms or null }`: the seats the buyer cannot have, and the ones this buyer holds |
-| `GET /api/events/{event}/changes` | Server-Sent Events, each `data` a JSON `{ "unavailable": [labels], "available": [labels] }` |
+| `GET /api/events/{event}/seats` | `{ "seq": n, "unavailable": [labels], "mine": [labels], "expiresAt": ms or null }`: the seats the buyer cannot have, the ones this buyer holds, and `seq`, the number of the last change the answer includes |
+| `GET /api/events/{event}/changes?after=n` | Server-Sent Events: every change numbered after `n`, the ones already made first, then each new one. Each event's `id` is its number and its `data` a JSON `{ "unavailable": [labels], "available": [labels] }`. When it is reconnected with a `Last-Event-ID` header, it starts after that number instead |
 | `POST /api/events/{event}/holds`, `DELETE /api/events/{event}/holds` | Hold or release `{ "labels": [...] }` for this buyer's session; a refusal is `409` with `{ "failed": [{ "label", "reason" }] }` |
 
-The shapes are yours to choose; these are the ones the adapter below reads.
+The shapes are yours to choose; these are the ones the adapter below reads. What matters is the numbering: your backend numbers every change to the event's seats in order, the snapshot says which number it is current to, and the stream replays from there. Without it, a seat taken between the snapshot and the stream's start would show as available until the page reloads.
 
 ## The adapter
 
@@ -31,10 +31,16 @@ const state = customState({
   async connect(ctx) {
     const reply = await fetch(`/api/events/${event}/seats`, { signal: ctx.signal });
     if (!reply.ok) throw new Error(`seats: ${reply.status}`);
-    const seats = (await reply.json()) as { unavailable: string[]; mine: string[]; expiresAt: number | null };
+    const seats = (await reply.json()) as {
+      seq: number;
+      unavailable: string[];
+      mine: string[];
+      expiresAt: number | null;
+    };
 
-    // Every change after this snapshot, as label lists.
-    changes = new EventSource(`/api/events/${event}/changes`);
+    // Every change after this snapshot, as label lists. On a reconnection
+    // EventSource sends the last id it saw, so nothing is missed then either.
+    changes = new EventSource(`/api/events/${event}/changes?after=${seats.seq}`);
     changes.onmessage = (message) => ctx.applyDelta(JSON.parse(message.data));
     changes.onerror = () => ctx.reportError(new Error("live seat updates interrupted"));
 
@@ -79,7 +85,7 @@ await createSeatMap(container, { chart: { url: `/charts/grand-hall.ccf` }, state
 
 What each part does:
 
-1. **`connect`** fetches the first state and resolves with it. The map is ready once it is applied. Pass `ctx.signal` to `fetch`, so a map destroyed while loading cancels the request. If `connect` rejects, `createSeatMap` fails with `state_connect_failed` (after up to three retries for a failure that may pass), so it must leave nothing open when it fails: here the `EventSource` opens only after the snapshot has arrived.
+1. **`connect`** fetches the first state and resolves with it. The map is ready once it is applied. Pass `ctx.signal` to `fetch`, so a map destroyed while loading cancels the request. If `connect` rejects, `createSeatMap` fails with `state_connect_failed` (after up to three retries for a failure that may pass), so it must leave nothing open when it fails: here the `EventSource` opens only after the snapshot has arrived, from the snapshot's number, so it misses nothing in between.
 2. **`ctx.applyDelta`** applies each change as it arrives. A label in both lists ends unavailable. A seat taken while the buyer has it selected leaves their selection (`onObjectUnavailable`).
 3. **`hold`** is called when the buyer selects a seat, one call at a time, with the labels to hold. Answer `{ ok: true }` when all are held. A refusal is all or nothing: name the seats at fault in `failed` with a reason; seats you do not name are asked for again with the next hold. Use the reason `not_free` for a seat someone else has: the map then says it was taken. A `hold` that rejects or takes more than 20 s fails, and the seat is dropped.
 4. **`release`** is called when the buyer deselects.
@@ -95,7 +101,7 @@ When your backend expires the buyer's holds, tell the map: call `ctx.setMine([])
 
 ## Keeping it consistent
 
-The map trusts what the adapter says. Two buyers can only be kept from one seat by your backend: a hold must check and take the seat in one step (a database transaction or a conditional update), and a booking must check that the buyer's hold is still there. If your change stream can miss messages (a dropped `EventSource` reconnects without the changes it missed), send a fresh snapshot with `ctx.applySnapshot` when it reconnects. Implement `resync()` too: the map calls it when your page calls `map.resync()`.
+The map trusts what the adapter says. Two buyers can only be kept from one seat by your backend: a hold must check and take the seat in one step (a database transaction or a conditional update), and a booking must check that the buyer's hold is still there. If your stream cannot replay that far back (it keeps its history only for a while, say), have it send a whole snapshot instead, as an event of its own, and pass that to `ctx.applySnapshot`. Implement `resync()` too: the map calls it when your page calls `map.resync()`.
 
 The [state adapter reference](../renderer/adapters.md#customState) has every method and the context's calls.
 

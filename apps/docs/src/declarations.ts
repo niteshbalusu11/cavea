@@ -94,15 +94,15 @@ export function members(body: string): Member[] {
     const end = statementEnd(body, i);
     const text = body.slice(i, end).trim();
     i = end + 1;
-    const m = text.match(/^(?:readonly\s+)?([A-Za-z_$][\w$]*)(\?)?\s*([(:])/);
-    if (m === null) {
-      doc = "";
-      continue;
-    }
-    const [head = "", name = "", optional, kind] = m;
+    // A property `name?: type`, or a method `name?<T>(…): type`. Anything
+    // else (an index or call signature, a getter) is not understood: it
+    // fails, so that no member is left out of a table without a word.
+    const m = text.match(/^(?:readonly\s+)?([A-Za-z_$][\w$]*)(\?)?\s*(<[^()]*>\s*)?([(:])/);
+    if (m === null) throw new Error(`a member the reference cannot read: ${text.slice(0, 80)}`);
+    const [head = "", name = "", optional, generics = "", kind] = m;
     const method = kind === "(";
     const raw = method ? "" : text.slice(head.length).trim();
-    const type = collapse(method ? text.slice(head.length - 1) : raw);
+    const type = collapse(method ? `${generics.trim()}${text.slice(head.length - 1)}` : raw);
     out.push({ name, optional: optional === "?", type, method, raw, doc });
     doc = "";
   }
@@ -183,8 +183,9 @@ export class Declarations {
 
   /**
    * Every name the entry module exports (in api.md, the `index.d.ts`
-   * block): `export { a, type B } from`, `export type { … } from`,
-   * `export declare function …`.
+   * block): `export { a, type B } from`, `export type { … } from`, and
+   * whatever it declares itself (`export declare function …`,
+   * `export interface …`, `export type X = …`).
    */
   exported(): string[] {
     const scope = this.files.get("index.d.ts");
@@ -196,7 +197,10 @@ export class Declarations {
         if (name !== "") names.add(name);
       }
     }
-    for (const m of scope.matchAll(/export declare (?:function|const|class) (\w+)/g)) {
+    // Declared in the entry module itself.
+    for (const m of scope.matchAll(
+      /^export (?:declare )?(?:function|const|class|interface|type|enum) (\w+)/gm,
+    )) {
       names.add(m[1] ?? "");
     }
     return [...names].toSorted();

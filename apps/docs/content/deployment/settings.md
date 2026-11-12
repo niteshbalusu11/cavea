@@ -30,4 +30,4 @@ A value the server cannot use (a malformed URL, a number out of range, an admin 
 
 ## Secrets
 
-`CAVEA_DATABASE_URL`, `CAVEA_ADMIN_KEY` and `CAVEA_LICENCE` hold secrets or a customer's licence. Give them to the container from your platform's secret store or an `.env` file only its owner can read, never in a compose file you commit. The server never writes a secret to its log: not these, not API keys, hold tokens, session cookies or request bodies.
+`CAVEA_DATABASE_URL`, `CAVEA_ADMIN_KEY` and `CAVEA_LICENCE` hold secrets or a customer's licence. Give them to the container from your platform's secret store or an `.env` file only its owner can read, never in a compose file you commit. The server never writes a secret to its log (not these, not API keys, hold tokens, session cookies or request bodies), with one exception: the one-time setup link of a server that has no user yet ([startup warnings](monitoring.md#startup-warnings)).

@@ -10,7 +10,7 @@ You need a Cavea server with a published chart, an event, a publishable key and 
 2. At checkout, the page sends the hold token and its own order details to your backend. Never prices: your backend works those out.
 3. Your backend reads what the hold token holds and how long it has left, and extends it if the payment could outlast it.
 4. Your backend takes the payment.
-5. Your backend **books** the hold token's seats with your order number, with a secret key.
+5. Your backend **books** exactly the seats it priced, under the hold token, with your order number and a secret key.
 
 The rule that makes it safe: **hold first, charge second, book third.** A hold that ends before the booking frees its seats and the booking fails, so you refund; you never sell a seat someone else holds.
 
@@ -97,7 +97,7 @@ export async function basket(event: string, holdToken: string) {
 }
 ```
 
-Price the seats from your own data by their labels, not from anything the page sent. The server does not report a seat's category, so keep your own table from labels (or sections) to prices.
+Store `seats` and `total` with the order: the payment is for these seats, and step 5 books exactly these. Price the seats from your own data by their labels, not from anything the page sent. The server does not report a seat's category, so keep your own table from labels (or sections) to prices.
 
 If the token has expired, tell the buyer their seats were released and send them back to the map: nothing has been charged.
 
@@ -125,7 +125,7 @@ Use your payment provider as you do today. If it supports it, authorise the amou
 
 ## 5. Book
 
-Book everything the hold token holds, with your order number as both the order reference and the idempotency key:
+Book the seats you priced in step 2, by label, under the hold token, with your order number in the order reference and the idempotency key. Name them: a booking without `objects` takes whatever the token holds at that moment, and the buyer's page can still add or release seats while the payment runs. Named, the booking takes exactly what was paid for, and fails if one of those seats is no longer held.
 
 ```ts check=types
 import { isCaveaError, type Cavea } from "{{server_sdk_package}}";
@@ -133,16 +133,22 @@ import { isCaveaError, type Cavea } from "{{server_sdk_package}}";
 
 export type Booked = { ok: true; seats: string[] } | { ok: false; why: "hold_ended" };
 
-export async function book(event: string, holdToken: string, orderId: string): Promise<Booked> {
+/** `seats`: the labels priced and paid for, stored with the order at checkout. */
+export async function book(
+  event: string,
+  holdToken: string,
+  orderId: string,
+  seats: string[],
+): Promise<Booked> {
   try {
     const reply = await cavea.events.book(
       event,
-      { hold_token: holdToken, order_ref: orderId },
+      { hold_token: holdToken, objects: seats, order_ref: orderId },
       { idempotencyKey: `book-${orderId}` },
     );
     return { ok: true, seats: reply.objects.map((o) => o.label) };
   } catch (error) {
-    // The hold ended before the booking: its seats are free, perhaps someone else's now.
+    // The hold ended before the booking, or a paid-for seat was released meanwhile.
     if (isCaveaError(error, "not_found") || isCaveaError(error, "object_not_held_by_token")) {
       return { ok: false, why: "hold_ended" };
     }
@@ -151,7 +157,7 @@ export async function book(event: string, holdToken: string, orderId: string): P
 }
 ```
 
-A booking is all or nothing: either every seat the token holds is booked, or none is. Booking the token's last seats deletes the token, and the seats show as unavailable on every buyer's map within a moment. Store the booked labels with your order.
+A booking is all or nothing: either every seat named is booked, or none is. The seats show as booked on every buyer's map within a moment. Booking the token's last seats deletes the token; if the buyer added seats during the payment, the token still holds those, unpaid: release them with `cavea.holdTokens.release(holdToken)` (the booked ones stay booked), or let them expire.
 
 ## When something goes wrong
 
@@ -159,6 +165,7 @@ A booking is all or nothing: either every seat the token holds is booked, or non
 |---|---|---|
 | **The hold expired before checkout** | The seats are free; the token is gone (`holdTokens.get` is `not_found`) | Charge nothing. Tell the buyer, and send them back to the map, which has already dropped the seats (`onHoldLost`, `onHoldExpired`). |
 | **The hold expired during the payment** | The seats are free and may be someone else's; `book` fails with `not_found` or `object_not_held_by_token` | Refund or void the payment. Extending the hold before charging (step 3) is what prevents this. |
+| **The buyer released a paid-for seat during the payment** (another tab, a deselect) | That seat is free; the others are held | `book` fails with `object_not_held_by_token` and books nothing: refund, or ask the buyer to choose again. |
 | **The payment failed or was declined** | The seats are still held, until the hold expires | Let the buyer try again: the hold still covers them. If they give up, release the seats at once with `cavea.holdTokens.release(holdToken)` rather than waiting for expiry. |
 | **The buyer closed the tab** | The seats stay held until the hold expires, then become free by themselves | Nothing. If the buyer reloads the same tab before the hold ends, the map brings their held seats back. A new tab starts a new selection. |
 | **The booking's reply was lost** (a timeout, a dropped connection, your process restarted) | The seats may or may not be booked | Send the same booking again with the same idempotency key. Within 24 hours the server answers with the first reply instead of booking again, so the order is booked exactly once. |

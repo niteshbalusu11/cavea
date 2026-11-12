@@ -750,7 +750,7 @@ export interface SeatMapOptions {
     onObjectHover?: (object: SeatObject | null, at: [number, number] | null) => void;
     /** The keyboard focus moved to an object, or was hidden (`null`); `at` as `onObjectHover`'s. */
     onObjectFocus?: (object: SeatObject | null, at: [number, number] | null) => void;
-    /** A pan or zoom settled: the chart point at the centre, the zoom in CSS pixels per chart unit, the level of detail. */
+    /** The camera moved (at most once a frame, throughout a pan, a zoom or an animation) or the level of detail changed: the chart point at the centre, the zoom in CSS pixels per chart unit, the level. */
     onCameraChange?: (camera: {
         centre: [number, number];
         zoom: number;

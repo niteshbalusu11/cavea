@@ -39,7 +39,7 @@ The server writes structured records to standard output, one JSON object per lin
 
 Every answer carries its request id in the `Cavea-Request-Id` header, and error answers also in the body's `request_id`. When a customer reports a failed request, that id finds every record of it. A client may send its own id in the same header (1 to 64 letters, digits, `.`, `_` or `-`) to match its own logs.
 
-Never in the log: API keys, hold tokens, session cookies, passwords, the setup and invitation links' tokens, query strings and request bodies, and the raw path (it can carry customer keys): the route's template is logged instead. Live connections log when they subscribe and when they close, with why; nothing per frame.
+Never in the log: API keys, hold tokens, session cookies, passwords, invitation links, query strings and request bodies, and the raw path (it can carry customer keys): the route's template is logged instead. The one exception is the setup link, below. Live connections log when they subscribe and when they close, with why; nothing per frame.
 
 A panic in a request (a bug) answers that request `500` and logs one `error` record with its location; every other request goes on being served.
 
@@ -57,7 +57,7 @@ At start, before it connects to the database, the server logs one `warn` record,
 
 A production set-up like the one in [Running Cavea](index.md) logs none. The server still starts with these; it refuses to start only with a value it cannot use.
 
-While the server has no user, it also logs the console's one-time setup link at start (`setup_link`), valid for an hour. The link holds a token: keep the logs of a fresh server private until the owner account exists.
+While the server has no user, it logs the console's one-time setup link at every start (`setup_link`), on purpose: it is how the first owner gets in. The link holds a token that creates the owner account, valid for an hour; a restart while there is still no user logs a new one. Anyone who can read those logs during that hour can create the owner first, so keep a fresh server's logs private, and create the owner at once; once it exists, no link is logged and an old one no longer works.
 
 ## Checking the seat state
 
