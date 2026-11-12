@@ -34,7 +34,7 @@
 //!   (`licence.rs`, `docs/12-security-licensing.md` §7.2).
 //! - `release [--dry-run] [--skip item,…] | prepare <version> | publish`:
 //!   a release, checked, built, signed and published (`release.rs`,
-//!   `publish.rs`, D-85).
+//!   `publish.rs`, D-91).
 //! - `upgrade [--from <rev>]… [--renderer <rev>]…`: the upgrade test from an
 //!   earlier revision with a populated database, and older renderers
 //!   against this server (`upgrade.rs`, `tools/upgrade/run.ts`, 13 §13).

@@ -1,4 +1,4 @@
-# cargo-audit's policy (12 §3 T15, D-85): run by `cargo xtask release` before
+# cargo-audit's policy (12 §3 T15, D-91): run by `cargo xtask release` before
 # every release, never in CI. A vulnerability stops the release. An entry
 # below is the documented exception: the advisory, the date, why it does not
 # apply, and when to look again. cargo-audit reads Cargo.lock as it is, so it

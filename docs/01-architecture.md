@@ -205,7 +205,7 @@ Drawing 100,000 seats is one instanced draw call, so the GPU is not the constrai
 - **REST API** is versioned in the path (`/v1`). Additive changes only within a version.
 - **Renderer and server** may be upgraded independently. The server supports renderers from the previous two minor versions.
 - **Database migrations** are forward-only, embedded in the binary, and run at startup behind an advisory lock.
-- **One version** (`MAJOR.MINOR.PATCH`, semver; before 1.0 a minor may break) for the server, its image and the three npm packages, released together (D-85). Its source is `version` under `[workspace.package]` in `Cargo.toml`; `cargo xtask release prepare <version>` writes it to every other place it appears and the release refuses while any disagrees. Pre-releases are `X.Y.Z-rc.N`. Customers read the policy in `apps/docs/content/reference/versions.md`.
+- **One version** (`MAJOR.MINOR.PATCH`, semver; before 1.0 a minor may break) for the server, its image and the three npm packages, released together (D-91). Its source is `version` under `[workspace.package]` in `Cargo.toml`; `cargo xtask release prepare <version>` writes it to every other place it appears and the release refuses while any disagrees. Pre-releases are `X.Y.Z-rc.N`. Customers read the policy in `apps/docs/content/reference/versions.md`.
 
 What counts as breaking, and what detects it (a breaking change needs a major version from 1.0, and before 1.0 a minor version and an entry under `### Upgrading`):
 
@@ -245,11 +245,11 @@ What counts as breaking, and what detects it (a breaking change needs a major ve
 
 - `cargo xtask build-web` produces the WASM, runs `wasm-opt`, generates TypeScript types and enforces the size gate against a committed baseline (`13-testing-benchmarks.md` §6.3).
 - `cargo xtask build-designer` builds the designer's module the same way, without a gate; `cargo xtask types` writes the TypeScript types generated from the Rust definitions (D-41), and a test fails when the committed ones are stale.
-- `cargo xtask release` checks, builds, signs and publishes a release (D-85): the audits and every test suite a machine can run, the image for x86-64 and arm64 under one index, signed keylessly by the release workflow with its SBOMs attached as signed attestations, the npm packages with provenance, and the GitHub release with the notes, SBOMs and checksums. The image is the server's only artefact; no standalone binary is released (08 §14).
+- `cargo xtask release` checks, builds, signs and publishes a release (D-91): the audits and every test suite a machine can run, the image for x86-64 and arm64 under one index, signed keylessly by the release workflow with its SBOMs attached as signed attestations, the npm packages with provenance, and the GitHub release with the notes, SBOMs and checksums. The image is the server's only artefact; no standalone binary is released (08 §14).
 - `bun run build` in `packages/renderer` and `packages/react` writes each package's `dist/`, which is what is published (05 §1); in the monorepo the packages export their TypeScript source, so the apps and tests need no build.
 - Every release publishes: Docker image, npm packages, Swift package, Android library, changelog, upgrade notes. (The Swift package and Android library join when their milestones ship.)
 
-**Releasing** (D-85; the checklist is 13 §13):
+**Releasing** (D-91; the checklist is 13 §13):
 
 1. `cargo xtask release prepare <version>` in a pull request: it sets the version everywhere, marks the docs site published and drafts the changelog's section from `bun tools/changelog.ts`. The releaser condenses the section, writes `### Upgrading` (what an operator does; breaking changes first), dates the heading, re-pins the compiled-chart hashes the version changes (the command says where), runs `bun tools/actions.ts` and takes any action updates, and runs `cargo xtask release --dry-run` (`nix develop .#release`), which must report nothing failed.
 2. After the pull request merges, the owner tags its commit on `main` and pushes the tag: `git tag -s v<version> <commit> && git push origin v<version>`.
@@ -264,5 +264,5 @@ What counts as breaking, and what detects it (a breaking change needs a major ve
 ### Supply chain
 
 - Lockfiles are committed and CI installs from them (`--locked`, `--frozen-lockfile`). `cargo-deny` and `cargo-audit` are not CI jobs; CI is kept to format, lint, type and build checks (`AGENTS.md`). npm packages are published with provenance.
-- The release runs `cargo deny check` (`deny.toml`: permissive licences only, crates.io only, advisories, duplicates warned), `cargo audit` (`.cargo/audit.toml`) and `bun audit`; any finding stops it, and an exception is a dated, reasoned entry in those files in a reviewed pull request (D-85). Every action in `.github/workflows/` is pinned by commit SHA with its version in a comment; `bun tools/actions.ts` lists newer releases of the same major and `--update` takes them, run at each release (no dependency bot); the release refuses an unpinned action.
+- The release runs `cargo deny check` (`deny.toml`: permissive licences only, crates.io only, advisories, duplicates warned), `cargo audit` (`.cargo/audit.toml`) and `bun audit`; any finding stops it, and an exception is a dated, reasoned entry in those files in a reviewed pull request (D-91). Every action in `.github/workflows/` is pinned by commit SHA with its version in a comment; `bun tools/actions.ts` lists newer releases of the same major and `--update` takes them, run at each release (no dependency bot); the release refuses an unpinned action.
 - New dependencies in `cavea-core`, `cavea-format` and `cavea-web` need a size and necessity justification in the pull request.

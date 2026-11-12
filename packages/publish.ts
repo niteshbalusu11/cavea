@@ -1,5 +1,5 @@
 // What every published package's `dist/package.json` says about where it
-// comes from and under which licence (D-85), shared by the packages' build
+// comes from and under which licence (D-91), shared by the packages' build
 // scripts. The licence is the owner's legal document (12 §8): `LICENSE` at
 // the repository's root. Until it exists each package is `private`, so npm
 // refuses to publish it, and `cargo xtask release` refuses first, saying why.

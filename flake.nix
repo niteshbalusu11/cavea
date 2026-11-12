@@ -61,7 +61,7 @@
         {
           default = pkgs.mkShell { packages = tools; };
           # `nix develop .#release`: the default shell plus what only a
-          # release uses (`cargo xtask release`, D-85), kept out of the
+          # release uses (`cargo xtask release`, D-91), kept out of the
           # default shell so nobody else downloads them. The release records
           # each one's version in its checklist.
           release = pkgs.mkShell {

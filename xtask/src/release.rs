@@ -1,4 +1,4 @@
-//! `cargo xtask release`: a release as one command (01 §6, 13 §13, D-85).
+//! `cargo xtask release`: a release as one command (01 §6, 13 §13, D-91).
 //!
 //! - `release prepare <version>`: sets the one version everywhere it is
 //!   written (the workspace `Cargo.toml` and `Cargo.lock`, the three
@@ -289,7 +289,7 @@ pub fn prerelease(v: &str) -> bool {
 }
 
 /// The docs site's variables (`apps/docs/site.json`), where the image's and
-/// the packages' public names live (D-83, D-85).
+/// the packages' public names live (D-83, D-91).
 fn site() -> Result<Value> {
     read_json(&root().join("apps/docs/site.json"))
 }

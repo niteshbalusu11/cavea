@@ -1,5 +1,5 @@
 //! `cargo xtask upgrade [--from <rev>]… [--renderer <rev>]… [--keep]`: the
-//! upgrade test (13 §13, D-85). For each `--from` revision (a release tag, or
+//! upgrade test (13 §13, D-91). For each `--from` revision (a release tag, or
 //! any earlier commit): builds that revision's `cavea-server` and `cavea` CLI
 //! in a git worktree of its own, then `tools/upgrade/run.ts` fills a database
 //! with it, stops it with work in flight, starts this tree's server on the

@@ -1,5 +1,5 @@
 // The GitHub Actions the workflows use, pinned by full commit SHA with the
-// version in a comment (12 §3 T15, D-85). There is no dependency bot: the
+// version in a comment (12 §3 T15, D-91). There is no dependency bot: the
 // releaser runs this at each release, and whoever touches a workflow may.
 //
 //   bun tools/actions.ts --check   fails unless every `uses:` is a 40-digit SHA with `# vX.Y.Z`

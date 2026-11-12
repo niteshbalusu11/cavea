@@ -1,4 +1,4 @@
-# The release (D-85, docs/01-architecture.md §6). Never runs for a pull
+# The release (D-91, docs/01-architecture.md §6). Never runs for a pull
 # request or a branch push: CI stays format, lint, type and build checks.
 #
 # - A version tag (`v0.1.0`) pushed by the owner: `check` runs the audits, the

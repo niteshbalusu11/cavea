@@ -1,4 +1,4 @@
-//! The irreversible half of a release (D-85): push the image for both
+//! The irreversible half of a release (D-91): push the image for both
 //! architectures under one index, sign it, attach the SBOMs as signed
 //! attestations, verify all of it from the registry, publish the npm packages
 //! with provenance, move the minor tag, create the GitHub release.

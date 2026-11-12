@@ -1,4 +1,4 @@
-# cargo-deny's policy (12 §3 T15, D-85): run by `cargo xtask release` before
+# cargo-deny's policy (12 §3 T15, D-91): run by `cargo xtask release` before
 # every release, never in CI. A finding stops the release. The exception path
 # is an entry here (or in `.cargo/audit.toml` for cargo-audit) with the date,
 # the reason, and when to look again, in a reviewed pull request.

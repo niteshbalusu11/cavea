@@ -1,4 +1,4 @@
-// The upgrade test (docs/13-testing-benchmarks.md §13, D-85), run by
+// The upgrade test (docs/13-testing-benchmarks.md §13, D-91), run by
 // `cargo xtask upgrade`, which builds the binaries and the old renderer:
 //
 //   bun tools/upgrade/run.ts --label <rev> --new <dir> --old <dir> [--licence <file>] --out <dir>
