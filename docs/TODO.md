@@ -276,7 +276,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **DSN-017** Section tool and automatic outline; convert to polygon (07 §5.5)
 - [x] **DSN-018** Shape tools: rectangle, ellipse, polygon, line (07 §4)
 - [x] **DSN-019** Text tool (07 §4)
-- [ ] **DSN-020** Image tool: upload, reference or background role, opacity, lock (07 §4)
+- [x] **DSN-020** Image tool: upload, reference or background role, opacity, lock (07 §4). Placing (file picker, I, drop, the new-chart screen), checks before upload, the content hash in the browser, upload in the background with saves waiting for it, refusals, scale handles, the reference role drawn but never compiled, the preview's background images, a local file's session-only pictures (07 §4 Image, D-74)
 - [x] **DSN-021** Focal point tool (07 §4)
 - [x] **DSN-022** Category brush (07 §4)
 
@@ -290,7 +290,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **DSN-028** Categories panel: add, rename, recolour, merge, delete with reassignment; contrast warning (07 §7). The edit core is built: `Session::categories` and the category calls, `contrast`, `too_similar` (07 §2.3, §7); the shell owes the panel and the colour picker; the panel is built (`CategoriesPanel.tsx`: the list, the active category, add, edit with the live W107 checks, reorder by drag or Alt+↑/↓, merge, delete with reassignment)
 - [x] **DSN-029** Layers panel: virtualised tree, drag to reparent, lock, hide (07 §3). The edit core is built: `Session::layers` by page, `expand_layer`, `reveal_layer`, `click_layer`, `move_layers`, `lock_layer`, `hide_layer`, and the selected ids in `selection_view` (07 §2.3); the panel is built (`LayersPanel.tsx`: virtual tree by page, keyboard, drag and drop of the whole selection, context menu, revealing a selection made elsewhere; 07 §3)
 - [x] **DSN-030** Snapping: grid, edges and centres, equal spacing, row alignment, angles (07 §5.2)
-- [ ] **DSN-031** Rulers and user guides (07 §5.2). The edit core is built: guides per floor as snap targets, `Session::add_guide` and the rest, `saved_guides` (07 §5.2); the shell owes the rulers, dragging guides out of them, and storing the guides beside the draft
+- [x] **DSN-031** Rulers and user guides (07 §5.2). The edit core: guides per floor as snap targets, `Session::add_guide` and the rest, `saved_guides`; the shell: the rulers (`Rulers.tsx`, `ruler.ts`), guides dragged out, moved, removed and moved by keyboard, kept in the browser per person, workspace and chart (`guides.ts`, D-75). A server place for editor state is a server task (07 §5.2)
 - [x] **DSN-032** Align, distribute, flip, duplicate, array duplicate (07 §5.1)
 - [x] **DSN-033** Copy and paste, including between charts (07 §5.1)
 - [ ] **DSN-034** Group, ungroup, order for decoration nodes (07 §5.1). Order, lock and hide are built; grouping needs a schema change (07 §5.1, group and ungroup)
@@ -304,9 +304,9 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **DSN-039** Preview with the buyer renderer, device widths and sample states (07 §11)
 - [ ] **DSN-040** Publish flow: compile, diff, thumbnail upload (07 §11). Built: compile on the server with `If-Match` after saving, disabled while not `publishable`, the server's findings on refusal, the new version (or "nothing changed") with its seats against the previous one (07 §11 "As built"). Owed, each waiting on the server: the diff (`GET /v1/charts/{chart}/versions/{number}/diff`, SRV-036), the impact on events and typed confirmation, the thumbnail (the server now takes it: `PUT /v1/charts/{chart}/versions/{number}/thumbnail` with an uploaded asset's hash, and every version object carries `thumbnail` and `created_by`; the designer's render and upload are owed), the upgrade offer
 - [x] **DSN-041** Export and import of chart document JSON (07 §12). The edit core is built: `Session::export`, `Session::import` with typed `ImportError`s (07 §12); the shell's menu items, file picker and drop, download, and the confirmation before replacing a chart are built (07 §12, in the shell)
-- [x] **DSN-042** New-chart screen, three templates, first-run tour (07 §16). The new-chart screen and the three templates (`NewChart.tsx`, `templates/`), the five-step tour (`Tour.tsx`, `tour.ts`, 07 §16 "In the shell"); placing a reference image from the new-chart screen is the image tool's (DSN-020), and says so
+- [x] **DSN-042** New-chart screen, three templates, first-run tour (07 §16). The new-chart screen and the three templates (`NewChart.tsx`, `templates/`), the five-step tour (`Tour.tsx`, `tour.ts`, 07 §16 "In the shell"); placing a reference image from the new-chart screen is the image tool's (DSN-020)
 - [x] **DSN-043** "Insert row block" form as the non-pointer path (07 §15). Built in the shell (`InsertForm.tsx`, `insert.ts`, 07 §15)
-- [ ] **DSN-044** Performance pass on the 100,000-seat chart (07 §14)
+- [ ] **DSN-044** Performance pass on the 100,000-seat chart (07 §14). Measured in the shell on `stadium-100k` (07 §14, the table); fixed the 39 to 52 ms baking frame (a `getError` wait on remade icon buffers, and the browser's bake budget) and the overlay built on draws it could not change. Owed: the row labels that blink once after a bake when about 500 long seat labels fill the dynamic text atlas (not reproduced yet), and a measurement on a hardware GPU
 
 ### Testing
 
