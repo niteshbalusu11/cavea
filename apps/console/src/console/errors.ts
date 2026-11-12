@@ -32,6 +32,7 @@ export function describe(e: ApiError): string {
       if (e.reason === "role") return msg("error.role");
       if (e.reason === "workspace") return msg("error.workspace");
       if (e.reason === "csrf" || e.reason === "origin") return msg("error.csrf");
+      if (e.reason === "licence_expired") return msg("error.licenceExpired");
       break;
     case "unauthorized":
       if (e.sessionLost) return msg("error.session");
@@ -48,14 +49,17 @@ export function reference(e: ApiError): string | undefined {
 /**
  * Reports a failed action in a toast. A cancelled request says nothing; an
  * ended session says nothing here (the frame sends the person to sign in).
- * A refusal for a role or a workspace re-reads `me`: the role may have
- * changed since the page was loaded, and the interface should follow it.
+ * A refusal for a role, a workspace or an expired licence re-reads `me`:
+ * the role or the licence may have changed since the page was loaded, and
+ * the interface should follow it.
  */
 export function report(e: unknown): void {
   if (isAbort(e)) return;
   const error = asApiError(e);
   if (error.sessionLost) return;
-  if (error.code === "forbidden" && (error.reason === "role" || error.reason === "workspace")) {
+  // The licence may have expired since `me` was read: the controls follow.
+  const stale = ["role", "workspace", "licence_expired"];
+  if (error.code === "forbidden" && stale.includes(error.reason ?? "")) {
     void loadSession();
   }
   notify(describe(error), "error", reference(error));

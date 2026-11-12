@@ -9,14 +9,14 @@ import { createSignal, Show } from "solid-js";
 import { checkEvent } from "../../api/check.ts";
 import { call } from "../../api/client.ts";
 import type { Event, UpdateEvent } from "../../api/generated.ts";
-import { allows } from "../../api/permissions.ts";
 import { asApiError, componentSignal } from "../../api/query.ts";
 import { msg } from "../../i18n/messages.ts";
-import { loadSession, workspace } from "../../session.ts";
+import { loadSession } from "../../session.ts";
 import { Button } from "../../ui/controls.tsx";
 import { Field, FormError, length } from "../../ui/form.tsx";
 import { Confirm, notify } from "../../ui/overlays.tsx";
 import { describe, reference, report } from "../errors.ts";
+import { cannot } from "../licence.ts";
 import { roleName } from "../Events.tsx";
 import { Action, CheckField, NumberField } from "../kit.tsx";
 import { EVENT_LIMITS, settingsRefusal, wholeNumber, type SettingsField } from "../refusals.ts";
@@ -25,6 +25,10 @@ const between = (text: string, limit: { min: number; max: number }) =>
   wholeNumber(text, limit.min, limit.max) === null ? msg("events.between", limit) : null;
 
 type Errors = Partial<Record<SettingsField, string | null>>;
+
+/** Why the settings cannot change now, if the role or the licence closes them. */
+const settingsClosed = () =>
+  cannot("updateEvent", () => msg("eventSettings.readOnly", { role: roleName() }));
 
 export function EventSettings(props: { event: Event; onEvent: (event: Event) => void }) {
   const signal = componentSignal();
@@ -46,7 +50,7 @@ export function EventSettings(props: { event: Event; onEvent: (event: Event) => 
     const counts = answer.counts ?? props.event.counts;
     return counts === undefined ? answer : { ...answer, counts };
   };
-  const editable = () => allows(workspace(), "updateEvent") && !archived();
+  const editable = () => settingsClosed() === null && !archived();
 
   const set = (field: SettingsField, problem: string | null) => {
     setErrors((e) => ({ ...e, [field]: problem }));
@@ -121,20 +125,15 @@ export function EventSettings(props: { event: Event; onEvent: (event: Event) => 
   };
 
   const archiveBlocked = () =>
-    !allows(workspace(), "archiveEvent")
-      ? msg("eventSettings.archiveRole", { role: roleName() })
-      : archived()
-        ? msg("eventSettings.alreadyArchived")
-        : null;
+    cannot("archiveEvent", () => msg("eventSettings.archiveRole", { role: roleName() })) ??
+    (archived() ? msg("eventSettings.alreadyArchived") : null);
 
   return (
     <div class="max-w-xl space-y-8">
       <form class="space-y-4" noValidate onSubmit={(e) => void submit(e)}>
         <h2 class="text-lg font-semibold text-fg">{msg("event.settings")}</h2>
         <p class="text-base text-muted">{msg("eventSettings.intro")}</p>
-        <Show when={!allows(workspace(), "updateEvent")}>
-          <p class="text-base text-muted">{msg("eventSettings.readOnly", { role: roleName() })}</p>
-        </Show>
+        <Show when={settingsClosed()}>{(why) => <p class="text-base text-muted">{why()}</p>}</Show>
         <Show when={archived()}>
           <p class="text-base text-warning">{msg("eventSettings.archivedNote")}</p>
         </Show>

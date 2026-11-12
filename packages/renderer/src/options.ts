@@ -99,6 +99,14 @@ export interface SeatMapOptions {
   /** The interface's direction; `auto` (default): `locale`'s if given, else the page's. */
   dir?: "ltr" | "rtl" | "auto";
   /**
+   * The licence file's text, for a map without `caveaServer` (12 §7.4):
+   * verified in the browser after the first interactive frame. Without it,
+   * or when it does not verify, the map carries a "Development licence"
+   * mark; it never stops the map. Ignored with `caveaServer`, whose server
+   * says.
+   */
+  licence?: string;
+  /**
    * Aborting it before the map is ready rejects `createSeatMap` (`aborted`)
    * and removes everything; after, it destroys the map (05 §9).
    */
@@ -229,6 +237,8 @@ const CHECKS: Record<string, (v: unknown) => boolean> = {
   locale: (v) => isLocale(v),
   messages: (v) => isObject(v) && Object.values(v).every((m) => m === undefined || isMessage(m)),
   dir: (v) => ["ltr", "rtl", "auto"].includes(v as string),
+  // Any value: one that is not a licence shows the mark, never refuses the map (D-20).
+  licence: () => true,
   ui: isObject,
   signal: (v) => isObject(v) && typeof v["aborted"] === "boolean" && "addEventListener" in v,
   assets: (v) =>

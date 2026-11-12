@@ -3,6 +3,7 @@
 // token kept across reloads. Built only on the public adapter interface.
 import type { AdapterContext, HoldResult, StateAdapter } from "./adapter.ts";
 import { CaveaError } from "./errors.ts";
+import { fromServer, reportLicence } from "./licence.ts";
 import {
   CLOSE,
   DELTA,
@@ -90,6 +91,8 @@ interface EventInfo {
   chart: { hash: string; url: string };
   hold_ttl_seconds: number;
   require_session: boolean;
+  /** `{status, domains}` from a server that licenses (12 §7.6); untrusted, read by `fromServer`. */
+  licence?: unknown;
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
@@ -197,6 +200,8 @@ export function serverAdapter(input: CaveaServerOptions, platform: () => Platfor
   let privateLive = false;
   let offset: number | undefined;
   let chartHash: string | undefined;
+  /** The event's `licence` field, as the server sent it. */
+  let licence: unknown;
   /** The buyer's held count and expiry (server ms), from `hold-tokens/current`. */
   let held = 0;
   let expires = 0;
@@ -869,6 +874,7 @@ export function serverAdapter(input: CaveaServerOptions, platform: () => Platfor
         }
       }
       chartHash = eventData.chart.hash;
+      licence = eventData.licence;
       seq = readSeq(bytes)[1];
       open();
       return { kind: "binary", bytes };
@@ -909,5 +915,6 @@ export function serverAdapter(input: CaveaServerOptions, platform: () => Platfor
     adapter.hold = hold;
     adapter.release = release;
   }
-  return adapter;
+  // The map's licence mark follows the server's answer (12 §7.4).
+  return reportLicence(adapter, () => fromServer(licence));
 }

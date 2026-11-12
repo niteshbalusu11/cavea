@@ -2,6 +2,7 @@
 // no WebGL. The DOM is `fakedom.ts`'s.
 import type { ObjectInfo, RendererEvent } from "./events.ts";
 import { FakeDocument } from "./fakedom.ts";
+import type { TrustedKey } from "./generated/licence-keys.ts";
 import type { AttachOptions } from "./host.ts";
 import type { SeatMapOptions } from "./options.ts";
 import { createMap, type Env } from "./seatmap.ts";
@@ -183,6 +184,11 @@ export function fakeEnv() {
     holdTimeoutMs: 30,
     contextLostMs: 30,
     metricsMs: 40,
+    licence: {
+      keys: [] as TrustedKey[],
+      subtle: (): SubtleCrypto | undefined => globalThis.crypto?.subtle,
+      host: (): string | null => "tickets.example.com",
+    },
   };
   return {
     env,

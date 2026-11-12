@@ -7,7 +7,9 @@ import { createA11y, type A11y } from "./a11y.ts";
 import { CaveaError, isDevelopment, permanent, warner, type CaveaErrorCode } from "./errors.ts";
 import type { ChartInfo, ObjectInfo, RendererEvent } from "./events.ts";
 import type { ObjectDetails } from "./generated/engine.ts";
+import type { TrustedKey } from "./generated/licence-keys.ts";
 import type { AttachOptions, Attached } from "./host.ts";
+import { check, decide, reported, type Standing } from "./licence.ts";
 import { localeDirection, translator } from "./messages.ts";
 import {
   isBounds,
@@ -51,6 +53,13 @@ export interface Env {
   contextLostMs: number;
   /** `onMetrics` fires at most once in this long (04 §24: 1 s). */
   metricsMs: number;
+  /** What the licence check needs (12 §7.4): the trusted keys, WebCrypto, and the page's host. */
+  licence: {
+    keys: readonly TrustedKey[];
+    subtle(): SubtleCrypto | undefined;
+    /** The page's host name, or `null` for an opaque origin (a file, a sandboxed frame). */
+    host(): string | null;
+  };
 }
 
 export interface Mounted {
@@ -930,6 +939,32 @@ export async function createMap(
     }
   }
 
+  /**
+   * Decides the licence mark once and shows it (12 §7.3): from the server
+   * through `caveaServer`, else from the `licence` option, else the
+   * "Development licence" mark. Nothing here can fail the map (D-20).
+   */
+  async function showLicence(): Promise<void> {
+    try {
+      const fromAdapter = reported(adapter);
+      if (fromAdapter !== undefined && options.licence !== undefined) {
+        warn('option "licence" is ignored with caveaServer: the server\'s licence counts');
+      }
+      const standing: Standing =
+        fromAdapter?.() ??
+        (options.licence === undefined
+          ? { kind: "invalid", reason: "no licence option" }
+          : await check(options.licence, env.licence.keys, env.licence.subtle(), Date.now()));
+      const decided = decide(standing, env.licence.host());
+      if (decided.mark !== null && !destroyed) {
+        warn(`the map shows the "${t(decided.mark)}" mark: ${decided.why} (12 §7.3)`);
+        ui?.mark(decided.mark);
+      }
+    } catch {
+      // A licence problem never stops a sale: no mark.
+    }
+  }
+
   function teardown(): void {
     destroyed = true;
     for (const timer of timers) {
@@ -1150,6 +1185,12 @@ export async function createMap(
         // The first frame drawn with the first state applied.
         if (marks["state_ready"] !== undefined && marks["interactive"] === undefined) {
           mark("interactive");
+          // The licence check, after this frame and never before it (12 §7.4).
+          const timer = setTimeout(() => {
+            timers.delete(timer);
+            void showLicence();
+          }, 0);
+          timers.add(timer);
         }
         if (options.onMetrics !== undefined) {
           timeFrame(ms);

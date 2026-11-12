@@ -284,7 +284,7 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
       server === null
         ? msg("topbar.publishLocal")
         : props.server?.canPublish !== true
-          ? msg("topbar.publishRole", { role: props.server?.role ?? "" })
+          ? (props.server?.closed ?? msg("topbar.publishRole", { role: props.server?.role ?? "" }))
           : readOnly()
             ? msg("topbar.publishReadOnly")
             : !v.complete

@@ -3,6 +3,7 @@
 // canvas in the map's shadow root. Every string from the chart or the host
 // goes in as text or an attribute value, never as markup (12 §3 T7). Nothing
 // here draws the canvas or runs while idle: the only timers are toasts'.
+import type { Mark } from "./licence.ts";
 import type { Translate } from "./messages.ts";
 import type { SeatObject } from "./options.ts";
 import type { Prices } from "./pricing.ts";
@@ -54,6 +55,8 @@ export interface Ui {
   /** The selection changed; `label` was just selected alone (the tooltip may pin to it). */
   selected(label: string | null): void;
   toast(text: string): void;
+  /** Shows the licence mark (12 §7.3), once decided. */
+  mark(mark: Mark): void;
   /** The box, in CSS pixels on the map, of a control over `at` (with a margin), if any. */
   covered(at: [number, number]): [number, number, number, number] | null;
   destroy(): void;
@@ -91,6 +94,8 @@ export function place(
 
 const R = "var(--cavea-radius,8px)";
 const PANEL = "var(--cavea-shadow,0 1px 4px rgb(0 0 0/.25))";
+/** The most the licence mark takes across. */
+const MARK = "min(160px,calc(50% - 18px))";
 /** The interface's stylesheet; the schemes' defaults come from `schemeCss`. */
 export const UI_CSS =
   ".r{position:absolute;inset:0;overflow:hidden;color:var(--_fg);font-family:var(--cavea-font);" +
@@ -134,6 +139,13 @@ export const UI_CSS =
   "align-items:center;gap:8px;pointer-events:none}.zc .ts{inset-inline-end:68px}" +
   `.to{pointer-events:auto;display:flex;align-items:center;max-width:100%;padding-inline-start:12px;` +
   `background:var(--_fg);color:var(--_bg);border-radius:${R};box-shadow:${PANEL};animation:var(--_t) .2s ease-out}` +
+  // The licence mark: text in the bottom inline-end corner, under the
+  // tooltip and toasts, that pointer input passes through; the legend keeps
+  // clear of the room it may take.
+  `.w{position:absolute;bottom:12px;inset-inline-end:12px;max-width:${MARK};padding:2px 8px;` +
+  `border-radius:${R};background:var(--_bg);color:var(--_fg-muted);font-size:max(12px,.75rem);` +
+  "pointer-events:none;user-select:none;-webkit-user-select:none}" +
+  `.r[data-w] .l{max-width:calc(100% - 36px - ${MARK})}.r[data-l] .w{display:none}` +
   ".vh{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}" +
   ".s,.e{position:absolute;inset:0;z-index:1;display:grid;place-content:center;justify-items:center;gap:12px;" +
   "padding:24px;text-align:center;background:var(--_bg)}" +
@@ -531,7 +543,23 @@ export function createUi(root: HTMLElement, canvas: HTMLElement, host: UiHost): 
     }
   }
 
+  let marked: HTMLElement | undefined;
+
   return {
+    mark(mark) {
+      if (dead || mark === null || marked !== undefined) {
+        return;
+      }
+      const node = make("div", "w", "", root);
+      marked = node;
+      panels.push(node);
+      root.setAttribute("data-w", "");
+      const render = (): void => {
+        node.textContent = t(mark);
+      };
+      render();
+      renders.push(render);
+    },
     refresh() {
       for (const render of renders) {
         render();

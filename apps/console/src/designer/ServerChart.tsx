@@ -63,6 +63,8 @@ export interface ServerSetup {
   canPublish: boolean;
   /** The role's name, for messages. */
   role: string;
+  /** Why it is read-only when the role is not why: the expired licence (12 §7.6). */
+  closed?: string;
 }
 
 export type Phase =
@@ -358,7 +360,7 @@ export function serverChart(props: {
     setChart(opened.chart);
     serverEtag = opened.etag;
     if (!canWrite) {
-      makeReadOnly(session, msg("readOnly.refused"));
+      makeReadOnly(session, props.setup.closed ?? msg("readOnly.refused"));
       attach(session, null);
       setPhase({ kind: "ready" });
       // Who is editing, as far as the server tells a reader.
@@ -677,6 +679,7 @@ export function serverChart(props: {
         <AccessIndicator
           access={access()}
           role={props.setup.role}
+          closed={props.setup.closed}
           who={who}
           onTakeOver={() => setTakeOverOpen(true)}
         />
@@ -854,7 +857,7 @@ export function serverChart(props: {
       const a = access();
       if (a.kind === "archived") return msg("lock.archivedRefused");
       if (a.kind === "elsewhere") return msg("lock.refused", { who: who(a.lock) });
-      return msg("readOnly.refused");
+      return props.setup.closed ?? msg("readOnly.refused");
     },
     load,
     async adopt(session) {
@@ -911,6 +914,7 @@ export function serverChart(props: {
 function AccessIndicator(props: {
   access: Access;
   role: string;
+  closed: string | undefined;
   who: (lock: LockInfo) => string;
   onTakeOver: () => void;
 }) {
@@ -933,7 +937,9 @@ function AccessIndicator(props: {
     }
   };
   const title = () =>
-    props.access.kind === "role" ? msg("save.readOnlyWhy", { role: props.role }) : undefined;
+    props.access.kind === "role"
+      ? (props.closed ?? msg("save.readOnlyWhy", { role: props.role }))
+      : undefined;
   return (
     <span class="flex min-w-0 items-center gap-2">
       <span

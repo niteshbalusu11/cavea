@@ -9,7 +9,7 @@ import { checkChartList, checkEvent, checkEventList } from "../api/check.ts";
 import { call } from "../api/client.ts";
 import type { Chart, Counts, Event } from "../api/generated.ts";
 import { createPages, loadAll } from "../api/pages.ts";
-import { allows } from "../api/permissions.ts";
+import { refused } from "../api/permissions.ts";
 import { componentSignal, createQuery } from "../api/query.ts";
 import { formatNumber, msg } from "../i18n/messages.ts";
 import { workspace } from "../session.ts";
@@ -31,6 +31,7 @@ import {
   type Shown,
 } from "./eventFilters.ts";
 import { EventForm } from "./EventForm.tsx";
+import { cannot } from "./licence.ts";
 import { Action, Empty, formatDateTime, LoadMore, Paged, table, tableBox, td, th } from "./kit.tsx";
 
 /** Events per page. */
@@ -54,8 +55,10 @@ export async function loadCharts(signal: AbortSignal) {
 }
 
 export const roleName = () => msg(`role.${workspace()?.role ?? "viewer"}`);
+/** Why archiving is closed for now: the licence (the role hides it). */
+const archiveClosed = () => cannot("archiveEvent", () => "");
 const cannotCreate = () =>
-  allows(workspace(), "createEvent") ? null : msg("events.roleCannot", { role: roleName() });
+  cannot("createEvent", () => msg("events.roleCannot", { role: roleName() }));
 
 /** How long typing pauses before the list is asked again. */
 const TYPING_MS = 300;
@@ -329,7 +332,9 @@ export function Events() {
 }
 
 function EventRow(props: { event: Event; chartName: string; onArchive: () => void }) {
-  const canArchive = () => allows(workspace(), "archiveEvent") && props.event.archived_at === null;
+  // The role decides whether the menu is there; the licence, whether its item works.
+  const canArchive = () =>
+    refused(workspace(), "archiveEvent") !== "role" && props.event.archived_at === null;
   return (
     <tr>
       <td class={td}>
@@ -381,11 +386,15 @@ function EventRow(props: { event: Event; chartName: string; onArchive: () => voi
               <DropdownMenu.Content class={menuContent}>
                 <DropdownMenu.Item
                   class={`${menuItem} text-danger`}
+                  disabled={archiveClosed() !== null}
                   onSelect={afterMenu(props.onArchive)}
                 >
                   <Icon name="trash" />
                   {msg("events.archive")}
                 </DropdownMenu.Item>
+                <Show when={archiveClosed()}>
+                  {(why) => <p class="max-w-64 px-2 py-1 text-sm text-muted">{why()}</p>}
+                </Show>
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
           </DropdownMenu>

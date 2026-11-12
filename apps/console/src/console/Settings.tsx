@@ -29,6 +29,7 @@ import { Button } from "../ui/controls.tsx";
 import { Field, fieldInputClass, FormError, length } from "../ui/form.tsx";
 import { Confirm, Dialog, notify } from "../ui/overlays.tsx";
 import { describe, reference, report } from "./errors.ts";
+import { LicenceTab } from "./Licence.tsx";
 import {
   Action,
   CopyField,
@@ -51,8 +52,8 @@ import {
   type InviteField,
 } from "./refusals.ts";
 
-type Tab = "workspace" | "members" | "audit";
-const TABS: Tab[] = ["workspace", "members", "audit"];
+type Tab = "workspace" | "members" | "audit" | "licence";
+const TABS: Tab[] = ["workspace", "members", "audit", "licence"];
 
 const permissions = () => workspace()?.permissions ?? [];
 const roleLabel = (r: Role) => msg(`role.${r}`);
@@ -73,6 +74,7 @@ export function Settings() {
           { value: "workspace", label: msg("settings.workspace"), content: () => <WorkspaceTab /> },
           { value: "members", label: msg("settings.members"), content: () => <MembersTab /> },
           { value: "audit", label: msg("settings.audit"), content: () => <AuditTab /> },
+          { value: "licence", label: msg("settings.licence"), content: () => <LicenceTab /> },
         ]}
       />
     </>
