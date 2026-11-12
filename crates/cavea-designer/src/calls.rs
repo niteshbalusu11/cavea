@@ -12,7 +12,7 @@
 use cavea_compiler::document::Category;
 use cavea_edit::{
     AlignTo, Applied, ArrayStep, Axis, CategoriesView, Command, CommandError, Contrast, Cursor,
-    Draft, Drop, End, Field, FloorGuides, FloorsView, HistoryView, Input, InputResult,
+    Draft, Drop, End, Field, FindingPlace, FloorGuides, FloorsView, HistoryView, Input, InputResult,
     InspectorView, LayerClick, LayersPage, Level, Numbering, NumberingView, Order, Overlay,
     Preview, Progress, Rect, SeatEdit, SeatRef, SelectionView, Session, SnapSettings, StatusView,
     ToolId, ToolView, UserGuide, ValidationView, ViewName,
@@ -111,6 +111,10 @@ calls! {
     fn numbering_preview(s) -> Option<Preview> { s.numbering_preview().cloned() }
     /// The validation panel's list: exactly the compiler's when `complete`.
     fn validation(s) -> ValidationView { s.validation() }
+    /// The labels of the row and seat a finding names, for a finding shown.
+    fn finding_place(s, node: u32, row: Option<u32>, seat: Option<u32>) -> FindingPlace {
+        s.finding_place(node, row, seat)
+    }
     /// What the canvas draws over the chart now, in chart units.
     fn overlay(s) -> Overlay { s.overlay() }
     /// The pointer the canvas shows.

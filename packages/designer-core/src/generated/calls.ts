@@ -814,6 +814,200 @@ export type Field =
       value: AlphaOverflow;
     };
 
+/**
+ * A finding's particulars without ids: names, labels, keys and numbers
+ * (03 §3.2). In JSON `{"kind": "duplicateLabel", "label": "A-1"}`.
+ */
+export type FindingDetail =
+  | {
+      kind: "schema";
+      schema: number;
+      newest: number;
+    }
+  | {
+      kind: "migration";
+      from: number;
+    }
+  | {
+      /** The same full label is on `related`'s seat too. */
+      kind: "duplicateLabel";
+      label: string;
+    }
+  | {
+      kind: "labelTooLong";
+    }
+  | {
+      /** The row named has no label; with a seat, that seat has none. */
+      kind: "emptyLabel";
+      seat: boolean;
+    }
+  | {
+      kind: "noCategory";
+    }
+  | {
+      kind: "unknownCategory";
+      key: string;
+    }
+  | {
+      kind: "unknownFloor";
+    }
+  | {
+      kind: "unknownIcon";
+      key: string;
+    }
+  | {
+      /** A section child on another floor than its section's (names, if any). */
+      kind: "floorConflict";
+      floor: string | null;
+      sectionFloor: string | null;
+    }
+  | {
+      kind: "duplicateFloor";
+      floor: string | null;
+    }
+  | {
+      kind: "duplicateCategory";
+      key: string;
+    }
+  | {
+      /** The category's label, else its key. */
+      kind: "categoryColor";
+      category: string;
+    }
+  | {
+      kind: "focalPoint";
+      floor: string | null;
+    }
+  | {
+      /** An id `related` uses too: a copy made outside the designer. */
+      kind: "duplicateId";
+    }
+  | {
+      /** The document's field name, e.g. `seatPitch`. */
+      kind: "invalidValue";
+      field: string;
+    }
+  | {
+      kind: "emptyText";
+    }
+  | {
+      kind: "outOfRange";
+    }
+  | {
+      /**
+       * The compiler's words: `zero size`, `self-intersecting outline`,
+       * `cannot be tessellated`.
+       */
+      kind: "geometry";
+      problem: string;
+    }
+  | {
+      /** More than `limit` of `what` (the compiler's words). */
+      kind: "tooMany";
+      what: string;
+      limit: number;
+    }
+  | {
+      /** A kind of object not compiled yet: `table`, `booth`, `area`, `section`. */
+      kind: "unsupported";
+      nodeKind: string;
+    }
+  | {
+      kind: "overlap";
+    }
+  | {
+      /**
+       * The floor's name; `None` for an unnamed floor or a chart without
+       * floors.
+       */
+      kind: "noFocalPoint";
+      floor: string | null;
+    }
+  | {
+      kind: "singleSeat";
+    }
+  | {
+      kind: "outsideOutline";
+    }
+  | {
+      kind: "unusedCategory";
+      category: string;
+    }
+  | {
+      kind: "noAccessibleSeat";
+    }
+  | {
+      kind: "similarColors";
+      category: string;
+      other: string;
+    }
+  | {
+      /** `ratio` as 4.5 for 4.5:1. */
+      kind: "lowContrast";
+      category: string;
+      background: string;
+      ratio: number;
+    }
+  | {
+      /** CSS pixels at fit zoom. */
+      kind: "textTooSmall";
+      px: number;
+    }
+  | {
+      kind: "noSectionLabel";
+    }
+  | {
+      kind: "chartTooLarge";
+      extent: number;
+    }
+  | {
+      kind: "tooManySeatsInRow";
+      seats: number;
+      limit: number;
+    }
+  | {
+      kind: "tooManySeats";
+      limit: number;
+    }
+  | {
+      kind: "seatIds";
+    }
+  | {
+      kind: "removedOutOfRange";
+    }
+  | {
+      kind: "arcRow";
+    }
+  | {
+      kind: "pathTooShort";
+    }
+  | {
+      kind: "directionNotForRows";
+    }
+  | {
+      kind: "invalidLabelStart";
+    }
+  | {
+      /**
+       * The row's labels cannot be written: `zeroStep`, `startParity`,
+       * `overflow`, `outOfRange`, `customExhausted`, `tooLong`.
+       */
+      kind: "labels";
+      problem: string;
+    };
+
+/**
+ * The label of the row and seat a finding names, as a person reads them
+ * on the chart, and their places counted from 1 (the row from the front,
+ * the seat from the start of its row) for when a label is empty.
+ */
+export type FindingPlace = {
+  row: string | null;
+  rowNumber: number | null;
+  seat: string | null;
+  seatNumber: number | null;
+};
+
 export type FindingView = {
   /** `"E001"` … `"W110"`, or `"unsupported"`. */
   code: string;
@@ -829,6 +1023,22 @@ export type FindingView = {
   seat: number | null;
   /** From the last full pass, which the document has changed since. */
   stale: boolean;
+  /**
+   * `node` as the layers panel names it: its name, label or text, or
+   * `None` and its kind (the shell then shows the kind, as the layers
+   * panel does).
+   */
+  name: string | null;
+  kind: NodeKind | null;
+  /** The same for `related`. */
+  relatedName: string | null;
+  relatedKind: NodeKind | null;
+  /**
+   * What the shell needs to say what is wrong in a person's words. The
+   * labels of the row and seat it names are read for the findings shown
+   * only (`Session::finding_place`), never for the whole list.
+   */
+  detail: FindingDetail;
 };
 
 export type Floor = {
@@ -1928,12 +2138,20 @@ export type Text = {
 /**
  * Text being typed (07 §2.3): the chrome shows a field at `at` (world)
  * holding `text`, and sends each change with `Session::set_text`. `node`
- * is the text node being edited, once it exists.
+ * is the text node being edited, once it exists. The rest is how the text
+ * is drawn, so the field can sit over it: its em size in chart units, its
+ * angle in the world (degrees, clockwise), where it lies along its x axis
+ * from `at` (03 §2.7: vertically centred), its weight and colour.
  */
 export type TextField = {
   node: number | null;
   at: [number, number];
   text: string;
+  size: number;
+  angle: number;
+  align: Align;
+  weight: number;
+  color: string;
 };
 
 export type TextFields = {
@@ -2040,6 +2258,7 @@ export interface CallTable {
   numbering: { args: []; returns: NumberingView; error: never };
   numbering_preview: { args: []; returns: Preview | null; error: never };
   validation: { args: []; returns: ValidationView; error: never };
+  finding_place: { args: [node: number, row: number | null, seat: number | null]; returns: FindingPlace; error: never };
   overlay: { args: []; returns: Overlay; error: never };
   cursor: { args: []; returns: Cursor; error: never };
   guides: { args: []; returns: UserGuide[]; error: never };
@@ -2207,6 +2426,11 @@ export abstract class Calls {
   /** The validation panel's list: exactly the compiler's when `complete`. */
   validation(): ValidationView {
     return this.call("validation", []);
+  }
+
+  /** The labels of the row and seat a finding names, for a finding shown. */
+  findingPlace(node: number, row: number | null, seat: number | null): FindingPlace {
+    return this.call("finding_place", [node, row, seat]);
   }
 
   /** What the canvas draws over the chart now, in chart units. */

@@ -31,6 +31,7 @@ use serde::Serialize;
 
 use crate::command::expand_runs;
 use crate::document::Document;
+use crate::views::NodeKind;
 use crate::index::{Rect, SpatialIndex};
 
 /// Whether the compiler can report `f` from one top-level node alone: not
@@ -358,6 +359,262 @@ pub struct FindingView {
     pub seat: Option<u32>,
     /// From the last full pass, which the document has changed since.
     pub stale: bool,
+    /// `node` as the layers panel names it: its name, label or text, or
+    /// `None` and its kind (the shell then shows the kind, as the layers
+    /// panel does).
+    pub name: Option<String>,
+    pub kind: Option<NodeKind>,
+    /// The same for `related`.
+    pub related_name: Option<String>,
+    pub related_kind: Option<NodeKind>,
+    /// What the shell needs to say what is wrong in a person's words. The
+    /// labels of the row and seat it names are read for the findings shown
+    /// only (`Session::finding_place`), never for the whole list.
+    pub detail: FindingDetail,
+}
+
+/// A finding's particulars without ids: names, labels, keys and numbers
+/// (03 §3.2). In JSON `{"kind": "duplicateLabel", "label": "A-1"}`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum FindingDetail {
+    Schema { schema: u32, newest: u32 },
+    Migration { from: u32 },
+    /// The same full label is on `related`'s seat too.
+    DuplicateLabel { label: String },
+    LabelTooLong,
+    /// The row named has no label; with a seat, that seat has none.
+    EmptyLabel { seat: bool },
+    NoCategory,
+    UnknownCategory { key: String },
+    UnknownFloor,
+    UnknownIcon { key: String },
+    /// A section child on another floor than its section's (names, if any).
+    FloorConflict { floor: Option<String>, section_floor: Option<String> },
+    DuplicateFloor { floor: Option<String> },
+    DuplicateCategory { key: String },
+    /// The category's label, else its key.
+    CategoryColor { category: String },
+    FocalPoint { floor: Option<String> },
+    /// An id `related` uses too: a copy made outside the designer.
+    DuplicateId,
+    /// The document's field name, e.g. `seatPitch`.
+    InvalidValue { field: String },
+    EmptyText,
+    OutOfRange,
+    /// The compiler's words: `zero size`, `self-intersecting outline`,
+    /// `cannot be tessellated`.
+    Geometry { problem: String },
+    /// More than `limit` of `what` (the compiler's words).
+    TooMany { what: String, limit: u32 },
+    /// A kind of object not compiled yet: `table`, `booth`, `area`, `section`.
+    Unsupported { node_kind: String },
+    Overlap,
+    /// The floor's name; `None` for an unnamed floor or a chart without
+    /// floors.
+    NoFocalPoint { floor: Option<String> },
+    SingleSeat,
+    OutsideOutline,
+    UnusedCategory { category: String },
+    NoAccessibleSeat,
+    SimilarColors { category: String, other: String },
+    /// `ratio` as 4.5 for 4.5:1.
+    LowContrast { category: String, background: String, ratio: f64 },
+    /// CSS pixels at fit zoom.
+    TextTooSmall { px: f64 },
+    NoSectionLabel,
+    ChartTooLarge { extent: u32 },
+    TooManySeatsInRow { seats: u32, limit: u32 },
+    TooManySeats { limit: u32 },
+    SeatIds,
+    RemovedOutOfRange,
+    ArcRow,
+    PathTooShort,
+    DirectionNotForRows,
+    InvalidLabelStart,
+    /// The row's labels cannot be written: `zeroStep`, `startParity`,
+    /// `overflow`, `outOfRange`, `customExhausted`, `tooLong`.
+    Labels { problem: String },
+}
+
+/// The label of the row and seat a finding names, as a person reads them
+/// on the chart, and their places counted from 1 (the row from the front,
+/// the seat from the start of its row) for when a label is empty.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindingPlace {
+    pub row: Option<String>,
+    pub row_number: Option<u32>,
+    pub seat: Option<String>,
+    pub seat_number: Option<u32>,
+}
+
+/// The layers panel's name of node `id` and its kind.
+fn named(doc: &Document, id: Option<u32>) -> (Option<String>, Option<NodeKind>) {
+    match id.and_then(|id| doc.node(id)) {
+        Some(n) => (crate::layers::name(n), Some(NodeKind::of(n))),
+        None => (None, None),
+    }
+}
+
+/// A floor's name, `None` when it has none or is not listed.
+fn floor_name(doc: &Document, id: u32) -> Option<String> {
+    let f = doc.floors().iter().find(|f| f.id == id)?;
+    (!f.name.is_empty()).then(|| f.name.clone())
+}
+
+/// A category's label, else its key.
+fn category_label(doc: &Document, key: &str) -> String {
+    let c = doc.categories().iter().find(|c| c.key == key);
+    c.map_or_else(|| key.to_owned(), |c| c.label.clone())
+}
+
+fn label_problem(e: cavea_core::label::LabelError) -> &'static str {
+    use cavea_core::label::LabelError as L;
+    match e {
+        L::ZeroStep => "zeroStep",
+        L::StartParity => "startParity",
+        L::Overflow => "overflow",
+        L::OutOfRange => "outOfRange",
+        L::CustomExhausted => "customExhausted",
+        L::TooLong => "tooLong",
+    }
+}
+
+fn finding_detail(doc: &Document, d: &Detail) -> FindingDetail {
+    use FindingDetail as F;
+    let s = |v: &str| v.to_owned();
+    match d {
+        Detail::Schema { schema } => F::Schema {
+            schema: *schema,
+            newest: cavea_compiler::SCHEMA,
+        },
+        Detail::Migration { from, .. } => F::Migration { from: *from },
+        Detail::Expand(k) => match k {
+            ExpandErrorKind::TooManySeatsInRow { seats, .. } => F::TooManySeatsInRow {
+                seats: *seats,
+                limit: cavea_core::limits::MAX_SEATS_PER_ROW,
+            },
+            ExpandErrorKind::TooManyObjects => F::TooManySeats {
+                limit: cavea_core::limits::MAX_OBJECTS,
+            },
+            ExpandErrorKind::OidRuns { .. } => F::SeatIds,
+            ExpandErrorKind::RemovedOutOfRange { .. } => F::RemovedOutOfRange,
+            ExpandErrorKind::InvalidNumber { field } => F::InvalidValue { field: s(field) },
+            ExpandErrorKind::ArcRow { .. } => F::ArcRow,
+            ExpandErrorKind::PathTooShort => F::PathTooShort,
+            ExpandErrorKind::DirectionNotForRows => F::DirectionNotForRows,
+            ExpandErrorKind::InvalidLabelStart => F::InvalidLabelStart,
+            ExpandErrorKind::Label { error, .. } => F::Labels {
+                problem: s(label_problem(*error)),
+            },
+        },
+        Detail::DuplicateLabel { label, .. } => F::DuplicateLabel {
+            label: s(label.as_str()),
+        },
+        Detail::LabelTooLong => F::LabelTooLong,
+        Detail::EmptyLabel { position, .. } => F::EmptyLabel {
+            seat: position.is_some(),
+        },
+        Detail::NoCategory => F::NoCategory,
+        Detail::UnknownCategory { key } => F::UnknownCategory { key: key.clone() },
+        Detail::UnknownFloor { .. } => F::UnknownFloor,
+        Detail::UnknownIcon { key } => F::UnknownIcon { key: key.clone() },
+        Detail::FloorConflict {
+            floor,
+            section_floor,
+        } => F::FloorConflict {
+            floor: floor_name(doc, *floor),
+            section_floor: floor_name(doc, *section_floor),
+        },
+        Detail::DuplicateFloor { floor } => F::DuplicateFloor {
+            floor: floor_name(doc, *floor),
+        },
+        Detail::DuplicateCategory { key } => F::DuplicateCategory { key: key.clone() },
+        Detail::CategoryColor { key } => F::CategoryColor {
+            category: category_label(doc, key),
+        },
+        Detail::FocalPoint { floor } => F::FocalPoint {
+            floor: floor_name(doc, *floor),
+        },
+        Detail::DuplicateId { .. } => F::DuplicateId,
+        Detail::InvalidValue { field } => F::InvalidValue { field: s(field) },
+        Detail::EmptyText => F::EmptyText,
+        Detail::OutOfRange => F::OutOfRange,
+        Detail::Geometry { problem } => F::Geometry { problem: s(problem) },
+        Detail::TooMany { what, limit } => F::TooMany {
+            what: s(what),
+            limit: *limit,
+        },
+        Detail::UnsupportedNode { kind } => F::Unsupported { node_kind: s(kind) },
+        Detail::Overlap { .. } => F::Overlap,
+        Detail::NoFocalPoint { floor } => F::NoFocalPoint {
+            floor: floor.and_then(|f| floor_name(doc, f)),
+        },
+        Detail::SingleSeat { .. } => F::SingleSeat,
+        Detail::OutsideOutline { .. } => F::OutsideOutline,
+        Detail::UnusedCategory { key } => F::UnusedCategory {
+            category: category_label(doc, key),
+        },
+        Detail::NoAccessibleSeat => F::NoAccessibleSeat,
+        Detail::SimilarColors { key, other } => F::SimilarColors {
+            category: category_label(doc, other),
+            other: category_label(doc, key),
+        },
+        Detail::LowContrast {
+            key,
+            background,
+            ratio,
+        } => F::LowContrast {
+            category: category_label(doc, key),
+            background: s(background),
+            ratio: f64::from(*ratio) / 100.0,
+        },
+        Detail::TextTooSmall { px } => F::TextTooSmall {
+            px: f64::from(*px) / 100.0,
+        },
+        Detail::NoSectionLabel => F::NoSectionLabel,
+        Detail::ChartTooLarge { extent } => F::ChartTooLarge { extent: *extent },
+    }
+}
+
+/// The labels of row `rid` of node `id` and of its seat `oid` (by the
+/// chart's label template, as buyers read it), from one expansion of that
+/// node: for the findings the validation panel shows.
+pub(crate) fn place(doc: &Document, id: u32, rid: Option<u32>, oid: Option<u32>) -> FindingPlace {
+    use cavea_compiler::Expansion;
+    let mut out = FindingPlace::default();
+    let overflow = doc.settings().alpha_overflow;
+    let mut e = Expansion::new();
+    let Some(node) = doc.node(id) else {
+        return out;
+    };
+    let ok = match node {
+        Node::RowBlock(b) => e.push_row_block(b, overflow).is_ok(),
+        Node::Row(r) => e.push_row(r, overflow).is_ok(),
+        _ => false,
+    };
+    if !ok {
+        return out;
+    }
+    let found = rid.and_then(|rid| e.rows.iter().enumerate().find(|(_, r)| r.rid == rid));
+    if let Some((i, row)) = found {
+        out.row_number = u32::try_from(i + 1).ok();
+        out.row = Some(row.label.as_str().to_owned()).filter(|l| !l.is_empty());
+    }
+    if let Some(oid) = oid
+        && let Some((at, seat)) = e.seats.iter().enumerate().find(|(_, s)| s.oid == oid)
+        && let Some(row) = e.rows.get(seat.row as usize)
+    {
+        let first = row.first_seat as usize;
+        out.seat_number = u32::try_from(at.saturating_sub(first) + 1).ok();
+        out.seat = crate::numbering::sample(doc, id, node, oid, overflow);
+    }
+    out
 }
 
 fn finding_view(doc: &Document, f: &Finding, stale: bool) -> FindingView {
@@ -387,6 +644,8 @@ fn finding_view(doc: &Document, f: &Finding, stale: bool) -> FindingView {
         }
         _ => None,
     };
+    let (name, kind) = named(doc, f.node);
+    let (related_name, related_kind) = named(doc, f.related());
     FindingView {
         code: f.code.as_str(),
         severity: f.severity().as_str(),
@@ -396,6 +655,11 @@ fn finding_view(doc: &Document, f: &Finding, stale: bool) -> FindingView {
         row,
         seat,
         stale,
+        name,
+        kind,
+        related_name,
+        related_kind,
+        detail: finding_detail(doc, &f.detail),
     }
 }
 

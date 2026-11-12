@@ -23,6 +23,7 @@ mod import;
 mod index;
 mod inspector;
 mod layers;
+mod naming;
 mod numbering;
 mod op;
 #[cfg(any(test, feature = "random"))]
@@ -62,7 +63,7 @@ pub use tool::{
     Button, Corner, Cursor, Guide, Handle, HandleKind, Input, Key, Modifiers, Overlay, Pointer,
     PointerKind, Readout, Side, SnapSettings, TextField, ToolId, tuning,
 };
-pub use validation::{FindingView, Marker, Progress, ValidationView};
+pub use validation::{FindingDetail, FindingPlace, FindingView, Marker, Progress, ValidationView};
 pub use views::{
     FloorView, FloorsView, HistoryView, KindCount, NodeKind, SelectionView, StatusView, VIEWS,
     ViewName,

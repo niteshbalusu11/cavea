@@ -10,7 +10,7 @@ use crate::arrange::{self, AlignTo, ArrayStep, Order};
 use crate::categories::{self, CategoriesView};
 use crate::clipboard;
 use crate::command::{Axis, Command, CommandError, End, Property, SeatEdit};
-use crate::document::{Document, LoadError};
+use crate::document::{Document, LoadError, each_node};
 use crate::draft::Draft;
 use crate::editor::{Applied, Editor};
 use crate::guides::{FloorGuides, Guides, UserGuide};
@@ -241,7 +241,10 @@ impl Session {
     pub fn insert(&mut self, parent: Option<u32>, draft: &Draft) -> Result<u32, CommandError> {
         self.reset_tool();
         let spot = tool::Spot::new(self.editor.document(), parent, self.floor);
-        let node = draft.node(self.category.as_deref(), spot.floor)?;
+        let mut node = draft.node(self.category.as_deref(), spot.floor)?;
+        if let Some(name) = crate::naming::fresh(self.editor.document(), &node) {
+            each_node!(&mut node, n => n.name = Some(name));
+        }
         let result = self.editor.apply(Command::CreateNode {
             parent,
             index: spot.index,
@@ -642,6 +645,17 @@ impl Session {
     /// The validation panel's list: exactly the compiler's when `complete`.
     pub fn validation(&self) -> ValidationView {
         self.validator.view(self.document())
+    }
+
+    /// The labels of the row `row` and seat `seat` of node `node` that a
+    /// finding names (07 §10), for the findings the panel shows.
+    pub fn finding_place(
+        &self,
+        node: u32,
+        row: Option<u32>,
+        seat: Option<u32>,
+    ) -> validation::FindingPlace {
+        validation::place(self.document(), node, row, seat)
     }
 
     /// Selects what a finding names, on its floor (shown if it is not), and

@@ -215,6 +215,8 @@ fn row_block_tool() {
         (55.0, 95.0, Curve::None {})
     );
     assert_eq!(b.category.as_deref(), Some("std"));
+    // Named as a person would, in the same undo entry (07 §5.1).
+    assert_eq!(b.name.as_deref(), Some("Row block 1"));
     let rows: Vec<_> = b
         .rows
         .iter()
@@ -238,6 +240,7 @@ fn row_block_tool() {
     t.drag([400.0, 450.0], [103.0, 203.0], NONE);
     let b = block(&t.node(t.selected())).clone();
     assert_eq!(b.origin, [262.5, 212.5]);
+    assert_eq!(b.name.as_deref(), Some("Row block 2"));
     assert_eq!((b.rows.len(), b.rows[0].seats), (3, 5));
     // Shift squares the drag: 300 × 300.
     t.drag([0.0, 2_000.0], [300.0, 2_100.0], SHIFT);
