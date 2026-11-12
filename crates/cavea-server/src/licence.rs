@@ -181,6 +181,10 @@ impl Status {
 struct Current {
     setting: Found,
     upload: Found,
+    /// Bumped by every upload this node takes ([`Licences::set_upload`]): a
+    /// refresh that read the database before an upload must not put back
+    /// what it read after it.
+    uploads: u64,
     /// What was last logged: the state and the licence id.
     logged: Option<(State, Option<String>)>,
 }
@@ -211,6 +215,7 @@ impl Licences {
             current: RwLock::new(Current {
                 setting,
                 upload: Found::Missing,
+                uploads: 0,
                 logged: None,
             }),
         }))
@@ -260,13 +265,23 @@ impl Licences {
             .write()
             .unwrap_or_else(PoisonError::into_inner);
         current.upload = found;
+        current.uploads += 1;
         log_change(&mut current, now_ms);
+    }
+
+    fn uploads(&self) -> u64 {
+        self.0
+            .current
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .uploads
     }
 
     /// Read `CAVEA_LICENCE`'s file and the uploaded licence again, then log
     /// the state if it changed. A database that cannot be read keeps the
     /// upload last read.
     pub async fn refresh(&self, db: &PgPool, now_ms: u64) {
+        let uploads = self.uploads();
         let setting = match &self.0.source {
             Some(LicenceSource::Path(path)) => Some(self.read_file(path.clone()).await),
             _ => None,
@@ -279,6 +294,12 @@ impl Licences {
                 None
             }
         };
+        self.apply(setting, upload, uploads, now_ms);
+    }
+
+    /// Take what a refresh read; the upload only if this node took none
+    /// since the refresh began (`uploads`, read before the database).
+    fn apply(&self, setting: Option<Found>, upload: Option<Found>, uploads: u64, now_ms: u64) {
         let mut current = self
             .0
             .current
@@ -287,7 +308,7 @@ impl Licences {
         if let Some(setting) = setting {
             current.setting = setting;
         }
-        if let Some(upload) = upload {
+        if let Some(upload) = upload.filter(|_| current.uploads == uploads) {
             current.upload = upload;
         }
         log_change(&mut current, now_ms);
@@ -457,6 +478,35 @@ mod tests {
         let none = Licences::new(Verifier::new([]), None);
         let s = none.status(0);
         assert_eq!((s.state, s.source), (State::Missing, None));
+    }
+
+    /// A refresh that read the old upload before a renewal was taken does not
+    /// put the old one back (the next refresh reads the renewal).
+    #[test]
+    fn a_stale_refresh_never_undoes_an_upload() {
+        let key = SigningKey::generate().unwrap().0;
+        let verifier = Verifier::new([key.public()]);
+        let old = Found::of(
+            &verifier,
+            &issue(&key, "lic_old", "2025-01-01", "2025-06-01"),
+        );
+        let new = Found::of(
+            &verifier,
+            &issue(&key, "lic_new", "2027-01-01", "2028-01-10"),
+        );
+        let set = Licences::new(verifier, None);
+        let at = day("2027-06-01");
+        set.apply(None, Some(old.clone()), set.uploads(), at);
+        assert_eq!(set.status(at).state, State::Expired);
+        let began = set.uploads();
+        set.set_upload(new, at);
+        set.apply(None, Some(old.clone()), began, at);
+        let status = set.status(at);
+        assert_eq!(status.state, State::Valid);
+        assert_eq!(status.licence.unwrap().id, "lic_new");
+        // A refresh begun after the upload takes what it read.
+        set.apply(None, Some(old), set.uploads(), at);
+        assert_eq!(set.status(at).state, State::Expired);
     }
 
     #[test]
