@@ -31,7 +31,9 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cavea -d cavea"]
+      # Over TCP, as the server connects: on its first start PostgreSQL runs
+      # a set-up server that answers on its socket only, then restarts.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U cavea -d cavea"]
       interval: 2s
       retries: 30
 
