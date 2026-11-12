@@ -74,7 +74,9 @@ export interface Live {
    * to select them; `settle` then puts back any it did not take. */
   allow(labels: readonly string[]): void;
   settle(labels: readonly string[]): void;
-  inspect(label: string | null): void;
+  /** The seat whose details are shown; they are read at once (`now`, a
+   * click) or once the keyboard rests on it. */
+  inspect(label: string | null, now?: boolean): void;
   /** Reads the details of `labels` now (a seat just clicked). */
   read(labels: readonly string[]): Promise<void>;
   /** Acts on `labels`, all or nothing, and reads them again either way. */
@@ -84,6 +86,9 @@ export interface Live {
   /** The label of object `idx`, for measurement. */
   labelAt(idx: number): string | undefined;
 }
+
+/** How long the keyboard rests on a seat before its details are read. */
+const INSPECT_MS = 250;
 
 /** Labels per read by label: the server takes at most 1,000. */
 const LABELS_PER_READ = 1_000;
@@ -120,6 +125,7 @@ export function createLive(options: {
   let inspected: string | null = null;
   let ctx: AdapterContext | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let inspecting: ReturnType<typeof setTimeout> | null = null;
   /** This connection's requests (a map that failed to start disconnects;
    * Retry connects again). */
   let conn = new AbortController();
@@ -252,11 +258,7 @@ export function createLive(options: {
     const touched = new Set(labelsChanged);
     // A watched seat changed, or one is held and its hold may have been
     // extended (a `seq` that moved without a status change).
-    if (
-      whole ||
-      look.some((l) => touched.has(l)) ||
-      (labelsChanged.length === 0 && look.some((l) => status(l) === "held"))
-    ) {
+    if (whole || look.some((l) => touched.has(l)) || look.some((l) => status(l) === "held")) {
       readQuietly(look);
     }
     bump();
@@ -318,6 +320,7 @@ export function createLive(options: {
 
   function stop(): void {
     stopped = true;
+    if (inspecting !== null) clearTimeout(inspecting);
     if (timer !== null) clearTimeout(timer);
     timer = null;
     conn.abort();
@@ -396,8 +399,23 @@ export function createLive(options: {
       if (ctx !== null && delta.available.length > 0) ctx.applyDelta(delta);
     },
     settle: (wanted) => sync(wanted),
-    inspect(label) {
+    inspect(label, now = false) {
+      const changed = label !== inspected;
       inspected = label;
+      if (inspecting !== null) clearTimeout(inspecting);
+      inspecting = null;
+      if (label === null) return;
+      if (now) {
+        readQuietly([label]);
+        return;
+      }
+      // A seat reached by the keyboard: its details once it stays a moment
+      // (arrowing across a row asks for the last one only).
+      if (!changed) return;
+      inspecting = setTimeout(() => {
+        inspecting = null;
+        if (inspected === label && !stopped) readQuietly([label]);
+      }, INSPECT_MS);
     },
     read: (wanted) => read(wanted),
     async act(action, targets, orderRef) {

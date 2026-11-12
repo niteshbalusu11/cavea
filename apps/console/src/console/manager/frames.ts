@@ -33,6 +33,9 @@ export interface DeltaFrame {
   /** Changed objects, `idx` strictly increasing. */
   idx: Uint32Array;
   codes: Uint8Array;
+  /** One past the highest `idx` named, changes and areas alike (0 when
+   * none): a receiver refuses the frame when it passes its count. */
+  end: number;
 }
 
 /** A frame of a type the route does not send: skipped (08 §8.6). */
@@ -150,8 +153,15 @@ function delta(r: Reader): DeltaFrame {
   const to = r.varint();
   if (to <= from) throw new FrameError("seq");
   const changes = list(r, 2, code);
-  list(r, 2, (x) => x.u32());
-  return { type: "delta", from, to, idx: changes.idx, codes: Uint8Array.from(changes.values) };
+  const areas = list(r, 2, (x) => x.u32());
+  return {
+    type: "delta",
+    from,
+    to,
+    idx: changes.idx,
+    codes: Uint8Array.from(changes.values),
+    end: Math.max(changes.end, areas.end),
+  };
 }
 
 /** Decodes one frame; throws `FrameError` when it breaks a rule. */

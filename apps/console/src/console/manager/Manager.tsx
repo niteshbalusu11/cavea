@@ -91,8 +91,7 @@ export function Manager(props: { event: Event; onEvent: (event: Event) => void }
 
   const inspect = (o: SeatObject | null, read: boolean) => {
     setInspected(o);
-    live.inspect(o?.label ?? null);
-    if (o !== null && read) void live.read([o.label]).catch(() => {});
+    live.inspect(o?.label ?? null, read);
   };
 
   const onSelection = (selection: Selection) => {

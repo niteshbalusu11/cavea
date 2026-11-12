@@ -175,6 +175,11 @@ test("the poller's steps: snapshot, delta, nothing new, gap, too old, restart, b
   });
   expect(step(from, objects + 1, snapshot)).toEqual({ kind: "bad", rule: "object count" });
   expect(step(from, 2, delta)).toEqual({ kind: "bad", rule: "idx" });
+  // An area at or past the count refuses the frame too (DELTA 4 → 5, a
+  // change at idx 0, an area at idx 3, three objects).
+  const area = { status: 200 as const, bytes: Uint8Array.from([3, 4, 5, 1, 0, 2, 1, 3, 1]) };
+  expect(step(4, 3, area)).toEqual({ kind: "bad", rule: "idx" });
+  expect(step(4, 4, area)).toMatchObject({ kind: "delta", to: 5 });
   expect(nextAfter(from, "bad")).toBe(0);
   // A frame type the route does not send is skipped.
   expect(step(from, objects, { status: 200, bytes: Uint8Array.from([6, 1]) })).toEqual({

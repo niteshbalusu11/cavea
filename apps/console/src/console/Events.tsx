@@ -115,6 +115,8 @@ export function Events() {
     try {
       const answer = checkEvent(await call("archiveEvent", { path: { event: event.key } }, signal));
       events.update((rows) => rows.map((r) => (r.key === answer.key ? answer : r)));
+      // The list is the server's view: an archived event leaves "active".
+      events.refetch();
       notify(msg("events.archived", { name: event.name ?? event.key }));
     } catch (e) {
       report(e);

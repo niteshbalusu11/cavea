@@ -19,7 +19,7 @@ import { DesignerPage } from "./designer/Designer.tsx";
 import { localSource } from "./designer/source.ts";
 import { loadSession, watchSession } from "./session.ts";
 import { followTheme } from "./theme.ts";
-import { focusNewPage, watchForms } from "./ui/focus.ts";
+import { focusNewPage, keepFocus, watchForms } from "./ui/focus.ts";
 import { ToastRegion } from "./ui/overlays.tsx";
 
 followTheme();
@@ -30,6 +30,7 @@ takeSetupToken();
 void loadSession();
 watchSession();
 watchForms();
+keepFocus();
 const root = document.getElementById("root");
 if (root === null) {
   throw new Error("#root element is missing from index.html");

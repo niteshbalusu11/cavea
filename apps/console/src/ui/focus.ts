@@ -95,3 +95,24 @@ export function watchForms(): void {
     });
   });
 }
+
+/**
+ * Every page: when the element that had focus leaves the page (its row
+ * archived, revoked or removed by a list read again after a dialog had
+ * already returned focus to it) and focus has fallen to the body, it goes
+ * to the same control drawn again or the page's heading.
+ */
+export function keepFocus(): void {
+  let last: Opener<HTMLElement> | null = null;
+  document.addEventListener("focusin", () => {
+    last = opener();
+  });
+  new MutationObserver(() => {
+    if (last === null || last.el.isConnected) return;
+    const now = document.activeElement;
+    if (now !== null && now !== document.body) return;
+    const instead = replacement(last, documentPage);
+    last = null;
+    if (instead !== null) focusOn(instead);
+  }).observe(document.body, { childList: true, subtree: true });
+}

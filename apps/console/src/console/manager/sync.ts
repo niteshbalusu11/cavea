@@ -42,8 +42,9 @@ export function step(seq: number | null, objects: number, answer: Answer): Step 
       return { kind: "snapshot", seq: frame.seq, codes: frame.codes };
     case "delta": {
       if (seq === null || frame.from !== seq) return { kind: "gap" };
-      const last = frame.idx.at(-1);
-      if (last !== undefined && last >= objects) return { kind: "bad", rule: "idx" };
+      // An `idx` at or past the chart's count, of a change or an area,
+      // refuses the frame whole (08 §8.6).
+      if (frame.end > objects) return { kind: "bad", rule: "idx" };
       return { kind: "delta", to: frame.to, idx: frame.idx, codes: frame.codes };
     }
     case "other":
