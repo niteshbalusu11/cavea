@@ -73,8 +73,9 @@ libc = { version = "0.2.191", default-features = false }
 
 [features]
 # A test build that also trusts the public key in `CAVEA_TEST_LICENCE_KEY` at
-# compile time, for trying licences by hand (D-80). Never in a release:
-# `cargo xtask build-server`, the image and CI build without it.
+# compile time, for trying licences by hand (D-80). Debug builds only: with
+# `--release` it fails to compile; `cargo xtask build-server`, the image and
+# CI build without it.
 trust-test-key = []
 
 [dev-dependencies]

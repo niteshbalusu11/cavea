@@ -126,7 +126,8 @@ impl Config {
             public_url: optional("CAVEA_PUBLIC_URL")?,
             console_cookie_secure: setting("CAVEA_CONSOLE_COOKIE_SECURE", || true)?,
             rate_limit_sign_in: setting("CAVEA_RATE_LIMIT_SIGN_IN", || 10)?,
-            licence: optional("CAVEA_LICENCE")?,
+            licence: std::env::var_os("CAVEA_LICENCE")
+                .and_then(crate::licence::LicenceSource::from_setting),
         }
         .checked()
     }

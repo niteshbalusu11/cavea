@@ -395,7 +395,12 @@ fn read_public_key(path: &Path) -> Result<PublicKey> {
 }
 
 fn read_licence(path: &Path) -> Result<Vec<u8>> {
-    let bytes = fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
+    use std::io::Read as _;
+    let file = fs::File::open(path).with_context(|| format!("cannot read {}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.take(u64::try_from(cavea_licence::MAX_BYTES).unwrap_or(u64::MAX) + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("cannot read {}", path.display()))?;
     ensure!(
         bytes.len() <= cavea_licence::MAX_BYTES,
         "{} is larger than a licence file can be",

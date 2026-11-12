@@ -43,19 +43,24 @@ pub enum LicenceSource {
     Contents(Vec<u8>),
 }
 
-impl std::str::FromStr for LicenceSource {
-    type Err = &'static str;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let trimmed = s.trim();
+impl LicenceSource {
+    /// `CAVEA_LICENCE`'s value. Never an error, so that no licence setting
+    /// can stop the server starting (D-20): empty is no licence, and a value
+    /// that is not UTF-8 can only be a path.
+    #[must_use]
+    pub fn from_setting(value: std::ffi::OsString) -> Option<Self> {
+        let text = match value.into_string() {
+            Ok(text) => text,
+            Err(path) => return Some(Self::Path(PathBuf::from(path))),
+        };
+        let trimmed = text.trim();
         if trimmed.is_empty() {
-            return Err("must be a licence file's path or its contents");
-        }
-        Ok(if trimmed.starts_with('{') {
-            Self::Contents(s.as_bytes().to_vec())
+            None
+        } else if trimmed.starts_with('{') {
+            Some(Self::Contents(text.into_bytes()))
         } else {
-            Self::Path(PathBuf::from(trimmed))
-        })
+            Some(Self::Path(PathBuf::from(trimmed)))
+        }
     }
 }
 
@@ -291,6 +296,11 @@ impl Licences {
     async fn read_file(&self, path: PathBuf) -> Found {
         let read = tokio::task::spawn_blocking(move || {
             use std::io::Read as _;
+            // Only a regular file: opening a FIFO or a device could block
+            // for ever, or read without end.
+            if !std::fs::metadata(&path)?.is_file() {
+                return Err(std::io::ErrorKind::InvalidInput.into());
+            }
             let file = std::fs::File::open(&path)?;
             let mut bytes = Vec::new();
             file.take(u64::try_from(MAX_BYTES).unwrap_or(u64::MAX) + 1)
@@ -473,15 +483,18 @@ mod tests {
 
     #[test]
     fn the_setting_is_a_path_or_contents() {
+        let read = |s: &str| LicenceSource::from_setting(s.into());
         assert_eq!(
-            "/etc/cavea/licence.json".parse::<LicenceSource>(),
-            Ok(LicenceSource::Path("/etc/cavea/licence.json".into()))
+            read("/etc/cavea/licence.json"),
+            Some(LicenceSource::Path("/etc/cavea/licence.json".into()))
         );
         assert_eq!(
-            " {\"a\":1}".parse::<LicenceSource>(),
-            Ok(LicenceSource::Contents(b" {\"a\":1}".to_vec()))
+            read(" {\"a\":1}"),
+            Some(LicenceSource::Contents(b" {\"a\":1}".to_vec()))
         );
-        assert!("  ".parse::<LicenceSource>().is_err());
+        // Never an error: empty is no licence.
+        assert_eq!(read(""), None);
+        assert_eq!(read("  "), None);
         assert_eq!(
             format!("{:?}", LicenceSource::Contents(b"{}".to_vec())),
             "Contents(..)"

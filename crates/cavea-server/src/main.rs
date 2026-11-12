@@ -96,7 +96,17 @@ async fn run(config: Config, streams: tokio::runtime::Handle) -> anyhow::Result<
     let limiter = Limiter::new(config.rate_limit_holds, config.rate_limit_reads)
         .with_sign_in(config.rate_limit_sign_in);
     let licences = cavea_server::licence::Licences::new(verifier(), config.licence.clone());
-    licences.refresh(&db, seats.clock.now().0).await;
+    // Bounded: a licence that cannot be read in time is read again in the
+    // background, and serving never waits for it (D-20).
+    let read = licences.refresh(&db, seats.clock.now().0);
+    if tokio::time::timeout(std::time::Duration::from_secs(5), read)
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            "the licence was not read within 5 s; serving, and reading it again every 30 s"
+        );
+    }
     let console = cavea_server::http::web::Files::embedded();
     let (files, bytes) = console.size();
     tracing::info!(files, bytes, "console files");
@@ -121,6 +131,9 @@ async fn run(config: Config, streams: tokio::runtime::Handle) -> anyhow::Result<
 /// `trust-test-key` feature only, the base64 public key that
 /// `CAVEA_TEST_LICENCE_KEY` held when it was compiled (D-80). No setting read
 /// at run time adds a key.
+#[cfg(all(feature = "trust-test-key", not(debug_assertions)))]
+compile_error!("`trust-test-key` is for debug builds only: a release never trusts a test key");
+
 fn verifier() -> cavea_licence::Verifier {
     let keys = cavea_licence::TRUSTED
         .iter()
