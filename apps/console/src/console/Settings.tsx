@@ -230,14 +230,15 @@ function MembersTab() {
     }
   };
 
-  /** A refusal of sign-in help: said in a toast; a member gone reloads the
-   * list, a role that may have changed under the person reloads `me`. */
+  /** A refusal of sign-in help: said in a toast; a member gone or a role
+   * that may have changed (theirs or the person's own) reads the list and
+   * `me` again. */
   const helpRefused = (e: unknown) => {
     const error = asApiError(e);
     const known = accountHelpRefusal(error);
     if (known === null) return report(e);
     notify(known.message, "error", reference(error));
-    if (known.gone) members.refetch();
+    if (known.gone || known.stale) members.refetch();
     if (known.stale) void loadSession();
   };
 

@@ -1255,7 +1255,7 @@ const accountSecurity = {
   "totp.closedEarly": "Two-step sign-in is still off. Start again whenever you are ready.",
   "codes.title": "Save your recovery codes",
   "codes.body":
-    "Two-step sign-in is on. If you lose your phone, each of these codes signs you in once in place of a code from the app. They are shown only now.",
+    "If you lose your phone, each of these codes signs you in once in place of a code from the app. They are shown only now: keep them somewhere other than your phone.",
   "codes.list": "Recovery codes",
   "codes.copy": "Copy codes",
   "codes.copied": "Copied",
