@@ -1,7 +1,7 @@
 // The steps of the end-to-end check, in order; each ends in checks a machine
 // evaluates. The words on screen come from the console's own catalogue
 // (`msg`), so a changed string changes what the check looks for with it.
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import type { Browser } from "../chromium.ts";
 import { msg } from "../../apps/console/src/i18n/messages.ts";
 import type { Server } from "./server.ts";
@@ -44,6 +44,22 @@ const BACK = msg("panel.back");
 const DIALOG = "dialog|alertdialog";
 
 const hex = (bytes: number): string => randomBytes(bytes).toString("hex");
+
+/** An authenticator app's code (RFC 6238: SHA-1, six digits) for a
+ * base32 key at 30-second step `step`. */
+export function totp(key: string, step: number): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = "";
+  for (const c of key.replace(/[\s=]/g, "").toUpperCase()) {
+    bits += alphabet.indexOf(c).toString(2).padStart(5, "0");
+  }
+  const bytes = Buffer.from((bits.match(/.{8}/g) ?? []).map((b) => parseInt(b, 2)));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(step));
+  const mac = createHmac("sha1", bytes).update(counter).digest();
+  const at = (mac[mac.length - 1] ?? 0) & 0xf;
+  return String((mac.readUInt32BE(at) & 0x7fffffff) % 1_000_000).padStart(6, "0");
+}
 
 /** Fails with "expected …, found …" unless `ok`. */
 function check(ok: boolean, expected: string, found: unknown): void {
@@ -859,6 +875,50 @@ export const STEPS: Step[] = [
           "one",
         );
       }
+    },
+  },
+  {
+    name: "Two-step: the viewer turns it on from the key shown, signs out, and signs in with a code",
+    async run(r) {
+      const v = page(r, "viewer");
+      // From the event page (a full-window tool) back to the console's frame.
+      await v.click({ role: "link", name: msg("event.back") });
+      await v.click({ role: "button", name: msg("user.menu", { email: viewer.email }) });
+      await v.click({ role: "menuitem", name: msg("user.account") });
+      await v.click({ role: "button", name: msg("account.twoStepTurnOn") });
+      const d = await v.find({ role: DIALOG, name: msg("totp.title") });
+      await v.enter({ role: "textbox", name: msg("totp.password") }, viewer.password, d);
+      await v.click({ role: "button", name: msg("totp.start") }, d);
+      await v.find({ role: "image", name: msg("totp.qrLabel") }, d);
+      const key = (
+        await v.value(await v.find({ role: "textbox", name: msg("totp.secret") }, d))
+      ).replaceAll(" ", "");
+      check(/^[A-Z2-7]{32}$/.test(key), "a 160-bit base32 key shown as text", key.length);
+      r.secrets.set("viewer's authenticator key", key);
+      const step = Math.floor(Date.now() / 30_000);
+      await v.enter({ role: "textbox", name: msg("totp.code") }, totp(key, step), d);
+      await v.click({ role: "button", name: msg("totp.confirm") }, d);
+      const codes = await v.find({ role: DIALOG, name: msg("codes.title") });
+      const list = await v.find({ role: "list", name: msg("codes.list") }, codes);
+      const shown = (await v.text(list)).match(/[a-z2-7]{5}-[a-z2-7]{5}/g) ?? [];
+      check(shown.length === 10, "ten recovery codes", shown.length);
+      r.secrets.set("viewer's recovery codes", shown.join("\n"));
+      await v.click({ role: "checkbox", name: msg("codes.saved") }, codes);
+      await v.click({ role: "button", name: msg("codes.done") }, codes);
+      await v.gone({ role: DIALOG, name: msg("codes.title") });
+      await v.find({ role: "button", name: msg("account.twoStepTurnOff") });
+
+      await v.click({ role: "button", name: msg("user.menu", { email: viewer.email }) });
+      await v.click({ role: "menuitem", name: msg("user.signOut") });
+      await v.find({ role: "heading", name: msg("signIn.title") });
+      await v.enter({ role: "textbox", name: msg("signIn.email") }, viewer.email);
+      await v.enter({ role: "textbox", name: msg("signIn.password") }, viewer.password);
+      await v.click({ role: "button", name: msg("signIn.submit") });
+      // The next step's code: the server takes one step either way, and
+      // never a step it took before.
+      await v.enter({ role: "textbox", name: msg("signIn.code") }, totp(key, step + 1));
+      await v.click({ role: "button", name: msg("signIn.codeSubmit") });
+      await v.find({ role: "button", name: msg("user.menu", { email: viewer.email }) });
     },
   },
   {
