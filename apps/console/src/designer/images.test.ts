@@ -16,7 +16,7 @@ import {
 
 /** A PNG header declaring `w × h` (the rest of the file does not matter
  * to the checks: the fake decoder says what the browser would). */
-function png(w: number, h: number): Uint8Array {
+function png(w: number, h: number): Uint8Array<ArrayBuffer> {
   const b = new Uint8Array(64);
   b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
   new DataView(b.buffer).setUint32(16, w);

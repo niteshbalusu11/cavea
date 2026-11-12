@@ -4,7 +4,7 @@
 // `customState` adapter playing a host. Loaded only when opened (a dynamic
 // import), so the renderer and its WebAssembly cost the console nothing
 // until then.
-import type { Designer, Session } from "@cavea/designer-core";
+import type { Designer, ImageAsset, Session } from "@cavea/designer-core";
 import { createSeatMap, customState, type AdapterContext, type SeatMap } from "@cavea/renderer";
 import { createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
 import { msg } from "../i18n/messages.ts";
@@ -25,6 +25,9 @@ const STATES: { id: "empty" | "half" | "nearly"; sold: number }[] = [
 export default function Preview(props: {
   designer: Designer;
   session: Session;
+  /** Where background images are (the page's image host); buyers never
+   * see a reference image, which the compiled chart does not hold. */
+  images: ((hash: string) => ImageAsset | null) | undefined;
   onClose: () => void;
 }) {
   const [device, setDevice] = createSignal<Device>(DESKTOP);
@@ -85,6 +88,10 @@ export default function Preview(props: {
         },
       }),
       theme: dark ? "dark" : "light",
+      assets: {
+        image: (hash) =>
+          props.images?.(hash) ?? Promise.reject(new Error(`image ${hash}: not in this page`)),
+      },
       signal: controller.signal,
       onReady: () => setReady(true),
     }).then(

@@ -396,6 +396,7 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
             <Preview
               designer={previewing() as Designer}
               session={e.session}
+              images={(hash) => images.source(hash)}
               onClose={() => setPreviewing(null)}
             />
           </Suspense>
