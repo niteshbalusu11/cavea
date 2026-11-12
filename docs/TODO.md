@@ -345,7 +345,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 - [x] **LIC-001** Licence file format and private signing tool (12 §7.2). `cavea-licence`, `cargo xtask licence` (12 §7.6, D-80); no key is trusted until the owner adds theirs
 - [x] **LIC-002** Server verification and behaviour by state; seat operations never blocked (12 §7.3). `CAVEA_LICENCE` or an upload, the state in `me` and the public event, console chart and event writes refused while expired (12 §7.6, D-81)
-- [x] **LIC-003** Renderer watermark logic, checked after the first interactive frame (12 §7.4). From the public event's `licence` with `caveaServer`, else the `licence` option verified with WebCrypto against the generated key list; one line of text, never in the way (12 §7.7, D-84)
+- [x] **LIC-003** Renderer watermark logic, checked after the first interactive frame (12 §7.4). From the public event's `licence` with `caveaServer`, else the `licence` option verified with WebCrypto against the generated key list; one line of text, never in the way (12 §7.7, D-84). The owner wants "Powered by Cavea" to be a link (2026-11-12); it stays plain text until there is a domain to point at
 - [x] **LIC-004** Console licence screen and banners (09 §7). Settings → Licence with the upload, banners by state and role, one rule for what may be written while expired (12 §7.7)
 - [x] **LIC-005** Test: expired and missing licences leave hold and book working (DECISIONS D-20). `seat_operations_ignore_the_licence`: every seat operation in ten licence states
 
@@ -383,7 +383,7 @@ Do not start a milestone until the previous one's exit criteria are met.
 - [x] **OPS-003** Upgrade test from the previous release with a populated database (13 §13). `cargo xtask upgrade --from <rev> --renderer <rev>` (`tools/upgrade/run.ts`), from the previous tag in the release; run from `cb0f8bf`, `0ed2fef` and `2480a4a`, renderers of `2d4933d` and `2480a4a`: no old answer changed (13 §13, D-91)
 - [ ] **OPS-004** Public demo instance with a fake checkout (14 §10)
 - [ ] **OPS-005** Delivery of builds and licence files to pilots (14 §10)
-- [ ] **OPS-006** Full release checklist run (13 §13)
+- [ ] **OPS-006** Full release checklist run (13 §13). Run as `cargo xtask release --dry-run` on `main` at `e456692` (2026-11-12, 16 minutes, on the development machine): every item a machine runs passed (the three audits; format, lint and build checks; the payload gate at 141,131 B; Rust tests with the database; simulation; determinism; golden images; the end-to-end check; the compatibility fixtures; both images; the image smoke test; the quick start and the deployment guide against the image; the packages; SBOMs; checksums; the publishing rehearsal against a local registry with a throwaway key; `npm publish --dry-run`). `web-checks` reported 18 failing tests that were not the repository's: `bun test` scanned a scratch worktree under `target/tmp/`; the repository's own 336 tests pass (`bun test ./apps ./packages`), and the script is being fixed. Still refused, for the owner: the version is `0.0.0` with no changelog section (`cargo xtask release prepare <version>`), and the image and package names in `apps/docs/site.json` are placeholders. Left for a person, as the checklist says: device benchmarks, L1 and L2 on reference hardware, chaos on reference hardware, the nightly suites, the manual accessibility matrix, running the arm64 image, reading the release notes
 
 ### Business
 

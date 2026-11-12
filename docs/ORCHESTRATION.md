@@ -161,34 +161,19 @@ Ask only when a decision is genuinely the owner's and work cannot route around i
 
 ## 11. Slice plan and open notes
 
-The orchestrator keeps this section current so that the plan survives a context summary. Done work is whatever `docs/TODO.md` ticks on `main`; this lists only what is planned and what to remember. Last refreshed after pull request #66 (2026-11-11).
+The orchestrator keeps this section current so that the plan survives a context summary. Done work is whatever `docs/TODO.md` ticks on `main`; this lists only what is planned and what to remember. Last refreshed after pull request #96 (2026-11-12), at the end of M4.
 
-Up to three builders run side by side, one per chain, because a chain's slices edit the same files. When a builder splits a slice, the next builder in that chain inherits the unreviewed branch and takes it through review together with the chain's next tasks. A builder may send an interim note and keep running: check the task's status before starting a follow-up, so that two builders never work one branch.
+**Where the work stands.** M1 to M4 are built as far as agents can take them; the milestone reports for M1, M2, M3 and M4 were posted in the orchestrator's thread. The owner's instruction is to stop after M4: do not start M5 or later without the owner saying so. No builder is running and no pull request is open, apart from any follow-up named below.
 
-**Renderer and SDK chain** (`cavea-render`, `cavea-web`, `packages/renderer`, `packages/react`, `apps/demo`, `fixtures/`):
+**Open, and whose it is:**
 
-1. In the merge gate: packaging, script-tag build, React wrapper, Next.js, CSP and bundler checks, changelog convention: `WEB-013` to `WEB-016`, `WEB-018`, `FND-009` (pull request #64).
-2. Running: headless render, golden images, scripted interaction tests, benchmark page: `REN-045`, `TST-010`, `TST-015`, `TST-012` (branch `slice/renderer-test-harness`).
-3. Then the last of M1: generated SDK types `FND-007` (the engine's events are hand-written JSON in `cavea-web/src/events.rs`, so it needs serde attributes the generator can read plus a test that the hand-written JSON matches), and background images `REN-020` (assets exist since #59; about 14 KB of payload is left under the 150 KB target).
-4. M2's leftovers: Node server SDK `WEB-026` (the OpenAPI document and a TypeScript generator for it exist: `xtask/src/api.rs`), HTTP fuzz target `TST-027`.
+- **The owner's, before a first release:** a container registry and the `@cavea` npm scope (the names live in `apps/docs/site.json`); `cargo xtask release prepare <version>` with the changelog section, then a signed `v*` tag; a GitHub environment named `release`. Optional and later: the licence signing key (generated offline; its public half goes into `TRUSTED` in `crates/cavea-licence/src/keys.rs`, then `cargo xtask types`), a host and domain for the docs site, a lawyer's review of `LICENSE` (`VAL-020`).
+- **The owner's, by nature:** reference-device runs (`TST-016`), reference-hardware load runs (`TST-024`), usability sessions (`TST-032`), the manual accessibility matrix, every `VAL` task, `OPS-004`, `OPS-005`.
+- **Waiting for a later milestone's server work:** `DSN-040` and `CON-006` (a version diff, `SRV-036`), `CON-007` (two event settings), `SEC-002` (webhooks), `SRV-039` (the manager stream), the renderer's manager mode (`CON-020`).
+- **Waiting for hardware:** `DSN-044` (a GPU measurement), running the arm64 image.
+- **Small, agent-doable, not started:** `DSN-061` (the publish dialog shows server findings in the compiler's words), `DSN-062` (unnamed objects in older charts show an internal id), `DSN-034` (grouping: needs a chart-schema change the owner has not decided), making "Powered by Cavea" a link once there is a domain.
 
-**Designer chain** (`cavea-edit`, `cavea-designer`, `packages/designer-core`, `apps/console/src/designer`):
-
-1. In the merge gate: the canvas, `DSN-004`, `DSN-005` (pull request #63).
-2. Approved and pushed, to be rebased and filed once #63 lands: the canvas in the shell, camera and zoom, curve handle, numbering preview, markers, insert form, new-chart screen and tour: `DSN-013`, `DSN-023`, `DSN-027`, `DSN-038`, `DSN-042`, `DSN-043` (branch `slice/designer-shell-3-canvas`, head `0d0ea92`, based on `da4d71b`; its decision D-60 must be renumbered).
-3. Then: rulers and guides `DSN-031`; the server-backed draft: autosave with etag, the IndexedDB safety net, the single-editor lock, preview, publish with thumbnail (`DSN-035` to `DSN-040`); image tool `DSN-020`; performance pass `DSN-044`; end-to-end test `TST-031`. `DSN-034` grouping needs a chart-schema change and is the owner's call.
-
-**Server chain** (`cavea-engine`, `cavea-server`, `deploy/`):
-
-1. Running: invitations, audit log, pool warm-up, the console embedded in the server binary, Docker image and compose: `CON-012`, `CON-013`, `CON-015`, `SRV-023` (branch `slice/server-audit-embed-docker`). After #65, a change to `openapi.json` also needs `cargo xtask types`.
-2. Then M4's server side in `docs/TODO.md` order: licensing `LIC-*`, security `SEC-*`, operations `OPS-*`, the Helm chart and systemd unit, TOTP and password reset (`CON-003`). A workspace created by the admin key after setup already has the owner as a member, which 09 §2 does not say: settle it with the invitations work.
-
-**Console chain** (`apps/console` outside the designer):
-
-1. Merged: API client, setup, sign-in, workspace switcher, role-aware navigation, charts list (#65).
-2. Next: chart detail `CON-006`, events list and create `CON-007`, event manager `CON-008`, event settings `CON-009`, API keys and quick start `CON-010`, `CON-011`, members and invitations screens `CON-012`, interface standards `CON-014`. New screens use `call()` in `api/client.ts`, `createQuery` keyed on the workspace, `Gate` around each section route, `allows(workspace(), "<operationId>")` for actions, and the `consoleScreens` block of `messages.ts`.
-
-No milestone report has been posted yet: M1 and M2 each still have open tasks. Post each one when its last agent-doable task merges.
+**How the work was run, for whoever continues it.** Up to three builders ran side by side, each on one chain of slices that edit the same files (renderer and SDK; designer; server; console; docs). When a builder split a slice, the next builder in that chain inherited the unreviewed branch. The lessons that cost time are in §5 and §7: a builder's final report sometimes never arrives (read the task's status); a builder can be cut off (rescue its worktree's uncommitted work to its branch, then start a continuation with the original brief); the secret scanner fails pull requests on test text that merely looks like a credential (briefs say how to write such tests); `bun test` scans scratch copies under `target/`; a long local run must be a `systemd-run --user` service, not a child of the session's shell; the owner's rule that breaking changes are free until a customer is live.
 
 Notes for milestone reports and later briefs:
 
