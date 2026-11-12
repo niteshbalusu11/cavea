@@ -1,0 +1,65 @@
+Cavea Software Licence
+
+Copyright (c) 2026 Nitesh Balusu. All rights reserved.
+
+"Cavea" is a working name. In this licence, "the Software" means the source
+code in this repository and the packages, container images and documentation
+built from it, and "the copyright holder" means the person named above.
+
+1. Ownership
+
+The Software is licensed, not sold. The copyright holder keeps every right
+that this licence does not expressly grant. The source code is published so
+that it can be read and audited; publishing it grants no right to use it
+beyond what this licence says.
+
+2. Evaluation and development
+
+You may install and run the Software, free of charge, to evaluate it and to
+build and test your own integration with it, in development and staging
+environments. Used this way, the Software may show a mark saying that it is
+not licensed for production.
+
+3. Production use
+
+Using the Software in production, including to offer or sell seats for a real
+event, requires a commercial licence agreement with the copyright holder and a
+licence file issued under that agreement. Where such an agreement exists, it
+governs your use of the Software and takes precedence over this file.
+
+4. Restrictions
+
+Unless a commercial licence agreement with the copyright holder expressly
+allows it, you may not:
+
+(a) distribute, sublicense, sell, rent or lend the Software, or provide it to
+    others as a hosted service;
+(b) modify the Software or make derivative works of it, other than by
+    configuring it and integrating with it through its documented interfaces;
+(c) remove or alter any copyright, licence or attribution notice in it.
+
+5. Third-party components
+
+Some parts of the Software are the work of others and are provided under
+their own licences, which accompany those parts (for example, the font used
+for seat labels is under the SIL Open Font License 1.1, in
+packages/renderer/assets/OFL.txt). Those licences, not this one, apply to
+those parts.
+
+6. No warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+
+7. Limitation of liability
+
+TO THE EXTENT THE LAW ALLOWS, THE COPYRIGHT HOLDER IS NOT LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE,
+ARISING FROM THE SOFTWARE OR FROM ITS USE, EXCEPT AS A COMMERCIAL LICENCE
+AGREEMENT WITH THE COPYRIGHT HOLDER PROVIDES.
+
+8. Termination
+
+Your rights under this licence end automatically if you do not comply with
+it. When they end, you must stop using the Software and delete your copies.
