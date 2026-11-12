@@ -138,7 +138,8 @@ export async function answer(run: () => Promise<Order>): Promise<Response> {
       status: order.status,
     });
   } catch (error) {
-    if (error instanceof Refusal) return Response.json({ error: error.error }, { status: error.status });
+    if (error instanceof Refusal)
+      return Response.json({ error: error.error }, { status: error.status });
     // Log the request id, never the hold token: it can release the buyer's seats.
     const id = isCaveaError(error) ? ` (request ${error.requestId ?? "none"})` : "";
     console.error(`checkout: ${error instanceof Error ? error.message : String(error)}${id}`);

@@ -106,7 +106,7 @@ A comparison page states honestly what competitors have that we do not: 3D views
 | Search | Pages for "seats.io alternative", "self-hosted seating chart", "seat map SDK for React", "React Native seat map", "accessible seat picker" |
 | Documentation | Public, complete, with runnable examples; the docs are the main sales material for developers |
 | Public benchmark | The benchmark page with method and scripts (`13-testing-benchmarks.md` §6.2) |
-| Open components | Publish the framework wrappers, example apps and the benchmark harness under a permissive licence |
+| Open components | Publish the framework wrappers, example apps and the benchmark harness under a permissive licence. The example apps are `examples/` in the repository, written to be copied out as they are into a public examples repository |
 | Technical writing | "Rendering 100,000 seats on a phone", "A seat engine that cannot double-book: how we test it", "What we learned drawing 40 venues" |
 | Open-source ticketing projects | An integration or plugin for the most active ones; their users are exactly the self-hosting audience |
 | Agencies | A partner page and a referral fee for agencies that build ticketing systems |
@@ -135,7 +135,7 @@ Switching cost is the main obstacle, so reduce it:
 | Guides | Hold, pay, book; bring your own backend; best-available; channels; migrating from seats.io |
 | Reference | Error codes, limits, changelog, security |
 
-The site's sources are `apps/docs/` (D-83): Markdown pages, a build to static files, the API reference generated from the OpenAPI document, and a check that runs the quick start end to end. As built: the quick start, concepts, the server API reference, error codes, limits and the changelog; the renderer reference (generated from the package's declarations where it can be, every sample type-checked), the guides (hold, pay, book; your own backend; React; bot protection), the deployment guide (run by its own check, with TLS, a live WebSocket change through the proxy, and backup and restore) and the designer's keyboard shortcuts (generated). Still to come: the designer's guide for venue staff and the examples (DOC-008, DOC-009); mobile, migration and best-available are later milestones.
+The site's sources are `apps/docs/` (D-83): Markdown pages, a build to static files, the API reference generated from the OpenAPI document, and a check that runs the quick start end to end. As built: the quick start, concepts, the server API reference, error codes, limits and the changelog; the renderer reference (generated from the package's declarations where it can be, every sample type-checked), the guides (hold, pay, book; your own backend; React; bot protection), the deployment guide (run by its own check, with TLS, a live WebSocket change through the proxy, and backup and restore) the designer's guide for venue staff (every task done in the real designer by its own check, every validation finding explained) and the designer's keyboard shortcuts (generated), and four examples in `examples/` (a plain page, React, Next.js and a Node backend), each run against a real server by `bun fixtures/run.ts examples`. Mobile, migration and best-available are later milestones.
 
 ## 8. Support policy
 

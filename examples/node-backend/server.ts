@@ -75,7 +75,11 @@ async function holdToken(session: Session) {
 /** A session token, for a page that makes its own hold token: the event can
  * then require one, so that every hold belongs to a buyer you know. */
 async function seatSession(session: Session) {
-  const token = await cavea.signSessionToken({ sub: session.buyer, event: EVENT, maxObjects: MAX_SEATS });
+  const token = await cavea.signSessionToken({
+    sub: session.buyer,
+    event: EVENT,
+    maxObjects: MAX_SEATS,
+  });
   return { token };
 }
 

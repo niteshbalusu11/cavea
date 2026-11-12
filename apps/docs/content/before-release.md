@@ -51,3 +51,24 @@ In the quick start's `public/index.html`, load the script from there:
 ```
 
 The script fetches the WebAssembly and the glyph atlas from beside itself, so the page's web server now serves all three from the page's own origin.
+
+## The npm packages
+
+The [examples](examples/index.md) and the guides install `{{renderer_package}}`, `@cavea/react` and `{{server_sdk_package}}` from npm. Until they are published, build them and pack each as a tarball, from the `cavea` directory:
+
+```sh
+nix develop -c bun install --frozen-lockfile
+nix develop -c cargo xtask build-web
+mkdir -p ../cavea-packages
+for p in renderer react server-sdk; do
+  (cd packages/$p && nix develop -c bun run build && cd dist && nix develop -c bun pm pack --destination ../../../../cavea-packages)
+done
+```
+
+That writes `cavea-renderer-0.0.0.tgz`, `cavea-react-0.0.0.tgz` and `cavea-server-sdk-0.0.0.tgz` into `cavea-packages`, beside the clone. In a copy of an example, install the ones its `package.json` names from there instead of from npm (the command below has the Next.js example's three, with the copy beside the clone), then carry on with its README:
+
+```sh
+npm install ../cavea-packages/cavea-renderer-0.0.0.tgz ../cavea-packages/cavea-react-0.0.0.tgz ../cavea-packages/cavea-server-sdk-0.0.0.tgz
+```
+
+This replaces the versions in its `package.json` with the tarballs' paths; do not commit that change.

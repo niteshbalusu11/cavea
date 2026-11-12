@@ -31,13 +31,17 @@ async function post(path: string, body?: unknown): Promise<Order> {
 }
 
 const MESSAGES: Record<string, string> = {
-  hold_expired: "Your seats were released before payment finished. You have not been charged; please choose again.",
+  hold_expired:
+    "Your seats were released before payment finished. You have not been charged; please choose again.",
   nothing_held: "Choose at least one seat first.",
 };
 
 export function SeatPicker() {
   // Made once: a new adapter would make a new map.
-  const state = useMemo(() => caveaServer({ baseUrl: SERVER, publishableKey: PUBLISHABLE_KEY, event: EVENT }), []);
+  const state = useMemo(
+    () => caveaServer({ baseUrl: SERVER, publishableKey: PUBLISHABLE_KEY, event: EVENT }),
+    [],
+  );
   const [selection, setSelection] = useState<Selection | null>(null);
   // While a seat is being held, it is not the buyer's yet.
   const [holding, setHolding] = useState(false);
@@ -63,7 +67,7 @@ export function SeatPicker() {
   const shown = seats.reduce((sum, seat) => sum + (seat.price ?? 0), 0);
 
   return (
-    <div className="picker">
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
       <SeatMap
         state={state}
         pricing={pricing}
@@ -72,9 +76,9 @@ export function SeatPicker() {
         onSelectionChange={setSelection}
         onHoldPending={() => setHolding(true)}
         onHoldSettled={() => setHolding(false)}
-        style={{ height: 520 }}
+        style={{ height: 520, flex: "1 1 500px" }}
       />
-      <aside>
+      <aside style={{ flex: "0 1 280px" }}>
         {order === null ? (
           <>
             <h2>Your seats</h2>
@@ -106,13 +110,21 @@ export function SeatPicker() {
               {order.seats.join(", ")}: {pounds(order.total)}
             </p>
             {/* FAKE payment: your payment provider's form goes here. */}
-            <button type="button" disabled={busy} onClick={() => void run(() => post(`/api/orders/${order.orderId}/pay`))}>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void run(() => post(`/api/orders/${order.orderId}/pay`))}
+            >
               Pay {pounds(order.total)} (fake)
             </button>
             <button
               type="button"
               disabled={busy}
-              onClick={() => void run(() => post(`/api/orders/${order.orderId}/cancel`)).then(() => setOrder(null))}
+              onClick={() =>
+                void run(() => post(`/api/orders/${order.orderId}/cancel`)).then(() =>
+                  setOrder(null),
+                )
+              }
             >
               Cancel
             </button>

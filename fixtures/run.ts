@@ -330,7 +330,9 @@ let chartFile = "";
 /** Builds and packs the packages `checks` need, and compiles the theatre preset. */
 async function prepare(checks: string[]): Promise<void> {
   await mkdir(PKGS, { recursive: true });
-  const packages = checks.some((c) => c !== "server-sdk" && c !== "example-node") ? ["renderer", "react"] : [];
+  const packages = checks.some((c) => c !== "server-sdk" && c !== "example-node")
+    ? ["renderer", "react"]
+    : [];
   if (packages.length > 0) {
     try {
       await readFile(join(ROOT, "packages/renderer/wasm/cavea_web_bg.wasm"));
@@ -983,7 +985,10 @@ async function example(name: string): Promise<{ dir: string; env: Record<string,
 }
 
 /** Where the event's seat `label` stands on the server. */
-async function seatStatus(server: { base: string; secret: string; event: string }, label: string): Promise<string> {
+async function seatStatus(
+  server: { base: string; secret: string; event: string },
+  label: string,
+): Promise<string> {
   const res = await fetch(
     `${server.base}/v1/events/${server.event}/objects?label=${encodeURIComponent(label)}`,
     { headers: { authorization: `Bearer ${server.secret}` } },
@@ -1016,7 +1021,11 @@ async function holdOnMap(t: Tab, held: () => Promise<string | null>): Promise<st
 }
 
 /** Waits for `test`, or fails naming `what`. */
-async function until<T>(what: string, test: () => Promise<T | null | undefined>, ms = 15_000): Promise<T> {
+async function until<T>(
+  what: string,
+  test: () => Promise<T | null | undefined>,
+  ms = 15_000,
+): Promise<T> {
   for (const deadline = Date.now() + ms; Date.now() < deadline; await Bun.sleep(200)) {
     const value = await test();
     if (value !== null && value !== undefined) return value;
@@ -1053,25 +1062,41 @@ async function examplePage(): Promise<void> {
     .replace(/const CAVEA_URL = ".*";/, `const CAVEA_URL = "${server.base}";`)
     .replace(/const PUBLISHABLE_KEY = ".*";/, `const PUBLISHABLE_KEY = "${server.key}";`)
     .replace(/const EVENT = ".*";/, `const EVENT = "${server.event}";`)
-    .replace(/<script src="https:\/\/cdn[^"]*"><\/script>/, '<script src="cavea/cavea.min.js"></script>');
+    .replace(
+      /<script src="https:\/\/cdn[^"]*"><\/script>/,
+      '<script src="cavea/cavea.min.js"></script>',
+    );
   await writeFile(page, html);
   await mkdir(join(dir, "cavea"), { recursive: true });
-  for (const f of ["cavea.min.js", "cavea_web_bg.wasm", "glyphs.png"]) await cp(join(DIST, f), join(dir, "cavea", f));
+  for (const f of ["cavea.min.js", "cavea_web_bg.wasm", "glyphs.png"])
+    await cp(join(DIST, f), join(dir, "cavea", f));
   const port = freePort();
-  const proc = start([join(nodePath, "node"), "serve.js"], { cwd: dir, env: { ...env, PORT: String(port) } });
+  const proc = start([join(nodePath, "node"), "serve.js"], {
+    cwd: dir,
+    env: { ...env, PORT: String(port) },
+  });
   await waitFor(proc, /localhost/, 15_000);
   const t = await examplePageTab(`http://localhost:${port}/`);
   t.expect("POST", /^\/api\/checkout$/, 404);
-  const text = (id: string) => t.evaluate<string>(`document.getElementById(${JSON.stringify(id)}).textContent`);
+  const text = (id: string) =>
+    t.evaluate<string>(`document.getElementById(${JSON.stringify(id)}).textContent`);
   const label = await holdOnMap(t, async () => {
-    const first = await t.evaluate<string | null>("document.querySelector('#seats li')?.textContent ?? null");
+    const first = await t.evaluate<string | null>(
+      "document.querySelector('#seats li')?.textContent ?? null",
+    );
     return first?.split(" (")[0] ?? null;
   });
-  const held = await until(`${label} held on the server`, async () => ((await seatStatus(server, label)) === "held" ? true : null));
+  const held = await until(`${label} held on the server`, async () =>
+    (await seatStatus(server, label)) === "held" ? true : null,
+  );
   const total = await text("total");
-  const enabled = await until("Continue enabled", () => t.evaluate<boolean | null>("document.getElementById('continue').disabled ? null : true"));
+  const enabled = await until("Continue enabled", () =>
+    t.evaluate<boolean | null>("document.getElementById('continue').disabled ? null : true"),
+  );
   await t.click({ role: "button", name: "Continue" });
-  const said = await until("the page to say checkout is not available", async () => ((await text("problem")) !== "" ? text("problem") : null));
+  const said = await until("the page to say checkout is not available", async () =>
+    (await text("problem")) !== "" ? text("problem") : null,
+  );
   const posted = t.network.some((n) => /^404 POST .*\/api\/checkout$/.test(n));
   const problems = await pageProblems(t);
   rows.push({
@@ -1092,9 +1117,13 @@ async function exampleReact(): Promise<void> {
     VITE_CAVEA_EVENT: server.event,
   };
   await sh(["sh", "-c", await script(dir, "build")], { cwd: dir, env: vite });
-  const t = await examplePageTab(`${serve([{ prefix: "/", dir: join(dir, "dist") }], { host: "localhost" })}/`);
+  const t = await examplePageTab(
+    `${serve([{ prefix: "/", dir: join(dir, "dist") }], { host: "localhost" })}/`,
+  );
   const label = await holdOnMap(t, async () => {
-    const first = await t.evaluate<string | null>("document.querySelector('section li')?.textContent ?? null");
+    const first = await t.evaluate<string | null>(
+      "document.querySelector('section li')?.textContent ?? null",
+    );
     return first === null ? null : first;
   });
   const seats = await t.evaluate<string>("document.querySelector('section').textContent");
@@ -1119,7 +1148,7 @@ async function exampleReact(): Promise<void> {
 async function exampleNext(): Promise<void> {
   const { dir, env } = await example("nextjs");
   const server = await caveaServer();
-  const next = {
+  const nextEnv = {
     ...env,
     NEXT_TELEMETRY_DISABLED: "1",
     NEXT_PUBLIC_CAVEA_URL: server.base,
@@ -1127,19 +1156,23 @@ async function exampleNext(): Promise<void> {
     NEXT_PUBLIC_CAVEA_EVENT: server.event,
   };
   // The build type-checks and prerenders without the secret key.
-  await sh(["next", "build"], { cwd: dir, env: next });
+  await sh(["next", "build"], { cwd: dir, env: nextEnv });
   const port = freePort();
   const proc = start(["next", "start", "-p", String(port), "-H", "127.0.0.1"], {
     cwd: dir,
-    env: { ...next, CAVEA_SECRET_KEY: server.secret },
+    env: { ...nextEnv, CAVEA_SECRET_KEY: server.secret },
   });
   await waitFor(proc, /Ready|started server/i, 60_000);
   const t = await examplePageTab(`http://127.0.0.1:${port}/`);
   const label = await holdOnMap(t, async () => {
-    const first = await t.evaluate<string | null>("document.querySelector('aside li')?.textContent ?? null");
+    const first = await t.evaluate<string | null>(
+      "document.querySelector('aside li')?.textContent ?? null",
+    );
     return first?.split(",")[0] ?? null;
   });
-  await until(`${label} held on the server`, async () => ((await seatStatus(server, label)) === "held" ? true : null));
+  await until(`${label} held on the server`, async () =>
+    (await seatStatus(server, label)) === "held" ? true : null,
+  );
   await t.click({ role: "button", name: "Checkout" });
   const pay = await t.find({ role: "button", name: /^Pay £[\d.]+ \(fake\)$/ });
   const price = await t.nameOf({ role: "button", name: /^Pay / });
@@ -1176,7 +1209,11 @@ async function exampleNode(): Promise<void> {
     },
   });
   await waitFor(proc, /listening on/, 15_000);
-  const cavea = async (method: string, path: string, body?: unknown): Promise<Record<string, unknown>> => {
+  const cavea = async (
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<Record<string, unknown>> => {
     const res = await fetch(`${server.base}${path}`, {
       method,
       headers: { authorization: `Bearer ${server.secret}`, "content-type": "application/json" },
@@ -1188,7 +1225,10 @@ async function exampleNode(): Promise<void> {
   /** A buyer's browser: its own cookie. */
   const buyer = () => {
     let cookie = "";
-    return async (path: string, body: unknown = {}): Promise<{ status: number; json: Record<string, unknown> }> => {
+    return async (
+      path: string,
+      body: unknown = {},
+    ): Promise<{ status: number; json: Record<string, unknown> }> => {
       const res = await fetch(`http://127.0.0.1:${port}${path}`, {
         method: "POST",
         headers: { "content-type": "application/json", cookie },
@@ -1202,7 +1242,12 @@ async function exampleNode(): Promise<void> {
     data: Array<{ label: string; category: { key: string } }>;
   };
   const seats = free.data;
-  const PRICES: Record<string, number> = { premium: 6500, standard: 4500, value: 2500, access: 4500 };
+  const PRICES: Record<string, number> = {
+    premium: 6500,
+    standard: 4500,
+    value: 2500,
+    access: 4500,
+  };
   const seen: string[] = [];
   const expect = (ok: boolean, what: string): void => {
     if (!ok) throw new Error(what);
@@ -1211,27 +1256,53 @@ async function exampleNode(): Promise<void> {
   // Hold, price, pay, book; pay again.
   const a = buyer();
   const token = String((await a("/api/hold-token")).json["holdToken"]);
-  expect(String((await a("/api/hold-token")).json["holdToken"]) === token, "one hold token per session");
+  expect(
+    String((await a("/api/hold-token")).json["holdToken"]) === token,
+    "one hold token per session",
+  );
   const two = seats.slice(0, 2);
-  await cavea("POST", `/v1/events/${server.event}/hold`, { hold_token: token, objects: two.map((s) => s.label) });
+  await cavea("POST", `/v1/events/${server.event}/hold`, {
+    hold_token: token,
+    objects: two.map((s) => s.label),
+  });
   const order = await a("/api/checkout");
   const total = two.reduce((sum, s) => sum + (PRICES[s.category.key] ?? 0), 0);
-  expect(order.status === 200 && order.json["total"] === total, `checkout priced ${total} from the categories`);
+  expect(
+    order.status === 200 && order.json["total"] === total,
+    `checkout priced ${total} from the categories`,
+  );
   const id = String(order.json["orderId"]);
   const paid = await a(`/api/orders/${id}/pay`);
   const statuses = await Promise.all(two.map((s) => seatStatus(server, s.label)));
-  expect(paid.json["status"] === "booked" && statuses.every((s) => s === "booked"), "paid and booked on the server");
-  expect((await a(`/api/orders/${id}/pay`)).json["status"] === "booked", "paying again answers booked");
-  expect((await buyer()(`/api/orders/${id}/pay`)).status === 404, "another buyer cannot pay the order");
+  expect(
+    paid.json["status"] === "booked" && statuses.every((s) => s === "booked"),
+    "paid and booked on the server",
+  );
+  expect(
+    (await a(`/api/orders/${id}/pay`)).json["status"] === "booked",
+    "paying again answers booked",
+  );
+  expect(
+    (await buyer()(`/api/orders/${id}/pay`)).status === 404,
+    "another buyer cannot pay the order",
+  );
   // The hold lost during the payment: refunded, nothing booked.
   const b = buyer();
   const lost = seats[2]?.label ?? "";
   const tokenB = String((await b("/api/hold-token")).json["holdToken"]);
   await cavea("POST", `/v1/events/${server.event}/hold`, { hold_token: tokenB, objects: [lost] });
   const orderB = String((await b("/api/checkout")).json["orderId"]);
-  await cavea("POST", `/v1/events/${server.event}/release`, { hold_token: tokenB, objects: [lost] });
+  await cavea("POST", `/v1/events/${server.event}/release`, {
+    hold_token: tokenB,
+    objects: [lost],
+  });
   const refused = await b(`/api/orders/${orderB}/pay`);
-  expect(refused.status === 409 && refused.json["error"] === "hold_expired" && (await seatStatus(server, lost)) === "free", "a hold lost during payment is refunded, not booked");
+  expect(
+    refused.status === 409 &&
+      refused.json["error"] === "hold_expired" &&
+      (await seatStatus(server, lost)) === "free",
+    "a hold lost during payment is refunded, not booked",
+  );
   // Cancelled: released at once.
   const c = buyer();
   const kept = seats[3]?.label ?? "";
@@ -1239,15 +1310,25 @@ async function exampleNode(): Promise<void> {
   await cavea("POST", `/v1/events/${server.event}/hold`, { hold_token: tokenC, objects: [kept] });
   const orderC = String((await c("/api/checkout")).json["orderId"]);
   const cancelled = await c(`/api/orders/${orderC}/cancel`);
-  expect(cancelled.json["status"] === "cancelled" && (await seatStatus(server, kept)) === "free", "a cancelled order's seats are free");
+  expect(
+    cancelled.json["status"] === "cancelled" && (await seatStatus(server, kept)) === "free",
+    "a cancelled order's seats are free",
+  );
   // An expired (here: unknown) hold token at checkout.
   const gone = await buyer()("/api/checkout", { holdToken: "an-expired-hold-token" });
-  expect(gone.status === 409 && gone.json["error"] === "hold_expired", "an ended hold at checkout is hold_expired");
+  expect(
+    gone.status === 409 && gone.json["error"] === "hold_expired",
+    "an ended hold at checkout is hold_expired",
+  );
   // A session token the server takes for a page's own hold token.
   const session = String((await buyer()("/api/seat-session")).json["token"]);
   const created = await fetch(`${server.base}/v1/public/hold-tokens`, {
     method: "POST",
-    headers: { authorization: `Bearer ${server.key}`, "content-type": "application/json", "cavea-session": session },
+    headers: {
+      authorization: `Bearer ${server.key}`,
+      "content-type": "application/json",
+      "cavea-session": session,
+    },
     body: JSON.stringify({ event: server.event }),
   });
   expect(created.status === 201 || created.status === 200, "the signed session token is accepted");
@@ -1284,7 +1365,9 @@ const CHECKS: Record<string, () => Promise<void>> = {
 // `examples` names the four example checks.
 const wanted = process.argv
   .slice(2)
-  .flatMap((w) => (w === "examples" ? ["example-page", "example-react", "example-next", "example-node"] : [w]));
+  .flatMap((w) =>
+    w === "examples" ? ["example-page", "example-react", "example-next", "example-node"] : [w],
+  );
 const unknown = wanted.filter((w) => !(w in CHECKS));
 if (unknown.length > 0) {
   console.error(`unknown check ${unknown.join(", ")}; the checks are: ${ALL}`);

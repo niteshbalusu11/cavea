@@ -53,17 +53,23 @@ export function findings(codes: string[], page: string): string[] {
   for (const code of codes) {
     const title = titles[`validation.${code}`];
     if (title === undefined) {
-      problems.push(`finding ${code} has no title in the console (validation.${code} in messages.ts)`);
+      problems.push(
+        `finding ${code} has no title in the console (validation.${code} in messages.ts)`,
+      );
       continue;
     }
     expected.add(title);
     const section = sections.get(title);
-    const group = code.startsWith("W") ? "Warnings" : "Errors";
+    const under = code.startsWith("W") ? "Warnings" : "Errors";
     if (section === undefined) {
-      problems.push(`designer/checking.md does not explain ${code}: add "### ${title}" under "## ${group}"`);
-    } else if (section.group !== group) {
-      problems.push(`designer/checking.md: "${title}" (${code}) belongs under "## ${group}"`);
-    } else if (!section.text.includes(code === "unsupported" ? `Code "${code}"` : `Code ${code}.`)) {
+      problems.push(
+        `designer/checking.md does not explain ${code}: add "### ${title}" under "## ${under}"`,
+      );
+    } else if (section.group !== under) {
+      problems.push(`designer/checking.md: "${title}" (${code}) belongs under "## ${under}"`);
+    } else if (
+      !section.text.includes(code === "unsupported" ? `Code "${code}"` : `Code ${code}.`)
+    ) {
       problems.push(`designer/checking.md: the section "${title}" does not name its code ${code}`);
     }
   }

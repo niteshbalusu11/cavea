@@ -65,6 +65,8 @@ const cavea = new Cavea({
 const token = await cavea.signSessionToken({ sub: buyer.id, event: "opening-night", maxObjects: 6 });
 ```
 
+The [Node backend example](../examples/index.md) has such a route, `POST /api/seat-session`.
+
 `sub` is your id for the buyer: any stable string, never their email. The token expires (in 15 minutes unless you say otherwise); the map asks again when it does.
 
 ### 3. Give it to the map

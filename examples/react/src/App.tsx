@@ -37,7 +37,8 @@ export function App() {
     <main style={{ maxWidth: 1000, margin: "0 auto", padding: 16, fontFamily: "Georgia, serif" }}>
       <h1>Opening night</h1>
       <label>
-        <input type="checkbox" checked={dark} onChange={(e) => setDark(e.target.checked)} /> Dark map
+        <input type="checkbox" checked={dark} onChange={(e) => setDark(e.target.checked)} /> Dark
+        map
       </label>
       <SeatMap
         state={state}

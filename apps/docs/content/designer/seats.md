@@ -27,6 +27,8 @@ Drag the block to move it, or type its position in the inspector: **X** and **Y*
 
 Most theatres curve their rows towards the stage. With the block selected, a small diamond sits just behind the middle of its front row: the curve handle.
 
+![The curve handle: a small diamond just behind the middle of the front row](../images/designer-curve-handle.webp)
+
 1. Drag the diamond back, away from the stage, to curve the rows around it. The status bar shows the curve's depth as you drag.
 2. Let go when the rows follow the plan's curve.
 

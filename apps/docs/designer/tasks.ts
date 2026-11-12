@@ -90,7 +90,8 @@ async function canvas(t: Tab): Promise<{ id: number; box: [number, number, numbe
 }
 
 const statusBar = (t: Tab): Promise<number> => t.find({ role: "contentinfo" });
-const inspector = (t: Tab): Promise<number> => t.find({ role: "region", name: msg("panel.inspector") });
+const inspector = (t: Tab): Promise<number> =>
+  t.find({ role: "region", name: msg("panel.inspector") });
 
 /** Waits until the status bar's text matches. */
 async function status(t: Tab, what: string, test: (text: string) => boolean): Promise<string> {
@@ -187,7 +188,9 @@ async function calibrate(t: Tab): Promise<(x: number, y: number) => [number, num
   const { box } = await canvas(t);
   const read = async (px: number, py: number): Promise<[number, number]> => {
     await t.mouse("mouseMoved", px, py);
-    const text = await status(t, "the pointer's position", (x) => /x -?[\d,.]+ +y -?[\d,.]+/.test(x));
+    const text = await status(t, "the pointer's position", (x) =>
+      /x -?[\d,.]+ +y -?[\d,.]+/.test(x),
+    );
     const m = text.match(/x (-?[\d,.]+) +y (-?[\d,.]+)/);
     return [Number((m?.[1] ?? "").replace(/,/g, "")), Number((m?.[2] ?? "").replace(/,/g, ""))];
   };
@@ -248,8 +251,10 @@ export const TASKS: Task[] = [
       await until("the inspector to show the picture", async () =>
         (await t.text(panel)).includes(msg("image.referenceNote")),
       );
-      await until("the picture to finish uploading", async () =>
-        !(await t.text(await statusBar(t))).includes(msg("image.uploadingCount", { n: 1 })),
+      await until(
+        "the picture to finish uploading",
+        async () =>
+          !(await t.text(await statusBar(t))).includes(msg("image.uploadingCount", { n: 1 })),
       );
       await chord(t, "0", CTRL);
       await Bun.sleep(500);
@@ -298,8 +303,14 @@ export const TASKS: Task[] = [
       // The panels' parts, collapsed and back.
       const side = await t.find({ role: "complementary" });
       await look(t, "screen");
-      await t.click({ role: "button", name: msg("panel.collapse", { panel: msg("panel.inspector") }) });
-      await t.click({ role: "button", name: msg("panel.expand", { panel: msg("panel.inspector") }) });
+      await t.click({
+        role: "button",
+        name: msg("panel.collapse", { panel: msg("panel.inspector") }),
+      });
+      await t.click({
+        role: "button",
+        name: msg("panel.expand", { panel: msg("panel.inspector") }),
+      });
       void side;
       // Dark, then back to light, from the menu.
       const banner = await t.find({ role: "banner" });
@@ -400,17 +411,23 @@ export const TASKS: Task[] = [
           (await t.text(await inspector(t))).includes(msg("inspector.settings")),
         );
         await field(t, msg("field.labelTemplate"), value);
-        await t.click({ role: "treeitem", name: /^Row block/ }, await t.find({ role: "tree", name: msg("layers.label") }));
+        await t.click(
+          { role: "treeitem", name: /^Row block/ },
+          await t.find({ role: "tree", name: msg("layers.label") }),
+        );
       };
       await template("{row}-{seat}");
       const plain = await first();
-      check(plain === "A-1", `with the Seat label {row}-{seat}, the first seat is A-1, not ${plain}`);
+      check(
+        plain === "A-1",
+        `with the Seat label {row}-{seat}, the first seat is A-1, not ${plain}`,
+      );
       await template("{section}-{row}-{seat}");
     },
   },
   {
     name: "seats.md: the Insert row block form",
-    async run({ t, shoot, look }) {
+    async run({ t, shoot }) {
       const banner = await t.find({ role: "banner" });
       await t.click({ role: "button", name: msg("menu.label") }, banner);
       await t.click({ role: "menuitem", name: msg("command.insertRowBlock") });
@@ -449,8 +466,14 @@ export const TASKS: Task[] = [
       );
       await saveState(t, msg("save.saved"));
       await t.goto(await t.evaluate<string>("location.href"));
-      await t.find({ role: "application", name: msg("canvas.label", { name: CHART.name }) }, undefined, 30_000);
-      await status(t, "124 seats after the reload", (x) => x.includes(msg("status.seats", { n: 124 })));
+      await t.find(
+        { role: "application", name: msg("canvas.label", { name: CHART.name }) },
+        undefined,
+        30_000,
+      );
+      await status(t, "124 seats after the reload", (x) =>
+        x.includes(msg("status.seats", { n: 124 })),
+      );
     },
   },
   {
@@ -464,8 +487,22 @@ export const TASKS: Task[] = [
         const row = await t.find({ role: "treeitem", name: item }, tree);
         const [x, y] = await t.centre(row);
         await t.mouse("mouseMoved", x, y);
-        await t.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "right", buttons: 2, clickCount: 1 });
-        await t.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "right", buttons: 0, clickCount: 1 });
+        await t.send("Input.dispatchMouseEvent", {
+          type: "mousePressed",
+          x,
+          y,
+          button: "right",
+          buttons: 2,
+          clickCount: 1,
+        });
+        await t.send("Input.dispatchMouseEvent", {
+          type: "mouseReleased",
+          x,
+          y,
+          button: "right",
+          buttons: 0,
+          clickCount: 1,
+        });
         await look(t, `context-${label}`);
         await t.click({ role: "menuitem", name: msg("layers.group") });
         await Bun.sleep(300);
@@ -486,7 +523,10 @@ export const TASKS: Task[] = [
       await t.find({ role: "heading", name: msg("panel.numbering") }).catch(() => undefined);
       await t.enter({ role: "textbox", name: msg("numbering.start"), nth: 0 }, "J", panel);
       await t.key("Tab");
-      await t.click({ role: "button", name: new RegExp(`^${msg("numbering.scheme")} `), nth: 1 }, panel);
+      await t.click(
+        { role: "button", name: new RegExp(`^${msg("numbering.scheme")} `), nth: 1 },
+        panel,
+      );
       await t.click({ role: "option", name: msg("scheme.odd") });
       await until("the preview to read J 1 3 5 7 9 11", async () =>
         /J 1 3 5 7 9 11/.test(await t.text(panel)),
@@ -497,8 +537,11 @@ export const TASKS: Task[] = [
       await look(t, "numbering");
       await shoot(t, "numbering", { x: 240, y: 40, width: 1200, height: 620 }, 0.7);
       await t.click({ role: "button", name: msg("numbering.apply") }, panel);
-      await until("the box's labels to be the applied ones", async () =>
-        /J 1 3 5 7 9 11/.test(await t.text(panel)) && (await t.text(panel)).includes(msg("numbering.untouched")),
+      await until(
+        "the box's labels to be the applied ones",
+        async () =>
+          /J 1 3 5 7 9 11/.test(await t.text(panel)) &&
+          (await t.text(panel)).includes(msg("numbering.untouched")),
       );
       await t.click({ role: "button", name: msg("panel.back") });
     },
@@ -538,7 +581,10 @@ export const TASKS: Task[] = [
       await t.click({ role: "button", name: msg("categories.edit", { label: "Box" }) }, panel);
       await add("Wheelchair space", "wheelchair", "#0F766E");
       await t.click({ role: "checkbox", name: msg("categories.accessible") }, panel);
-      await t.click({ role: "button", name: msg("categories.edit", { label: "Wheelchair space" }) }, panel);
+      await t.click(
+        { role: "button", name: msg("categories.edit", { label: "Wheelchair space" }) },
+        panel,
+      );
       // The box's seats: its section's category, in the inspector.
       await t.click({ role: "tab", name: msg("panel.layers") });
       const tree = await t.find({ role: "tree", name: msg("layers.label") });
@@ -573,7 +619,11 @@ export const TASKS: Task[] = [
       const at = await calibrate(t);
       const a1 = at(ends[0] ?? 0, y);
       // From the section: its block, the block's rows, then the row's seats.
-      for (const level of [msg("kind.rowBlock"), msg("inspector.level.rows"), msg("inspector.level.seats")]) {
+      for (const level of [
+        msg("kind.rowBlock"),
+        msg("inspector.level.rows"),
+        msg("inspector.level.seats"),
+      ]) {
         await t.clickAt(...a1);
         await t.clickAt(...a1);
         await until(`the inspector to say ${level}`, async () =>
@@ -613,7 +663,9 @@ export const TASKS: Task[] = [
       // The stage: a rectangle over the plan's, and a text on it.
       await t.click({ role: "button", name: msg("tool.rect") });
       await t.drag(at(-400, -570), at(400, -390), 10);
-      await status(t, "the stage as a sixth object", (x) => x.includes(msg("status.nodes", { n: 6 })));
+      await status(t, "the stage as a sixth object", (x) =>
+        x.includes(msg("status.nodes", { n: 6 })),
+      );
       await t.click({ role: "tab", name: msg("panel.layers") });
       check(
         (await t.has({ role: "treeitem", name: /^Box A 1/ })) &&
@@ -637,35 +689,55 @@ export const TASKS: Task[] = [
       );
       KNOWN.push("the Text tool opens no field to type in");
       const floors = (await draft(t))["floors"] as unknown[];
-      check(floors.length === 0, "a chart started from scratch now has a floor: update arranging.md and checking.md");
+      check(
+        floors.length === 0,
+        "a chart started from scratch now has a floor: update arranging.md and checking.md",
+      );
       KNOWN.push("a chart started from scratch has no floor, so no focal point");
       // A second box: Box A duplicated, moved across, its own label.
       await t.click({ role: "tab", name: msg("panel.layers") });
       const tree = await t.find({ role: "tree", name: msg("layers.label") });
-      await t.click({ role: "treeitem", name: /^Box A/ }, await t.find({ role: "tree", name: msg("layers.label") }));
-      await chord(t, "d", CTRL);
-      await until("a copy of the box", async () =>
-        (await t.all({ role: "treeitem", name: /^Box A/ }, await t.find({ role: "tree", name: msg("layers.label") }))).length === 2,
+      await t.click(
+        { role: "treeitem", name: /^Box A/ },
+        await t.find({ role: "tree", name: msg("layers.label") }),
       );
-      const x = await t.value(await t.find({ role: "textbox", name: msg("field.x") }, await inspector(t)));
+      await chord(t, "d", CTRL);
+      await until(
+        "a copy of the box",
+        async () =>
+          (
+            await t.all(
+              { role: "treeitem", name: /^Box A/ },
+              await t.find({ role: "tree", name: msg("layers.label") }),
+            )
+          ).length === 2,
+      );
+      const x = await t.value(
+        await t.find({ role: "textbox", name: msg("field.x") }, await inspector(t)),
+      );
       await field(t, msg("field.x"), String(-Number(x.replace(/,/g, "")) + 50));
       await field(t, msg("field.rotation"), "0");
       void tree;
       await look(t, "duplicated");
-      await status(t, "136 seats", (x) => x.includes(msg("status.seats", { n: 136 })));
+      await status(t, "136 seats", (bar) => bar.includes(msg("status.seats", { n: 136 })));
       // Its labels are the original's: validation says so, with an error.
       await t.click({ role: "tab", name: new RegExp(`^${msg("panel.validation")}`) });
-      const validation = await t.find({ role: "tabpanel", name: new RegExp(`^${msg("panel.validation")}`) });
-      await until("a Duplicate label error", async () =>
-        (await t.text(validation)).includes(msg("validation.E001")),
+      const validation = await t.find({
+        role: "tabpanel",
+        name: new RegExp(`^${msg("panel.validation")}`),
+      });
+      await until(
+        "a Duplicate label error",
+        async () => (await t.text(validation)).includes(msg("validation.E001")),
         30_000,
       );
       await quiet(t);
       await look(t, "duplicate-error");
       await shoot(t, "validation", await around(t, [validation], 0));
       await field(t, msg("field.label"), "Box B");
-      await until("the error to go", async () =>
-        !(await t.text(validation)).includes(msg("validation.E001")),
+      await until(
+        "the error to go",
+        async () => !(await t.text(validation)).includes(msg("validation.E001")),
         30_000,
       );
       // Align: both boxes' top edges level.
@@ -673,8 +745,24 @@ export const TASKS: Task[] = [
       const layers = await t.find({ role: "tree", name: msg("layers.label") });
       await t.click({ role: "treeitem", name: /^Box A/ }, layers);
       const [bx, by] = await t.centre(await t.find({ role: "treeitem", name: /^Box B/ }, layers));
-      await t.send("Input.dispatchMouseEvent", { type: "mousePressed", x: bx, y: by, button: "left", buttons: 1, clickCount: 1, modifiers: CTRL });
-      await t.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: bx, y: by, button: "left", buttons: 0, clickCount: 1, modifiers: CTRL });
+      await t.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: bx,
+        y: by,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+        modifiers: CTRL,
+      });
+      await t.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: bx,
+        y: by,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+        modifiers: CTRL,
+      });
       await status(t, "2 selected", (s) => s.includes(msg("status.selected", { n: 2 })));
       await command(t, msg("command.align.top"));
       // Layers: the picture hidden while checking the seats alone, then shown.
@@ -702,7 +790,10 @@ export const TASKS: Task[] = [
     name: "checking.md: the chart valid",
     async run({ t, look }) {
       await t.click({ role: "tab", name: new RegExp(`^${msg("panel.validation")}`) });
-      const panel = await t.find({ role: "tabpanel", name: new RegExp(`^${msg("panel.validation")}`) });
+      const panel = await t.find({
+        role: "tabpanel",
+        name: new RegExp(`^${msg("panel.validation")}`),
+      });
       const text = await until(
         "validation to finish",
         async () => {
@@ -714,7 +805,9 @@ export const TASKS: Task[] = [
       await look(t, "checked");
       // No error; the one warning left is the focal point the chart cannot hold.
       check(
-        text.includes(`${msg("validation.errors")} 0`) && text.includes(`${msg("validation.warnings")} 1`) && text.includes("W102"),
+        text.includes(`${msg("validation.errors")} 0`) &&
+          text.includes(`${msg("validation.warnings")} 1`) &&
+          text.includes("W102"),
         `no errors and only W102 left, not: ${text}`,
       );
     },
@@ -736,7 +829,10 @@ export const TASKS: Task[] = [
       };
       const nudge = async (): Promise<void> => {
         await t.click({ role: "tab", name: msg("panel.layers") });
-        await t.click({ role: "treeitem", name: /^Box B/ }, await t.find({ role: "tree", name: msg("layers.label") }));
+        await t.click(
+          { role: "treeitem", name: /^Box B/ },
+          await t.find({ role: "tree", name: msg("layers.label") }),
+        );
         const c = await canvas(t);
         await t.call(c.id, "function () { this.focus(); }");
         await t.key("ArrowLeft");
@@ -769,7 +865,11 @@ export const TASKS: Task[] = [
         await saveState(t, msg("save.offline"));
         const url = await t.evaluate<string>("location.href");
         await t.send("Page.navigate", { url });
-        const dialog = await t.find({ role: DIALOG, name: msg("recovery.title") }, undefined, 30_000);
+        const dialog = await t.find(
+          { role: DIALOG, name: msg("recovery.title") },
+          undefined,
+          30_000,
+        );
         await shoot(t, "recovery", await around(t, [dialog], 0));
         await t.send("Fetch.disable");
         await t.click({ role: "button", name: msg("recovery.restore") }, dialog);
@@ -786,7 +886,10 @@ export const TASKS: Task[] = [
       const { t, browser, owner, shoot, look } = g;
       const url = await t.evaluate<string>("location.href");
       const base = new URL(url).origin;
-      const signIn = async (name: string, who: { email: string; password: string }): Promise<Tab> => {
+      const signIn = async (
+        name: string,
+        who: { email: string; password: string },
+      ): Promise<Tab> => {
         const tab = await Tab.open(browser, name, 1440, 900);
         tab.allow("GET", /^\/favicon\.ico$/, 404);
         tab.expect("GET", /^\/console\/api\/me$/, 401);
@@ -794,13 +897,20 @@ export const TASKS: Task[] = [
         await tab.enter({ role: "textbox", name: msg("signIn.email") }, who.email);
         await tab.enter({ role: "textbox", name: msg("signIn.password") }, who.password);
         await tab.click({ role: "button", name: msg("signIn.submit") });
-        await tab.find({ role: "button", name: msg("user.menu", { email: who.email }) }, undefined, 30_000);
+        await tab.find(
+          { role: "button", name: msg("user.menu", { email: who.email }) },
+          undefined,
+          30_000,
+        );
         await tab.find({ role: "link", name: CHART.name }, undefined, 30_000);
         return tab;
       };
       const nudge = async (tab: Tab): Promise<void> => {
         await tab.click({ role: "tab", name: msg("panel.layers") });
-        await tab.click({ role: "treeitem", name: /^Box B/ }, await tab.find({ role: "tree", name: msg("layers.label") }));
+        await tab.click(
+          { role: "treeitem", name: /^Box B/ },
+          await tab.find({ role: "tree", name: msg("layers.label") }),
+        );
         const c = await canvas(tab);
         await tab.call(c.id, "function () { this.focus(); }");
         await tab.key("ArrowLeft");
@@ -814,7 +924,10 @@ export const TASKS: Task[] = [
         await Bun.sleep(3000);
 
         const bar = await same.text(await same.find({ role: "banner" }));
-        check(!bar.includes(msg("save.readOnly")), `the same person's second browser opens the chart to edit, not: ${bar}`);
+        check(
+          !bar.includes(msg("save.readOnly")),
+          `the same person's second browser opens the chart to edit, not: ${bar}`,
+        );
         await nudge(same);
         await saveState(same, msg("save.saved"));
         await t.send("Page.bringToFront");
@@ -826,7 +939,9 @@ export const TASKS: Task[] = [
         await t.click({ role: "button", name: msg("conflict.keepMine") }, resolve);
         await t.gone({ role: DIALOG });
         await saveState(t, msg("save.saved"));
-        KNOWN.push("one person in two browsers can edit a chart in both, and the second save is refused");
+        KNOWN.push(
+          "one person in two browsers can edit a chart in both, and the second save is refused",
+        );
       } finally {
         await same.close();
         await t.send("Page.bringToFront");
@@ -841,17 +956,30 @@ export const TASKS: Task[] = [
           const r = await fetch("/v1/charts/${CHART.key}/lock", { headers: { "cavea-workspace": me.workspaces[0].id } });
           return r.json();
         })()`);
-      check((await lockNow()).lock === null, "closing the second browser no longer frees the lock: update the note in saving.md");
-      KNOWN.push("closing a chart in one of a person's two browsers frees the editing lock under the other, which saves on without it");
+      check(
+        (await lockNow()).lock === null,
+        "closing the second browser no longer frees the lock: update the note in saving.md",
+      );
+      KNOWN.push(
+        "closing a chart in one of a person's two browsers frees the editing lock under the other, which saves on without it",
+      );
       await t.goto(url);
       await canvas(t);
-      await until("the reopened chart to hold the lock", async () => ((await lockNow()).lock?.email === owner.email ? true : undefined));
+      await until("the reopened chart to hold the lock", async () =>
+        (await lockNow()).lock?.email === owner.email ? true : undefined,
+      );
       // A colleague: an editor invited from the console's Settings.
-      const colleague = { email: "events@example.org", password: `colleague ${Math.random().toString(36).slice(2)}` };
+      const colleague = {
+        email: "events@example.org",
+        password: `colleague ${Math.random().toString(36).slice(2)}`,
+      };
       const inviter = await signIn("inviter", owner);
       let link = "";
       try {
-        await inviter.click({ role: "link", name: msg("nav.settings") }, await inviter.find({ role: "navigation", name: msg("nav.label") }));
+        await inviter.click(
+          { role: "link", name: msg("nav.settings") },
+          await inviter.find({ role: "navigation", name: msg("nav.label") }),
+        );
         await inviter.click({ role: "tab", name: msg("settings.members") });
         await inviter.click({ role: "button", name: msg("invite.new") });
         const form = await inviter.find({ role: DIALOG, name: msg("invite.title") });
@@ -859,8 +987,13 @@ export const TASKS: Task[] = [
         await inviter.key("Tab");
         await inviter.type(msg("role.editor").slice(0, 1).toLowerCase());
         await inviter.click({ role: "button", name: msg("invite.create") }, form);
-        const shown = await inviter.find({ role: DIALOG, name: msg("invite.shownTitle", { email: colleague.email }) });
-        link = await inviter.value(await inviter.find({ role: "textbox", name: msg("invite.link") }, shown));
+        const shown = await inviter.find({
+          role: DIALOG,
+          name: msg("invite.shownTitle", { email: colleague.email }),
+        });
+        link = await inviter.value(
+          await inviter.find({ role: "textbox", name: msg("invite.link") }, shown),
+        );
       } finally {
         await inviter.close();
       }
@@ -873,7 +1006,11 @@ export const TASKS: Task[] = [
         await other.enter({ role: "textbox", name: msg("setup.password") }, colleague.password);
         await other.enter({ role: "textbox", name: msg("setup.confirm") }, colleague.password);
         await other.click({ role: "button", name: msg("accept.submit") });
-        await other.find({ role: "button", name: msg("user.menu", { email: colleague.email }) }, undefined, 30_000);
+        await other.find(
+          { role: "button", name: msg("user.menu", { email: colleague.email }) },
+          undefined,
+          30_000,
+        );
         await other.goto(url);
         const banner = await other.find({ role: "banner" }, undefined, 30_000);
         const editing = `Read-only: ${owner.email} is editing`;
@@ -881,30 +1018,54 @@ export const TASKS: Task[] = [
           (await other.text(banner)).includes(editing),
         );
         await quiet(other);
-        await shoot(other, "read-only", { ...(await around(other, [banner], 0)), x: 0, width: 1440 }, 0.75);
+        await shoot(
+          other,
+          "read-only",
+          { ...(await around(other, [banner], 0)), x: 0, width: 1440 },
+          0.75,
+        );
         await other.click({ role: "button", name: msg("lock.takeOver") }, banner);
-        const confirm = await other.find({ role: DIALOG, name: msg("lock.confirmTitle", { who: owner.email }) });
+        const confirm = await other.find({
+          role: DIALOG,
+          name: msg("lock.confirmTitle", { who: owner.email }),
+        });
         await other.click({ role: "button", name: msg("lock.takeOverConfirm") }, confirm);
         await other.gone({ role: DIALOG });
         await until(
           "the colleague's designer to be editable",
-          async () => ((await other.text(await other.find({ role: "banner" }))).includes("Read-only") ? undefined : true),
+          async () =>
+            (await other.text(await other.find({ role: "banner" }))).includes("Read-only")
+              ? undefined
+              : true,
           30_000,
         ).catch(async (e: unknown) => {
-          await Bun.write(join(g.out, "takeover.fail.txt"), `${other.network.slice(-20).join("\n")}\n${await other.outline()}`);
+          await Bun.write(
+            join(g.out, "takeover.fail.txt"),
+            `${other.network.slice(-20).join("\n")}\n${await other.outline()}`,
+          );
           throw e;
         });
         // The owner's designer is told, and is read-only now.
         await t.send("Page.bringToFront");
-        const told = await t.find({ role: DIALOG, name: msg("lock.lostTitle", { who: colleague.email }) }, undefined, 30_000);
+        const told = await t.find(
+          { role: DIALOG, name: msg("lock.lostTitle", { who: colleague.email }) },
+          undefined,
+          30_000,
+        );
         await shoot(t, "taken-over", await around(t, [told], 0));
         await t.click({ role: "button", name: msg("lock.takeOver") }, told);
-        const back = await t.find({ role: DIALOG, name: msg("lock.confirmTitle", { who: colleague.email }) });
+        const back = await t.find({
+          role: DIALOG,
+          name: msg("lock.confirmTitle", { who: colleague.email }),
+        });
         await t.click({ role: "button", name: msg("lock.takeOverConfirm") }, back);
         await t.gone({ role: DIALOG });
         await until(
           "the owner's designer to be editable again",
-          async () => ((await t.text(await t.find({ role: "banner" }))).includes("Read-only") ? undefined : true),
+          async () =>
+            (await t.text(await t.find({ role: "banner" }))).includes("Read-only")
+              ? undefined
+              : true,
           30_000,
         );
       } finally {
@@ -927,11 +1088,18 @@ export const TASKS: Task[] = [
       await t.click({ role: "button", name: msg("action.close") }, preview);
       await t.gone({ role: DIALOG });
       const publish = async (version: number, seats: number): Promise<void> => {
-        await t.click({ role: "button", name: msg("topbar.publish") }, await t.find({ role: "banner" })).catch(async (e: unknown) => {
-          g.log(`  publish refused: ${await t.text(await t.find({ role: "banner" }))} | ${await t.text(await statusBar(t))}`);
-          throw e;
+        await t
+          .click({ role: "button", name: msg("topbar.publish") }, await t.find({ role: "banner" }))
+          .catch(async (e: unknown) => {
+            g.log(
+              `  publish refused: ${await t.text(await t.find({ role: "banner" }))} | ${await t.text(await statusBar(t))}`,
+            );
+            throw e;
+          });
+        const dialog = await t.find({
+          role: DIALOG,
+          name: msg("publish.title", { name: CHART.name }),
         });
-        const dialog = await t.find({ role: DIALOG, name: msg("publish.title", { name: CHART.name }) });
         await t.click({ role: "button", name: msg("publish.action") }, dialog);
         const done = msg("publish.done", { version, seats: String(seats) });
         await until(`“${done}”`, async () => (await t.text(dialog)).includes(done), 30_000);
@@ -943,14 +1111,19 @@ export const TASKS: Task[] = [
       await publish(1, 136);
       // The charts list's picture is made in the background after publishing,
       // by this page: leaving at once would leave the version without one.
-      await until("the thumbnail to be attached", async () =>
-        t.network.some((n) => /^200 \w+ .*\/versions\/1\/thumbnail/.test(n)) ? true : undefined,
+      await until(
+        "the thumbnail to be attached",
+        async () =>
+          t.network.some((n) => /^200 \w+ .*\/versions\/1\/thumbnail/.test(n)) ? true : undefined,
         30_000,
       );
       // The console: the chart's picture in the list, its versions, an event on version 1.
       await t.click({ role: "button", name: msg("menu.label") }, banner);
       await t.click({ role: "menuitem", name: msg("menu.console") });
-      const picture = { role: "image", name: msg("charts.thumbnail", { name: CHART.name }) } as const;
+      const picture = {
+        role: "image",
+        name: msg("charts.thumbnail", { name: CHART.name }),
+      } as const;
       await t.find({ role: "heading", name: msg("charts.title") });
       await Bun.sleep(2000);
       if (!(await t.has(picture))) {
@@ -963,19 +1136,31 @@ export const TASKS: Task[] = [
       const versions = await t.find({ role: "table", name: msg("chart.versions") });
       await shoot(t, "versions", await around(t, [versions], 8));
       await t.click({ role: "button", name: msg("chart.createEvent") }, versions);
-      const form = await t.find({ role: DIALOG, name: msg("events.newFromTitle", { name: CHART.name }) });
+      const form = await t.find({
+        role: DIALOG,
+        name: msg("events.newFromTitle", { name: CHART.name }),
+      });
       await t.enter({ role: "textbox", name: msg("events.name") }, "Spring Concert", form);
       await t.click({ role: "button", name: msg("events.create") }, form);
       await t.gone({ role: DIALOG });
       // A change and a second version: the event keeps the first.
       await t.click({ role: "link", name: msg("charts.open") });
-      await t.find({ role: "application", name: msg("canvas.label", { name: CHART.name }) }, undefined, 30_000);
+      await t.find(
+        { role: "application", name: msg("canvas.label", { name: CHART.name }) },
+        undefined,
+        30_000,
+      );
       await t.click({ role: "tab", name: msg("panel.layers") });
-      await t.click({ role: "treeitem", name: /^Box B/ }, await t.find({ role: "tree", name: msg("layers.label") }));
+      await t.click(
+        { role: "treeitem", name: /^Box B/ },
+        await t.find({ role: "tree", name: msg("layers.label") }),
+      );
       await field(t, msg("field.rotation"), "-5");
       await saveState(t, msg("save.saved"));
       await publish(2, 136);
-      const events = await t.evaluate<Array<{ name: string; version: { number: number } }>>(`(async () => {
+      const events = await t.evaluate<
+        Array<{ name: string; version: { number: number } }>
+      >(`(async () => {
         const me = await (await fetch("/console/api/me")).json();
         const r = await fetch("/v1/events", { headers: { "cavea-workspace": me.workspaces[0].id } });
         return (await r.json()).data;
@@ -991,14 +1176,25 @@ export const TASKS: Task[] = [
     async run({ t, shoot, out }) {
       await t.goto(`${new URL(await t.evaluate<string>("location.href")).origin}/charts`);
       await t.click({ role: "button", name: msg("charts.openDesigner") });
-      const theatre = await t.find({ role: "button", name: new RegExp(`^${msg("template.theatre")} `) }, undefined, 30_000);
+      const theatre = await t.find(
+        { role: "button", name: new RegExp(`^${msg("template.theatre")} `) },
+        undefined,
+        30_000,
+      );
       const empty = await t.find({ role: "button", name: new RegExp(`^${msg("new.empty")}`) });
       const heading = await t.find({ role: "heading", name: msg("new.title") });
-      const banquet = await t.find({ role: "button", name: new RegExp(`^${msg("template.banquet")} `) });
+      const banquet = await t.find({
+        role: "button",
+        name: new RegExp(`^${msg("template.banquet")} `),
+      });
       const image = await t.find({ role: "button", name: new RegExp(`^${msg("new.image")}`) });
       await shoot(t, "start", await around(t, [heading, empty, image, theatre, banquet], 16), 0.75);
       await t.click({ role: "button", name: new RegExp(`^${msg("template.theatre")} `) });
-      await t.find({ role: "application", name: msg("canvas.label", { name: msg("template.theatre") }) }, undefined, 30_000);
+      await t.find(
+        { role: "application", name: msg("canvas.label", { name: msg("template.theatre") }) },
+        undefined,
+        30_000,
+      );
       await t.click({ role: "button", name: msg("tour.skip") }).catch(() => undefined);
       // What the browser saves, as the download would: the file's name and text.
       await t.evaluate(`(() => {
@@ -1015,7 +1211,9 @@ export const TASKS: Task[] = [
       await t.click({ role: "button", name: msg("menu.label") }, banner);
       await t.click({ role: "menuitem", name: new RegExp(`^${msg("menu.export")}`) });
       const saved = await until("the chart file to be saved", () =>
-        t.evaluate<{ name: string; text: string } | null>("window.saved ?? null").then((x) => x ?? undefined),
+        t
+          .evaluate<{ name: string; text: string } | null>("window.saved ?? null")
+          .then((x) => x ?? undefined),
       );
       check(saved.name.endsWith(".json"), `the exported file ends in .json: ${saved.name}`);
       const file = join(out, saved.name);
@@ -1035,4 +1233,3 @@ export const TASKS: Task[] = [
     },
   },
 ];
-

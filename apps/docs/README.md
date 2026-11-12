@@ -16,6 +16,9 @@ What a developer at a ticketing company reads to evaluate Cavea and to get start
 | `static/` | Copied to the site as it is: the stylesheet, the script (search, copy buttons), the favicon, the screenshots. |
 | `quickstart/check.ts` | Runs the quick start end to end; also retakes the screenshots. |
 | `deployment/check.ts` | Runs the deployment guide's compose file, Caddyfile, setup, reconciler, backup and restore. |
+| `designer/check.ts`, `designer/tasks.ts` | Does every task of the designer guide in the real designer; also retakes its screenshots. |
+| `src/findings.ts` | The check that `content/designer/checking.md` explains every validation finding the compiler can report. |
+| `src/examples.ts` | The check that the examples in `examples/` use the site's version and script URL. |
 
 ## Build and preview
 
@@ -93,3 +96,18 @@ It runs the pages' `compose.yaml` and `Caddyfile` under a project name, port and
 `site.json` names the server image and the seat map's script URL as they will be published, and `"published": false` puts a notice on every page that points to "Before the first release". `site.json`'s `image`, `renderer_package`, `server_sdk_package` and `repository` are also what `cargo xtask release` publishes to (D-91): it refuses while the image's registry is the `example` placeholder or a name disagrees with the packages. `cargo xtask release prepare <version>` sets `version`, the image's tag and the script's URL and sets `published` to `true`. At the first release, also set the real registry in `image` and delete `content/before-release.md` and its entry in `site.json`.
 
 The output is static files. To deploy, copy `apps/docs/dist/` to a static host: GitHub Pages, Cloudflare Pages, Netlify, or a bucket behind a CDN, at the root of a host name such as `docs.example.com` (the 404 page links from the root). The host and domain are the owner's choice.
+
+## The designer guide
+
+`content/designer/` is written for a venue's staff, not developers, and done by machine like the quick start: `designer/tasks.ts` does each page's tasks, in order, in the real designer, by the labels the page prints in bold. Every bold phrase on those pages must be a label in the console's catalogue (`apps/console/src/i18n/messages.ts`; a `{…}` there matches any text), or **Note**, **Not yet** or **Warning**: write what is not a label in plain or italic text.
+
+```sh
+cargo xtask build-server                                   # the server with the console
+nix develop -c bun apps/docs/designer/check.ts [--screenshots]
+```
+
+`--screenshots` retakes `static/images/designer-*.webp` (light theme, WebP, about 250 KB together). `checking.md` has one section per validation finding, titled as the console titles it, under **Errors** or **Warnings**, naming its code; the build fails while a finding the compiler can report has none.
+
+## Examples
+
+`content/examples/index.md` describes the projects in the repository's `examples/` directory, which `bun fixtures/run.ts examples` runs against a real server (AGENTS.md). A block on the page that shows an example's file is `check=file:examples/…`.

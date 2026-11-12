@@ -5,7 +5,12 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 
-const TYPES = { ".html": "text/html", ".js": "text/javascript", ".wasm": "application/wasm", ".png": "image/png" };
+const TYPES = {
+  ".html": "text/html",
+  ".js": "text/javascript",
+  ".wasm": "application/wasm",
+  ".png": "image/png",
+};
 const root = import.meta.dirname;
 const port = Number(process.env.PORT ?? 8000);
 

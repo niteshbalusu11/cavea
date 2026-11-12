@@ -107,7 +107,7 @@
     },
     {
       "section": "Examples",
-      "planned": "Plain page, React, Next.js, Node backend (DOC-009)"
+      "pages": ["examples/index.md"]
     }
   ]
 }

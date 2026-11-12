@@ -153,11 +153,16 @@ async function main(): Promise<void> {
     // Whatever the page reported meanwhile fails the check: a person would have seen it break.
     await t.collect();
     const problems = t.problems.splice(0).filter((p) => p.kind !== "request");
-    check(problems.length === 0, `the page reported, during “${task.name}”:\n  ${problems.map((p) => p.text.slice(0, 300)).join("\n  ")}`);
+    check(
+      problems.length === 0,
+      `the page reported, during “${task.name}”:\n  ${problems.map((p) => p.text.slice(0, 300)).join("\n  ")}`,
+    );
   }
   for (const k of KNOWN) log(`known product bug, worked around as the guide says: ${k}`);
   if (keep) {
-    console.log(`\n--keep: ${base}/console/charts, ${OWNER.email} / ${OWNER.password}. Ctrl+C stops.`);
+    console.log(
+      `\n--keep: ${base}/console/charts, ${OWNER.email} / ${OWNER.password}. Ctrl+C stops.`,
+    );
     await new Promise(() => undefined);
   }
 }
@@ -165,10 +170,11 @@ async function main(): Promise<void> {
 /** Bold phrases on the guide's pages that are not console labels: its own call-outs. */
 const OWN = ["Note", "Not yet", "Warning"];
 
-
 try {
   await main();
-  console.log(`designer guide check passed in ${((performance.now() - started) / 1000).toFixed(0)} s`);
+  console.log(
+    `designer guide check passed in ${((performance.now() - started) / 1000).toFixed(0)} s`,
+  );
 } finally {
   for (const c of cleanup.toReversed()) await c().catch((e: unknown) => console.error(String(e)));
 }

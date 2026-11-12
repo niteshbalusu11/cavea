@@ -2,10 +2,10 @@
   "name": "cavea-example-plain-page",
   "private": true,
   "type": "module",
-  "engines": {
-    "node": ">=20.11"
-  },
   "scripts": {
     "start": "node serve.js"
+  },
+  "engines": {
+    "node": ">=20.11"
   }
 }
