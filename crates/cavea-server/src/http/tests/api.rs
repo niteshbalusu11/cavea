@@ -1658,6 +1658,158 @@ async fn authorisation_matrix() {
     .await;
 }
 
+/// Bodies with a struct nested where the rows of [`ROUTES`] have none.
+const NESTED: &[(Method, &str, &str)] = &[
+    (
+        Method::POST,
+        "/v1/events",
+        r#"{"key":"nested","chart":"{chart}","settings":{"max_objects":2}}"#,
+    ),
+    (
+        Method::PATCH,
+        "/v1/events/{event}",
+        r#"{"settings":{"max_objects":2}}"#,
+    ),
+    (
+        Method::POST,
+        "/v1/charts",
+        r#"{"key":"nested","name":"n","document":{"schema":1,"name":"n","settings":{},"nextOid":1}}"#,
+    ),
+    (
+        Method::POST,
+        "/console/api/setup",
+        r#"{"token":"0000","email":"x@example.org","password":"not-a-real-password-1","workspace":{"key":"w","name":"w"}}"#,
+    ),
+];
+
+/// 08 §6.4: every route whose body the document types as JSON (an object,
+/// on every route), with the credential it accepts, refuses an array (empty,
+/// and the row's own values in order, which serde would take as the struct's
+/// fields by position), a string, a number and `null` as `400
+/// invalid_request`, `reason: "json_data"`; and so does each object nested
+/// in a row's body, or in [`NESTED`], replaced by an array of its values. A
+/// route added later is driven through its row; the rows' bodies are checked
+/// against the document, so none is missed.
+#[tokio::test]
+#[ignore = "needs CAVEA_TEST_DATABASE_URL"]
+async fn object_bodies_refuse_other_json() {
+    let _serial = serial();
+    with_db(async move |pool| {
+        let app = api(&pool, Some(ADMIN));
+        let a = Tenant::create(&app, "a").await;
+        let b = Tenant::create(&app, "b").await;
+        let members = Members::create(&pool, &a, &b).await;
+        let doc = crate::http::openapi::document();
+        let mut probes: Vec<(&Method, &str, String)> = Vec::new();
+        let mut routes = 0;
+        for (method, template, _, body) in ROUTES {
+            let path = route_of(template);
+            let pointer = format!(
+                "/paths/{}/{}/requestBody/content/application~1json",
+                path.replace('~', "~0").replace('/', "~1"),
+                method.as_str().to_lowercase()
+            );
+            let json = doc.pointer(&pointer).is_some();
+            let row = body.filter(|b| *b != "{png}");
+            assert_eq!(json, row.is_some(), "{method} {path}: the row's body");
+            if let Some(body) = row {
+                routes += 1;
+                probes.push((method, template, body.to_owned()));
+            }
+        }
+        for (method, template, body) in NESTED {
+            probes.push((method, template, (*body).to_owned()));
+        }
+        assert!(routes >= 25, "{routes} routes");
+        let mut sent = 0;
+        for (method, template, body) in probes {
+            let (needs, _) = op_of(method, template);
+            let cred = [
+                Cred::Secret,
+                Cred::Publishable,
+                Cred::Admin,
+                Cred::Member(Role::Owner),
+            ]
+            .into_iter()
+            .find(|c| needs == Needs::Nothing || expect(needs, *c).is_none())
+            .unwrap();
+            let authorization = match cred {
+                Cred::Secret => Some(format!("Bearer {}", a.secret)),
+                Cred::Publishable => Some(format!("Bearer {}", a.publishable)),
+                Cred::Admin => Some(format!("Bearer {ADMIN}")),
+                _ => None,
+            };
+            let path = members.path(&a.path(template));
+            let (path, authorization) = match (needs, authorization) {
+                (Needs::QueryKey, Some(_)) => (with_key(&path, &a.publishable), None),
+                (_, authorization) => (path, authorization),
+            };
+            let mut headers = members.headers(cred, &a, &b);
+            if let Some(value) = authorization {
+                headers.push((header::AUTHORIZATION, value));
+            }
+            headers.push((header::IF_MATCH, "*".to_owned()));
+            headers.push((HOLD_TOKEN, a.token.clone()));
+            let mut body = a.path(&body).replace("{asset}", &"0".repeat(64));
+            for n in ["{n}", "{m}", "{k}", "{p}"] {
+                body = body.replace(n, "0");
+            }
+            let body: Value = serde_json::from_str(&body).unwrap();
+            let fields = body.as_object().unwrap();
+            let values = |o: &serde_json::Map<String, Value>| Value::from_iter(o.values().cloned());
+            let mut bad: Vec<_> = [json!([]), values(fields), json!("x"), json!(1), Value::Null]
+                .into_iter()
+                .map(|b| (b, "json_data"))
+                .collect();
+            // A chart document's own fields are the compiler's to parse (03
+            // §2); a document that is not an object is `reason: "document"`.
+            let draft = template.ends_with("/draft");
+            for (name, value) in fields.iter().filter(|_| !draft) {
+                if let Some(nested) = value.as_object() {
+                    let mut changed = fields.clone();
+                    changed.insert(name.clone(), values(nested));
+                    let reason = if name == "document" {
+                        "document"
+                    } else {
+                        "json_data"
+                    };
+                    bad.push((Value::Object(changed), reason));
+                }
+            }
+            for (bad, reason) in bad {
+                let request = request(
+                    method.clone(),
+                    &path,
+                    None,
+                    &refs(&headers),
+                    Some(bad.to_string()),
+                );
+                let (response, answer) = send(app.clone(), request).await;
+                let bad = bad.to_string();
+                let at = format!("{method} {template} with {}", &bad[..bad.len().min(80)]);
+                assert_eq!(response.status(), 400, "{at}: {answer}");
+                assert_problem(&response, &answer, Code::InvalidRequest);
+                assert_eq!(answer["details"]["reason"], reason, "{at}: {answer}");
+                sent += 1;
+            }
+        }
+        assert!(sent >= 150, "{sent} requests");
+        // A chart document by position, which the compiler's parser takes.
+        let body = json!({ "key": "positional", "name": "n", "document": [1, "n", {}, 1] });
+        let (response, answer) = call(
+            &app,
+            Method::POST,
+            "/v1/charts",
+            Some(&a.secret),
+            Some(body),
+        )
+        .await;
+        assert_problem(&response, &answer, Code::InvalidRequest);
+        assert_eq!(answer["details"]["reason"], "document", "{answer}");
+    })
+    .await;
+}
+
 mod assets;
 mod charts;
 mod console;

@@ -82,6 +82,14 @@ pub async fn check_draft(bytes: axum::body::Bytes) -> Result<(), ChartError> {
 }
 
 fn parse(bytes: &[u8]) -> Result<ChartDocument, ChartError> {
+    // A document is an object (03 §2): serde's derived `Deserialize` would
+    // also take an array, its fields by position, and the draft is stored as
+    // sent.
+    if bytes.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{') {
+        return Err(ChartError::Document(
+            "chart document: expected an object".to_owned(),
+        ));
+    }
     let document =
         ChartDocument::from_json(bytes).map_err(|e| ChartError::Document(e.to_string()))?;
     // Only schema 1 exists, so migrating on read (03 §2.8) is the identity.

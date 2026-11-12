@@ -56,14 +56,6 @@ use tower::ServiceExt as _;
 
 /// Obviously fake; 32 characters at least.
 const ADMIN: &str = "fuzz-admin-key-not-a-real-secret-0000";
-/// A known failure (13 §5): the server takes a JSON array for a request
-/// object, its fields by position (serde's derived `Deserialize` accepts a
-/// sequence for a struct), where the document allows only an object; input
-/// `fuzz/known/http_api/array-for-object`. While it stands, a body whose top
-/// level is an array is not checked against the request schema, and the
-/// generator puts no array where the schema has an object. Set it to `false`
-/// once the server refuses them.
-const KNOWN_ARRAY_FOR_OBJECT: bool = true;
 /// Most requests one input makes.
 const MAX_REQUESTS: usize = 12;
 /// What a workspace's names carry: never produced from an input's bytes,
@@ -517,9 +509,7 @@ async fn send(h: &Harness, world: &World, req: Built) -> Answer {
 
     // The document's view of the exchange.
     let matched = check::operation(&req.method, &path);
-    let top_array = bytes.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'[');
     let sent_json = content_type == Some("application/json")
-        && !(KNOWN_ARRAY_FOR_OBJECT && top_array)
         && matched.is_some_and(|(_, op)| {
             op.pointer("/requestBody/content/application~1json")
                 .is_some()
@@ -926,10 +916,8 @@ fn generate(
             .unwrap_or(schema),
         None => schema,
     };
-    // Sometimes the wrong kind of value altogether; never an array for an
-    // object while KNOWN_ARRAY_FOR_OBJECT stands.
+    // Sometimes the wrong kind of value altogether.
     if c.rare(23) {
-        let object = schema.get("properties").is_some();
         let wrong = [
             json!(null),
             json!(1),
@@ -938,8 +926,7 @@ fn generate(
             json!(true),
             json!([]),
         ];
-        let n = if object { wrong.len() - 1 } else { wrong.len() };
-        return wrong[c.pick(n)].clone();
+        return wrong[c.pick(wrong.len())].clone();
     }
     let label = |c: &mut Choices<'_>| {
         let i = c.pick(me.labels.len() + 1);

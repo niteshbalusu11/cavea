@@ -36,9 +36,10 @@ pub fn check_object_count(count: usize) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// A JSON request body. Use it instead of `axum::Json` so that a malformed,
-/// mistyped, oversized or too deeply nested body is a problem+json
-/// `invalid_request`.
+/// A JSON request body, which must be an object. Use it instead of
+/// `axum::Json` so that a malformed, mistyped, oversized or too deeply nested
+/// body is a problem+json `invalid_request`. A struct nested in the body
+/// takes [`object`] or [`optional_object`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Json<T>(pub T);
 
@@ -59,7 +60,8 @@ where
 }
 
 /// A JSON request body as bytes, not yet parsed: the checks of [`Json`]
-/// (content type, the route's size limit, nesting depth) without the parse.
+/// (content type, the route's size limit, nesting depth, an object at the top)
+/// without the parse.
 #[derive(Debug, Clone, Default)]
 pub struct RawJson(pub Bytes);
 
@@ -90,6 +92,19 @@ where
                 "The body nests arrays and objects too deeply.",
             )
             .with_detail("limit", MAX_JSON_DEPTH));
+        }
+        // Every JSON body of the API is an object (08 §6.4). serde's derived
+        // `Deserialize` also takes a struct from an array, its fields by
+        // position, so anything else is refused here, before a route parses
+        // it: valid JSON as `json_data`, the rest as `json_syntax`.
+        if bytes.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{') {
+            return Err(
+                if serde_json::from_slice::<serde::de::IgnoredAny>(&bytes).is_ok() {
+                    invalid("json_data", "The body must be a JSON object.")
+                } else {
+                    invalid("json_syntax", "The body is not JSON.")
+                },
+            );
         }
         Ok(Self(bytes))
     }
@@ -162,6 +177,50 @@ fn json_rejection(rejection: &JsonRejection) -> ApiError {
     ApiError::new(Code::InvalidRequest)
         .with_message(rejection.body_text())
         .with_detail("reason", reason)
+}
+
+/// A struct nested in a request body, as a field's
+/// `#[serde(deserialize_with = "object")]`: it must be a JSON object, where
+/// serde's derived `Deserialize` would also take an array, its fields by
+/// position, which the document does not allow (08 §6.4).
+pub fn object<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    struct Fields<T>(std::marker::PhantomData<T>);
+
+    impl<'de, T: serde::Deserialize<'de>> serde::de::Visitor<'de> for Fields<T> {
+        type Value = T;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("an object")
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<T, A::Error> {
+            T::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+
+    deserializer.deserialize_map(Fields(std::marker::PhantomData))
+}
+
+/// [`object`] for an optional field: `null` is `None`.
+pub fn optional_object<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    struct Object<T>(T);
+
+    impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for Object<T> {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            object(deserializer).map(Self)
+        }
+    }
+
+    let value: Option<Object<T>> = serde::Deserialize::deserialize(deserializer)?;
+    Ok(value.map(|o| o.0))
 }
 
 /// Path parameters. Use it instead of `axum::extract::Path` so that a
