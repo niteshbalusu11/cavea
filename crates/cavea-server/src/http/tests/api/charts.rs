@@ -103,7 +103,14 @@ async fn chart_lifecycle() {
         assert_eq!(response.headers()[header::ETAG], "\"1\"");
         assert_eq!(
             draft,
-            json!({ "schema": 1, "name": "Royal Theatre", "nextOid": 1 })
+            json!({
+                "schema": 1,
+                "name": "Royal Theatre",
+                "nextOid": 1,
+                "categories": [{
+                    "key": "standard", "label": "Standard", "color": "#2563EB", "accessible": false
+                }],
+            })
         );
 
         // A draft that does not validate is saved; If-Match is required and

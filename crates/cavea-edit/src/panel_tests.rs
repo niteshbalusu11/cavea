@@ -470,6 +470,41 @@ fn dangling(doc: &Document) -> BTreeSet<String> {
 /// and moves the active category with it; a delete without a replacement
 /// is refused while anything names the key; each edit is one undo entry,
 /// undone byte for byte and redone.
+/// 07 §7: new seats take the active category. A chart with none (one the
+/// server made empty before it gave the draft a category, or one whose last
+/// category was deleted) has no active category; once it gets a category,
+/// that one is active, so the next block drawn has seats that compile.
+#[test]
+fn a_chart_given_its_first_category_draws_with_it() {
+    let mut s = Session::import(r#"{"schema": 1, "name": "Empty", "nextOid": 1}"#).expect("open");
+    assert_eq!(s.category(), None);
+    let standard = Category {
+        key: "standard".into(),
+        label: "Standard".into(),
+        color: "#2563EB".into(),
+        accessible: false,
+    };
+    s.add_category(None, standard).expect("add");
+    assert_eq!(s.category(), Some("standard"));
+    let block = Draft::RowBlock {
+        origin: [0.0, 0.0],
+        rows: 2,
+        seats: 4,
+        seat_pitch: 60.0,
+        row_pitch: 100.0,
+    };
+    s.insert(None, &block).expect("block");
+    let e002 = findings(&s.document().snapshot())
+        .into_iter()
+        .filter(|f| f.code.as_str() == "E002")
+        .count();
+    assert_eq!(e002, 0, "the block's seats have a category");
+    // Undone, the chart has none again, and nothing is active.
+    s.undo().expect("undo block");
+    s.undo().expect("undo category");
+    assert_eq!(s.category(), None);
+}
+
 #[test]
 fn categories_merge_and_delete() {
     let mut merged = 0;
