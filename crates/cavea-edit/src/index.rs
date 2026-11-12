@@ -148,6 +148,11 @@ impl Place {
         }
     }
 
+    /// The turn, in degrees clockwise, from −180 to 180.
+    pub(crate) fn angle(&self) -> f64 {
+        self.sin.atan2(self.cos).to_degrees()
+    }
+
     /// With y down, turns +x towards +y: clockwise on screen, as the compiler.
     pub(crate) fn apply(&self, p: P) -> P {
         let [x, y] = self.turn(p);

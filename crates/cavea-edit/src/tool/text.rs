@@ -4,13 +4,13 @@
 //! a click elsewhere commits, Escape cancels. The select tool edits an
 //! existing text node the same way after a double click.
 
-use cavea_compiler::document::Node;
+use cavea_compiler::document::{Align, Node};
 
 use super::draw::{Live, Spot, finish};
 use super::snap;
 use super::{Button, Context, Cursor, Input, Key, Overlay, TextField, Tool};
 use crate::command::{Command, Property};
-use crate::draft::Draft;
+use crate::draft::{Draft, TEXT_COLOR, TEXT_SIZE, TEXT_WEIGHT};
 use crate::index::P;
 use crate::selection::{Level, Selection, View};
 
@@ -107,16 +107,39 @@ impl TextEdit {
 
     pub(crate) fn field(&self, view: &View<'_>) -> TextField {
         let node = self.existing.as_ref().map(|e| e.0).or(self.live.created());
-        let at = match self.spot.parent {
-            Some(s) => view.index.to_world(s, self.at).unwrap_or(self.at),
-            None => self.at,
+        let (at, turn) = match self.spot.parent.and_then(|s| view.index.place(s)) {
+            Some(place) => (place.apply(self.at), place.angle()),
+            None => (self.at, 0.0),
+        };
+        // The node as drawn now, else a new one's defaults (07 §4).
+        let shown = node.and_then(|id| match view.doc.node(id) {
+            Some(Node::Text(t)) => Some(t),
+            _ => None,
+        });
+        let (size, rotation, align, weight, color) = match (shown, &self.existing) {
+            (Some(t), _) => (t.size, t.rotation, t.align, t.weight, t.color.clone()),
+            (None, Some((_, n))) => match &**n {
+                Node::Text(t) => (t.size, t.rotation, t.align, t.weight, t.color.clone()),
+                _ => defaults(),
+            },
+            (None, None) => defaults(),
         };
         TextField {
             node,
             at,
             text: self.text.clone(),
+            size,
+            angle: (turn + rotation).rem_euclid(360.0),
+            align,
+            weight,
+            color,
         }
     }
+}
+
+/// A new text's size, rotation, alignment, weight and colour (07 §4).
+fn defaults() -> (f64, f64, Align, u16, String) {
+    (TEXT_SIZE, 0.0, Align::Center, TEXT_WEIGHT, TEXT_COLOR.to_owned())
 }
 
 #[derive(Debug, Default)]

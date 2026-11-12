@@ -308,13 +308,21 @@ pub enum Readout {
 
 /// Text being typed (07 §2.3): the chrome shows a field at `at` (world)
 /// holding `text`, and sends each change with `Session::set_text`. `node`
-/// is the text node being edited, once it exists.
+/// is the text node being edited, once it exists. The rest is how the text
+/// is drawn, so the field can sit over it: its em size in chart units, its
+/// angle in the world (degrees, clockwise), where it lies along its x axis
+/// from `at` (03 §2.7: vertically centred), its weight and colour.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextField {
     pub node: Option<u32>,
     pub at: [f64; 2],
     pub text: String,
+    pub size: f64,
+    pub angle: f64,
+    pub align: cavea_compiler::document::Align,
+    pub weight: u16,
+    pub color: String,
 }
 
 /// What a tool works on.

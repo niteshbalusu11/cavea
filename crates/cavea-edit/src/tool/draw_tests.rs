@@ -679,6 +679,28 @@ fn text_tool() {
     t.key(Key::Enter);
     assert!(matches!(t.node(id), Node::Text(x) if x.text == "STAGE LEFT"));
     assert_eq!(t.s.editor().undo_len(), 3);
+    // One undo per edit restores the text exactly; one more removes it.
+    let typed = t.state();
+    t.s.undo().expect("undo");
+    assert!(matches!(t.node(id), Node::Text(x) if x.text == "STAGE"));
+    t.s.redo().expect("redo");
+    assert_eq!(t.state(), typed);
+    // The field follows the text as drawn: its size and its turn.
+    t.s.apply(Command::TransformNodes {
+        nodes: vec![NodeTransform {
+            id,
+            origin: [0.0, -500.0],
+            rotation: 30.0,
+        }],
+    })
+    .expect("turn");
+    t.click([0.0, -500.0]);
+    t.time -= 900.0;
+    t.click([0.0, -500.0]);
+    let field = t.s.overlay().text.expect("field");
+    assert_eq!((field.size, field.angle), (60.0, 30.0));
+    t.key(Key::Escape);
+    assert!(matches!(t.node(id), Node::Text(x) if x.text == "STAGE LEFT"));
 }
 
 /// `p` turned by `degrees` about `c` (clockwise, y down).

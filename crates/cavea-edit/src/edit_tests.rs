@@ -471,6 +471,48 @@ fn focal_point_tool() {
     assert_eq!(t.s.overlay().focal, None);
 }
 
+/// A chart that lists no floors (a new chart, 07 §16) gets its focal point:
+/// the press lists the implicit floor in the same gesture, every node stays
+/// where it was, W102 goes, and one undo returns the chart to no floors.
+#[test]
+fn focal_point_on_a_chart_without_floors() {
+    let mut doc = chart();
+    doc.floors.clear();
+    // Without errors, so the warnings are checked: the free row has no label.
+    doc.nodes.retain(|n| !matches!(n, Node::Row(_)));
+    let mut t = T::new(doc);
+    let w102 = |t: &mut T| {
+        while !t.s.validate(u64::MAX).done {}
+        t.s.validation().findings.iter().any(|f| f.code == "W102")
+    };
+    assert!(w102(&mut t));
+    t.s.select(Level::Top, [10]);
+    let start = t.state();
+    t.s.set_tool(ToolId::Focal);
+    t.drag(&[[10.0, -700.0], [50.0, -900.0]]);
+    let floors = t.s.document().floors().to_vec();
+    assert_eq!(floors.len(), 1);
+    assert_eq!((floors[0].name.as_str(), floors[0].level), ("", 0));
+    assert_eq!(floors[0].focal_point, Some([50.0, -900.0]));
+    assert_eq!(t.s.floor(), Some(floors[0].id));
+    assert_eq!(t.s.overlay().focal, Some([50.0, -900.0]));
+    assert!(!w102(&mut t), "the focal point is set");
+    assert_eq!(
+        t.s.selection().items().iter().copied().collect::<Vec<_>>(),
+        [10],
+        "the selection stays"
+    );
+    assert_eq!(t.entries(), 1);
+    t.s.undo().expect("undo");
+    assert_eq!(t.state(), start);
+    assert!(t.s.document().floors().is_empty());
+    assert_eq!(t.s.floor(), None);
+    // Escape mid-press lists nothing.
+    t.input(Input::PointerDown, [0.0, 0.0], NONE);
+    t.key(Key::Escape, NONE);
+    assert_eq!(t.state(), start);
+}
+
 #[test]
 fn align_distribute_order_lock() {
     let mut t = T::new(chart());

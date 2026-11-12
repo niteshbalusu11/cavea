@@ -1014,8 +1014,12 @@ impl Session {
         if !self.floor.is_some_and(listed) {
             let first = doc.floors().first().map(|f| f.id);
             if self.floor != first {
+                // A chart's implicit floor listed (the focal point tool)
+                // holds what was shown: the selection stays.
+                if self.floor.is_some() {
+                    self.selection = Selection::default();
+                }
                 self.floor = first;
-                self.selection = Selection::default();
             }
         }
     }
