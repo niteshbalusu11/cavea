@@ -228,7 +228,7 @@ export function Inspector(props: { editor: Editor; onNumbering: () => void }) {
             {num("x", c().x)}
             {num("y", c().y)}
             {num("rotation", c().rotation)}
-            <Show when={c().floor !== null && floors().length > 0}>
+            <Show when={c().floor !== null && floors().length > 1}>
               <SelectField
                 label={msg("field.floor")}
                 options={floors()}

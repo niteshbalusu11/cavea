@@ -587,6 +587,7 @@ const ui = {
   "status.seats": "{n} seats",
   "status.nodes": "{n} objects",
   "status.selected": "{n} selected",
+  "status.selectedIn": "{n} selected in {section}",
   "status.problems": "{errors} errors · {warnings} warnings",
   "status.noProblems": "No problems",
   "status.checking": "Checking…",

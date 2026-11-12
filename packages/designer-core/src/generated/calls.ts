@@ -1995,6 +1995,12 @@ export type SelectionView = {
    * selection" frames.
    */
   bounds: Rect | null;
+  /**
+   * Inside a section (`level` names it): its name as the layers panel
+   * shows it, `null` when it has none, so the status bar can say where
+   * a new object went.
+   */
+  within: string | null;
 };
 
 export type Settings = {

@@ -8619,6 +8619,16 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "within",
+            "optional": false,
+            "type": {
+              "union": [
+                "string",
+                "null"
+              ]
+            }
           }
         ]
       }
