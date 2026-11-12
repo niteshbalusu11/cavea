@@ -29,6 +29,7 @@ import { CategoriesPanel } from "./CategoriesPanel.tsx";
 import { createEditor, type Editor } from "./editor.ts";
 import { guidesKey, parseGuides, throttledWriter } from "./guides.ts";
 import { createImageHost } from "./imageHost.ts";
+import type { Checked } from "./images.ts";
 import { failureMessage, failureOf } from "./errors.ts";
 import { commands } from "./commands.ts";
 import { Help } from "./Help.tsx";
@@ -75,8 +76,9 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
   const navigate = useNavigate();
   let picker: HTMLInputElement | undefined;
   let imagePicker: HTMLInputElement | undefined;
-  /** An image picked to start a new chart, placed once that chart opens. */
-  let imageForNew: File | null = null;
+  /** An image picked (and checked) to start a new chart, placed once that
+   * chart opens. */
+  let imageForNew: Checked | null = null;
   let newFromImage = false;
 
   const resize = () => setWidth(window.innerWidth);
@@ -121,7 +123,7 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
           install,
           editor,
           onPanic: setPanic,
-          settled: () => images.settled(),
+          uploads: images,
         });
   /** A file opened over a server draft always asks: it replaces the draft. */
   const dirty = () => {
@@ -148,7 +150,10 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
   const placeImage = async (file: File) => {
     if (newFromImage) {
       newFromImage = false;
-      imageForNew = file;
+      // Checked before anything is replaced: a refusal changes nothing.
+      const checked = await images.check(file);
+      if (checked === null) return;
+      imageForNew = checked;
       await request(emptyChart(msg("designer.untitled")), "");
       return;
     }

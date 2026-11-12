@@ -26,6 +26,7 @@ import {
   MAX_SIDE,
   nodesNaming,
   Uploads,
+  type Checked,
   type Refusal,
   type UploadReply,
   type UploadSummary,
@@ -47,11 +48,16 @@ export interface ImageHost {
   uploads: Accessor<UploadSummary | null>;
   /** Whether the upload of `hash` is still to finish. */
   pending(hash: string): boolean;
-  /** Checks `file` and places it at the view's centre, selected. */
-  place(editor: Editor, file: File, role?: ImageRole): Promise<boolean>;
+  /** Checks `file` as the server will; a refusal is said and `null`. */
+  check(file: File): Promise<Checked | null>;
+  /** Places a picture (checked first when a file) at the view's centre,
+   * selected. */
+  place(editor: Editor, file: File | Checked, role?: ImageRole): Promise<boolean>;
   /** For a save: `null` once every upload is done, else what the save
    * reports meanwhile (`Uploads.settled`). Tries waiting uploads first. */
   settled(): Promise<SaveReply | null>;
+  /** Uploads refused so far (`Uploads.refusals`). */
+  refusals(): number;
   retry(): void;
   dispose(): void;
 }
@@ -114,6 +120,12 @@ export function createImageHost(props: {
   const [failed, setFailed] = createSignal<ReadonlySet<string>>(new Set());
   const [summary, setSummary] = createSignal<UploadSummary | null>(null);
   const available = new Set<() => void>();
+  /** Pictures placed whose first failure, if one comes, is retried from
+   * the bytes placed (a load begun before they were here). */
+  const fresh = new Set<string>();
+  const retry = () => {
+    for (const run of available) run();
+  };
   const ref = props.server;
   const uploads =
     ref === null
@@ -153,6 +165,7 @@ export function createImageHost(props: {
     },
     failed,
     markFailed(hash) {
+      if (fresh.delete(hash)) return retry();
       setFailed((s) => new Set([...s, hash]));
     },
     onAvailable(run) {
@@ -164,23 +177,28 @@ export function createImageHost(props: {
       const s = uploads?.state(hash) ?? null;
       return s === "sending" || s === "waiting";
     },
-    async place(editor, file, role = "reference") {
+    async check(file) {
       const designer = await props.designer;
       const checked = await checkImage(file, { measure, hash: (b) => designer.assetHash(b) });
-      if ("refused" in checked) {
-        notify(refusalMessage(checked.refused), "error");
-        return false;
-      }
-      const { blob, hash, width, height } = checked.ok;
+      if ("ok" in checked) return checked.ok;
+      notify(refusalMessage(checked.refused), "error");
+      return null;
+    },
+    async place(editor, file, role = "reference") {
+      const checked = file instanceof Blob ? await this.check(file) : file;
+      if (checked === null) return false;
+      const { blob, hash, width, height } = checked;
+      if (!blobs.has(hash)) fresh.add(hash);
       blobs.set(hash, blob);
       if (failed().has(hash)) {
+        fresh.delete(hash);
         setFailed((s) => {
           const next = new Set(s);
           next.delete(hash);
           return next;
         });
         // The canvas asks for it again, from these bytes.
-        for (const run of available) run();
+        retry();
       }
       const c = editor.camera();
       const id = editor.run((s) =>
@@ -210,6 +228,7 @@ export function createImageHost(props: {
       uploads?.retryNow();
       return (await uploads?.settled()) ?? null;
     },
+    refusals: () => uploads?.refusals() ?? 0,
     retry: online,
     dispose() {
       window.removeEventListener("online", online);

@@ -191,6 +191,7 @@ export class Uploads {
   readonly #state = new Map<string, Upload>();
   #timer: unknown = null;
   #waiters: (() => void)[] = [];
+  #refusals = 0;
   #disposed = false;
 
   constructor(deps: UploadDeps) {
@@ -211,6 +212,11 @@ export class Uploads {
     for (const [hash, s] of this.#state) {
       if (s.kind === "waiting") this.#send(hash, s.attempts);
     }
+  }
+
+  /** Uploads refused so far: a change means nodes were removed. */
+  refusals(): number {
+    return this.#refusals;
   }
 
   state(hash: string): Upload["kind"] | null {
@@ -299,6 +305,7 @@ export class Uploads {
   }
 
   #refuse(hash: string, message: string): void {
+    this.#refusals++;
     this.#state.set(hash, { kind: "refused" });
     this.#blobs.delete(hash);
     this.#deps.onRefused(hash, message);
@@ -330,6 +337,26 @@ export class Uploads {
   #wake(): void {
     for (const w of this.#waiters.splice(0)) w();
   }
+}
+
+/**
+ * A draft save that never goes ahead of the uploads it depends on (D-74):
+ * it waits for them, and while one waits reports what the save machine
+ * shows (`offline`, `signedOut`). When an upload was refused during the
+ * wait, its nodes were removed from the session, so the document is sent
+ * as it is now (`current`), never the copy taken before the wait.
+ */
+export function afterUploads(
+  uploads: { settled(): Promise<SaveReply | null>; refusals(): number },
+  current: () => string,
+  send: (draft: string, etag: string) => Promise<SaveReply>,
+): (draft: string, etag: string) => Promise<SaveReply> {
+  return async (draft, etag) => {
+    const before = uploads.refusals();
+    const waiting = await uploads.settled();
+    if (waiting !== null) return waiting;
+    return send(uploads.refusals() === before ? draft : current(), etag);
+  };
 }
 
 /** Every image node naming `hash` in a chart document (sections' children

@@ -23,6 +23,7 @@ import {
   type SaveState,
 } from "./autosave.ts";
 import { draftStore, recoveryPrefix, type Recovery } from "./drafts.ts";
+import { afterUploads } from "./images.ts";
 import type { Editor } from "./editor.ts";
 import { failureMessage, failureOf } from "./errors.ts";
 import { makeReadOnly } from "./readonly.ts";
@@ -84,9 +85,8 @@ export function serverChart(props: {
   install: (session: Session) => Editor;
   editor: Accessor<Editor | null>;
   onPanic: (message: string) => void;
-  /** Before a save: `null` once the images it names are on the server,
-   * else what the save reports meanwhile (`ImageHost.settled`). */
-  settled: () => Promise<SaveReply | null>;
+  /** The page's uploads, which a save waits for (`ImageHost`, D-74). */
+  uploads: { settled(): Promise<SaveReply | null>; refusals(): number };
 }): ServerChart {
   const { ref, canWrite } = props.setup;
   const signal = componentSignal();
@@ -140,7 +140,11 @@ export function serverChart(props: {
         revision: () => session.status().revision,
         exportDraft: () => session.export(),
         // Never a draft naming an image the server does not hold yet.
-        send: async (draft, etag) => (await props.settled()) ?? saveDraft(ref, draft, etag),
+        send: afterUploads(
+          props.uploads,
+          () => session.export(),
+          (draft, etag) => saveDraft(ref, draft, etag),
+        ),
         store,
         onState: (s) => {
           // A newer editor's machine has replaced this one.

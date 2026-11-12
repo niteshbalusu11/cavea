@@ -4,6 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SaveReply } from "./autosave.ts";
 import {
+  afterUploads,
   checkImage,
   declaredSize,
   MAX_BYTES,
@@ -196,5 +197,34 @@ describe("uploads", () => {
     // Not retried by the clock.
     await r.advance(120_000);
     expect(r.sent.length).toBe(1);
+  });
+});
+
+describe("a save after uploads", () => {
+  test("a picture refused during the wait: the document now is sent, not the copy", async () => {
+    const r = rig();
+    const H = "c".repeat(32);
+    let doc = "with-picture";
+    r.uploads.add(H, new Blob(["x"]));
+    const sent: string[] = [];
+    const save = afterUploads(
+      r.uploads,
+      () => doc,
+      (draft) => {
+        sent.push(draft);
+        return Promise.resolve({ kind: "saved", etag: "e" });
+      },
+    );
+    const reply = save(doc, "e0");
+    await settle();
+    expect(sent).toEqual([]);
+    // The refusal removes the picture from the session (as `onRefused` does).
+    doc = "without-picture";
+    r.sent[0]?.answer({ kind: "refused", message: "no" });
+    expect(await reply).toEqual({ kind: "saved", etag: "e" });
+    expect(sent).toEqual(["without-picture"]);
+    // Nothing refused during a wait: the draft given is sent as it is.
+    expect(await save("as-given", "e1")).toEqual({ kind: "saved", etag: "e" });
+    expect(sent.at(-1)).toBe("as-given");
   });
 });
