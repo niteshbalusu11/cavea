@@ -303,9 +303,7 @@ function sections(
       x: body.slice(0, 600),
     });
   }
-  for (const m of html.matchAll(
-    /<tr id="([^"]+)"><td><code>([^<]+)<\/code><\/td>([\s\S]*?)<\/tr>/g,
-  )) {
+  for (const m of html.matchAll(/<tr id="([^"]+)"><td><code>([^<]+)<\/code>([\s\S]*?)<\/tr>/g)) {
     out.push({
       t: title,
       s: plain(m[2] ?? ""),

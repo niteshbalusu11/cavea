@@ -170,16 +170,16 @@ export function render(source: string, page: string): Rendered {
     },
   );
 
-  // A table row whose first cell is one code span (an option, a setting, a
-  // token) is linkable and found by search on its own: its id is that name.
+  // A table row whose first cell starts with a code span (an option, a
+  // setting, a token) is linkable and found by search on its own: its id is that name.
   const ids = new Set(headings.map((h) => h.id));
-  html = html.replace(/<tr><td><code>([^<]+)<\/code><\/td>/g, (row, name: string) => {
+  html = html.replace(/<tr><td><code>([^<]+)<\/code>(?=<\/td>|<br)/g, (row, name: string) => {
     const id = plain(name)
       .replace(/\?$/, "")
       .replace(/[^A-Za-z0-9_.-]+/g, "-");
     if (id === "" || ids.has(id)) return row;
     ids.add(id);
-    return `<tr id="${id}"><td><code>${name}</code></td>`;
+    return `<tr id="${id}"><td><code>${name}</code>`;
   });
 
   const h1 = headings.find((h) => h.level === 1);

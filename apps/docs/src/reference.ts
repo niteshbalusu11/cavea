@@ -91,7 +91,7 @@ function memberRows(
     // An object type without a description of its own is listed member by member.
     const literal = !m.method && doc === "" && m.raw.startsWith("{") && m.raw.endsWith("}");
     if (literal || EXPAND.has(m.type)) {
-      if (doc !== "") rows.push(`| ${code(name)} | ${code(m.type)} | ${doc} |`);
+      if (doc !== "") rows.push(`| ${code(name)}<br>${code(m.type)} | ${doc} |`);
       const inner = literal ? members(m.raw.slice(1, -1)) : d.interface(m.type);
       if (!literal) s.claimed.add(m.type);
       rows.push(...memberRows(s, d, inner, owner, `${name}.`, undefined, marks));
@@ -102,7 +102,10 @@ function memberRows(
         `${owner}.${name} has no description: add a doc comment to its declaration (${d.where})`,
       );
     }
-    rows.push(`| ${code(`${name}${marks && m.optional ? "?" : ""}`)} | ${code(m.type)} | ${doc} |`);
+    // The type under the name, so a long type does not push the description off a narrow page.
+    rows.push(
+      `| ${code(`${name}${marks && m.optional ? "?" : ""}`)}<br>${code(m.type)} | ${doc} |`,
+    );
   }
   return rows;
 }
@@ -116,12 +119,12 @@ function membersTable(s: Sources, spec: string, filter: string | undefined): str
   const marks = filter === undefined;
   const head =
     filter === "callbacks"
-      ? "| Callback | Signature | Called when |"
+      ? "| Callback and signature | Called when |"
       : list.every((m) => m.method)
-        ? "| Method | Signature | What it does |"
-        : "| Name | Type | Description |";
+        ? "| Method and signature | What it does |"
+        : "| Name and type | Description |";
   const rows = memberRows(s, d, list, name, "", filter, marks);
-  return [head, "|---|---|---|", ...rows].join("\n");
+  return [head, "|---|---|", ...rows].join("\n");
 }
 
 function unionTable(s: Sources, name: string): string {

@@ -85,7 +85,8 @@
     },
     {
       "section": "Designer",
-      "planned": "User guide for venue staff (DOC-008)"
+      "planned": "User guide for venue staff (DOC-008)",
+      "pages": ["designer/shortcuts.md"]
     },
     {
       "section": "Examples",

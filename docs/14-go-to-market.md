@@ -135,7 +135,7 @@ Switching cost is the main obstacle, so reduce it:
 | Guides | Hold, pay, book; bring your own backend; best-available; channels; migrating from seats.io |
 | Reference | Error codes, limits, changelog, security |
 
-The site's sources are `apps/docs/` (D-83): Markdown pages, a build to static files, the API reference generated from the OpenAPI document, and a check that runs the quick start end to end. As built: the quick start, concepts, the server API reference, error codes, limits and the changelog; the other sections are in its navigation file, to come.
+The site's sources are `apps/docs/` (D-83): Markdown pages, a build to static files, the API reference generated from the OpenAPI document, and a check that runs the quick start end to end. As built: the quick start, concepts, the server API reference, error codes, limits and the changelog; the renderer reference (generated from the package's declarations where it can be, every sample type-checked), the guides (hold, pay, book; your own backend; React; bot protection), the deployment guide (run by its own check, with TLS, a live WebSocket change through the proxy, and backup and restore) and the designer's keyboard shortcuts (generated). Still to come: the designer's guide for venue staff and the examples (DOC-008, DOC-009); mobile, migration and best-available are later milestones.
 
 ## 8. Support policy
 

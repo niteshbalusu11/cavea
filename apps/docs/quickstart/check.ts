@@ -562,7 +562,33 @@ async function quickStart(path: "console" | "api", steps: Step[], browser: Brows
   log(`${path}: passed`);
 }
 
+/**
+ * "Before the first release" says how to run this page from the repository,
+ * in two blocks marked `check=run:quickstart`: a local image in the server's
+ * `image:` line, and the script tag loading `cavea/cavea.min.js`. This check
+ * does both (a local image, and SCRIPT beside the page), so it holds the page
+ * to them.
+ */
+async function beforeRelease(): Promise<void> {
+  const raw = await Bun.file(join(HERE, "content/before-release.md")).text();
+  const marked = fences(raw).filter((f) => f.meta.check === "run:quickstart");
+  check(
+    marked.length === 2,
+    `before-release.md has two blocks marked check=run:quickstart, not ${marked.length}`,
+  );
+  const [image, script] = marked;
+  check(
+    /^ {2}server:\n {4}image: cavea-server:local\n$/.test(image?.code ?? ""),
+    "before-release.md's compose lines name a local image for the server",
+  );
+  check(
+    script?.code === `<script src="${SCRIPT}"></script>\n`,
+    `before-release.md's script tag loads ${SCRIPT}, as this check serves it`,
+  );
+}
+
 async function main(): Promise<void> {
+  await beforeRelease();
   const { steps, source } = await page();
   labelsAreTheConsoles(source);
   for (const a of ASSETS) {
