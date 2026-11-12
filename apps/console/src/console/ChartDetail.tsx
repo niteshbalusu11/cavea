@@ -482,7 +482,11 @@ function Settings(props: { chart: Chart; query: Query<Chart> }) {
   const blocked = () =>
     cannot("archiveChart", () => msg("chart.archiveRole", { role: roleName() })) ??
     (props.chart.archived_at !== null ? msg("chart.alreadyArchived") : null);
+  // Shown archived at once (09 §8); put back, saying so, if refused.
   const archive = async () => {
+    const before = props.chart.archived_at;
+    const name = props.chart.name;
+    props.query.update((c) => ({ ...c, archived_at: new Date().toISOString() }));
     try {
       const chart = checkChart(
         await call("archiveChart", { path: { chart: props.chart.key } }, signal),
@@ -490,7 +494,8 @@ function Settings(props: { chart: Chart; query: Query<Chart> }) {
       props.query.update(() => chart);
       notify(msg("charts.archived", { name: chart.name }));
     } catch (e) {
-      report(e);
+      props.query.update((c) => ({ ...c, archived_at: before }));
+      if (!signal.aborted) report(e, msg("charts.archiveBack", { name }));
     }
   };
   return (

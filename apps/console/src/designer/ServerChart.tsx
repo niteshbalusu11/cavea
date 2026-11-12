@@ -72,8 +72,10 @@ export type Phase =
   | { kind: "failed"; title: string; detail?: string | undefined; retry: boolean }
   | { kind: "ready" };
 
-/** What the publish dialog's run reports. */
-export type PublishOutcome = Published | { kind: "notSaved" };
+/** What the publish dialog's run reports. `editedMeanwhile`: the server
+ * refused because the draft changed while it compiled, and the change was
+ * this page's own edit, saved by autosave (07 §11). */
+export type PublishOutcome = Published | { kind: "notSaved" } | { kind: "editedMeanwhile" };
 
 /** Who may change the chart in this page, and why not. */
 export type Access =
@@ -901,7 +903,14 @@ export function serverChart(props: {
         s === undefined || s.disposed
           ? null
           : { draft: s.export(), revision: s.status().revision, floor: s.floors().shown };
-      const result = await publish(ref, autosave.etag, signal);
+      const sent = autosave.etag;
+      const result = await publish(ref, sent, signal);
+      // The draft changed after `sent` was saved: by this page's own edit
+      // when its save machine, all saved now, holds a newer etag (the lock
+      // keeps others out); otherwise it changed elsewhere.
+      if (result.kind === "conflict" && (await autosave.flush()) && autosave.etag !== sent) {
+        return { kind: "editedMeanwhile" };
+      }
       if (result.kind === "published") {
         setChart((c) => (c === null ? c : { ...c, published_version: result.version }));
         // A new version, or one published again before it had a picture.

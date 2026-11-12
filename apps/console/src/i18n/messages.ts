@@ -902,6 +902,7 @@ const consoleScreens = {
   "charts.archiveBody":
     "Its draft can no longer change and it cannot be used for new events. Published versions stay available to events that use them. Archiving cannot be undone here.",
   "charts.archiveConfirm": "Archive",
+  "charts.archiveBack": "“{name}” is not archived: the server refused.",
   "charts.archived": "“{name}” archived.",
   "charts.created": "“{name}” created.",
   "charts.roleCannot": "your role, {role}, cannot create charts",
@@ -989,6 +990,7 @@ const consoleScreens = {
   "events.archiveBody":
     "The event becomes read-only: no seat can be held, booked or released, and its seat map stops changing. Archiving cannot be undone.",
   "events.archiveConfirm": "Archive event",
+  "events.archiveBack": "“{name}” is not archived: the server refused.",
   "events.archived": "“{name}” archived.",
   "events.created": "“{name}” created.",
   "events.newTitle": "New event",
@@ -1159,6 +1161,7 @@ const consoleScreens = {
   "workspace.keyHint": "A workspace's key cannot be changed.",
   "workspace.save": "Save",
   "workspace.saving": "Saving…",
+  "workspace.renameBack": "The workspace is called “{name}” again: the new name was not saved.",
   "workspace.renamed": "Workspace renamed to “{name}”.",
 
   "members.title": "Members",
@@ -1179,6 +1182,7 @@ const consoleScreens = {
   "members.changeSelfBody":
     "This is your own role: you may lose access to parts of the console, and only an owner or an admin can give it back.",
   "members.changeConfirm": "Change role",
+  "members.roleBack": "{email} is {role} again: the change was not made.",
   "members.changed": "{email} is now {role}.",
   "members.removeTitle": "Remove {email} from this workspace?",
   "members.removeBody":
@@ -1707,7 +1711,11 @@ const serverDesigner = {
   "publish.unchanged": "Nothing changed since version {version}: it is the published version.",
   "publish.invalid": "The server found errors and did not publish:",
   "publish.notSaved": "The draft could not be saved, so nothing was published.",
-  "publish.conflict": "The draft changed elsewhere before it was published; nothing was published.",
+  "publish.conflict":
+    "The draft changed before it was published, not by this page (another tab or window, perhaps), so nothing was published.",
+  "publish.editedMeanwhile":
+    "You edited the chart while it was publishing. Your edit is saved, and the server published nothing, so that a version never misses it. Publish again to publish the chart as it is now.",
+  "publish.again": "Publish again",
   "publish.failed": "Publishing failed: {message}",
   "topbar.publishLocal": "Publishing needs a chart on the server: open one from the charts list.",
   "topbar.publishRole": "Your role ({role}) cannot publish.",

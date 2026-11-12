@@ -51,9 +51,10 @@ export function reference(e: ApiError): string | undefined {
  * ended session says nothing here (the frame sends the person to sign in).
  * A refusal for a role, a workspace or an expired licence re-reads `me`:
  * the role or the licence may have changed since the page was loaded, and
- * the interface should follow it.
+ * the interface should follow it. `before`: what the screen put back (an
+ * optimistic change taken back), said first.
  */
-export function report(e: unknown): void {
+export function report(e: unknown, before?: string): void {
   if (isAbort(e)) return;
   const error = asApiError(e);
   if (error.sessionLost) return;
@@ -62,5 +63,9 @@ export function report(e: unknown): void {
   if (error.code === "forbidden" && stale.includes(error.reason ?? "")) {
     void loadSession();
   }
-  notify(describe(error), "error", reference(error));
+  notify(
+    before === undefined ? describe(error) : `${before} ${describe(error)}`,
+    "error",
+    reference(error),
+  );
 }

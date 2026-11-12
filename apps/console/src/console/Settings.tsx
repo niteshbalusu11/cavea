@@ -61,6 +61,7 @@ import {
   ROLES,
   type InviteField,
 } from "./refusals.ts";
+import { optimisticRows } from "./optimistic.ts";
 import { by, rove, rowKeys } from "./tables.ts";
 
 /** Owner first: a role's rank, for sorting. */
@@ -113,6 +114,10 @@ function WorkspaceTab() {
     if (!check() || busy() || ws === null) return;
     setBusy(true);
     setFailure(null);
+    // Shown at once wherever the name is (the frame, the switcher), and
+    // put back if the server refuses it (09 §8).
+    const before = ws.name;
+    adoptWorkspaceName(ws.id, name().trim());
     try {
       const answer = checkWorkspace(
         await call("renameWorkspace", { body: { name: name().trim() } }, signal),
@@ -120,8 +125,10 @@ function WorkspaceTab() {
       adoptWorkspaceName(answer.id, answer.name);
       notify(msg("workspace.renamed", { name: answer.name }));
     } catch (err) {
+      adoptWorkspaceName(ws.id, before);
       const refusal = asApiError(err);
       if (signal.aborted || refusal.sessionLost) return;
+      notify(msg("workspace.renameBack", { name: before }), "error", reference(refusal));
       if (refusal.reason === "invalid_field") {
         setError(msg("charts.textRule"));
       } else {
@@ -213,20 +220,35 @@ function MembersTab() {
     return s.data.data.filter((m) => m.role === "owner").length;
   });
 
-  /** A refusal: said in a toast; a member gone, or a role that may have
-   * changed under the person, reloads. */
-  const refused = (e: unknown) => {
+  /** A refusal: said in a toast, after `before` (a change taken back); a
+   * member gone, or a role that may have changed under the person, reloads. */
+  const refused = (e: unknown, before?: string) => {
     const error = asApiError(e);
     const known = memberRefusal(error);
-    if (known === null) return report(e);
-    notify(known.message, "error", reference(error));
+    if (known === null) return report(e, before);
+    notify(
+      before === undefined ? known.message : `${before} ${known.message}`,
+      "error",
+      reference(error),
+    );
     members.refetch();
     if (error.code === "forbidden") void loadSession();
   };
 
+  // A role change shows at once (09 §8) and is taken back, visibly, if the
+  // server refuses it; two in flight for one member end on the server's
+  // word (the list is read again).
+  const roleOf = optimisticRows<Role>(
+    (id, role) =>
+      members.update((rows) => rows.map((r) => (r.user.id === id ? { ...r, role } : r))),
+    () => members.refetch(),
+  );
+
   const apply = async (p: Pending) => {
-    try {
-      if (p.kind === "role") {
+    if (p.kind === "role") {
+      const change = roleOf(p.member.user.id, p.member.role);
+      const id = change.begin(p.to);
+      try {
         const answer = checkMember(
           await call(
             "changeMemberRole",
@@ -234,14 +256,22 @@ function MembersTab() {
             signal,
           ),
         );
-        members.update((rows) => rows.map((r) => (r.user.id === answer.user.id ? answer : r)));
+        change.confirm(id, answer.role);
         notify(msg("members.changed", { email: p.member.user.email, role: roleLabel(p.to) }));
-      } else {
-        await call("removeMember", { path: { user: p.member.user.id } }, signal);
-        members.update((rows) => rows.filter((r) => r.user.id !== p.member.user.id));
-        notify(msg("members.removed", { email: p.member.user.email }));
+        if (isMe(p.member)) void loadSession();
+      } catch (e) {
+        const back = change.fail(id);
+        if (signal.aborted) return;
+        refused(e, msg("members.roleBack", { email: p.member.user.email, role: roleLabel(back) }));
       }
-      // One's own role or membership: the console follows it.
+      return;
+    }
+    // Removing waits for the server: access that looks gone must be gone.
+    try {
+      await call("removeMember", { path: { user: p.member.user.id } }, signal);
+      members.update((rows) => rows.filter((r) => r.user.id !== p.member.user.id));
+      notify(msg("members.removed", { email: p.member.user.email }));
+      // One's own membership: the console follows it.
       if (isMe(p.member)) void loadSession();
     } catch (e) {
       refused(e);
@@ -542,7 +572,8 @@ function MemberRow(props: {
             value={props.member.role}
             onChange={(e) => {
               const to = choices().find((r) => r === e.currentTarget.value);
-              // The list shows the role the server holds until it agrees.
+              // The role shown stays until the change is confirmed in its
+              // dialog; it then shows at once (and comes back if refused).
               e.currentTarget.value = props.member.role;
               if (to !== undefined && to !== props.member.role) props.onRole(to);
             }}

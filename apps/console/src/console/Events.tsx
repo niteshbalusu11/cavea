@@ -166,7 +166,11 @@ export function Events() {
     return s.status === "ready" && s.data.next !== null;
   };
 
+  // Shown archived at once (09 §8); put back, saying so, if refused.
   const archive = async (event: Event) => {
+    const mark = (archived_at: string | null) =>
+      events.update((rows) => rows.map((r) => (r.key === event.key ? { ...r, archived_at } : r)));
+    mark(new Date().toISOString());
     try {
       const answer = checkEvent(await call("archiveEvent", { path: { event: event.key } }, signal));
       events.update((rows) => rows.map((r) => (r.key === answer.key ? answer : r)));
@@ -174,7 +178,10 @@ export function Events() {
       events.refetch();
       notify(msg("events.archived", { name: event.name ?? event.key }));
     } catch (e) {
-      report(e);
+      mark(event.archived_at);
+      if (!signal.aborted) {
+        report(e, msg("events.archiveBack", { name: event.name ?? event.key }));
+      }
     }
   };
 

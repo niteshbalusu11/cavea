@@ -77,9 +77,19 @@ export function PublishDialog(props: {
           <Show
             when={step().kind !== "done"}
             fallback={
-              <Button variant="primary" onClick={close}>
-                {msg("action.close")}
-              </Button>
+              <Show
+                when={done()?.outcome.kind === "editedMeanwhile"}
+                fallback={
+                  <Button variant="primary" onClick={close}>
+                    {msg("action.close")}
+                  </Button>
+                }
+              >
+                <Button onClick={close}>{msg("action.close")}</Button>
+                <Button variant="primary" onClick={() => void go()}>
+                  {msg("publish.again")}
+                </Button>
+              </Show>
             }
           >
             <Button onClick={close} disabled={step().kind === "working"}>
@@ -131,6 +141,8 @@ function Result(props: { outcome: PublishOutcome; before: Chart["published_versi
       return <p role="alert">{msg("publish.notSaved")}</p>;
     case "conflict":
       return <p role="alert">{msg("publish.conflict")}</p>;
+    case "editedMeanwhile":
+      return <p role="alert">{msg("publish.editedMeanwhile")}</p>;
     case "locked":
       return <p role="alert">{msg("publish.locked", { who: holderName(o.lock, "") })}</p>;
     case "failed":

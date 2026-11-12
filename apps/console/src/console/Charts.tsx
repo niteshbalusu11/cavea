@@ -187,13 +187,19 @@ export function Charts() {
     }
   };
 
+  // Shown archived at once (09 §8): the card leaves the list, or shows
+  // Archived; put back, saying so, if the server refuses.
   const archive = async (chart: Chart) => {
+    const mark = (archived_at: string | null) =>
+      list.update((all) => all.map((c) => (c.key === chart.key ? { ...c, archived_at } : c)));
+    mark(new Date().toISOString());
     try {
       await call("archiveChart", { path: { chart: chart.key } }, signal);
       notify(msg("charts.archived", { name: chart.name }));
       list.refetch();
     } catch (e) {
-      report(e);
+      mark(chart.archived_at);
+      if (!signal.aborted) report(e, msg("charts.archiveBack", { name: chart.name }));
     }
   };
 
