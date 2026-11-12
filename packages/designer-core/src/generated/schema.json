@@ -528,6 +528,18 @@
       "call": "step_out",
       "returns": "null"
     },
+    "textField": {
+      "call": "text_field",
+      "returns": {
+        "union": [
+          {
+            "args": [],
+            "ref": "TextField"
+          },
+          "null"
+        ]
+      }
+    },
     "title": {
       "call": "title",
       "returns": "string"

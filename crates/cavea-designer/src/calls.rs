@@ -15,7 +15,7 @@ use cavea_edit::{
     Draft, Drop, End, Field, FindingPlace, FloorGuides, FloorsView, HistoryView, Input, InputResult,
     InspectorView, LayerClick, LayersPage, Level, Numbering, NumberingView, Order, Overlay,
     Preview, Progress, Rect, SeatEdit, SeatRef, SelectionView, Session, SnapSettings, StatusView,
-    ToolId, ToolView, UserGuide, ValidationView, ViewName,
+    TextField, ToolId, ToolView, UserGuide, ValidationView, ViewName,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -117,6 +117,8 @@ calls! {
     }
     /// What the canvas draws over the chart now, in chart units.
     fn overlay(s) -> Overlay { s.overlay() }
+    /// The text field the tool asks for: the overlay's `text` alone.
+    fn text_field(s) -> Option<TextField> { s.text_field() }
     /// The pointer the canvas shows.
     fn cursor(s) -> Cursor { s.cursor() }
     /// The user guides of the floor shown, in the order added.

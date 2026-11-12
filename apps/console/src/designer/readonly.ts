@@ -33,6 +33,8 @@ const LOOKING = new Set([
   "numberingPreview",
   "validation",
   "overlay",
+  "textField",
+  "findingPlace",
   "cursor",
   "guides",
   "savedGuides",

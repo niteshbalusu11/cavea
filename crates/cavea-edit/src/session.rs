@@ -908,6 +908,21 @@ impl Session {
         self.tool.cursor()
     }
 
+    /// The text field the tool asks for (07 §4, Text), alone: the
+    /// overlay's `text` without the rest, which validation's markers make
+    /// costly to read on every frame.
+    pub fn text_field(&self) -> Option<crate::tool::TextField> {
+        let view = selection::View {
+            doc: self.editor.document(),
+            index: &self.index,
+            floor: self.floor,
+            tol: 0.0,
+        };
+        let mut out = Overlay::default();
+        self.tool.overlay(&view, &self.selection, &mut out);
+        out.text
+    }
+
     /// What the canvas draws over the chart now.
     pub fn overlay(&self) -> Overlay {
         let view = selection::View {

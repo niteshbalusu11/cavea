@@ -449,6 +449,8 @@ const ui = {
   "rail.label": "Tools",
   "canvas.label": "{name}: canvas",
   "canvas.role": "chart canvas",
+  "canvas.textField": "Text on the chart",
+  "canvas.textFieldHint": "Enter to place it, Escape to cancel",
   "canvas.unavailable": "The canvas cannot draw here",
   "canvas.noWebgl": "This browser has no WebGL2, which the designer's canvas needs.",
   "canvas.failed": "The canvas stopped: {message}",

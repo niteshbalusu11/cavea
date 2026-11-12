@@ -2260,6 +2260,7 @@ export interface CallTable {
   validation: { args: []; returns: ValidationView; error: never };
   finding_place: { args: [node: number, row: number | null, seat: number | null]; returns: FindingPlace; error: never };
   overlay: { args: []; returns: Overlay; error: never };
+  text_field: { args: []; returns: TextField | null; error: never };
   cursor: { args: []; returns: Cursor; error: never };
   guides: { args: []; returns: UserGuide[]; error: never };
   saved_guides: { args: []; returns: FloorGuides[]; error: never };
@@ -2436,6 +2437,11 @@ export abstract class Calls {
   /** What the canvas draws over the chart now, in chart units. */
   overlay(): Overlay {
     return this.call("overlay", []);
+  }
+
+  /** The text field the tool asks for: the overlay's `text` alone. */
+  textField(): TextField | null {
+    return this.call("text_field", []);
   }
 
   /** The pointer the canvas shows. */
