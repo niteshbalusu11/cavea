@@ -139,6 +139,9 @@ function TurnOn(props: { onClose: () => void }) {
   );
 
   const close = () => {
+    // Not while a request is on its way: a confirmation the server
+    // committed would lose its recovery codes with the dialog.
+    if (busy()) return;
     // Started, not confirmed: nothing is on, and the key is dropped.
     if (stage() === "scan") notify(msg("totp.closedEarly"));
     forget();
@@ -264,7 +267,7 @@ function TurnOn(props: { onClose: () => void }) {
             <FormError message={failure()?.text ?? null} detail={failure()?.detail} />
             {waiting()}
             <div class="flex justify-end gap-2">
-              <Button class="h-8" onClick={close}>
+              <Button class="h-8" disabled={busy()} onClick={close}>
                 {msg("action.cancel")}
               </Button>
               <Button
@@ -317,7 +320,7 @@ function TurnOn(props: { onClose: () => void }) {
               <FormError message={failure()?.text ?? null} detail={failure()?.detail} />
               {waiting()}
               <div class="flex justify-end gap-2">
-                <Button class="h-8" onClick={close}>
+                <Button class="h-8" disabled={busy()} onClick={close}>
                   {msg("action.cancel")}
                 </Button>
                 <Button
@@ -486,9 +489,14 @@ function TurnOff(props: { onClose: () => void }) {
     setCode("");
   };
   onCleanup(forget);
-  const close = () => {
+  const leave = () => {
     forget();
     props.onClose();
+  };
+  /** Cancel, Escape: not while turning off is on its way, whose answer
+   * updates the page. */
+  const close = () => {
+    if (!busy()) leave();
   };
 
   const submit = async (e: SubmitEvent) => {
@@ -505,7 +513,7 @@ function TurnOff(props: { onClose: () => void }) {
     try {
       await disableTotp(password(), code(), signal);
       notify(msg("totpOff.done"));
-      close();
+      leave();
     } catch (err) {
       const error = asApiError(err);
       if (signal.aborted || error.sessionLost) return;
@@ -519,7 +527,7 @@ function TurnOff(props: { onClose: () => void }) {
         case "notOn":
           adoptSecondFactor(false);
           notify(msg("totpOff.notOn"));
-          close();
+          leave();
           break;
         case "wait":
           wait.start(refusal.seconds);
@@ -570,7 +578,7 @@ function TurnOff(props: { onClose: () => void }) {
           </p>
         </Show>
         <div class="flex justify-end gap-2">
-          <Button class="h-8" onClick={close}>
+          <Button class="h-8" disabled={busy()} onClick={close}>
             {msg("action.cancel")}
           </Button>
           <Button

@@ -4,7 +4,16 @@
 // the list carries, the create form, and archive.
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { A, useSearchParams } from "@solidjs/router";
-import { createMemo, createSignal, createUniqueId, For, onCleanup, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  createUniqueId,
+  For,
+  on,
+  onCleanup,
+  Show,
+} from "solid-js";
 import { checkChartList, checkEvent, checkEventList } from "../api/check.ts";
 import { call } from "../api/client.ts";
 import type { Chart, Counts, Event } from "../api/generated.ts";
@@ -86,6 +95,14 @@ export function Events() {
   // The creation range as picked; applied when it is a range (D-93).
   const [range, setRange] = createSignal({ from: filters().from, to: filters().to });
   const rangeError = () => rangeProblem(day(range().from), day(range().to));
+  // The URL changed by navigation (a link, back, Clear): the inputs follow.
+  createEffect(
+    on(
+      () => [filters().from, filters().to] as const,
+      ([from, to]) => setRange({ from, to }),
+      { defer: true },
+    ),
+  );
   const onDate = (end: "from" | "to", value: string) => {
     const picked = { ...range(), [end]: value };
     setRange(picked);

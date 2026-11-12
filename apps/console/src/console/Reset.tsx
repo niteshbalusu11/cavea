@@ -26,6 +26,8 @@ type Ended = "spent" | "codeEnded" | null;
 
 export function Reset() {
   const [token, setToken] = createSignal(resetToken());
+  // The token lives as long as this page: leaving it unused forgets it.
+  onCleanup(dropResetToken);
   const [ended, setEnded] = createSignal<Ended>(null);
   const end = (why: Exclude<Ended, null>) => {
     dropResetToken();

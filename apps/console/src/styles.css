@@ -170,7 +170,12 @@
   body [data-print] {
     position: absolute;
     inset: 0 auto auto 0;
+  }
+  /* Black on white paper, whatever the screen's theme. */
+  body [data-print],
+  body [data-print] * {
     color: #000000;
+    background: #ffffff;
   }
 }
 
