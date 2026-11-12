@@ -17,7 +17,7 @@ One HTML file, `index.html`, with the seat map from a script tag: no build, no f
    npm start
    ```
 
-   Open `http://localhost:8000`. Choose a seat: it is held for you, and listed under the map with its price.
+   Open `http://localhost:8000` (`PORT=8001 npm start` serves on another port). Choose a seat: it is held for you, and listed under the map with its price.
 
 **Continue** posts `{ holdToken }` to `/api/checkout` on the page's own origin. This example has no backend, so it says checkout is not available: your backend answers it, as the [Node backend example](../node-backend) does, by pricing what the hold token holds, taking payment and booking.
 

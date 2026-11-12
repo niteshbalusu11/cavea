@@ -2,3 +2,5 @@ node_modules/
 .next/
 next-env.d.ts
 *.tsbuildinfo
+# Written by `next dev`.
+AGENTS.md
