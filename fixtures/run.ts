@@ -23,6 +23,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { Browser, type Message } from "../tools/chromium.ts";
+import { Tab } from "../tools/e2e/tab.ts";
 
 const ROOT = join(import.meta.dir, "..");
 const WORK = join(ROOT, "target/tmp/compat");
@@ -30,7 +31,7 @@ const FIXTURES = import.meta.dir;
 const PKGS = join(WORK, "pkgs");
 const DIST = join(ROOT, "packages/renderer/dist");
 const ALL =
-  "script-tag vite vite-dev webpack rollup esbuild next react18 csp-custom csp-server csp-cdn server-sdk";
+  "script-tag vite vite-dev webpack rollup esbuild next react18 csp-custom csp-server csp-cdn server-sdk example-page example-react example-next example-node";
 
 interface Row {
   check: string;
@@ -329,7 +330,7 @@ let chartFile = "";
 /** Builds and packs the packages `checks` need, and compiles the theatre preset. */
 async function prepare(checks: string[]): Promise<void> {
   await mkdir(PKGS, { recursive: true });
-  const packages = checks.some((c) => c !== "server-sdk") ? ["renderer", "react"] : [];
+  const packages = checks.some((c) => c !== "server-sdk" && c !== "example-node") ? ["renderer", "react"] : [];
   if (packages.length > 0) {
     try {
       await readFile(join(ROOT, "packages/renderer/wasm/cavea_web_bg.wasm"));
@@ -337,7 +338,7 @@ async function prepare(checks: string[]): Promise<void> {
       throw new Error("run `cargo xtask build-web` first");
     }
   }
-  if (checks.includes("server-sdk")) {
+  if (checks.some((c) => c === "server-sdk" || c === "example-node" || c === "example-next")) {
     packages.push("server-sdk");
   }
   for (const pkg of packages) {
@@ -736,6 +737,8 @@ async function caveaServer(): Promise<{
   event: string;
   asset: string;
   admin: string;
+  secret: string;
+  secretId: string;
 }> {
   const pg = "postgres://cavea:cavea@127.0.0.1:5432";
   // One database per call: several checks start a server in one run.
@@ -794,7 +797,7 @@ async function caveaServer(): Promise<{
     return (await res.json()) as Record<string, unknown>;
   };
   const workspace = await call("/v1/workspaces", admin, { key: "compat", name: "compat" });
-  const secret = String((workspace["secret_key"] as { key: string }).key);
+  const { key: secret, id: secretId } = workspace["secret_key"] as { key: string; id: string };
   // A background image (04 §7), loaded from the server after the first frame.
   const upload = await fetch(`${base}/v1/assets`, {
     method: "POST",
@@ -823,7 +826,7 @@ async function caveaServer(): Promise<{
   const key = String(
     (await call("/v1/keys", secret, { kind: "publishable", name: "compat" }))["key"],
   );
-  return { base, key, event: "show", asset, admin };
+  return { base, key, event: "show", asset, admin, secret, secretId };
 }
 
 /** The packed server SDK in a strict Node project: type-checked with the
@@ -939,6 +942,324 @@ async function cspServer(): Promise<void> {
   }
 }
 
+// ----------------------------------------------------------------- examples
+
+// The examples (`examples/`, DOC-009) are written to be copied out and run
+// as they are. Each check copies one, points its `@cavea` versions at the
+// packed tarballs (the packages are not published yet), installs it with npm
+// as its README says, runs it against `cavea-server` and drives it: the pages
+// in Chromium, by clicking a seat on the map; the backend over HTTP. Then it
+// asks the server what happened to the seats.
+
+const EXAMPLES = join(ROOT, "examples");
+
+/** Example `name` copied to `target/tmp/compat/examples/<name>` and installed. */
+async function example(name: string): Promise<{ dir: string; env: Record<string, string> }> {
+  const dir = join(WORK, "examples", name);
+  await rm(dir, { recursive: true, force: true });
+  await cp(join(EXAMPLES, name), dir, {
+    recursive: true,
+    filter: (src) => !/\/(node_modules|\.next|dist)(\/|$)/.test(src),
+  });
+  const file = join(dir, "package.json");
+  const pkg = JSON.parse(await readFile(file, "utf8")) as Record<string, Record<string, string>>;
+  let deps = 0;
+  for (const field of ["dependencies", "devDependencies"]) {
+    for (const dep of Object.keys(pkg[field] ?? {})) {
+      deps++;
+      const short = dep.match(/^@cavea\/(.+)$/)?.[1];
+      const into = pkg[field];
+      if (short !== undefined && into !== undefined) {
+        into[dep] = `file:${join(PKGS, `cavea-${short}-0.0.0.tgz`)}`;
+      }
+    }
+  }
+  await writeFile(file, JSON.stringify(pkg, null, 2));
+  const env = await node(dir);
+  if (deps > 0) {
+    await sh([join(nodePath, "npm"), "install", "--no-audit", "--no-fund"], { cwd: dir, env });
+  }
+  return { dir, env };
+}
+
+/** Where the event's seat `label` stands on the server. */
+async function seatStatus(server: { base: string; secret: string; event: string }, label: string): Promise<string> {
+  const res = await fetch(
+    `${server.base}/v1/events/${server.event}/objects?label=${encodeURIComponent(label)}`,
+    { headers: { authorization: `Bearer ${server.secret}` } },
+  );
+  const body = (await res.json()) as { data: Array<{ status: string }> };
+  return body.data[0]?.status ?? "missing";
+}
+
+/**
+ * Clicks near the middle of the page's map until `held()` names a seat the
+ * page lists as chosen; returns it. A double tap's window apart, so no two
+ * clicks make a zoom.
+ */
+async function holdOnMap(t: Tab, held: () => Promise<string | null>): Promise<string> {
+  const map = await t.find({ role: "application" }, undefined, 30_000);
+  await Bun.sleep(1500);
+  const [left, top, width, height] = await t.box(map);
+  for (let ring = 0; ring < 8; ring++) {
+    for (let dx = -ring; dx <= ring; dx++) {
+      for (let dy = -ring; dy <= ring; dy++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+        await t.clickAt(left + width / 2 + dx * 6, top + height * 0.45 + dy * 6);
+        await Bun.sleep(400);
+        const label = await held();
+        if (label !== null) return label;
+      }
+    }
+  }
+  throw new Error("no click near the map's middle chose a seat");
+}
+
+/** Waits for `test`, or fails naming `what`. */
+async function until<T>(what: string, test: () => Promise<T | null | undefined>, ms = 15_000): Promise<T> {
+  for (const deadline = Date.now() + ms; Date.now() < deadline; await Bun.sleep(200)) {
+    const value = await test();
+    if (value !== null && value !== undefined) return value;
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+/** A page of an example in Chromium: the map, a seat held on it, problems collected. */
+async function examplePageTab(url: string): Promise<Tab> {
+  const t = await Tab.open(await chromium(), "buyer", 1280, 900);
+  cleanup.push(() => t.close());
+  t.allow("GET", /favicon/, 404);
+  await t.goto(url);
+  await t.find({ role: "application" }, undefined, 30_000).catch(async (error: unknown) => {
+    await t.collect();
+    const seen = [...t.network.slice(-10), ...t.problems.map((p) => p.text.slice(0, 200))];
+    throw new Error(`${String(error)}: ${seen.join(" | ")}`, { cause: error });
+  });
+  return t;
+}
+
+/** Whatever the page reported that a person would have seen break. */
+async function pageProblems(t: Tab): Promise<string[]> {
+  await t.collect();
+  return t.problems.map((p) => p.text.slice(0, 200));
+}
+
+async function examplePage(): Promise<void> {
+  const { dir, env } = await example("plain-page");
+  const server = await caveaServer();
+  // The README's step 1, and the script from beside the page until the CDN has it.
+  const page = join(dir, "index.html");
+  const html = (await readFile(page, "utf8"))
+    .replace(/const CAVEA_URL = ".*";/, `const CAVEA_URL = "${server.base}";`)
+    .replace(/const PUBLISHABLE_KEY = ".*";/, `const PUBLISHABLE_KEY = "${server.key}";`)
+    .replace(/const EVENT = ".*";/, `const EVENT = "${server.event}";`)
+    .replace(/<script src="https:\/\/cdn[^"]*"><\/script>/, '<script src="cavea/cavea.min.js"></script>');
+  await writeFile(page, html);
+  await mkdir(join(dir, "cavea"), { recursive: true });
+  for (const f of ["cavea.min.js", "cavea_web_bg.wasm", "glyphs.png"]) await cp(join(DIST, f), join(dir, "cavea", f));
+  const port = freePort();
+  const proc = start([join(nodePath, "node"), "serve.js"], { cwd: dir, env: { ...env, PORT: String(port) } });
+  await waitFor(proc, /localhost/, 15_000);
+  const t = await examplePageTab(`http://localhost:${port}/`);
+  t.expect("POST", /^\/api\/checkout$/, 404);
+  const text = (id: string) => t.evaluate<string>(`document.getElementById(${JSON.stringify(id)}).textContent`);
+  const label = await holdOnMap(t, async () => {
+    const first = await t.evaluate<string | null>("document.querySelector('#seats li')?.textContent ?? null");
+    return first?.split(" (")[0] ?? null;
+  });
+  const held = await until(`${label} held on the server`, async () => ((await seatStatus(server, label)) === "held" ? true : null));
+  const total = await text("total");
+  const enabled = await until("Continue enabled", () => t.evaluate<boolean | null>("document.getElementById('continue').disabled ? null : true"));
+  await t.click({ role: "button", name: "Continue" });
+  const said = await until("the page to say checkout is not available", async () => ((await text("problem")) !== "" ? text("problem") : null));
+  const posted = t.network.some((n) => /^404 POST .*\/api\/checkout$/.test(n));
+  const problems = await pageProblems(t);
+  rows.push({
+    check: "example-page",
+    tool: "examples/plain-page",
+    ok: held && /^Total: £\d/.test(total) && enabled && posted && problems.length === 0,
+    detail: `${label} held on the server; "${total}"; Continue posted the hold token (${posted ? "seen" : "not seen"}): "${said}"${problems.length > 0 ? `; page problems: ${problems.join(" | ")}` : ""}`,
+  });
+}
+
+async function exampleReact(): Promise<void> {
+  const { dir, env } = await example("react");
+  const server = await caveaServer();
+  const vite = {
+    ...env,
+    VITE_CAVEA_URL: server.base,
+    VITE_CAVEA_PUBLISHABLE_KEY: server.key,
+    VITE_CAVEA_EVENT: server.event,
+  };
+  await sh(["sh", "-c", await script(dir, "build")], { cwd: dir, env: vite });
+  const t = await examplePageTab(`${serve([{ prefix: "/", dir: join(dir, "dist") }], { host: "localhost" })}/`);
+  const label = await holdOnMap(t, async () => {
+    const first = await t.evaluate<string | null>("document.querySelector('section li')?.textContent ?? null");
+    return first === null ? null : first;
+  });
+  const seats = await t.evaluate<string>("document.querySelector('section').textContent");
+  const statuses = await until("the seat held on the server", async () => {
+    const res = await fetch(`${server.base}/v1/events/${server.event}/objects?status=held`, {
+      headers: { authorization: `Bearer ${server.secret}` },
+    });
+    const body = (await res.json()) as { data: Array<{ label: string }> };
+    return body.data.length === 1 ? body.data[0]?.label : null;
+  });
+  await t.click({ role: "checkbox", name: "Dark map" });
+  await Bun.sleep(1000);
+  const problems = await pageProblems(t);
+  rows.push({
+    check: "example-react",
+    tool: await versionOf(dir, "vite"),
+    ok: /Total: £\d/.test(seats) && problems.length === 0,
+    detail: `built (tsc, vite); "${label}" listed, ${statuses} held on the server; dark theme switched${problems.length > 0 ? `; page problems: ${problems.join(" | ")}` : ""}`,
+  });
+}
+
+async function exampleNext(): Promise<void> {
+  const { dir, env } = await example("nextjs");
+  const server = await caveaServer();
+  const next = {
+    ...env,
+    NEXT_TELEMETRY_DISABLED: "1",
+    NEXT_PUBLIC_CAVEA_URL: server.base,
+    NEXT_PUBLIC_CAVEA_PUBLISHABLE_KEY: server.key,
+    NEXT_PUBLIC_CAVEA_EVENT: server.event,
+  };
+  // The build type-checks and prerenders without the secret key.
+  await sh(["next", "build"], { cwd: dir, env: next });
+  const port = freePort();
+  const proc = start(["next", "start", "-p", String(port), "-H", "127.0.0.1"], {
+    cwd: dir,
+    env: { ...next, CAVEA_SECRET_KEY: server.secret },
+  });
+  await waitFor(proc, /Ready|started server/i, 60_000);
+  const t = await examplePageTab(`http://127.0.0.1:${port}/`);
+  const label = await holdOnMap(t, async () => {
+    const first = await t.evaluate<string | null>("document.querySelector('aside li')?.textContent ?? null");
+    return first?.split(",")[0] ?? null;
+  });
+  await until(`${label} held on the server`, async () => ((await seatStatus(server, label)) === "held" ? true : null));
+  await t.click({ role: "button", name: "Checkout" });
+  const pay = await t.find({ role: "button", name: /^Pay £[\d.]+ \(fake\)$/ });
+  const price = await t.nameOf({ role: "button", name: /^Pay / });
+  await t.clickAt(...(await t.centre(pay)));
+  await t.find({ role: "heading", name: "Booked" });
+  const status = await until(`${label} booked on the server`, async () => {
+    const s = await seatStatus(server, label);
+    return s === "booked" ? s : null;
+  });
+  const problems = await pageProblems(t);
+  rows.push({
+    check: "example-next",
+    tool: await versionOf(dir, "next"),
+    ok: status === "booked" && problems.length === 0,
+    detail: `built and started; ${label} held from the map, checked out ("${price}"), paid and ${status} on the server${problems.length > 0 ? `; page problems: ${problems.join(" | ")}` : ""}`,
+  });
+}
+
+async function exampleNode(): Promise<void> {
+  const { dir, env } = await example("node-backend");
+  const server = await caveaServer();
+  await sh([join(nodePath, "npm"), "run", "typecheck"], { cwd: dir, env });
+  const port = freePort();
+  // `npm start` is `node server.ts`: started directly, so that stopping it stops the server.
+  const proc = start([join(nodePath, "node"), "server.ts"], {
+    cwd: dir,
+    env: {
+      ...env,
+      PORT: String(port),
+      CAVEA_URL: server.base,
+      CAVEA_EVENT: server.event,
+      CAVEA_SECRET_KEY: server.secret,
+      CAVEA_SECRET_KEY_ID: server.secretId,
+    },
+  });
+  await waitFor(proc, /listening on/, 15_000);
+  const cavea = async (method: string, path: string, body?: unknown): Promise<Record<string, unknown>> => {
+    const res = await fetch(`${server.base}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${server.secret}`, "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    if (!res.ok) throw new Error(`${method} ${path}: HTTP ${res.status} ${await res.text()}`);
+    return (await res.json()) as Record<string, unknown>;
+  };
+  /** A buyer's browser: its own cookie. */
+  const buyer = () => {
+    let cookie = "";
+    return async (path: string, body: unknown = {}): Promise<{ status: number; json: Record<string, unknown> }> => {
+      const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify(body),
+      });
+      cookie = res.headers.get("set-cookie")?.split(";")[0] ?? cookie;
+      return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+    };
+  };
+  const free = (await cavea("GET", `/v1/events/${server.event}/objects?status=free&limit=8`)) as {
+    data: Array<{ label: string; category: { key: string } }>;
+  };
+  const seats = free.data;
+  const PRICES: Record<string, number> = { premium: 6500, standard: 4500, value: 2500, access: 4500 };
+  const seen: string[] = [];
+  const expect = (ok: boolean, what: string): void => {
+    if (!ok) throw new Error(what);
+    seen.push(what);
+  };
+  // Hold, price, pay, book; pay again.
+  const a = buyer();
+  const token = String((await a("/api/hold-token")).json["holdToken"]);
+  expect(String((await a("/api/hold-token")).json["holdToken"]) === token, "one hold token per session");
+  const two = seats.slice(0, 2);
+  await cavea("POST", `/v1/events/${server.event}/hold`, { hold_token: token, objects: two.map((s) => s.label) });
+  const order = await a("/api/checkout");
+  const total = two.reduce((sum, s) => sum + (PRICES[s.category.key] ?? 0), 0);
+  expect(order.status === 200 && order.json["total"] === total, `checkout priced ${total} from the categories`);
+  const id = String(order.json["orderId"]);
+  const paid = await a(`/api/orders/${id}/pay`);
+  const statuses = await Promise.all(two.map((s) => seatStatus(server, s.label)));
+  expect(paid.json["status"] === "booked" && statuses.every((s) => s === "booked"), "paid and booked on the server");
+  expect((await a(`/api/orders/${id}/pay`)).json["status"] === "booked", "paying again answers booked");
+  expect((await buyer()(`/api/orders/${id}/pay`)).status === 404, "another buyer cannot pay the order");
+  // The hold lost during the payment: refunded, nothing booked.
+  const b = buyer();
+  const lost = seats[2]?.label ?? "";
+  const tokenB = String((await b("/api/hold-token")).json["holdToken"]);
+  await cavea("POST", `/v1/events/${server.event}/hold`, { hold_token: tokenB, objects: [lost] });
+  const orderB = String((await b("/api/checkout")).json["orderId"]);
+  await cavea("POST", `/v1/events/${server.event}/release`, { hold_token: tokenB, objects: [lost] });
+  const refused = await b(`/api/orders/${orderB}/pay`);
+  expect(refused.status === 409 && refused.json["error"] === "hold_expired" && (await seatStatus(server, lost)) === "free", "a hold lost during payment is refunded, not booked");
+  // Cancelled: released at once.
+  const c = buyer();
+  const kept = seats[3]?.label ?? "";
+  const tokenC = String((await c("/api/hold-token")).json["holdToken"]);
+  await cavea("POST", `/v1/events/${server.event}/hold`, { hold_token: tokenC, objects: [kept] });
+  const orderC = String((await c("/api/checkout")).json["orderId"]);
+  const cancelled = await c(`/api/orders/${orderC}/cancel`);
+  expect(cancelled.json["status"] === "cancelled" && (await seatStatus(server, kept)) === "free", "a cancelled order's seats are free");
+  // An expired (here: unknown) hold token at checkout.
+  const gone = await buyer()("/api/checkout", { holdToken: "an-expired-hold-token" });
+  expect(gone.status === 409 && gone.json["error"] === "hold_expired", "an ended hold at checkout is hold_expired");
+  // A session token the server takes for a page's own hold token.
+  const session = String((await buyer()("/api/seat-session")).json["token"]);
+  const created = await fetch(`${server.base}/v1/public/hold-tokens`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${server.key}`, "content-type": "application/json", "cavea-session": session },
+    body: JSON.stringify({ event: server.event }),
+  });
+  expect(created.status === 201 || created.status === 200, "the signed session token is accepted");
+  const leaked = /sk_|hold_token":|"hold/.test(proc.output) ? "a key or token in the output" : null;
+  rows.push({
+    check: "example-node",
+    tool: `Node ${(await sh([join(nodePath, "node"), "--version"])).trim()}`,
+    ok: leaked === null,
+    detail: `${seen.join("; ")}${leaked === null ? "" : `; ${leaked}`}`,
+  });
+}
+
 // --------------------------------------------------------------------- main
 
 const CHECKS: Record<string, () => Promise<void>> = {
@@ -954,9 +1275,16 @@ const CHECKS: Record<string, () => Promise<void>> = {
   "csp-server": cspServer,
   "csp-cdn": cspCdn,
   "server-sdk": serverSdk,
+  "example-page": examplePage,
+  "example-react": exampleReact,
+  "example-next": exampleNext,
+  "example-node": exampleNode,
 };
 
-const wanted = process.argv.slice(2);
+// `examples` names the four example checks.
+const wanted = process.argv
+  .slice(2)
+  .flatMap((w) => (w === "examples" ? ["example-page", "example-react", "example-next", "example-node"] : [w]));
 const unknown = wanted.filter((w) => !(w in CHECKS));
 if (unknown.length > 0) {
   console.error(`unknown check ${unknown.join(", ")}; the checks are: ${ALL}`);
