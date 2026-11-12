@@ -22,7 +22,7 @@ You need [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) 
 
 ## Its software bill of materials
 
-Each release carries signed SBOMs in [SPDX](https://spdx.dev) 2.3 JSON. The index carries the source's: every Rust crate and JavaScript package in the lockfiles it was built from. Each architecture's image carries its own: its operating-system packages and the server. To read the source's:
+Each release carries signed SBOMs in [SPDX](https://spdx.dev) 2.3 JSON. The index carries the source's: every Rust crate and JavaScript package in the lockfiles it was built from. Each architecture's image carries its own: the packages of the operating-system base it is built on (Debian's C library, certificates, time zones) and the server, whose Rust crates the source's SBOM lists. To read the source's:
 
 ```sh
 cosign verify-attestation {{image}} --type spdxjson \

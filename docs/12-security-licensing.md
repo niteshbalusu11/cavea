@@ -43,7 +43,7 @@ Everything arriving from a browser is untrusted, including chart files and realt
 | T12 | Replayed or duplicated booking calls | Idempotency keys; all-or-nothing commands |
 | T13 | Forged webhooks at the customer's endpoint | HMAC signature with a timestamp; the docs require a five-minute tolerance check |
 | T14 | SQL injection | Parameterised queries only; every query is a `&'static str` (sqlx refuses any other without `AssertSqlSafe`, which only tests use), so no SQL is built from input |
-| T15 | Supply-chain compromise | Lockfiles; `cargo-deny` and `cargo-audit`; pinned CI actions; npm provenance; signed images; SBOM per release |
+| T15 | Supply-chain compromise | Lockfiles; `cargo-deny` and `cargo-audit`; pinned CI actions; npm provenance; signed images; SBOM per release. As built (D-85): `cargo xtask release` runs `cargo deny check`, `cargo audit` and `bun audit` and stops on a finding (exceptions are dated, reasoned entries in `deny.toml` and `.cargo/audit.toml`); every workflow action pinned by commit SHA, the release refusing one that is not; the image and each architecture's image signed keylessly by the release workflow (cosign, Sigstore's public log), SPDX SBOMs attached as signed attestations and to the GitHub release; npm packages published with provenance from the same workflow, whose publishing job alone holds the identity token. Customers verify by `apps/docs/content/reference/verify-release.md` |
 | T16 | Timing attacks on key comparison | Keys are looked up by hash; comparison is constant-time |
 | T17 | Split brain between two server nodes | Fencing epoch checked inside every commit (`08-server.md` §4.8) |
 | T18 | Abuse of best-available to scan inventory | Rate limited; public use is off by default per event |

@@ -321,8 +321,10 @@ fn steps(
     })?;
     list.step("verify", "Verify from the registry: signatures, attestations, pull by digest", || {
         let mut text = String::new();
-        logged(&out, "verify", &mut target.cosign(&["verify", &at(&index)], true))?;
-        let index_sbom = ["verify-attestation", "--type", "spdxjson", &at(&index)];
+        // By the version's tag, as a customer verifies (verify-release.md).
+        let tagged = target.image(&format!(":{version}"));
+        logged(&out, "verify", &mut target.cosign(&["verify", &tagged], true))?;
+        let index_sbom = ["verify-attestation", "--type", "spdxjson", &tagged];
         logged(&out, "verify", &mut target.cosign(&index_sbom, true))?;
         for (arch, digest) in &digests {
             logged(&out, "verify", &mut target.cosign(&["verify", &at(digest)], true))?;
@@ -337,7 +339,10 @@ fn steps(
             ensure!(theirs == ours, "linux/{arch}: pulled {theirs}, built {ours}");
             writeln!(text, "linux/{arch}: signature and SBOM attestation verify; pulled by digest, image {ours}")?;
         }
-        Ok(Outcome::Pass(format!("index: signature and source SBOM verify\n{}", text.trim())))
+        Ok(Outcome::Pass(format!(
+            "{tagged}: signature and source SBOM verify\n{}",
+            text.trim()
+        )))
     })?;
     list.step("npm", "Publish the npm packages with provenance", || {
         let dist_tag = if pre { "next" } else { "latest" };
@@ -360,6 +365,11 @@ fn steps(
                     .arg("package/package.json"),
             )?)?;
             let id = format!("{}@{version}", pkg["name"].as_str().unwrap_or(name));
+            // npm refuses a private package only when publishing for real.
+            ensure!(
+                pkg["private"] != true,
+                "{id} is private: no LICENSE (12 §8)"
+            );
             let file = tarball.to_string_lossy().into_owned();
             if rehearsal {
                 logged(

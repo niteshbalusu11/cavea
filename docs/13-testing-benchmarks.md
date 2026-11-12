@@ -627,9 +627,14 @@ Specified in `11-accessibility.md` §9.
 |---|---|---|
 | Every pull request | In CI: format, lint, type checks and builds, including the WASM build with size gate. Run locally by the author before filing: unit tests, short property and simulation runs, micro-benchmarks, end-to-end smoke, authorisation matrix | About 10 minutes |
 | Nightly | Long simulation, fuzzing, full golden images, L2 for two minutes, full end-to-end | About 2 hours |
-| Every release | Device benchmarks, L1–L5, chaos, upgrade test from the previous release with data, compatibility matrix, manual accessibility matrix | About a day |
+| Every release | `cargo xtask release` in the release workflow (§13): every suite above that a machine runs, the upgrade test from the previous release with data, the compatibility fixtures, the image's smoke test. By a person: device benchmarks, L1–L5, chaos, manual accessibility matrix | About a day |
 
 ## 13. Release checklist
+
+`cargo xtask release` (D-85) runs every item a machine can and prints this list with each one's result, kept as `checklist.md` with the release (and attached to the GitHub release). It runs: the pull-request suites (format, lint, types, builds, the payload gate, unit and database tests, the short simulation, determinism, the server SDK's tests), the full golden images and end-to-end check, the compatibility fixtures, `cargo xtask upgrade` from the previous release and the renderers of the two previous minors, the image for both architectures with `deploy/smoke.ts` and the docs' quick start against it, the audits, the version and changelog checks, signing and the SBOMs. A person does and records: device benchmarks, L1 to L5 and chaos on reference hardware, the long nightly runs (simulation, fuzzing, L2), the accessibility matrix, the arm64 image started on arm64 hardware, and reading the changelog and upgrade notes.
+
+`cargo xtask upgrade --from <rev> --renderer <rev>` works from any earlier commit too: it fills a database through that revision's own API (workspaces, keys, the console's owner and a member invited, charts with versions and a thumbnail, a draft mid-edit and a lock, an uploaded image, an event with holds live at the stop, bookings, blocked seats, an archived chart and event, a licence), stops it, starts the new server on it, compares every read route's answer field by field (fields only the new server has are listed, not failed), works the data (the old holds extended and booked, the draft saved with its old ETag, the lock released, the old session cookie, signing in, publishing) and runs the reconciler before and after. Measured 2026-11-12 from `cb0f8bf` (migrations 1 to 3, before the console's people), `0ed2fef` (1 to 6) and `2480a4a` (1 to 8): no difference in any old answer, the reconciler clean, the old session still signed in, the licence still valid; the renderers of `2d4933d` (the first packaged one) and `2480a4a` held a seat and saw a live change against the new server.
+
 
 - [ ] All pull-request and nightly suites green on the release commit.
 - [ ] Device benchmarks within every budget; results committed.
