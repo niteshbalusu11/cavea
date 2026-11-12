@@ -168,15 +168,26 @@ impl Checklist {
 
 // ------------------------------------------------------------------ helpers
 
+/// A command as a person would type it: the program and its arguments.
+fn shown(command: &Command) -> String {
+    let mut text = command.get_program().to_string_lossy().into_owned();
+    for arg in command.get_args() {
+        text.push(' ');
+        text.push_str(&arg.to_string_lossy());
+    }
+    text
+}
+
 /// A command's standard output, failing with its standard error.
 pub fn capture(command: &mut Command) -> Result<String> {
     let output = command
         .stderr(Stdio::piped())
         .output()
-        .with_context(|| format!("cannot run {command:?}"))?;
+        .with_context(|| format!("cannot run `{}`", shown(command)))?;
     ensure!(
         output.status.success(),
-        "{command:?} failed with {}: {}",
+        "`{}` failed with {}: {}",
+        shown(command),
         output.status,
         String::from_utf8_lossy(&output.stderr).trim()
     );
@@ -194,7 +205,7 @@ pub fn logged(out: &Path, id: &str, command: &mut Command) -> Result<()> {
         .stdout(file.try_clone()?)
         .stderr(file)
         .status()
-        .with_context(|| format!("cannot run {command:?}"))?;
+        .with_context(|| format!("cannot run `{}`", shown(command)))?;
     if status.success() {
         return Ok(());
     }
@@ -202,7 +213,8 @@ pub fn logged(out: &Path, id: &str, command: &mut Command) -> Result<()> {
     let tail: Vec<&str> = log.lines().rev().take(25).collect();
     let tail: Vec<&str> = tail.into_iter().rev().collect();
     bail!(
-        "{command:?} failed with {status} (log: {}):\n{}",
+        "`{}` failed with {status} (log: {}):\n{}",
+        shown(command),
         path.display(),
         tail.join("\n")
     )
