@@ -294,14 +294,23 @@ async function reply(op: OperationId, response: Response): Promise<unknown> {
   if (type !== media) {
     throw unexpected();
   }
-  if (media === "application/json") {
-    try {
-      return JSON.parse(await response.text()) as unknown;
-    } catch {
-      throw unexpected();
-    }
+  // Read outside any `catch` of ours: a body that times out or is cancelled
+  // is the transport's to classify (retried, or the caller's reason).
+  const json = media === "application/json";
+  const body =
+    json || media.startsWith("text/") ? await response.text() : await response.arrayBuffer();
+  // A status that documents a body has one: an empty frame is no state.
+  if ((typeof body === "string" ? body.length : body.byteLength) === 0) {
+    throw unexpected();
   }
-  return media.startsWith("text/") ? response.text() : response.arrayBuffer();
+  if (!json) {
+    return body;
+  }
+  try {
+    return JSON.parse(body as string) as unknown;
+  } catch {
+    throw unexpected();
+  }
 }
 
 /** A network failure's system code (`ECONNREFUSED`), never its message,

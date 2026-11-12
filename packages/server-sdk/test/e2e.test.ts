@@ -171,6 +171,8 @@ describe.skipIf(DATABASE === undefined)("against cavea-server", () => {
       const ws = await operator.workspaces.create({ key: "sdk-e2e", name: "SDK" });
       const listed = await all(operator.workspaces.list({ limit: 1 }));
       expect(listed.map((w) => w.id)).toContain(ws.id);
+      // Prometheus text, through the raw call (no wrapper).
+      expect(await operator.call("metrics", {})).toContain("cavea_");
       const cavea = new Cavea({
         baseUrl: base,
         secretKey: ws.secret_key.key,

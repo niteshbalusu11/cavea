@@ -94,6 +94,16 @@ const network = (): Error => new TypeError("fetch failed", { cause: { code: "ECO
 const decode = (s: string | undefined): unknown =>
   JSON.parse(Buffer.from(s ?? "", "base64url").toString());
 
+// Headers at once, then a body that never ends.
+const stalled = (init?: RequestInit): Response => {
+  const body = new ReadableStream({
+    start(controller) {
+      init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason));
+    },
+  });
+  return new Response(body, { headers: { "Content-Type": "application/json" } });
+};
+
 async function rejection(promise: Promise<unknown>): Promise<unknown> {
   try {
     await promise;
@@ -338,6 +348,28 @@ describe("retries", () => {
 });
 
 describe("timeouts and cancellation", () => {
+  test("a body that stops after the headers is a timeout (a read retried) or the caller's abort", async () => {
+    let calls = 0;
+    const cavea = new Cavea({
+      baseUrl: BASE,
+      secretKey: KEY,
+      timeoutMs: 30,
+      maxRetries: 1,
+      fetch: async (_, init) => {
+        calls++;
+        return stalled(init);
+      },
+    });
+    const error = (await rejection(cavea.charts.get("c"))) as CaveaError;
+    expect([error.code, calls]).toEqual(["timeout", 2]);
+    const reason = new Error("stop");
+    const controller = new AbortController();
+    const pending = rejection(cavea.charts.get("c", { signal: controller.signal }));
+    await Bun.sleep(5);
+    controller.abort(reason);
+    expect(await pending).toBe(reason);
+  });
+
   test("an attempt that takes too long is a timeout; a read is tried again", async () => {
     let calls = 0;
     const cavea = new Cavea({
@@ -432,6 +464,7 @@ describe("errors", () => {
     for (const answer of [
       () => new Response("<html>sign in</html>", { headers: { "Content-Type": "text/html" } }),
       () => new Response(null, { status: 200 }),
+      () => new Response(null, { headers: { "Content-Type": "application/vnd.cavea.frame" } }),
       () =>
         new Response(frame, {
           status: 202,
