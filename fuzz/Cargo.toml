@@ -27,6 +27,8 @@ libfuzzer-sys = "0.4"
 # Each at the main workspace's version, already in its tree.
 axum = { version = "0.8.9", default-features = false }
 cavea-server = { path = "../crates/cavea-server", features = ["fuzzing"] }
+# The server's licence state, as its router tests make it (no licence).
+cavea-licence = { path = "../crates/cavea-licence" }
 cavea-telemetry = { path = "../crates/cavea-telemetry" }
 # Signs the session tokens the requests carry (08 §11).
 hmac = { version = "0.13.0", default-features = false }

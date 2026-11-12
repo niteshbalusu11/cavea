@@ -283,6 +283,7 @@ dependencies = [
  "cavea-compiler",
  "cavea-core",
  "cavea-format",
+ "cavea-licence",
  "cavea-render",
  "cavea-server",
  "cavea-telemetry",
@@ -295,6 +296,16 @@ dependencies = [
  "sqlx",
  "tokio",
  "tower",
+]
+
+[[package]]
+name = "cavea-licence"
+version = "0.0.0"
+dependencies = [
+ "base64",
+ "ring",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -320,6 +331,7 @@ dependencies = [
  "cavea-core",
  "cavea-engine",
  "cavea-format",
+ "cavea-licence",
  "cavea-telemetry",
  "getrandom 0.4.3",
  "hmac",

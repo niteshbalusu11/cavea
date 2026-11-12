@@ -91,7 +91,7 @@ Toolchains: Rust is pinned in `rust-toolchain.toml` (with the `wasm32-unknown-un
 - The same with `--release` and `measure_ -- --ignored --nocapture --test-threads=1`: prints commit latency, actor throughput and load time; `measure_console_reads` prints the staff state, counts and events list at 100,000 seats and 1,000 events. `cargo test --release -p cavea-engine --lib -- --ignored --nocapture measure_publication` prints what a publication costs the actor at 100,000 objects
 - A schema change is a new file in `crates/cavea-server/migrations/`, listed in `crates/cavea-server/src/store/migrations.rs`; never edit a released one
 
-CI (`.github/workflows/ci.yml`) runs the Rust checks, a type check of the fuzz crate on the stable toolchain (`cargo check --manifest-path fuzz/Cargo.toml --all-targets --locked`), `check-deps` and `build-web` (with binaryen 132 installed, so the payload gate runs), then the TypeScript `lint`, `format:check`, `typecheck` and `build`. `.github/workflows/docs.yml` builds the docs site alone when only its inputs change (Markdown included, which `ci.yml` ignores). Neither runs tests.
+CI (`.github/workflows/ci.yml`) runs the Rust checks, a type check of the fuzz crate on the stable toolchain (`cargo check --manifest-path fuzz/Cargo.toml --all-targets`), `check-deps` and `build-web` (with binaryen 132 installed, so the payload gate runs), then the TypeScript `lint`, `format:check`, `typecheck` and `build`. `.github/workflows/docs.yml` builds the docs site alone when only its inputs change (Markdown included, which `ci.yml` ignores). Neither runs tests.
 
 ## Quality gates
 

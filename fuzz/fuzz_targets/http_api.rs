@@ -355,6 +355,8 @@ fn setup() -> Harness {
         public_url: None,
         console_cookie_secure: true,
         rate_limit_sign_in: 10,
+        // None: the server's licence state is what the router tests use.
+        licence: None,
     };
     let state = runtime.block_on(async {
         cavea_server::http::AppState {
@@ -376,6 +378,7 @@ fn setup() -> Harness {
             db: pool,
             health: cavea_server::http::Health::default(),
             console: cavea_server::http::web::Files::new(&[]),
+            licences: cavea_server::licence::Licences::new(cavea_licence::Verifier::new([]), None),
         }
     });
     let doc = cavea_server::http::openapi::document();
