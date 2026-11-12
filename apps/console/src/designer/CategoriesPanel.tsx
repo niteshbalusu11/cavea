@@ -91,8 +91,7 @@ export function CategoriesPanel(props: { editor: Editor }) {
           >
             {(a) => (
               <>
-                {msg("categories.activeIs")}{" "}
-                <span class="font-medium text-fg">{a().label}</span>
+                {msg("categories.activeIs")} <span class="font-medium text-fg">{a().label}</span>
               </>
             )}
           </Show>

@@ -117,7 +117,13 @@ test("on a real chart, findings name objects by name and rows and seats by label
           origin: [0, 800],
           seatPitch: 50,
           seats: 3,
-          path: { kind: "polyline", points: [[0, 0], [100, 0]] },
+          path: {
+            kind: "polyline",
+            points: [
+              [0, 0],
+              [100, 0],
+            ],
+          },
           oids: [[300, 3]],
           category: "std",
         },
@@ -171,7 +177,8 @@ test("on a real chart, findings name objects by name and rows and seats by label
   const codes = new Set(warned.map((f) => f.code));
   for (const code of ["W102", "W103", "W105", "W106", "W109"]) expect(codes).toContain(code);
   for (const f of warned) {
-    const at = f.node !== null && namesPlace(f) ? warnings.findingPlace(f.node, f.row, f.seat) : null;
+    const at =
+      f.node !== null && namesPlace(f) ? warnings.findingPlace(f.node, f.row, f.seat) : null;
     plain(findingText(f, at));
   }
   const single = warned.find((f) => f.code === "W103");

@@ -320,11 +320,9 @@ test("random edits, outages, other tabs, the lock and choices: nothing lost, not
           // Another person, or this person in another browser: takes over,
           // saves while theirs, or leaves.
           const who = next(2) === 0 ? "other" : "there";
-          [
-            () => r.server.takesOver(who),
-            () => r.server.saves(who),
-            () => r.server.leaves(who),
-          ][next(3)]?.();
+          [() => r.server.takesOver(who), () => r.server.saves(who), () => r.server.leaves(who)][
+            next(3)
+          ]?.();
           break;
         }
         case 12:

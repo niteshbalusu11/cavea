@@ -189,6 +189,12 @@ export function serverChart(props: {
   const [stranded, setStranded] = createSignal<string | null>(null);
   const [conflictOpen, setConflictOpen] = createSignal(false);
   const [leaving, setLeaving] = createSignal<(() => void) | null>(null);
+  /** The version whose picture for the charts list is being made (D-79),
+   * which leaving now would lose: said in the top bar, and leaving asks. */
+  const [picturing, setPicturing] = createSignal<number | null>(null);
+  /** Leaving while the picture is made: where to go once it is done, or
+   * if the person leaves without it. */
+  const [leavingPicture, setLeavingPicture] = createSignal<(() => void) | null>(null);
   /** Why it is read-only when the role is not why: the expired licence. */
   const [closed, setClosed] = createSignal(props.setup.closed);
   const [access, setAccess] = createSignal<Access>(
@@ -440,8 +446,17 @@ export function serverChart(props: {
   };
 
   /** A published version's thumbnail, made in the background: a failure
-   * is a quiet note, never the publish's. */
+   * is a quiet note, never the publish's. While it is made the top bar says
+   * so and leaving asks first (`picturing`). */
   const thumbnail = async (version: Version, published: Published_) => {
+    setPicturing(version.number);
+    try {
+      await picture(version, published);
+    } finally {
+      setPicturing(null);
+    }
+  };
+  const picture = async (version: Version, published: Published_) => {
     const e = props.editor();
     if (e === null) return;
     const images = e.images;
@@ -642,8 +657,9 @@ export function serverChart(props: {
   // changes the server lacks, the store written when the page is hidden,
   // a guard on the console's own links, and a retry when back online.
   const beforeUnload = (e: BeforeUnloadEvent) => {
-    if (autosave?.unsaved !== true) return;
-    void autosave.keep();
+    const unsaved = autosave?.unsaved === true;
+    if (!unsaved && picturing() === null) return;
+    if (unsaved) void autosave?.keep();
     e.preventDefault();
     // Older browsers show the warning only when this is set.
     e.returnValue = "";
@@ -687,12 +703,25 @@ export function serverChart(props: {
     window.removeEventListener("online", online);
   });
   useBeforeLeave((e) => {
-    if (left || e.defaultPrevented || autosave?.unsaved !== true) return;
-    e.preventDefault();
-    setLeaving(() => () => {
+    if (left || e.defaultPrevented) return;
+    const go = () => {
       left = true;
       e.retry(true);
-    });
+    };
+    if (autosave?.unsaved === true) {
+      e.preventDefault();
+      setLeaving(() => go);
+    } else if (picturing() !== null) {
+      e.preventDefault();
+      setLeavingPicture(() => go);
+    }
+  });
+  // The picture is done while the person waits to leave: on they go.
+  createEffect(() => {
+    const go = leavingPicture();
+    if (go === null || picturing() !== null) return;
+    setLeavingPicture(null);
+    go();
   });
 
   // The session ended under the editor (it expired, or ended elsewhere):
@@ -735,6 +764,13 @@ export function serverChart(props: {
         onRetry={() => autosave?.retry()}
         onResolve={() => setConflictOpen(true)}
       />
+      <Show when={picturing()}>
+        {(n) => (
+          <span class="ml-2 truncate text-sm text-faint" role="status">
+            {msg("thumbnail.making", { version: n() })}
+          </span>
+        )}
+      </Show>
     </Show>
   );
   /** The store refused the work: read with the save state, which is
@@ -874,6 +910,19 @@ export function serverChart(props: {
         </div>
       </Confirm>
       <Confirm
+        open={leavingPicture() !== null}
+        title={msg("thumbnail.leaveTitle")}
+        description={msg("thumbnail.leaveBody", { version: picturing() ?? 0 })}
+        confirm={msg("thumbnail.leaveConfirm")}
+        cancel={msg("thumbnail.wait")}
+        onConfirm={() => {
+          const go = leavingPicture();
+          setLeavingPicture(null);
+          go?.();
+        }}
+        onClose={() => setLeavingPicture(null)}
+      />
+      <Confirm
         open={leaving() !== null}
         title={msg("leave.title")}
         description={msg("leave.body")}
@@ -971,9 +1020,7 @@ function AccessIndicator(props: {
       case "editing":
         return "";
       case "role":
-        return a.lock === null
-          ? msg("save.readOnly")
-          : props.says("lock.roleEditing", a.lock);
+        return a.lock === null ? msg("save.readOnly") : props.says("lock.roleEditing", a.lock);
       case "archived":
         return msg("lock.archived");
       case "elsewhere":

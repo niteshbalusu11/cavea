@@ -1927,6 +1927,12 @@ const designerLock = {
   "topbar.publishReadOnly": "This chart is open read-only here.",
   "publish.locked": "{who} is editing this chart, so nothing was published.",
   "thumbnail.skipped": "Version {version} was published without a picture for the charts list.",
+  "thumbnail.making": "Making the picture of version {version} for the charts list…",
+  "thumbnail.leaveTitle": "The charts list's picture is still being made",
+  "thumbnail.leaveBody":
+    "Version {version} is published. Its picture for the charts list takes a few seconds more; leave now and the version has none. Wait, and you leave as soon as it is done.",
+  "thumbnail.leaveConfirm": "Leave without it",
+  "thumbnail.wait": "Wait",
 };
 
 export const catalogue = {
