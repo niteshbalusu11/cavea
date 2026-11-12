@@ -30,7 +30,8 @@ use serde_json::Value;
 
 use super::root;
 use crate::release::{
-    ARCHES, Checklist, Outcome, PACKAGES, capture, logged, prerelease, sh, workspace_version,
+    ARCHES, Checklist, Outcome, PACKAGES, capture, logged, prerelease, release_files, sh,
+    workspace_version,
 };
 
 /// The registry the rehearsal pushes to, pinned by digest.
@@ -436,17 +437,10 @@ fn steps(
             )))
         },
     )?;
-    list.step("github-release", "GitHub release with the notes, SBOMs and checksums", || {
+    list.step("github-release", "GitHub release with the notes, SBOMs, tarballs and checksums", || {
         let tag = format!("v{version}");
         let mut files: Vec<String> = vec!["SHA256SUMS".to_owned(), "checklist.md".to_owned()];
-        for entry in fs::read_dir(out.join("sbom"))? {
-            files.push(format!("sbom/{}", entry?.file_name().to_string_lossy()));
-        }
-        let mut create = sh(&["gh", "release", "create", &tag, "--verify-tag", "--title", &format!("Cavea {version}"), "--notes-file", "notes.md"]);
-        if pre {
-            create.arg("--prerelease");
-        }
-        create.args(&files).current_dir(&out);
+        files.extend(release_files(&out)?);
         if rehearsal {
             return Ok(Outcome::NotApplicable(format!(
                 "not in a dry run (irreversible): `gh release create {tag} --verify-tag …` with {}",
@@ -454,8 +448,21 @@ fn steps(
             )));
         }
         if capture(&mut sh(&["gh", "release", "view", &tag])).is_ok() {
-            return Ok(Outcome::Pass(format!("{tag} exists (a re-run)")));
+            // A re-run: `gh release create` makes a draft, uploads, then
+            // publishes, so an interrupted one may have left a draft with
+            // some files. Upload them all again and publish it.
+            let mut upload = sh(&["gh", "release", "upload", &tag, "--clobber"]);
+            upload.args(&files).current_dir(&out);
+            logged(&out, "github-release", &mut upload)?;
+            logged(&out, "github-release", &mut sh(&["gh", "release", "edit", &tag, "--draft=false"]))?;
+            return Ok(Outcome::Pass(format!("{tag} completed (a re-run): {}", files.join(", "))));
         }
+        let title = format!("Cavea {version}");
+        let mut create = sh(&["gh", "release", "create", &tag, "--verify-tag", "--title", &title, "--notes-file", "notes.md"]);
+        if pre {
+            create.arg("--prerelease");
+        }
+        create.args(&files).current_dir(&out);
         logged(&out, "github-release", &mut create)?;
         Ok(Outcome::Pass(format!("{tag} with {}", files.join(", "))))
     })?;

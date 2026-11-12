@@ -787,7 +787,16 @@ fn preflight(
                     "the section has no `### Upgrading` notes"
                 );
             }
-            let check = capture(&mut sh(&["bun", "tools/changelog.ts", "--check", "HEAD"]))?;
+            // Since the release before this one: the tag being released is on HEAD.
+            let tag = format!("v{version}");
+            let check = capture(&mut sh(&[
+                "bun",
+                "tools/changelog.ts",
+                "--check",
+                "--exclude",
+                &tag,
+                "HEAD",
+            ]))?;
             Ok(Outcome::Pass(format!("`{head}`; {check}")))
         },
     )?;
@@ -1287,26 +1296,52 @@ fn artefacts(
             Ok(Outcome::Pass(text.trim().to_owned()))
         },
     )?;
-    list.step("checksums", "SHA256SUMS of the release files", || {
-        let mut files = Vec::new();
-        for dir in ["npm", "sbom", "images"] {
-            let Ok(entries) = fs::read_dir(out.join(dir)) else {
-                continue;
-            };
-            for entry in entries {
-                let name = entry?.file_name().to_string_lossy().into_owned();
-                if name.ends_with(".tgz") || name.ends_with(".json") || name.ends_with(".tar") {
-                    files.push(format!("{dir}/{name}"));
-                }
+    list.step(
+        "checksums",
+        "SHA256SUMS of the release's downloadable files",
+        || {
+            // Exactly the files the GitHub release offers, by the names it gives
+            // them (no directory), so `sha256sum -c SHA256SUMS` works beside them.
+            // The images are verified by digest and signature instead.
+            let mut sums = String::new();
+            let mut count = 0;
+            for file in release_files(&out)? {
+                let (dir, name) = file
+                    .split_once('/')
+                    .context("a release file outside a directory")?;
+                sums.push_str(&capture(
+                    Command::new("sha256sum")
+                        .arg(name)
+                        .current_dir(out.join(dir)),
+                )?);
+                sums.push('\n');
+                count += 1;
+            }
+            ensure!(count > 0, "nothing to sum");
+            fs::write(out.join("SHA256SUMS"), sums)?;
+            Ok(Outcome::Pass(format!("{count} files")))
+        },
+    )?;
+    Ok(images)
+}
+
+/// The files attached to the GitHub release besides `SHA256SUMS` and the
+/// checklist, relative to `out`, sorted: the SBOMs and the npm tarballs.
+pub fn release_files(out: &Path) -> Result<Vec<String>> {
+    let mut files = Vec::new();
+    for (dir, suffix) in [("sbom", ".spdx.json"), ("npm", ".tgz")] {
+        let Ok(entries) = fs::read_dir(out.join(dir)) else {
+            continue;
+        };
+        for entry in entries {
+            let name = entry?.file_name().to_string_lossy().into_owned();
+            if name.ends_with(suffix) {
+                files.push(format!("{dir}/{name}"));
             }
         }
-        files.sort();
-        ensure!(!files.is_empty(), "nothing to sum");
-        let sums = capture(Command::new("sha256sum").args(&files).current_dir(&out))?;
-        fs::write(out.join("SHA256SUMS"), format!("{sums}\n"))?;
-        Ok(Outcome::Pass(format!("{} files", files.len())))
-    })?;
-    Ok(images)
+    }
+    files.sort();
+    Ok(files)
 }
 
 /// The package count and the count by ecosystem of an SPDX document.

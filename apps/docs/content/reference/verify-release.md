@@ -33,7 +33,7 @@ cosign verify-attestation {{image}} --type spdxjson \
 
 It prints the SBOM's name and how many packages it lists. For an architecture's own, run the same command with `{{image}}` replaced by that image's digest, which `docker buildx imagetools inspect {{image}}` lists for each platform (`{{image}}@sha256:…`).
 
-The same SBOM files are attached to the version's release on GitHub (`{{repository}}/releases/tag/v{{version}}`), with `SHA256SUMS` listing each file's checksum (`sha256sum -c SHA256SUMS`).
+The same SBOM files are attached to the version's release on GitHub (`{{repository}}/releases/tag/v{{version}}`), with the npm packages' tarballs and `SHA256SUMS`, which lists the checksum of each: download them into one directory and run `sha256sum -c SHA256SUMS` there.
 
 ## The npm packages
 

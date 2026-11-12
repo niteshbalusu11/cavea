@@ -4,6 +4,8 @@
 //
 //   bun tools/changelog.ts [ref]          the next release's entries, as Markdown
 //   bun tools/changelog.ts --check [ref]  fails if one of them is not a merged pull request
+//   --exclude <tag>                       ignores that tag (the release being made, already
+//                                         on `ref`), so "since" is the one before it
 //
 // `ref` defaults to `origin/main`. "Since the last release" is since the
 // newest `v*` tag reachable from `ref`, or, before the first release, since
@@ -11,7 +13,9 @@
 // The releaser condenses the list into the version's section by hand.
 const args = process.argv.slice(2);
 const check = args.includes("--check");
-const ref = args.find((a) => !a.startsWith("--")) ?? "origin/main";
+const excludeAt = args.indexOf("--exclude");
+const exclude = excludeAt === -1 ? undefined : args[excludeAt + 1];
+const ref = args.find((a, i) => !a.startsWith("--") && i !== excludeAt + 1) ?? "origin/main";
 
 const git = (...argv: string[]): string => {
   const run = Bun.spawnSync(["git", ...argv], { stderr: "pipe" });
@@ -21,7 +25,16 @@ const git = (...argv: string[]): string => {
   return run.stdout.toString().trim();
 };
 
-const tag = Bun.spawnSync(["git", "describe", "--tags", "--abbrev=0", "--match", "v*", ref]);
+const tag = Bun.spawnSync([
+  "git",
+  "describe",
+  "--tags",
+  "--abbrev=0",
+  "--match",
+  "v*",
+  ...(exclude === undefined ? [] : ["--exclude", exclude]),
+  ref,
+]);
 const since =
   tag.exitCode === 0
     ? tag.stdout.toString().trim()

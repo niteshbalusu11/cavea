@@ -842,6 +842,11 @@ async function renderer(): Promise<void> {
   say(`the renderer of ${label} is drawing the new server's event`);
 
   // A seat the backend holds shows as taken on the page.
+  // A seat the backend holds goes from available to unavailable on the page.
+  const status = (label: string | undefined): string =>
+    `window.page.map.findObject(${JSON.stringify(label)})?.status`;
+  const first = await tab.evaluate<string | undefined>(status(free[0]));
+  check(first === "available", `${free[0]} shows as available first (${first})`);
   const token = str(
     (await must([201], "POST", "/v1/hold-tokens", { event: "night" }, { key: sk })).json,
     "hold_token",
@@ -853,10 +858,7 @@ async function renderer(): Promise<void> {
     { hold_token: token, objects: [free[0]] },
     { key: sk },
   );
-  await tab.waitFor(
-    `window.page.map.findObject(${JSON.stringify(free[0])})?.status !== "free"`,
-    15_000,
-  );
+  await tab.waitFor(`${status(free[0])} === "unavailable"`, 15_000);
   say(`the backend's hold on ${free[0]} reached the page live`);
   // The page holds a seat itself.
   await tab.evaluate(`window.page.map.select([${JSON.stringify(free[1])}])`);
