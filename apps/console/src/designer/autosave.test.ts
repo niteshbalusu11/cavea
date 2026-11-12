@@ -57,13 +57,13 @@ const settle = async () => {
 type Mode = "up" | "down" | "signedOut";
 
 /** Who holds the lock: `me`, this browser (every tab of it); `there`, the
- * same person in another browser, a holder apart (D-94); `other`, another
+ * same person in another browser, a holder apart (D-96); `other`, another
  * person. */
 type Holder = "me" | "there" | "other";
 
 /** The server's draft and etag, another writer, and requests the test
  * answers one at a time; the editing lock by the server's clock (D-73),
- * held by person and editor (D-94). */
+ * held by person and editor (D-96). */
 class FakeServer {
   constructor(readonly clock: FakeClock) {}
   lock: { holder: Holder; since: number; until: number } | null = null;
@@ -133,7 +133,7 @@ class FakeServer {
   }
 
   /** They close the chart: their own lock is released, never another
-   * editor's, the same person's included (D-94). */
+   * editor's, the same person's included (D-96). */
   leaves(who: "there" | "other"): void {
     if (this.lock?.holder === who) this.lock = null;
   }
@@ -625,7 +625,7 @@ test("taken over: saving stops, the work stays in the store, and the person lear
   expect(r.server.refusedLocked).toBe(1);
 });
 
-test("the person's other browser is a holder apart (D-94): its leaving never frees this one's lock, and its take-over stops this one", async () => {
+test("the person's other browser is a holder apart (D-96): its leaving never frees this one's lock, and its take-over stops this one", async () => {
   const r = locked();
   r.edit();
   // The other browser opened read-only and closes: this one's lock stays.

@@ -50,9 +50,11 @@ Select two or more objects, press `Ctrl`+`K` and type "align" or "distribute":
 
 The stage, the mixing desk, a pillar, the exits: draw them with **Rectangle** (`U`), **Ellipse**, **Polygon** (click each corner, then the first again) or **Line**, and set their **Fill** and **Stroke** colours in the inspector. Buyers see them on the map.
 
-Press `Escape` until nothing is selected before you draw one. While you are working inside a section (after double-clicking it), what you draw on it goes into that section; the **Layers** list shows where it went.
+Press `Escape` until nothing is selected before you draw one. While you are working inside a section (after double-clicking it), what you draw on it goes into that section; the status bar says so ("1 selected in Stalls"), and the **Layers** list shows where it went.
 
-> **Not yet** The **Text** tool does nothing yet, so the stage cannot be named on the chart.
+To name the stage, choose **Text** (`X`), click where the words go, type them and press `Enter` (`Escape` cancels). To change them later, double-click the text, or type in the inspector's **Text**. Its size, weight, colour and rotation are in the inspector too.
+
+Then tell the chart where the stage is: choose **Focal point** (`F`) and click the middle of the stage ([No focal point](checking.md#no-focal-point)).
 
 ## Layers, locking and hiding
 

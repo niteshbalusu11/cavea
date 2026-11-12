@@ -14,7 +14,7 @@ A new chart has one category, **Standard**. Open the **Categories** tab in the p
 4. Choose **Add category** for each other level. Give each a **Label**, a **Key** and a **Colour** (type a colour such as `#B45309`, or choose one).
 5. Tick **Accessible** on a category of wheelchair or accessible spaces. The buyer's map marks those seats, and buyers who need them can find them.
 
-The list shows how many seats each category has ("110 objects"), and a tick beside an accessible one. The menu at the end of each row (the three dots) has **Move up** and **Move down**, which set the order of the map's key, **Merge into…** and **Delete…**. Deleting a category that seats still use asks which category they move to.
+The list shows how many seats each category has ("110 objects"), and the word **Accessible**, with a wheelchair symbol, beside an accessible one. The menu at the end of each row (the three dots) has **Move up** and **Move down**, which set the order of the map's key, **Merge into…** and **Delete…**. Deleting a category that seats still use asks which category they move to.
 
 ## Colours
 
@@ -34,7 +34,7 @@ A block's seats take the block's category. With the block selected, choose it in
 To put single seats in another category, paint them:
 
 1. Step into the block's seats: double-click the block, then double-click the row, so that the inspector says **Seats** ([Change single rows and seats](seats.md#change-single-rows-and-seats)). The brush paints what a click would select, so without this it paints whole blocks.
-2. In **Categories**, click the name of the category to paint with. Its row is highlighted: it is now the active category, which the brush paints and new blocks start with.
+2. In **Categories**, click the name of the category to paint with. Its row is marked **Active**, and the top of the list says "Active:" and its name: it is the category the brush paints and new blocks start with.
 3. Choose **Category brush** in the tools (`C`).
 4. Click seats, or drag across them. Each click is one step you can undo.
 5. Choose **Select** (`V`) when you have finished.

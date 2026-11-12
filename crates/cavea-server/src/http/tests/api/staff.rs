@@ -682,7 +682,7 @@ async fn chart_lock_life_cycle() {
     .await;
 }
 
-/// D-94: one person's two editors (two browsers, `?editor=`) are two
+/// D-96: one person's two editors (two browsers, `?editor=`) are two
 /// holders. The second is refused the lock, saves and publishing while the
 /// first holds it, and cannot release it; after a take-over the first is the
 /// one refused and its release leaves the second's lock. A request naming

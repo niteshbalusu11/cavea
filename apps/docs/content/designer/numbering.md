@@ -36,7 +36,7 @@ A new block is numbered A, B, C from the front row and 1, 2, 3 from the left. If
 | **Continue from the previous row** | Seats are numbered on from one row to the next instead of starting again in each row, as some arenas do |
 | **Prefix**, **Suffix** | Text before or after every seat's label |
 
-Left and right are as a person sees them looking at the stage, from the point the chart calls its focal point. A chart started in the console has no focal point yet, and the panel says so ("has no focal point to face"): then **Left to right** means left to right on your screen, before the block is turned.
+Left and right are as a person sees them looking at the stage, from the point the chart calls its focal point. Until you place one with the **Focal point** tool (`F`, [No focal point](checking.md#no-focal-point)), the panel says the block "has no focal point to face": then **Left to right** means left to right on your screen, before the block is turned.
 
 ## Odd and even
 

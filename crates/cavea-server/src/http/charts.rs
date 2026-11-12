@@ -220,7 +220,7 @@ macro_rules! chart_columns {
 }
 
 /// The lock's holder, the holder's email while a member, its times, and
-/// the editor that took it (D-94); `NULL` when it has expired. For a chart
+/// the editor that took it (D-96); `NULL` when it has expired. For a chart
 /// aliased `c` joined with [`lock_joins`].
 macro_rules! lock_columns {
     () => {
@@ -1261,7 +1261,7 @@ impl Lock {
         })
     }
 
-    /// Whether `actor`, as `editor`, holds it (D-94): the same person or key,
+    /// Whether `actor`, as `editor`, holds it (D-96): the same person or key,
     /// and the same editor when both the lock and the request name one. A
     /// request naming none is any editor of its actor, as before editors.
     fn held_by(&self, actor: &str, editor: Option<&str>) -> bool {
@@ -1273,7 +1273,7 @@ impl Lock {
     }
 }
 
-/// `?editor=`: the editor a request comes from (D-94). The console's
+/// `?editor=`: the editor a request comes from (D-96). The console's
 /// designer names its browser with a random id, so that one person's two
 /// browsers are two holders of the lock and neither releases or saves
 /// under the other's.
@@ -1372,7 +1372,7 @@ struct LockChart {
 /// Take the lock if it is free, expired, the caller's already (a renewal,
 /// keeping `since`, and the editor that took it when `$6` names none), or
 /// `$4` says take over. The caller's is its actor's, by editor `$6` when
-/// both name one (D-94). An archived chart takes none.
+/// both name one (D-96). An archived chart takes none.
 const TAKE_LOCK: &str = concat!(
     "WITH c AS (
   UPDATE charts
@@ -1451,7 +1451,7 @@ const RELEASE_LOCK: &str = "UPDATE charts
    AND ($4::text IS NULL OR lock_editor IS NULL OR lock_editor = $4)";
 
 /// Release the caller's lock; another's stays, another editor's of the same
-/// actor included (D-94). `204` either way.
+/// actor included (D-96). `204` either way.
 async fn unlock(
     Staff(auth): Staff,
     Path(key): Path<String>,

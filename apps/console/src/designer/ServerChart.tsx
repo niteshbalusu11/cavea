@@ -110,7 +110,7 @@ export interface ServerChart {
 
 /** Messages naming a lock's holder as `{who}`, each with a `…Self`
  * sentence of its own for the person themself in another browser, which
- * holds the lock apart from this one (D-94). */
+ * holds the lock apart from this one (D-96). */
 type LockMessage =
   | "lock.editing"
   | "lock.takenOver"
