@@ -1,0 +1,7 @@
+# `bun test` from the repository root finds test files everywhere below it. These
+# paths are skipped: `target/` holds scratch copies and worktrees of this
+# repository (their tests fail without installed dependencies), `dist/` built
+# output. Patterns match paths relative to the directory `bun test` runs in.
+# `tools/tests.test.ts` fails when a tracked test file matches one.
+[test]
+pathIgnorePatterns = ["**/target/**", "**/dist/**"]
