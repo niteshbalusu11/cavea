@@ -13,7 +13,7 @@ The public JavaScript surface of the renderer. Everything here is semver-stable 
 | `@cavea/vue`, `@cavea/svelte` | Thin wrappers (props in, events out). Not yet |
 | `@cavea/designer-embed` | Helper for embedding the designer in an iframe |
 | `@cavea/manager-embed` | Helper for embedding the event manager |
-| `@cavea/server-sdk` | Node client for the server's REST API (never used in the browser) |
+| `@cavea/server-sdk` | Node client for the server's REST API (never used in the browser; §15) |
 
 **What a customer installs** (D-58). `@cavea/renderer` is built by `bun run build` in `packages/renderer` into `dist/`, which is the package (`bun pm pack` in it; publishing is OPS-001). Every file is at the top of the package:
 
@@ -593,3 +593,51 @@ const state = customState({
 ```
 
 This path uses no Cavea server. It is the "renderer only" licence.
+
+## 15. Server SDK
+
+`@cavea/server-sdk` is the server's REST API (08 §6) for a customer's backend: Node 20.3 or later (`AbortSignal.any`) and bun, on the platform's `fetch`. It holds a secret key, so it is never used in a browser: constructed where `window` and `document` exist, it throws unless `dangerouslyAllowBrowser` is set (tests that fake a browser only). The page talks to the customer's backend, which talks to Cavea.
+
+```ts
+import { Cavea, isCaveaError } from '@cavea/server-sdk';
+
+const cavea = new Cavea({ baseUrl: 'https://seats.example.com', secretKey: process.env.CAVEA_SECRET_KEY, keyId: process.env.CAVEA_KEY_ID });
+
+const token = await cavea.holdTokens.create({ event: 'hamlet-2027-03-14' });
+await cavea.events.hold('hamlet-2027-03-14', { hold_token: token.hold_token, objects: ['Orchestra-C-12'] });
+// After payment: the order number as the idempotency key, so a retry books once.
+await cavea.events.book('hamlet-2027-03-14', { hold_token: token.hold_token, order_ref: '77120' }, { idempotencyKey: 'order-77120' });
+
+for await (const seat of cavea.events.listObjects('hamlet-2027-03-14', { status: 'booked' })) { /* every booked seat once */ }
+
+try { await cavea.events.hold('hamlet-2027-03-14', { hold_token: token.hold_token, objects: ['Orchestra-C-13'] }); }
+catch (e) { if (isCaveaError(e, 'object_not_free')) { /* e.details.objects names the seats */ } else throw e; }
+
+const session = await cavea.signSessionToken({ sub: buyerId, event: 'hamlet-2027-03-14' });   // for the picker's Cavea-Session (08 §11)
+```
+
+**What it is made of** (D-77). `cargo xtask types` writes `src/generated.ts` from the committed OpenAPI document (`xtask/src/api.rs`, the generator the console uses): a type for each schema the SDK's operations reach, each operation's input and reply, and a table of the operations a secret key or the admin key may call, with method, path template, credential, whether it takes an `Idempotency-Key` and whether it is a page. `cargo xtask types --check`, and so `cargo test -p xtask`, fails while the file is stale. One hand-written request layer (`src/core.ts`) turns the table into calls; a thin layer (`src/index.ts`) groups them by resource. `cavea.call(operationId, input)` reaches every operation of the table, typed, so an operation the server gains is callable as soon as the types are regenerated. `src/wrappers.ts` names the method that reaches each operation, typed against the table: an operation without a line fails `bun run typecheck` until it gets a method or `null` (reachable through `call` only, as `metrics` is); `wrappers.test.ts` calls each method and checks the method and path it sends.
+
+| Group | Methods |
+|---|---|
+| `charts` | `list`, `create`, `get`, `archive`, `getDraft` (the document and its `ETag`), `saveDraft` (`ifMatch` required: the etag read, or `"*"`), `validate`, `publish` (`ifMatch` optional; `created` false when the draft compiled to a version the chart had), `versions` |
+| `events` | `list` (`chart` to filter), `create`, `get` (with counts), `update`, `archive`, `hold`, `release`, `book`, `changeStatus`, `objects` (by label: `{data, unknown}`), `listObjects` (`status` to filter) |
+| `holdTokens` | `create`, `get`, `extend`, `release` |
+| `keys` | `list`, `create`, `revoke` |
+| `assets` | `upload` (bytes; `created` false when the workspace had them) |
+| `workspaces` (admin key) | `list`, `create`, `mintKey`, `inviteOwner` |
+
+**Rules it applies.**
+
+- **Credentials.** `secretKey` (`sk_` and 64 hex digits, checked at construction) for workspace operations, `adminKey` for the operator's; an operation whose key the client lacks fails before sending. The key goes in `Authorization: Bearer`, never a URL, and is kept in a closure: printing the client or an error never shows it.
+- **Idempotency keys** (08 §6.1). Every call to an operation that takes one (hold, release, book, change status, extending and releasing a hold token) sends one: the caller's `idempotencyKey` (1 to 255 printable ASCII characters, checked before sending), else a random UUID made for that call. Retries of the call send the same key, so a reply lost on the way back is replayed, not applied twice. The same key with another request is `idempotency_mismatch`. An `idempotencyKey` on an operation that takes none is a `TypeError`.
+- **Retries, only where a repeat cannot do something twice.** After a network failure, a timeout, `429`, `500`, `502`, `503` or `504`, the client tries again (2 retries by default, `maxRetries`) only for reads (`GET`), archives and revocations (`DELETE`, idempotent by 08 §6.2), a draft saved over `If-Match: *`, and calls carrying an idempotency key. Never a create, a publish, an event change, a hold-token creation or a draft saved over an etag (its repeat would conflict with itself). It waits `Retry-After` when the answer gives one, and fails at once with it when it is longer than `maxRetryAfter` (30 s by default); otherwise a jittered back-off from 250 ms, doubling. Any other `4xx` is final.
+- **Timeouts and cancellation.** Each attempt has `timeoutMs` (30 s by default; per call too); `signal` cancels the whole call, retries and waits included, and the call rejects with the signal's reason.
+- **Pages** are async iterators that follow `next` exactly until it is `null`: an empty page with a `next` is not the end (an objects page looks at 10,000 objects at most, 08 §6.2), and a cursor returned twice is an error rather than a loop. `.pages()` gives the pages.
+- **Errors** are one class, `CaveaError`: `code` (the problem's, 08 §6.4, typed from the document's catalogue; or `network`, `timeout`, `unexpected` for an answer that is not one of the API's), `reason` and `details` as the problem gives them, `status`, `requestId` (from `Cavea-Request-Id`), `retryAfter` and `operation`. Its message is built from those alone: never the key, the request's body, headers or URL (a hold token is in some paths), nor the server's free-text message, which can quote part of a refused body. `reason` is a string: the document does not enumerate reasons.
+- **Session tokens** (08 §11, D-34): `signSessionToken({sub, event, ttlSeconds?, maxObjects?, channels?})` signs HS256 with the secret key, `kid` the key's id (`keyId`, from the key's creation or `keys.list()`); the server verifies it with the key's stored SHA-256, which is the same HMAC.
+- `baseUrl` may carry a path prefix (a proxy at `/cavea/`) and no credentials, query or fragment; redirects are refused, so a key is never sent on to another place.
+
+**Packaging** follows `@cavea/renderer` (D-58): `bun run build` in `packages/server-sdk` writes `dist/` (`index.js`, one ES module with no imports; `index.d.ts` and the declarations it reaches; `package.json` with `"type": "module"`, `"sideEffects": false`, `engines.node >=20.3`), and fails while `api.md`, the public declarations as one file, is stale (`bun run build --update-api`). No runtime dependencies. There is no script-tag build or WASM: it is not for pages.
+
+**Proof.** `src/client.test.ts` holds the rules above to a scripted `fetch`. `test/e2e.test.ts` runs against a real `cavea-server` on a database of its own when `CAVEA_TEST_DATABASE_URL` is set: a workspace by the admin key, a chart published, events walked in pages, hold, book, an idempotent replay and a mismatch, a conflict, draft etags, a lost reply retried and applied once, a `429` waited for (made by a wrapping `fetch`: secret-key routes are not rate limited, 08 §12), and a session token the server's public route accepts. `bun fixtures/run.ts server-sdk` installs the packed tarball into a strict TypeScript project (no DOM library, `skipLibCheck` off) and runs it under Node 22 and 24 against `cavea-server` (13 §8).
