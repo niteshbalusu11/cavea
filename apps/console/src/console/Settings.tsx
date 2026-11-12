@@ -3,6 +3,7 @@
 // revoke) and the audit log. Only an owner makes or unmakes an owner, and
 // a workspace keeps one owner: what the server would refuse is not offered,
 // and its refusal is shown when it comes anyway (a role changed elsewhere).
+import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { useSearchParams } from "@solidjs/router";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import {
@@ -11,6 +12,7 @@ import {
   checkInvitationList,
   checkMember,
   checkMemberList,
+  checkPasswordResetCreated,
   checkWorkspace,
 } from "../api/check.ts";
 import { call } from "../api/client.ts";
@@ -18,6 +20,7 @@ import type {
   AuditEntry,
   Invitation,
   InvitationCreated,
+  PasswordResetCreated,
   WorkspaceMember,
 } from "../api/generated.ts";
 import { createPages, loadAll } from "../api/pages.ts";
@@ -25,13 +28,15 @@ import type { Role } from "../api/permissions.ts";
 import { asApiError, componentSignal, createQuery } from "../api/query.ts";
 import { msg, msgOf } from "../i18n/messages.ts";
 import { adoptWorkspaceName, loadSession, me, workspace } from "../session.ts";
-import { Button } from "../ui/controls.tsx";
+import { Button, buttonClass } from "../ui/controls.tsx";
 import { Field, fieldInputClass, FormError, length } from "../ui/form.tsx";
-import { Confirm, Dialog, notify } from "../ui/overlays.tsx";
+import { Icon } from "../ui/Icon.tsx";
+import { afterMenu, Confirm, Dialog, menuContent, menuItem, notify } from "../ui/overlays.tsx";
 import { describe, reference, report } from "./errors.ts";
 import { LicenceTab } from "./Licence.tsx";
 import {
   Action,
+  CheckField,
   CopyField,
   Empty,
   formatDateTime,
@@ -45,6 +50,8 @@ import {
   th,
 } from "./kit.tsx";
 import {
+  accountHelpLock,
+  accountHelpRefusal,
   inviteRefusal,
   memberLock,
   memberRefusal,
@@ -174,6 +181,12 @@ function MembersTab() {
   const [inviting, setInviting] = createSignal(false);
   const [pending, setPending] = createSignal<Pending | null>(null);
   const [revoking, setRevoking] = createSignal<Invitation | null>(null);
+  // Sign-in help for a member (CON-003, D-90): a reset link, or resetting
+  // their two-step sign-in.
+  const [helping, setHelping] = createSignal<{
+    kind: "link" | "twoStep";
+    member: WorkspaceMember;
+  } | null>(null);
 
   /** The number of owners when every member is loaded. */
   const owners = createMemo(() => {
@@ -214,6 +227,27 @@ function MembersTab() {
       if (isMe(p.member)) void loadSession();
     } catch (e) {
       refused(e);
+    }
+  };
+
+  /** A refusal of sign-in help: said in a toast; a member gone or a role
+   * that may have changed (theirs or the person's own) reads the list and
+   * `me` again. */
+  const helpRefused = (e: unknown) => {
+    const error = asApiError(e);
+    const known = accountHelpRefusal(error);
+    if (known === null) return report(e);
+    notify(known.message, "error", reference(error));
+    if (known.gone || known.stale) members.refetch();
+    if (known.stale) void loadSession();
+  };
+
+  const resetTwoStep = async (member: WorkspaceMember) => {
+    try {
+      await call("resetMemberSecondFactor", { path: { user: member.user.id } }, signal);
+      notify(msg("resetTwoStep.done", { email: member.user.email }));
+    } catch (e) {
+      helpRefused(e);
     }
   };
 
@@ -304,6 +338,7 @@ function MembersTab() {
                           owners={owners()}
                           onRole={(to) => setPending({ kind: "role", member: m, to })}
                           onRemove={() => setPending({ kind: "remove", member: m })}
+                          onHelp={(kind) => setHelping({ kind, member: m })}
                         />
                       )}
                     </For>
@@ -396,6 +431,30 @@ function MembersTab() {
         onClose={() => setPending(null)}
       />
       <Confirm
+        open={helping()?.kind === "twoStep"}
+        title={msg("resetTwoStep.title", { email: helping()?.member.user.email ?? "" })}
+        description={msg("resetTwoStep.body")}
+        confirm={msg("resetTwoStep.confirm")}
+        variant="danger"
+        onConfirm={() => {
+          const h = helping();
+          if (h !== null) void resetTwoStep(h.member);
+        }}
+        onClose={() => setHelping(null)}
+      />
+      <Show when={helping()?.kind === "link" ? helping()?.member : undefined}>
+        {(m) => (
+          <ResetLinkDialog
+            member={m()}
+            onClose={() => setHelping(null)}
+            onRefused={(e) => {
+              setHelping(null);
+              helpRefused(e);
+            }}
+          />
+        )}
+      </Show>
+      <Confirm
         open={revoking() !== null}
         title={msg("invite.revokeTitle", { email: revoking()?.email ?? "" })}
         description={msg("invite.revokeBody")}
@@ -417,8 +476,17 @@ function MemberRow(props: {
   owners: number | null;
   onRole: (to: Role) => void;
   onRemove: () => void;
+  onHelp: (kind: "link" | "twoStep") => void;
 }) {
   const lock = () => memberLock(permissions(), props.member.role, props.owners);
+  const helpLock = () => {
+    const l = accountHelpLock(permissions(), props.member.role, props.self);
+    return l === "self"
+      ? msg("members.ownAccount")
+      : l === "ownership"
+        ? msg("members.ownerAccounts")
+        : null;
+  };
   const reason = () => {
     const l = lock();
     return l === "ownership"
@@ -461,14 +529,56 @@ function MemberRow(props: {
           </select>
         </Show>
       </td>
-      <td class={`${td} text-right`}>
-        <Action
-          label={msg("members.remove")}
-          class="h-7"
-          variant="danger"
-          blocked={reason()}
-          onClick={props.onRemove}
-        />
+      <td class={`${td} text-right whitespace-nowrap`}>
+        <span class="inline-flex gap-2">
+          <Show
+            when={helpLock() === null}
+            fallback={
+              <Action
+                label={msg("members.signInHelp")}
+                class="h-7"
+                blocked={helpLock()}
+                onClick={() => {}}
+              />
+            }
+          >
+            <DropdownMenu gutter={4} placement="bottom-end">
+              <DropdownMenu.Trigger
+                data-focus-id={`member-help-${props.member.user.id}`}
+                class={buttonClass("secondary", "h-7")}
+                aria-label={msg("members.accountMenu", { email: props.member.user.email })}
+              >
+                {msg("members.signInHelp")}
+                <Icon name="more" />
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content class={menuContent}>
+                  <DropdownMenu.Item
+                    class={menuItem}
+                    onSelect={afterMenu(() => props.onHelp("link"))}
+                  >
+                    <Icon name="lock" />
+                    {msg("members.resetLink")}
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    class={`${menuItem} text-danger`}
+                    onSelect={afterMenu(() => props.onHelp("twoStep"))}
+                  >
+                    <Icon name="unlock" />
+                    {msg("members.resetTwoStep")}
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu>
+          </Show>
+          <Action
+            label={msg("members.remove")}
+            class="h-7"
+            variant="danger"
+            blocked={reason()}
+            onClick={props.onRemove}
+          />
+        </span>
       </td>
     </tr>
   );
@@ -594,6 +704,104 @@ function InviteDialog(props: { onClose: () => void; onCreated: () => void }) {
   );
 }
 
+/** Makes a password reset link for a member (D-90), then shows it once.
+ * Clearing their two-step sign-in is a separate choice, off by default:
+ * a lost password is not a lost phone. */
+function ResetLinkDialog(props: {
+  member: WorkspaceMember;
+  onClose: () => void;
+  /** A refusal the members screen says (the member gone, a role). */
+  onRefused: (e: unknown) => void;
+}) {
+  const signal = componentSignal();
+  const [clear, setClear] = createSignal(false);
+  const [failure, setFailure] = createSignal<{ text: string; detail?: string } | null>(null);
+  const [busy, setBusy] = createSignal(false);
+  // The link: held only while the dialog is open.
+  const [created, setCreated] = createSignal<PasswordResetCreated | null>(null);
+  const email = () => props.member.user.email;
+  const close = () => {
+    setCreated(null);
+    props.onClose();
+  };
+  const submit = async (e: SubmitEvent) => {
+    e.preventDefault();
+    if (busy()) return;
+    setBusy(true);
+    setFailure(null);
+    try {
+      setCreated(
+        checkPasswordResetCreated(
+          await call(
+            "createMemberPasswordReset",
+            { path: { user: props.member.user.id }, body: { clear_second_factor: clear() } },
+            signal,
+          ),
+        ),
+      );
+    } catch (err) {
+      const error = asApiError(err);
+      if (signal.aborted || error.sessionLost) return;
+      if (accountHelpRefusal(error) !== null) {
+        props.onRefused(error);
+        return;
+      }
+      const detail = reference(error);
+      setFailure(
+        detail === undefined ? { text: describe(error) } : { text: describe(error), detail },
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Show
+      when={created()}
+      fallback={
+        <Dialog open title={msg("resetLink.title", { email: email() })} heading onClose={close}>
+          <form class="space-y-4 px-5 pt-2 pb-5" noValidate onSubmit={(e) => void submit(e)}>
+            <p class="text-base text-muted">{msg("resetLink.body", { email: email() })}</p>
+            <CheckField
+              label={msg("resetLink.clear")}
+              hint={msg("resetLink.clearHint")}
+              checked={clear()}
+              onChange={setClear}
+            />
+            <FormError message={failure()?.text ?? null} detail={failure()?.detail} />
+            <div class="flex justify-end gap-2">
+              <Button class="h-8" onClick={close}>
+                {msg("action.cancel")}
+              </Button>
+              <Button type="submit" variant="primary" class="h-8" disabled={busy()}>
+                {busy() ? msg("resetLink.creating") : msg("resetLink.create")}
+              </Button>
+            </div>
+          </form>
+        </Dialog>
+      }
+    >
+      {(c) => (
+        <Confirm
+          open
+          title={msg("resetLink.shownTitle", { email: email() })}
+          description={msg("resetLink.shownBody", {
+            email: email(),
+            expires: formatDateTime(c().reset.expires_at),
+          })}
+          onClose={close}
+        >
+          <div class="mt-4 space-y-2">
+            <CopyField label={msg("resetLink.link")} value={absolute(c().link)} />
+            <Show when={c().reset.clear_second_factor}>
+              <p class="text-sm text-warning">{msg("resetLink.shownCleared")}</p>
+            </Show>
+          </div>
+        </Confirm>
+      )}
+    </Show>
+  );
+}
+
 /** At most this many pages of members are read to name the log's actors. */
 const MEMBER_PAGES = 10;
 
@@ -689,6 +897,16 @@ export function auditDetail(detail: AuditEntry["detail"]): string {
   if (kind !== null) parts.push(msgOf("audit.kind", kind) ?? kind);
   const version = factText(detail["version"]);
   if (version !== null) parts.push(msg("audit.version", { version }));
+  // Account security (CON-003): how a sign-in was completed, codes left,
+  // a reset that removed two-step sign-in.
+  const factor = detail["second_factor"];
+  if (factor === "totp") parts.push(msg("audit.byApp"));
+  if (factor === "recovery_code") parts.push(msg("audit.byRecovery"));
+  const remaining = detail["remaining"];
+  if (typeof remaining === "number") parts.push(msg("audit.remaining", { n: remaining }));
+  if (detail["second_factor_cleared"] === true || detail["clear_second_factor"] === true) {
+    parts.push(msg("audit.cleared"));
+  }
   return parts.join(" · ");
 }
 

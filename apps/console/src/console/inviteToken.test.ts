@@ -1,7 +1,9 @@
-// The invitation link's token: taken on the invitation page only, gone
-// from the address bar, and not mistaken for a setup token (CON-012).
+// The invitation link's token and a reset link's: each taken on its own
+// page only, gone from the address bar, and not mistaken for a setup token
+// (CON-012, CON-003).
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { dropInviteToken, inviteToken, takeInviteToken } from "./inviteToken.ts";
+import { dropResetToken, resetToken, takeResetToken } from "./resetToken.ts";
 import { dropSetupToken, setupToken, takeSetupToken } from "./setupToken.ts";
 
 const TOKEN = "0123456789abcdef".repeat(4);
@@ -21,6 +23,7 @@ function at(pathname: string, hash: string) {
 
 beforeEach(() => {
   dropInviteToken();
+  dropResetToken();
   dropSetupToken();
 });
 afterEach(() => {
@@ -55,4 +58,24 @@ test("a malformed token is kept as such, and a used one is dropped", () => {
   expect(inviteToken()).toBe(TOKEN);
   dropInviteToken();
   expect(inviteToken()).toBeNull();
+});
+
+test("a reset link's token is the reset page's alone, and leaves the address bar", () => {
+  at("/console/reset", `#token=${TOKEN}`);
+  takeInviteToken();
+  expect(replaced).toEqual([]);
+  takeResetToken();
+  expect(replaced).toEqual(["/console/reset"]);
+  window.location.hash = "";
+  takeSetupToken();
+  expect([resetToken(), inviteToken(), setupToken()]).toEqual([TOKEN, null, null]);
+  dropResetToken();
+  expect(resetToken()).toBeNull();
+  // Not taken on another page, nor kept when it cannot be one.
+  at("/console/invite", `#token=${TOKEN}`);
+  takeResetToken();
+  expect(resetToken()).toBeNull();
+  at("/reset", "#token=ABC");
+  takeResetToken();
+  expect(resetToken()).toBe("malformed");
 });

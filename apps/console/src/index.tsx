@@ -10,6 +10,8 @@ import { Frame, Gate, NotBuilt, NotFound, SECTIONS } from "./console/Frame.tsx";
 import { Invite } from "./console/Invite.tsx";
 import { INVITE_PATHS, takeInviteToken } from "./console/inviteToken.ts";
 import { BASE } from "./console/paths.ts";
+import { Reset } from "./console/Reset.tsx";
+import { RESET_PATHS, takeResetToken } from "./console/resetToken.ts";
 import { Settings } from "./console/Settings.tsx";
 import { Setup } from "./console/Setup.tsx";
 import { takeSetupToken } from "./console/setupToken.ts";
@@ -23,9 +25,10 @@ import { focusNewPage, keepFocus, watchForms } from "./ui/focus.ts";
 import { ToastRegion } from "./ui/overlays.tsx";
 
 followTheme();
-// Before the router reads the address: the setup token and an invitation's
-// leave the address bar at once (CON-002, CON-012).
+// Before the router reads the address: the setup token, an invitation's and
+// a reset link's leave the address bar at once (CON-002, CON-012, CON-003).
 takeInviteToken();
+takeResetToken();
 takeSetupToken();
 void loadSession();
 watchSession();
@@ -68,6 +71,7 @@ render(
         <Route path={BASE === "" ? ["/setup", "/console/setup"] : "/setup"} component={Setup} />
         <Route path="/sign-in" component={SignIn} />
         <Route path={INVITE_PATHS} component={Invite} />
+        <Route path={RESET_PATHS} component={Reset} />
         <Route path="/designer/local" component={() => <DesignerPage source={localSource} />} />
         <Route path={["/events/:event", "/events/:event/settings"]} component={EventPage} />
         <Route path="/designer/:workspace/:chart" component={ChartRoute} />

@@ -5,30 +5,16 @@
 // account can sign in and come back to accept; it is dropped once used or
 // refused as spent.
 import { BASE } from "./paths.ts";
-import { readSetupToken } from "./setupToken.ts";
+import { pageToken } from "./setupToken.ts";
 
 /** The invitation page's paths: the link's, and the router's own. */
 export const INVITE_PATHS = BASE === "" ? ["/console/invite", "/invite"] : ["/invite"];
 
-let taken: string | null | "malformed" = null;
+const invite = pageToken(INVITE_PATHS);
 
 /** Takes the token when the address is the invitation page's; before
  * `takeSetupToken`, which would otherwise take it as a setup token. */
-export function takeInviteToken(): void {
-  const { pathname, search, hash } = window.location;
-  const path = BASE !== "" && pathname.startsWith(BASE) ? pathname.slice(BASE.length) : pathname;
-  if (!INVITE_PATHS.includes(path.replace(/\/+$/, ""))) return;
-  const found = readSetupToken(hash);
-  if (found === null) return;
-  taken = found;
-  window.history.replaceState(window.history.state, "", pathname + search);
-}
-
-export function inviteToken(): string | null | "malformed" {
-  return taken;
-}
-
+export const takeInviteToken = invite.take;
+export const inviteToken = invite.get;
 /** Forgets the token: accepted, or refused as spent. */
-export function dropInviteToken(): void {
-  taken = null;
-}
+export const dropInviteToken = invite.drop;

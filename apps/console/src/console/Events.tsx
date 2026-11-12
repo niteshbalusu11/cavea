@@ -4,7 +4,16 @@
 // the list carries, the create form, and archive.
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { A, useSearchParams } from "@solidjs/router";
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  createUniqueId,
+  For,
+  on,
+  onCleanup,
+  Show,
+} from "solid-js";
 import { checkChartList, checkEvent, checkEventList } from "../api/check.ts";
 import { call } from "../api/client.ts";
 import type { Chart, Counts, Event } from "../api/generated.ts";
@@ -23,8 +32,11 @@ import {
   DEFAULTS,
   eventsQuery,
   filtered,
+  day,
   fromParams,
+  localZone,
   MAX_Q,
+  rangeProblem,
   toParams,
   type Filters,
   type Order,
@@ -80,9 +92,30 @@ export function Events() {
     clearTimeout(typing);
     typing = setTimeout(() => set({ q: clip(value) }), TYPING_MS);
   };
+  // The creation range as picked; applied when it is a range (D-93).
+  const [range, setRange] = createSignal({ from: filters().from, to: filters().to });
+  const rangeError = () => rangeProblem(day(range().from), day(range().to));
+  // The URL changed by navigation (a link, back, Clear): the inputs follow.
+  createEffect(
+    on(
+      () => [filters().from, filters().to] as const,
+      ([from, to]) => setRange({ from, to }),
+      { defer: true },
+    ),
+  );
+  const onDate = (end: "from" | "to", value: string) => {
+    const picked = { ...range(), [end]: value };
+    setRange(picked);
+    const from = day(picked.from);
+    const to = day(picked.to);
+    // An inverted range is said on its end and not sent.
+    if (rangeProblem(from, to) === null) set({ from, to });
+  };
+  const dateIds = { zone: createUniqueId(), error: createUniqueId() };
   const clear = () => {
     clearTimeout(typing);
     setTyped("");
+    setRange({ from: "", to: "" });
     setParams(toParams(DEFAULTS), { replace: true });
   };
 
@@ -206,6 +239,43 @@ export function Events() {
             <option value="newest">{msg("events.orderNewest")}</option>
           </select>
         </label>
+        <div class="flex flex-wrap items-center gap-3">
+          <label class="flex items-center gap-2 text-base whitespace-nowrap text-fg">
+            {msg("events.createdFrom")}
+            <input
+              type="date"
+              class={`${fieldInputClass} w-auto`}
+              value={range().from}
+              max={day(range().to) || undefined}
+              aria-describedby={dateIds.zone}
+              onChange={(e) => onDate("from", e.currentTarget.value)}
+            />
+          </label>
+          <label class="flex items-center gap-2 text-base whitespace-nowrap text-fg">
+            {msg("events.createdUntil")}
+            <input
+              type="date"
+              class={`${fieldInputClass} w-auto`}
+              value={range().to}
+              min={day(range().from) || undefined}
+              aria-invalid={rangeError() === null ? undefined : true}
+              aria-describedby={
+                rangeError() === null ? dateIds.zone : `${dateIds.error} ${dateIds.zone}`
+              }
+              onChange={(e) => onDate("to", e.currentTarget.value)}
+            />
+          </label>
+          <span id={dateIds.zone} class="text-sm text-muted">
+            {msg("events.dateZone", { zone: localZone() })}
+          </span>
+          <Show when={rangeError()}>
+            {(problem) => (
+              <span id={dateIds.error} role="alert" class="text-sm text-danger">
+                {problem()}
+              </span>
+            )}
+          </Show>
+        </div>
         <Show when={filtered(filters())}>
           <Button class="h-8" onClick={clear}>
             {msg("events.clearFilters")}

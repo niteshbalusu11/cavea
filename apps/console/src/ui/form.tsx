@@ -20,6 +20,8 @@ export function Field(props: {
   disabled?: boolean;
   mono?: boolean;
   maxLength?: number;
+  /** The keyboard a phone shows (`numeric` for a code's digits). */
+  inputMode?: "numeric" | "text";
   ref?: (el: HTMLInputElement) => void;
 }) {
   const id = createUniqueId();
@@ -41,6 +43,7 @@ export function Field(props: {
         autocomplete={props.autocomplete}
         spellcheck={false}
         maxLength={props.maxLength}
+        inputMode={props.inputMode}
         disabled={props.disabled}
         aria-invalid={props.error ? true : undefined}
         aria-describedby={described()}

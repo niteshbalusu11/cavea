@@ -33,6 +33,9 @@
   --c-guide: #0e7490;
   --c-shadow: rgb(28 25 23 / 0.14);
   --c-scrim: rgb(28 25 23 / 0.32);
+  /* A QR code is dark on light in both themes: scanners expect it. */
+  --c-qr-dark: #000000;
+  --c-qr-light: #ffffff;
   color-scheme: light;
 }
 
@@ -65,6 +68,8 @@
   --c-guide: #22d3ee;
   --c-shadow: rgb(0 0 0 / 0.5);
   --c-scrim: rgb(0 0 0 / 0.55);
+  --c-qr-dark: #000000;
+  --c-qr-light: #ffffff;
   color-scheme: dark;
 }
 
@@ -123,6 +128,8 @@
   --color-success: var(--c-success);
   --color-canvas: var(--c-canvas);
   --color-scrim: var(--c-scrim);
+  --color-qr-dark: var(--c-qr-dark);
+  --color-qr-light: var(--c-qr-light);
   --color-transparent: transparent;
   --color-current: currentColor;
 }
@@ -148,6 +155,27 @@
   }
   ::selection {
     background: var(--c-accent-soft);
+  }
+}
+
+/* Printing recovery codes (CON-003): only the element marked for print. */
+@media print {
+  body:has([data-print]) * {
+    visibility: hidden;
+  }
+  body [data-print],
+  body [data-print] * {
+    visibility: visible;
+  }
+  body [data-print] {
+    position: absolute;
+    inset: 0 auto auto 0;
+  }
+  /* Black on white paper, whatever the screen's theme. */
+  body [data-print],
+  body [data-print] * {
+    color: #000000;
+    background: #ffffff;
   }
 }
 
