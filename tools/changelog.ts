@@ -15,7 +15,9 @@ const args = process.argv.slice(2);
 const check = args.includes("--check");
 const excludeAt = args.indexOf("--exclude");
 const exclude = excludeAt === -1 ? undefined : args[excludeAt + 1];
-const ref = args.find((a, i) => !a.startsWith("--") && i !== excludeAt + 1) ?? "origin/main";
+const ref =
+  args.find((a, i) => !a.startsWith("--") && (excludeAt === -1 || i !== excludeAt + 1)) ??
+  "origin/main";
 
 const git = (...argv: string[]): string => {
   const run = Bun.spawnSync(["git", ...argv], { stderr: "pipe" });
