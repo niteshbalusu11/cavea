@@ -378,7 +378,7 @@ function MembersTab() {
                     <tr>
                       {memberSort.header("email", complete(members))}
                       {memberSort.header("role", complete(members))}
-                      <th scope="col" class={th}>
+                      <th scope="col" class={`${th} whitespace-nowrap`}>
                         {msg("members.colTwoStep")}
                       </th>
                       <th scope="col" class={th}>
