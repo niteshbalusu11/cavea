@@ -14,7 +14,8 @@ import {
   type Selection,
 } from "@cavea/renderer";
 import { createEffect, createMemo, createSignal, For, onMount, Show } from "solid-js";
-import type { ApiError } from "../../api/client.ts";
+import { checkEvent } from "../../api/check.ts";
+import { call, type ApiError } from "../../api/client.ts";
 import type { Event } from "../../api/generated.ts";
 import { allows } from "../../api/permissions.ts";
 import { asApiError, componentSignal } from "../../api/query.ts";
@@ -66,7 +67,12 @@ interface Refused {
 
 export function Manager(props: { event: Event; onEvent: (event: Event) => void }) {
   const signal = componentSignal();
-  const live = createLive({ event: props.event.key, signal, onEvent: (e) => props.onEvent(e) });
+  const live = createLive({
+    event: props.event.key,
+    chartUrl: props.event.version.url,
+    signal,
+    onCounts: (counts, seq) => props.onEvent({ ...props.event, counts, seq }),
+  });
   const [map, setMap] = createSignal<SeatMap | null>(null);
   const [failed, setFailed] = createSignal<CaveaError | ApiError | null>(null);
   const [picked, setPicked] = createSignal<Picked[]>([]);
@@ -114,8 +120,8 @@ export function Manager(props: { event: Event; onEvent: (event: Event) => void }
     if (host === undefined) return;
     setFailed(null);
     try {
+      // The chart comes from the adapter, which reads its labels too.
       const created = await createSeatMap(host, {
-        chart: { url: new URL(props.event.version.url, window.location.origin) },
         state: live.adapter,
         selection: { max: MAX },
         theme: resolvedTheme(),
@@ -196,8 +202,12 @@ export function Manager(props: { event: Event; onEvent: (event: Event) => void }
         map()?.clearSelection();
       } else {
         setRefusal({ action, error: outcome.error, refused: outcome.refused });
-        // The panel says it; a role lowered since is read again.
+        // The panel says it; a role lowered since is read again, and the
+        // event (archived since?) quietly.
         if (outcome.error.code === "forbidden") void loadSession();
+        void call("getEvent", { path: { event: props.event.key } }, signal)
+          .then((e) => props.onEvent(checkEvent(e)))
+          .catch(() => {});
       }
       return outcome;
     } catch (e) {

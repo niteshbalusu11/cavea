@@ -1,20 +1,17 @@
 // The manager's rules: what an action may take, how a refusal names its
-// seats, what the map is told as statuses and the selection change, how a
-// whole read merges with fresher reads, and when to read everything.
+// seats, what the map is told as statuses and the selection change, and how
+// the operator's own action shows until the state catches up.
 import { expect, test } from "bun:test";
 import { ApiError } from "../../api/client.ts";
-import type { EventObject } from "../../api/generated.ts";
 import {
   ACTIONS,
   blockers,
+  countsOf,
   deltaFor,
   eligible,
-  learnSeats,
-  mergeRead,
   refusedSeats,
-  statusesToRead,
-  wholeReadDue,
-  WHOLE_EVERY_MS,
+  seatStatus,
+  statusOf,
   type Status,
 } from "./model.ts";
 
@@ -105,69 +102,27 @@ test("the map is told only what changed: taken seats unavailable, selected ones 
   expect(deltaFor(["A-2"], drawn, hidden)).toEqual({ unavailable: [], available: ["A-2"] });
 });
 
-const o = (label: string, status: EventObject["status"]): EventObject => ({
-  label,
-  oid: 0,
-  status,
+const fromState = () => "free" as Status;
+
+test("the operator's own action shows until the state reaches its seq, then the state rules", () => {
+  const pending = new Map([["A-1", { status: "booked" as Status, seq: 10 }]]);
+  // A poll answered before the booking (state at 9) does not undo it.
+  expect(seatStatus(pending, 9, "A-1", fromState)).toBe("booked");
+  expect(seatStatus(pending, null, "A-1", fromState)).toBe("booked");
+  // From seq 10 on the state includes it: what it says stands (a buyer's
+  // later change included), and the entry is gone.
+  expect(seatStatus(pending, 10, "A-1", fromState)).toBe("free");
+  expect(pending.size).toBe(0);
+  expect(seatStatus(pending, 3, "A-2", () => "held")).toBe("held");
 });
 
-test("a whole read does not undo what was learnt seat by seat after it began", () => {
-  const read = new Map([
-    ["A-1", o("A-1", "held")],
-    ["A-2", o("A-2", "booked")],
-    ["A-3", o("A-3", "blocked")],
-  ]);
-  // Since the read began at 100: A-1 was booked (an action), A-2 released
-  // (read by label as free), and A-4 blocked; A-3 was learnt before it.
-  const current = new Map([
-    ["A-1", o("A-1", "booked")],
-    ["A-4", o("A-4", "blocked")],
-  ]);
-  const learnt = new Map([
-    ["A-1", 150],
-    ["A-2", 120],
-    ["A-3", 50],
-    ["A-4", 100],
-  ]);
-  const merged = mergeRead(read, current, learnt, 100);
-  expect(Object.fromEntries([...merged].map(([l, v]) => [l, v.status]))).toEqual({
-    "A-1": "booked",
-    "A-3": "blocked",
-    "A-4": "blocked",
+test("counts come from the codes, custom statuses by code", () => {
+  expect(countsOf(Uint8Array.from([0, 0, 1, 2, 2, 3, 7, 7, 15]))).toEqual({
+    free: 2,
+    held: 1,
+    booked: 2,
+    blocked: 1,
+    custom: { "7": 2, "15": 1 },
   });
-});
-
-test("an answer to a request sent before a newer one leaves what was learnt since", () => {
-  const nonFree = new Map<string, EventObject>();
-  const learnt = new Map<string, number>();
-  // A poll is sent (stamp 1); the operator books A-1 (answer at stamp 2);
-  // the poll's answer, from before the booking, then arrives.
-  expect(learnSeats(nonFree, learnt, [o("A-1", "booked")], ["A-1"], 2)).toEqual(["A-1"]);
-  expect(learnSeats(nonFree, learnt, [], ["A-1", "A-2"], 1)).toEqual(["A-2"]);
-  expect(nonFree.get("A-1")?.status).toBe("booked");
-  // A read sent after the booking is taken, free included.
-  expect(learnSeats(nonFree, learnt, [], ["A-1"], 3)).toEqual(["A-1"]);
-  expect(nonFree.has("A-1")).toBe(false);
-  // A whole read that began at stamp 5 was merged (its stamps pruned): a
-  // seat read sent at 4 and answered after it is dropped, whatever seat.
-  expect(learnSeats(nonFree, new Map(), [], ["A-3"], 4, 5)).toEqual([]);
-  expect(learnSeats(nonFree, new Map(), [o("A-3", "held")], ["A-3"], 6, 5)).toEqual(["A-3"]);
-});
-
-test("a whole read pages only statuses some seat has, and waits in proportion to its cost", () => {
-  expect(
-    statusesToRead({ free: 10, held: 0, booked: 2, blocked: 0, custom: { "5": 1, "6": 0 } }),
-  ).toEqual(["booked", "5"]);
-  expect(statusesToRead({ free: 10, held: 0, booked: 0, blocked: 0, custom: {} })).toEqual([]);
-
-  expect(wholeReadDue(0, null, false)).toBe(true);
-  const quick = { endedAt: 1_000, tookMs: 50 };
-  expect(wholeReadDue(2_000, quick, true)).toBe(false); // within the 2 s gap
-  expect(wholeReadDue(3_000, quick, true)).toBe(true);
-  expect(wholeReadDue(3_000, quick, false)).toBe(false); // nothing changed
-  expect(wholeReadDue(1_000 + WHOLE_EVERY_MS, quick, false)).toBe(true);
-  // A read that took 3 s waits 30 s even when the counts move.
-  const slow = { endedAt: 1_000, tookMs: 3_000 };
-  expect(wholeReadDue(20_000, slow, true)).toBe(false);
-  expect(wholeReadDue(31_000, slow, true)).toBe(true);
+  expect([0, 1, 2, 3, 9].map(statusOf)).toEqual(["free", "held", "booked", "blocked", 9]);
 });

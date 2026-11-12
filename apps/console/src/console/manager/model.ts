@@ -1,8 +1,8 @@
-// The event manager's rules as plain functions (09 §4.2, CON-008; D-67):
-// which seats an action may take, how a refusal maps back to seats, what
-// the map must be told when the truth or the selection changes, how a
-// whole read of the statuses merges with what was learnt meanwhile, and
-// when to read everything again. The screen and the poller only call these.
+// The event manager's rules as plain functions (09 §4.2, CON-008; D-68,
+// D-77): which seats an action may take, how a refusal maps back to seats,
+// what the map must be told when the truth or the selection changes, and
+// how the operator's own action shows until the state catches up. The
+// screen and the poller only call these.
 import type { ApiError } from "../../api/client.ts";
 import type { Counts, EventObject } from "../../api/generated.ts";
 
@@ -86,101 +86,56 @@ export function deltaFor(
   return delta;
 }
 
-/**
- * The seats that are not free after a whole read that began at `started`:
- * the read's answer, except for seats learnt about one by one since it
- * began (a seat read by label, or changed by the operator's own action),
- * which keep what was learnt, being fresher than the read's page.
- */
-export function mergeRead(
-  read: ReadonlyMap<string, EventObject>,
-  current: ReadonlyMap<string, EventObject>,
-  learnt: ReadonlyMap<string, number>,
-  started: number,
-): Map<string, EventObject> {
-  const out = new Map<string, EventObject>();
-  for (const [label, object] of read) {
-    if ((learnt.get(label) ?? -Infinity) < started) out.set(label, object);
+/** A domain status's code (02 §4.1) as the API names it. */
+export function statusOf(code: number): Status {
+  switch (code) {
+    case 0:
+      return "free";
+    case 1:
+      return "held";
+    case 2:
+      return "booked";
+    case 3:
+      return "blocked";
+    default:
+      return code;
   }
-  for (const [label, at] of learnt) {
-    if (at < started) continue;
-    const object = current.get(label);
-    if (object !== undefined) out.set(label, object);
-  }
-  return out;
+}
+
+/** The event's counts as the state shows them, one pass over the codes. */
+export function countsOf(codes: Uint8Array): Counts {
+  const n: number[] = Array.from({ length: 16 }, () => 0);
+  for (const c of codes) n[c] = (n[c] ?? 0) + 1;
+  const custom: Record<string, number> = {};
+  for (let code = 4; code < 16; code++) if ((n[code] ?? 0) > 0) custom[String(code)] = n[code] ?? 0;
+  return { free: n[0] ?? 0, held: n[1] ?? 0, booked: n[2] ?? 0, blocked: n[3] ?? 0, custom };
+}
+
+/** What the operator's own action made of a seat, until the state shows
+ * it: the reply's `seq`, which the state reaches within a publication. */
+export interface Pending {
+  status: Status;
+  seq: number;
 }
 
 /**
- * What a read or an action stamped `at` says of `labels` (`objects`: those
- * of them that are not free), into `nonFree` and `learnt` in place. A seat
- * learnt about by a later stamp is left alone: an answer to a poll sent
- * before the operator's booking must not undo it. Returns the labels taken.
+ * A seat's status: the operator's own action's result while the state is
+ * older than it (so a poll answered before the change cannot undo it on
+ * screen), else what the state says. Drops the pending entries the state
+ * has reached.
  */
-export function learnSeats(
-  nonFree: Map<string, EventObject>,
-  learnt: Map<string, number>,
-  objects: readonly EventObject[],
-  labels: readonly string[],
-  at: number,
-  /** The stamp of the last whole read merged: an answer to a request sent
-   * before it began is older than what it read, and is dropped whole. */
-  floor = 0,
-): string[] {
-  if (at < floor) return [];
-  const given = new Map(objects.map((o) => [o.label, o]));
-  const taken: string[] = [];
-  for (const label of labels) {
-    if ((learnt.get(label) ?? -1) > at) continue;
-    taken.push(label);
-    const o = given.get(label);
-    if (o === undefined || o.status === "free") nonFree.delete(label);
-    else nonFree.set(label, o);
-    learnt.set(label, at);
+export function seatStatus(
+  pending: Map<string, Pending>,
+  stateSeq: number | null,
+  label: string,
+  fromState: () => Status,
+): Status {
+  const p = pending.get(label);
+  if (p !== undefined) {
+    if (stateSeq === null || stateSeq < p.seq) return p.status;
+    pending.delete(label);
   }
-  return taken;
-}
-
-/** The statuses a whole read must page through: those the counts say some
- * seat has (free seats have no row, and are every seat not listed). */
-export function statusesToRead(counts: Counts): string[] {
-  const out: string[] = [];
-  if (counts.held > 0) out.push("held");
-  if (counts.booked > 0) out.push("booked");
-  if (counts.blocked > 0) out.push("blocked");
-  for (const [code, n] of Object.entries(counts.custom)) if (n > 0) out.push(code);
-  return out;
-}
-
-export const sameCounts = (a: Counts, b: Counts): boolean =>
-  a.free === b.free &&
-  a.held === b.held &&
-  a.booked === b.booked &&
-  a.blocked === b.blocked &&
-  JSON.stringify(a.custom) === JSON.stringify(b.custom);
-
-/** How often the counts and the watched seats (the selection and the seat
- * inspected) are read. */
-export const TICK_MS = 3_000;
-/** A whole read at least this often, for changes the counts cannot show
- * (one seat held as another's hold expires). */
-export const WHOLE_EVERY_MS = 60_000;
-/** A whole read waits at least this long after the last, and at least
- * `WHOLE_GAP_FACTOR` times as long as the last took: a large, busy event is
- * then read less often instead of keeping the server reading. */
-export const WHOLE_GAP_MS = 2_000;
-export const WHOLE_GAP_FACTOR = 10;
-
-/** Whether a whole read is due at `now`, after the last one (`null`:
- * none yet), when the counts differ from those that read began with. */
-export function wholeReadDue(
-  now: number,
-  last: { endedAt: number; tookMs: number } | null,
-  countsChanged: boolean,
-): boolean {
-  if (last === null) return true;
-  const since = now - last.endedAt;
-  if (since < Math.max(WHOLE_GAP_MS, WHOLE_GAP_FACTOR * last.tookMs)) return false;
-  return countsChanged || since >= WHOLE_EVERY_MS;
+  return fromState();
 }
 
 /** At most this many labels named in a list ("A-1, A-2 and 6 more"). */

@@ -105,10 +105,53 @@ export async function callWithHeaders<Op extends OperationId>(
   signal: AbortSignal,
   options: CallOptions = {},
 ): Promise<{ reply: Reply<Op>; status: number; headers: Headers }> {
+  const { response, body: buffer } = await send(op, input, signal, options, "application/json");
+  const requestId = response.headers.get("Cavea-Request-Id");
+  const text = new TextDecoder().decode(buffer);
+  if (!response.ok) {
+    const error = problem(response, text, requestId);
+    if (error.sessionLost) context.onSessionLost();
+    throw error;
+  }
+  const meta = { status: response.status, headers: response.headers };
+  if (text === "") return { reply: undefined as Reply<Op>, ...meta };
+  if (!isJson(response)) return { reply: text as Reply<Op>, ...meta };
+  try {
+    return { reply: JSON.parse(text) as Reply<Op>, ...meta };
+  } catch {
+    throw unexpected(response.status, requestId);
+  }
+}
+
+/** `call` for an operation whose answer is bytes (a chart, a state frame):
+ * the body, or `null` for `204`; failures as `call`'s. */
+export async function callBytes<Op extends OperationId>(
+  op: Op,
+  input: Input<Op>,
+  signal: AbortSignal,
+): Promise<{ bytes: Uint8Array | null; requestId: string | null }> {
+  const { response, body } = await send(op, input, signal, {}, "*/*");
+  const requestId = response.headers.get("Cavea-Request-Id");
+  if (!response.ok) {
+    const error = problem(response, new TextDecoder().decode(body), requestId);
+    if (error.sessionLost) context.onSessionLost();
+    throw error;
+  }
+  return { bytes: response.status === 204 ? null : new Uint8Array(body), requestId };
+}
+
+/** Sends `op` and reads the whole answer, or rejects as `lost` says. */
+async function send<Op extends OperationId>(
+  op: Op,
+  input: Input<Op>,
+  signal: AbortSignal,
+  options: CallOptions,
+  accept: string,
+): Promise<{ response: Response; body: ArrayBuffer }> {
   const info = OPERATIONS[op];
   const parts = input as Parts;
   const url = target(info.path, parts);
-  const headers = new Headers({ Accept: "application/json" });
+  const headers = new Headers({ Accept: accept });
   for (const [name, value] of Object.entries(parts.headers ?? {})) {
     if (value !== undefined) headers.set(name, value);
   }
@@ -142,25 +185,10 @@ export async function callWithHeaders<Op extends OperationId>(
   } catch (e) {
     throw lost(e, signal, timeout);
   }
-  const requestId = response.headers.get("Cavea-Request-Id");
-  let text: string;
   try {
-    text = await response.text();
+    return { response, body: await response.arrayBuffer() };
   } catch (e) {
     throw lost(e, signal, timeout);
-  }
-  if (!response.ok) {
-    const error = problem(response, text, requestId);
-    if (error.sessionLost) context.onSessionLost();
-    throw error;
-  }
-  const meta = { status: response.status, headers: response.headers };
-  if (text === "") return { reply: undefined as Reply<Op>, ...meta };
-  if (!isJson(response)) return { reply: text as Reply<Op>, ...meta };
-  try {
-    return { reply: JSON.parse(text) as Reply<Op>, ...meta };
-  } catch {
-    throw unexpected(response.status, requestId);
   }
 }
 
