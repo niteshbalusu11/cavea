@@ -31,7 +31,7 @@ import {
   type Shown,
 } from "./eventFilters.ts";
 import { EventForm } from "./EventForm.tsx";
-import { Action, Empty, formatDateTime, LoadMore, Paged, table, td, th } from "./kit.tsx";
+import { Action, Empty, formatDateTime, LoadMore, Paged, table, tableBox, td, th } from "./kit.tsx";
 
 /** Events per page. */
 const PAGE = 25;
@@ -250,7 +250,7 @@ export function Events() {
                   ? msg("events.countOne")
                   : msg("events.count", { n: rows().length })}
             </p>
-            <div class="mt-2 overflow-x-auto">
+            <div class={`mt-2 ${tableBox}`}>
               <table class={table}>
                 <caption class="sr-only">
                   {filters().order === "newest"
@@ -347,7 +347,7 @@ function EventRow(props: { event: Event; chartName: string; onArchive: () => voi
           {msg("events.versionShort", { number: props.event.version.number })}
         </span>
       </td>
-      <td class={`${td} w-64`}>
+      <td class={`${td} lg:w-64`}>
         <CountsBar counts={props.event.counts} />
       </td>
       <td class={`${td} text-sm whitespace-nowrap text-muted`}>

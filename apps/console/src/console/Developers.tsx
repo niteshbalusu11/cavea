@@ -28,6 +28,7 @@ import {
   Paged,
   Tabs,
   table,
+  tableBox,
   td,
   th,
   TextAreaField,
@@ -125,7 +126,7 @@ function Keys() {
               />
               {msg("keys.showRevoked")}
             </label>
-            <div class="mt-3 overflow-x-auto">
+            <div class={`mt-3 ${tableBox}`}>
               <table class={table}>
                 <caption class="sr-only">{msg("keys.title")}</caption>
                 <thead>

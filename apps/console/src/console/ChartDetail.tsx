@@ -28,6 +28,7 @@ import {
   Paged,
   Tabs,
   table,
+  tableBox,
   td,
   th,
 } from "./kit.tsx";
@@ -233,7 +234,7 @@ function Versions(props: { chart: Chart; onCreate: (version: number) => void }) 
                 {msg("chart.versionsPartial", { n: data().versions.length })}
               </p>
             </Show>
-            <div class="overflow-x-auto">
+            <div class={tableBox}>
               <table class={table}>
                 <caption class="sr-only">{msg("chart.versions")}</caption>
                 <thead>

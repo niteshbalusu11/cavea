@@ -28,6 +28,10 @@ export const table = "w-full border-collapse text-left text-base";
 export const th =
   "sticky top-0 z-10 border-b border-line bg-surface px-3 py-2 text-sm font-medium text-muted";
 export const td = "border-b border-line px-3 py-2 align-middle text-fg";
+/** Around a table: its own scroll box, both ways and at most about a
+ * window high, so its sticky header stays in view (09 §8) and a table wider
+ * than the window (from 768 px) scrolls sideways without the page. */
+export const tableBox = "max-h-[calc(100dvh-12rem)] overflow-auto";
 
 /** Shown while a list's first page loads. */
 export function ListLoading(props: { label: string; rows?: number }) {
