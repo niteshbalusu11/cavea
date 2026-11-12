@@ -525,7 +525,7 @@ function ChartForm(props: { draft: Draft; onClose: () => void; onCreated: (c: Ch
 
   const submit = async (e: SubmitEvent) => {
     e.preventDefault();
-    if (![check("name"), check("key")].every(Boolean) || busy()) return;
+    if (![check("name"), check("key")].every(Boolean) || busy() || writeBlocked() !== null) return;
     setBusy(true);
     setFailure(null);
     try {
@@ -596,11 +596,18 @@ function ChartForm(props: { draft: Draft; onClose: () => void; onCreated: (c: Ch
           error={errors().key}
         />
         <FormError message={failure()?.text ?? null} detail={failure()?.detail} />
+        {/* The licence may expire while the dialog is open: it follows. */}
+        <Show when={writeBlocked()}>{(why) => <p class="text-base text-warning">{why()}</p>}</Show>
         <div class="flex justify-end gap-2">
           <Button class="h-8" onClick={props.onClose}>
             {msg("action.cancel")}
           </Button>
-          <Button type="submit" variant="primary" class="h-8" disabled={busy()}>
+          <Button
+            type="submit"
+            variant="primary"
+            class="h-8"
+            disabled={busy() || writeBlocked() !== null}
+          >
             {busy() ? msg("charts.creating") : msg("charts.create")}
           </Button>
         </div>

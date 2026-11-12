@@ -16,6 +16,7 @@ import { Field, FormError, length } from "../ui/form.tsx";
 import { Dialog } from "../ui/overlays.tsx";
 import { keyFrom } from "./Charts.tsx";
 import { describe, reference } from "./errors.ts";
+import { cannot } from "./licence.ts";
 import { CheckField, formatDate, NumberField, SelectField } from "./kit.tsx";
 import { EVENT_LIMITS, eventRefusal, wholeNumber, type EventField } from "./refusals.ts";
 
@@ -38,6 +39,9 @@ export async function loadVersions(chart: string, signal: AbortSignal) {
   // oxlint-disable-next-line unicorn/no-array-reverse -- reverses a copy of ours; `toReversed` is ES2023, past the lib (ES2022).
   return { versions: [...all.data].reverse(), complete: all.complete };
 }
+
+/** Why an event cannot be made now: the role, or the licence expiring while the form is open. */
+const closed = () => cannot("createEvent", () => msg("error.role"));
 
 export function versionLabel(v: Version, published: number | null): string {
   const text = msg("events.versionOption", {
@@ -153,7 +157,7 @@ export function EventForm(props: {
       .map((check) => check())
       .every(Boolean);
     const c = chart();
-    if (!ok || busy() || c === null) return;
+    if (!ok || busy() || c === null || closed() !== null) return;
     setBusy(true);
     setFailure(null);
     try {
@@ -343,11 +347,18 @@ export function EventForm(props: {
           <p class="text-sm text-muted">{msg("events.notYet")}</p>
         </fieldset>
         <FormError message={failure()?.text ?? null} detail={failure()?.detail} />
+        {/* The licence may expire while the dialog is open: it follows. */}
+        <Show when={closed()}>{(why) => <p class="text-base text-warning">{why()}</p>}</Show>
         <div class="flex justify-end gap-2">
           <Button class="h-8" onClick={props.onClose}>
             {msg("action.cancel")}
           </Button>
-          <Button type="submit" variant="primary" class="h-8" disabled={busy()}>
+          <Button
+            type="submit"
+            variant="primary"
+            class="h-8"
+            disabled={busy() || closed() !== null}
+          >
             {busy() ? msg("events.creating") : msg("events.create")}
           </Button>
         </div>
