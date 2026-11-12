@@ -131,7 +131,7 @@ impl Session {
             hidden,
             bounds: Rect::around(outlines.iter().flatten().copied()),
             within: match sel.level() {
-                Level::Section(id) => self.document().node(id).and_then(crate::layers::name),
+                Level::Section(id) => crate::naming::shown(self.document(), id),
                 _ => None,
             },
         }

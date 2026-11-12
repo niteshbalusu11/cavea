@@ -4,7 +4,9 @@
 // their labels, never by an internal id.
 import { beforeAll, expect, test } from "bun:test";
 import type { Designer, FindingDetail, FindingView, Session } from "@cavea/designer-core";
-import { findingText, namesPlace } from "./findings.ts";
+import type { Finding } from "../api/generated.ts";
+import { msg } from "../i18n/messages.ts";
+import { findingText, namesPlace, refused } from "./findings.ts";
 import { designer } from "./testkit.ts";
 
 let d: Designer;
@@ -187,4 +189,60 @@ test("on a real chart, findings name objects by name and rows and seats by label
     expect(findingText(single, where)).toStartWith("Row A of Front block");
   }
   expect(findingText(warned.find((f) => f.code === "W105") as FindingView)).toContain("Premium");
+});
+
+test("a refused publish's findings are said as the panel says them, none dropped", () => {
+  // The same labels twice (E001), one block unnamed (`cavea gen` makes such
+  // charts), and a background picture this workspace lacks (E007, which
+  // only the server checks).
+  const s = d.open(
+    JSON.stringify({
+      schema: 1,
+      name: "Refused",
+      nextOid: 900,
+      categories: [{ key: "std", label: "Standard", color: "#2563EB" }],
+      nodes: [
+        block(10, "Stalls left", 0, [{ rid: 100 }]),
+        block(20, null, 1000, [{ rid: 200 }]),
+        { id: 50, type: "image", asset: "f".repeat(64), size: [10, 10], role: "background" },
+      ],
+    }),
+  );
+  const own = validated(s).filter((f) => f.severity === "error");
+  expect(own.length).toBeGreaterThan(0);
+  const server: Finding[] = [
+    ...own.map((f): Finding => ({
+      code: f.code,
+      severity: "error",
+      node: f.node,
+      related: f.related,
+      message: f.message,
+    })),
+    { code: "E007", severity: "error", node: 50, related: null, message: "image 50: no asset" },
+    { code: "E042", severity: "error", node: 77, related: null, message: "object 77: new words" },
+    { code: "E006", severity: "error", node: null, related: null, message: "more than 3 sections" },
+    { code: "W101", severity: "warning", node: 10, related: 20, message: "nodes 10, 20 overlap" },
+  ];
+  for (const chart of [s, null]) {
+    const said = refused(server, chart);
+    // Every error, and only errors, in the order the server gave them.
+    expect(said.map((x) => x.code)).toEqual([...own.map((f) => f.code), "E007", "E042", "E006"]);
+    for (const x of said) {
+      plain(x.text);
+      expect(x.text).not.toMatch(/\b(10|20|50|77)\b/);
+      expect(x.title).not.toContain(x.code);
+    }
+  }
+  const said = refused(server, s);
+  own.forEach((f, i) => {
+    const place = f.node !== null && namesPlace(f) ? s.findingPlace(f.node, f.row, f.seat) : null;
+    expect(said[i]?.text).toBe(findingText(f, place));
+  });
+  expect(said.some((x) => x.text.includes("Row block 1"))).toBe(true);
+  expect(said.at(-3)).toEqual({
+    code: "E007",
+    title: msg("validation.E007"),
+    text: msg("finding.missingPicture", { node: "Image 1" }),
+  });
+  expect(said.at(-2)?.text).toBe(msg("finding.other", { node: msg("finding.something") }));
 });

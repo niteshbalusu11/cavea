@@ -65,8 +65,8 @@ pub use tool::{
 };
 pub use validation::{FindingDetail, FindingPlace, FindingView, Marker, Progress, ValidationView};
 pub use views::{
-    FloorView, FloorsView, HistoryView, KindCount, NodeKind, SelectionView, StatusView, VIEWS,
-    ViewName,
+    FloorView, FloorsView, HistoryView, KindCount, NamedNode, NodeKind, SelectionView, StatusView,
+    VIEWS, ViewName,
 };
 
 #[cfg(test)]

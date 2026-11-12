@@ -9,6 +9,7 @@ import { Button } from "../ui/controls.tsx";
 import { inputClass, Row, SelectField } from "../ui/fields.tsx";
 import { Dialog } from "../ui/overlays.tsx";
 import { selectedSection } from "./commands.ts";
+import { nodeName } from "./findings.ts";
 import type { Editor } from "./editor.ts";
 import {
   check,
@@ -214,10 +215,7 @@ function Form(props: { editor: Editor; onClose: () => void }) {
               : [
                   {
                     value: String(section),
-                    label: msg("layers.unnamed", {
-                      kind: msg("kind.section"),
-                      id: String(section),
-                    }),
+                    label: nodeName(editor.run((s) => s.nodeName(section))?.name ?? null),
                   },
                 ]),
           ]}

@@ -43,9 +43,6 @@ function zone(e: DragEvent, row: LayerRow): Drop {
 /** The rows a row's expanded children take below it. */
 const span = (r: LayerRow) => (r.expanded === true ? r.children : 0);
 
-export const rowName = (r: LayerRow): string =>
-  r.name ?? msg("layers.unnamed", { kind: msg(`kind.${r.kind}`), id: String(r.id) });
-
 export function LayersPanel(props: { editor: Editor }) {
   const editor = props.editor;
   const page = () => editor.views.layers;
@@ -360,7 +357,7 @@ export function LayersPanel(props: { editor: Editor }) {
                     class="min-w-0 flex-1 truncate"
                     classList={{ "italic text-muted": row.name === null }}
                   >
-                    {rowName(row)}
+                    {row.name}
                   </span>
                   <Show when={row.expanded !== null}>
                     <span class="text-xs text-faint tabular-nums group-hover:hidden">

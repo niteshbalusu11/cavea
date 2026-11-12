@@ -27,10 +27,10 @@ pub struct LayerRow {
     pub depth: u8,
     pub id: u32,
     pub kind: NodeKind,
-    /// The node's `name`, else its label, else a text's string; `null`
-    /// when it has none, and the shell shows its kind and id ("Row block
-    /// 12"), translated.
-    pub name: Option<String>,
+    /// The node's name on display (`naming.rs`): its `name`, else its
+    /// label, else a text's string, else its kind and a number ("Row block
+    /// 2"), never its id.
+    pub name: String,
     pub locked: bool,
     pub hidden: bool,
     pub selected: bool,
@@ -86,20 +86,6 @@ struct List {
     roots: Vec<u32>,
     starts: Vec<u32>,
     total: u32,
-}
-
-/// The node's own name, label or text.
-pub(crate) fn name(node: &Node) -> Option<String> {
-    let label = match node {
-        Node::Section(n) => n.label.as_ref(),
-        Node::Row(n) => n.label.as_ref(),
-        Node::Table(n) => n.label.as_ref(),
-        Node::Booth(n) => n.label.as_ref(),
-        Node::Area(n) => n.label.as_ref(),
-        Node::Text(n) => Some(&n.text),
-        Node::RowBlock(_) | Node::Shape(_) | Node::Icon(_) | Node::Image(_) => None,
-    };
-    each_node!(node, n => n.name.as_ref()).or(label).cloned()
 }
 
 fn expandable(doc: &Document, id: u32) -> bool {
@@ -178,7 +164,7 @@ impl Layers {
                 depth,
                 id,
                 kind: NodeKind::of(node),
-                name: name(node),
+                name: crate::naming::shown(doc, id).unwrap_or_default(),
                 locked,
                 hidden,
                 selected,

@@ -257,6 +257,13 @@ const validation = {
  * `{seat}` a seat ("Seat A-C-12 of Stalls"). */
 const findings = {
   something: "An object",
+  otherTitle: "Cannot be published",
+  other:
+    "{node} cannot be published as it is. Select it to check its settings, or delete it and draw it again.",
+  otherChart:
+    "The chart cannot be published as it is. Check the Validation panel, or export the chart and ask for help.",
+  missingPicture:
+    "{node} shows a picture this workspace does not have. Delete it and place the picture again.",
   rowOf: "Row {row} of {node}",
   rowNumberOf: "The {n} row of {node}",
   aRowOf: "A row of {node}",
@@ -663,7 +670,6 @@ const ui = {
 
   "layers.label": "Layers",
   "layers.empty": "This floor has no objects.",
-  "layers.unnamed": "{kind} {id}",
   "layers.lock": "Lock",
   "layers.unlock": "Unlock",
   "layers.hide": "Hide",
@@ -1853,7 +1859,8 @@ const serverDesigner = {
   "publish.done": "Published version {version}: {seats} seats.",
   "publish.delta": "{delta} seats against version {version}.",
   "publish.unchanged": "Nothing changed since version {version}: it is the published version.",
-  "publish.invalid": "The server found errors and did not publish:",
+  "publish.invalid": "Not published: the server found {n} errors.",
+  "publish.invalidOne": "Not published: the server found an error.",
   "publish.notSaved": "The draft could not be saved, so nothing was published.",
   "publish.conflict":
     "The draft changed before it was published, not by this page (another tab or window, perhaps), so nothing was published.",

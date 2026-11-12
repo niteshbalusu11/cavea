@@ -3,16 +3,16 @@
 // buyer reads, and what to do about it. The edit core's view carries the
 // particulars (`FindingDetail`) and the names; the labels of the row and
 // seat a finding names are read for the findings shown only
-// (`findingPlace`). No DOM, so it is tested alone.
-import type { FindingPlace, FindingView, NodeKind } from "@cavea/designer-core";
+// (`findingPlace`). A publish the server refuses lists its findings the
+// same way (`refused`). No DOM, so it is tested alone.
+import type { FindingPlace, FindingView, Session } from "@cavea/designer-core";
+import type { Finding } from "../api/generated.ts";
 import { formatNumber, msg, msgOf, type MessageId, type Params } from "../i18n/messages.ts";
 
-/** A node as the layers panel names it (`rowName` there). */
-export function nodeName(name: string | null, kind: NodeKind | null, id: number | null): string {
-  if (name !== null) return name;
-  if (kind === null || id === null) return msg("finding.something");
-  return msg("layers.unnamed", { kind: msg(`kind.${kind}`), id: String(id) });
-}
+/** A node as the layers panel names it: the edit core names every node
+ * (`naming.rs`), so only a finding without one, or of a node the chart no
+ * longer holds, gets "An object". */
+export const nodeName = (name: string | null): string => name ?? msg("finding.something");
 
 const ordinals = new Intl.PluralRules("en", { type: "ordinal" });
 const SUFFIX: Record<string, string> = { one: "st", two: "nd", few: "rd", other: "th" };
@@ -62,8 +62,8 @@ const lower = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 /** What the finding says, in full. `place` is `findingPlace`'s answer for
  * findings naming a row or seat. */
 export function findingText(f: FindingView, place: FindingPlace | null = null): string {
-  const node = nodeName(f.name, f.kind, f.node);
-  const related = nodeName(f.relatedName, f.relatedKind, f.related);
+  const node = nodeName(f.name);
+  const related = nodeName(f.relatedName);
   const say = (id: MessageId, params: Params = {}) =>
     msg(id, {
       node,
@@ -181,3 +181,60 @@ export function findingText(f: FindingView, place: FindingPlace | null = null): 
 /** Whether a finding names a row or seat, whose labels `findingPlace` reads. */
 export const namesPlace = (f: FindingView): boolean =>
   f.node !== null && (f.row !== null || f.seat !== null);
+
+/** A finding as the dialogs show it: the catalogue's title for its code over
+ * its sentence. */
+export interface Said {
+  code: string;
+  title: string;
+  text: string;
+}
+
+/** The catalogue's title for a code, else a plain one. */
+export const findingTitle = (code: string): string =>
+  msgOf("validation", code) ?? msg("finding.otherTitle");
+
+/** One finding's identity, the same on both sides: code, nodes, words. */
+const key = (f: Finding | FindingView) =>
+  `${f.code}\u0000${f.node}\u0000${f.related}\u0000${f.message}`;
+
+/** What the publish dialog needs of the open chart's session. */
+export type Chart = Pick<Session, "validation" | "findingPlace" | "nodeName">;
+
+/** The errors of a publish the server refused (07 §11), each in the
+ * validation panel's words: the server compiled the draft the designer
+ * holds, so a finding of the open chart's own validation with the same
+ * code, nodes and compiler message is the same finding, said as the panel
+ * says it. One the designer does not have (an image whose picture this
+ * workspace lacks, which only the server checks; or a chart edited since)
+ * gets its code's title and a sentence naming its object as the layers
+ * panel does. Every finding is said, none by an internal id. */
+export function refused(findings: Finding[], chart: Chart | null): Said[] {
+  const errors = findings.filter((f) => f.severity === "error");
+  const shown = errors.length > 0 ? errors : findings;
+  const own = new Map<string, FindingView[]>();
+  for (const f of chart?.validation().findings ?? []) {
+    const k = key(f);
+    own.set(k, [...(own.get(k) ?? []), f]);
+  }
+  return shown.map((f) => {
+    const mine = own.get(key(f))?.shift();
+    if (mine !== undefined) {
+      const at = mine.node;
+      const place =
+        at !== null && namesPlace(mine)
+          ? (chart?.findingPlace(at, mine.row, mine.seat) ?? null)
+          : null;
+      return { code: f.code, title: findingTitle(f.code), text: findingText(mine, place) };
+    }
+    const named = f.node === null ? null : (chart?.nodeName(f.node) ?? null);
+    const node = nodeName(named?.name ?? null);
+    const text =
+      f.node === null
+        ? msg("finding.otherChart")
+        : f.code === "E007" && named?.kind === "image"
+          ? msg("finding.missingPicture", { node })
+          : msg("finding.other", { node });
+    return { code: f.code, title: findingTitle(f.code), text };
+  });
+}

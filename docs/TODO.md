@@ -316,8 +316,8 @@ Do not start a milestone until the previous one's exit criteria are met.
 
 ### Found while fixing the designer guide's findings, not fixed
 
-- [ ] **DSN-061** The publish dialog lists the server's findings (a refused publish) in the compiler's words, with internal ids; give them the validation panel's sentences (07 §10, §11)
-- [ ] **DSN-062** Charts saved before new objects were named keep "Row block 123" (kind and id) for unnamed objects in the layers panel and the findings; offer to name them, or name them by kind and number on display
+- [x] **DSN-061** The publish dialog lists the server's findings (a refused publish) in the compiler's words, with internal ids; give them the validation panel's sentences (07 §10, §11). Each error is matched to the open chart's own finding and said as the panel says it; one the designer does not have gets its code's title and a sentence naming its object (07 §11 "As built")
+- [x] **DSN-062** Charts saved before new objects were named keep "Row block 123" (kind and id) for unnamed objects in the layers panel and the findings; offer to name them, or name them by kind and number on display. Named on display by kind and number in the edit core, never written (07 §5.1 "Names on display", D-99)
 
 ---
 

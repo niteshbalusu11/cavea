@@ -159,7 +159,7 @@ export function StatusBar(props: {
             ? // A new object drawn inside a section goes into it: say so.
               msg("status.selectedIn", {
                 n: v.selection.count,
-                section: nodeName(v.selection.within, "section", v.selection.level.id),
+                section: nodeName(v.selection.within),
               })
             : msg("status.selected", { n: v.selection.count })}
         </span>

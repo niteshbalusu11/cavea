@@ -31,6 +31,7 @@ import { guidesKey, parseGuides, throttledWriter } from "./guides.ts";
 import { createImageHost } from "./imageHost.ts";
 import type { Checked } from "./images.ts";
 import { failureMessage, failureOf } from "./errors.ts";
+import { refused } from "./findings.ts";
 import { commands } from "./commands.ts";
 import { Help } from "./Help.tsx";
 import { InsertForm } from "./InsertForm.tsx";
@@ -524,6 +525,7 @@ export function DesignerPage(props: { source: ChartSource; server?: ServerSetup 
             chart={server?.chart() ?? null}
             seats={e.views.status.seats}
             run={() => server?.publish() ?? Promise.resolve({ kind: "notSaved" })}
+            say={(findings) => e.run((s) => refused(findings, s)) ?? refused(findings, null)}
             onClose={() => setPublishing(false)}
           />
         )}

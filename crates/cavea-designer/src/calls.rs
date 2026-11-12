@@ -13,9 +13,9 @@ use cavea_compiler::document::Category;
 use cavea_edit::{
     AlignTo, Applied, ArrayStep, Axis, CategoriesView, Command, CommandError, Contrast, Cursor,
     Draft, Drop, End, Field, FindingPlace, FloorGuides, FloorsView, HistoryView, Input,
-    InputResult, InspectorView, LayerClick, LayersPage, Level, Numbering, NumberingView, Order,
-    Overlay, Preview, Progress, Rect, SeatEdit, SeatRef, SelectionView, Session, SnapSettings,
-    StatusView, TextField, ToolId, ToolView, UserGuide, ValidationView, ViewName,
+    InputResult, InspectorView, LayerClick, LayersPage, Level, NamedNode, Numbering, NumberingView,
+    Order, Overlay, Preview, Progress, Rect, SeatEdit, SeatRef, SelectionView, Session,
+    SnapSettings, StatusView, TextField, ToolId, ToolView, UserGuide, ValidationView, ViewName,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -115,6 +115,8 @@ calls! {
     fn finding_place(s, node: u32, row: Option<u32>, seat: Option<u32>) -> FindingPlace {
         s.finding_place(node, row, seat)
     }
+    /// A node as the layers panel names it, with its kind, by its id.
+    fn node_name(s, id: u32) -> Option<NamedNode> { s.node_name(id) }
     /// What the canvas draws over the chart now, in chart units.
     fn overlay(s) -> Overlay { s.overlay() }
     /// The text field the tool asks for: the overlay's `text` alone.

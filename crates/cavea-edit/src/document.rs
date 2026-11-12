@@ -13,6 +13,7 @@
 //! and removed ids are kept with the revision that removed them.
 //! [`Document::changes_since`] answers "what changed since revision n".
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -83,6 +84,9 @@ pub struct Document {
     pub(crate) fresh: u64,
     /// One past the last id allocated in this session, or 0.
     pub(crate) high_water: u32,
+    /// The names unnamed nodes are shown by (`naming.rs`), worked out when
+    /// first asked after a change of the structure.
+    pub(crate) shown: RefCell<crate::naming::Shown>,
 }
 
 impl Document {
@@ -113,6 +117,7 @@ impl Document {
             removed: BTreeMap::new(),
             fresh: u64::from(next_oid),
             high_water: 0,
+            shown: RefCell::default(),
         };
         for node in nodes {
             let id = node_id(&node);
