@@ -32,7 +32,14 @@ import {
   th,
   TextAreaField,
 } from "./kit.tsx";
-import { badOrigins, keyRefusal, parseOrigins, type KeyField } from "./refusals.ts";
+import {
+  badOrigins,
+  keyRefusal,
+  originsProblem,
+  originsRefusal,
+  parseOrigins,
+  type KeyField,
+} from "./refusals.ts";
 import { pastedKey, snippets, type Snippet } from "./snippets.ts";
 
 type Tab = "keys" | "quickstart";
@@ -56,6 +63,8 @@ export function Developers() {
   );
 }
 
+const cannotEditOrigins = () =>
+  allows(workspace(), "updateKeyOrigins") ? null : msg("keys.roleCannot", { role: roleName() });
 const cannotManage = () =>
   allows(workspace(), "createKey") ? null : msg("keys.roleCannot", { role: roleName() });
 
@@ -75,6 +84,7 @@ function Keys() {
   const [revoked, setRevoked] = createSignal(false);
   const [creating, setCreating] = createSignal(false);
   const [revoking, setRevoking] = createSignal<Key | null>(null);
+  const [editing, setEditing] = createSignal<Key | null>(null);
 
   const revoke = async (key: Key) => {
     try {
@@ -145,7 +155,13 @@ function Keys() {
                 </thead>
                 <tbody>
                   <For each={rows().filter((k) => revoked() || k.revoked_at === null)}>
-                    {(key) => <KeyRow key={key} onRevoke={() => setRevoking(key)} />}
+                    {(key) => (
+                      <KeyRow
+                        key={key}
+                        onRevoke={() => setRevoking(key)}
+                        onEdit={() => setEditing(key)}
+                      />
+                    )}
                   </For>
                 </tbody>
               </table>
@@ -159,6 +175,20 @@ function Keys() {
       </Paged>
       <Show when={creating()}>
         <KeyDialog onClose={() => setCreating(false)} onCreated={() => keys.refetch()} />
+      </Show>
+      <Show when={editing()} keyed>
+        {(key) => (
+          <OriginsDialog
+            apiKey={key}
+            onClose={() => setEditing(null)}
+            onSaved={(answer) => {
+              keys.update((rows) => rows.map((r) => (r.id === answer.id ? answer : r)));
+              notify(msg("keys.originsSaved", { name: answer.name }));
+              setEditing(null);
+            }}
+            onGone={() => keys.refetch()}
+          />
+        )}
       </Show>
       <Confirm
         open={revoking() !== null}
@@ -176,7 +206,7 @@ function Keys() {
   );
 }
 
-function KeyRow(props: { key: Key; onRevoke: () => void }) {
+function KeyRow(props: { key: Key; onRevoke: () => void; onEdit: () => void }) {
   const live = () => props.key.revoked_at === null;
   return (
     <tr classList={{ "text-muted": !live() }}>
@@ -207,15 +237,27 @@ function KeyRow(props: { key: Key; onRevoke: () => void }) {
           ? msg("keys.never")
           : formatDateTime(props.key.last_used_at)}
       </td>
-      <td class={`${td} text-right`}>
+      <td class={`${td} text-right whitespace-nowrap`}>
+        <Show when={live() && props.key.kind === "publishable"}>
+          <span data-focus-id={`origins-${props.key.id}`}>
+            <Action
+              label={msg("keys.editOrigins")}
+              class="mr-2 h-7"
+              blocked={cannotEditOrigins()}
+              onClick={props.onEdit}
+            />
+          </span>
+        </Show>
         <Show when={live()}>
-          <Action
-            label={msg("keys.revoke")}
-            class="h-7"
-            variant="danger"
-            blocked={cannotManage()}
-            onClick={props.onRevoke}
-          />
+          <span data-focus-id={`revoke-${props.key.id}`}>
+            <Action
+              label={msg("keys.revoke")}
+              class="h-7"
+              variant="danger"
+              blocked={cannotManage()}
+              onClick={props.onRevoke}
+            />
+          </span>
         </Show>
       </td>
     </tr>
@@ -393,6 +435,132 @@ function KeyShown(props: { created: KeyCreated; onClose: () => void }) {
         </Show>
       </div>
     </Confirm>
+  );
+}
+
+/** Changes a publishable key's allowed origins (`PATCH /v1/keys/{id}`):
+ * a list of 1 to 50, or every origin, chosen on purpose and warned about. */
+function OriginsDialog(props: {
+  apiKey: Key;
+  onClose: () => void;
+  onSaved: (key: Key) => void;
+  /** The key changed elsewhere (revoked): the list is read again. */
+  onGone: () => void;
+}) {
+  const signal = componentSignal();
+  const [every, setEvery] = createSignal(props.apiKey.allowed_origins === null);
+  const [text, setText] = createSignal((props.apiKey.allowed_origins ?? []).join("\n"));
+  const [error, setError] = createSignal<string | null>(null);
+  const [failure, setFailure] = createSignal<{ text: string; detail?: string } | null>(null);
+  const [busy, setBusy] = createSignal(false);
+  const check = () => {
+    const problem = originsProblem(every(), text());
+    setError(problem);
+    return problem === null;
+  };
+  const opening = () => every() && props.apiKey.allowed_origins !== null;
+
+  const submit = async (e: SubmitEvent) => {
+    e.preventDefault();
+    if (!check() || busy()) return;
+    setBusy(true);
+    setFailure(null);
+    try {
+      const body = { allowed_origins: every() ? null : parseOrigins(text()) };
+      props.onSaved(
+        checkKey(await call("updateKeyOrigins", { path: { id: props.apiKey.id }, body }, signal)),
+      );
+    } catch (err) {
+      const e2 = asApiError(err);
+      if (signal.aborted || e2.sessionLost) return;
+      const refusal = originsRefusal(e2);
+      if (refusal?.field === true) {
+        setError(refusal.message);
+      } else {
+        if (refusal !== null) props.onGone();
+        if (e2.code === "forbidden") void loadSession();
+        const detail = reference(e2);
+        const shown = refusal?.message ?? describe(e2);
+        setFailure(detail === undefined ? { text: shown } : { text: shown, detail });
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open
+      heading
+      title={msg("keys.originsTitle", { name: props.apiKey.name })}
+      onClose={props.onClose}
+    >
+      <form class="space-y-4 px-5 pt-2 pb-5" noValidate onSubmit={(e) => void submit(e)}>
+        <p class="text-base text-muted">
+          {msg("keys.originsIntro", { prefix: `${props.apiKey.prefix}…` })}
+        </p>
+        <fieldset class="space-y-2">
+          <legend class="text-sm font-medium text-fg">{msg("keys.originsChoice")}</legend>
+          <For each={[false, true]}>
+            {(all) => (
+              <label class="flex items-start gap-2 text-base text-fg">
+                <input
+                  type="radio"
+                  name="origins-scope"
+                  class="mt-1 size-4 accent-accent-fill"
+                  checked={every() === all}
+                  onChange={() => {
+                    setEvery(all);
+                    setError(null);
+                  }}
+                />
+                <span>{msg(all ? "keys.originsEvery" : "keys.originsListed")}</span>
+              </label>
+            )}
+          </For>
+        </fieldset>
+        <Show
+          when={!every()}
+          fallback={
+            <div role="alert" class="rounded-md border border-warning bg-warning-soft px-3 py-2">
+              <p class="text-base font-medium text-warning">{msg("keys.originsWarnTitle")}</p>
+              <p class="mt-1 text-sm text-fg">{msg("keys.originsWarn")}</p>
+            </div>
+          }
+        >
+          <TextAreaField
+            label={msg("keys.origins")}
+            hint={msg("keys.originsEditHint")}
+            placeholder="https://tickets.example.com"
+            value={text()}
+            onInput={(v) => {
+              setText(v);
+              if (error() !== null) check();
+            }}
+            onBlur={check}
+            error={error()}
+          />
+        </Show>
+        <FormError message={failure()?.text ?? null} detail={failure()?.detail} />
+        <div class="flex justify-end gap-2">
+          <Button class="h-8" onClick={props.onClose}>
+            {msg("action.cancel")}
+          </Button>
+          <Button
+            type="submit"
+            variant={opening() ? "danger" : "primary"}
+            class="h-8"
+            disabled={busy()}
+          >
+            {busy()
+              ? msg("keys.originsSaving")
+              : opening()
+                ? msg("keys.originsOpen")
+                : msg("keys.originsSave")}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
 

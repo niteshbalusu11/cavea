@@ -1045,9 +1045,27 @@ const consoleScreens = {
   "keys.kind": "Type",
   "keys.origins": "Allowed origins",
   "keys.originsHint":
-    "One per line, such as https://tickets.example.com. At most 50. Leave empty to accept every origin. They cannot be changed later.",
+    "One per line, such as https://tickets.example.com. At most 50. Leave empty to accept every origin. You can change them later.",
   "keys.originsRule": "List 1 to 50 origins such as https://tickets.example.com, or none.",
   "keys.originsTooMany": "List at most 50 origins.",
+  "keys.originsNone": "List at least one origin, or choose to allow every origin.",
+  "keys.originsRevoked": "This key has been revoked: its origins can no longer change.",
+  "keys.editOrigins": "Edit origins…",
+  "keys.originsTitle": "Allowed origins of “{name}”",
+  "keys.originsIntro":
+    "Pages on these origins may use the publishable key {prefix}. The change applies to the key's next request.",
+  "keys.originsChoice": "Which pages may use this key",
+  "keys.originsListed": "Only pages on the origins listed",
+  "keys.originsEvery": "Pages on every origin",
+  "keys.originsEditHint":
+    "One per line, as a page's address starts: scheme and host, and a port if any, with no path. At most 50.",
+  "keys.originsWarnTitle": "Any website will be able to use this key",
+  "keys.originsWarn":
+    "A page on any site could then show this workspace's seat maps and hold seats with it, within the key's rate limits. Choose this only if the key is used where origins cannot be listed.",
+  "keys.originsSave": "Save origins",
+  "keys.originsOpen": "Allow every origin",
+  "keys.originsSaving": "Saving…",
+  "keys.originsSaved": "Origins of “{name}” saved.",
   "keys.originsBad": "Not an origin (scheme and host, no path): {list}",
   "keys.create": "Create key",
   "keys.creating": "Creating…",

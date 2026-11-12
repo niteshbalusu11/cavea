@@ -369,6 +369,7 @@ function EventRow(props: { event: Event; chartName: string; onArchive: () => voi
         <Show when={canArchive()}>
           <DropdownMenu gutter={4} placement="bottom-end">
             <DropdownMenu.Trigger
+              data-focus-id={`event-menu-${props.event.key}`}
               class="inline-flex size-7 items-center justify-center rounded-md text-muted hover:bg-hover hover:text-fg"
               aria-label={msg("events.menu", { name: props.event.name ?? props.event.key })}
             >

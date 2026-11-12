@@ -98,19 +98,43 @@ export function parseOrigins(text: string): string[] | null {
   return list.length === 0 ? null : list;
 }
 
-/** The origins the console can tell are not origins, before sending; the
- * server normalises and checks the rest. */
+/** The origins the server would refuse (its `normalise_origin`): `http://`
+ * or `https://`, then a host and port only (letters, digits, `.`, `-`,
+ * `:`, `[`, `]`; no path, not even `/`), at most 255 characters. Case is
+ * not checked: the server lowercases. */
 export function badOrigins(list: string[]): string[] {
   return list.filter((o) => {
-    let url: URL;
-    try {
-      url = new URL(o);
-    } catch {
-      return true;
-    }
-    const bare = url.pathname === "/" && url.search === "" && url.hash === "" && !o.endsWith("/");
-    return (url.protocol !== "https:" && url.protocol !== "http:") || !bare || url.username !== "";
+    const lower = o.toLowerCase();
+    const rest = lower.startsWith("https://")
+      ? lower.slice(8)
+      : lower.startsWith("http://")
+        ? lower.slice(7)
+        : null;
+    return rest === null || rest === "" || o.length > 255 || !/^[a-z0-9.:[\]-]+$/.test(rest);
   });
+}
+
+/** At most this many origins on a key (08 §11). */
+export const MAX_ORIGINS = 50;
+
+/** What is wrong with origins typed for a key, `null` when nothing: `every`
+ * allows every origin (`null` on the wire); otherwise 1 to 50 origins. */
+export function originsProblem(every: boolean, text: string): string | null {
+  if (every) return null;
+  const list = parseOrigins(text) ?? [];
+  if (list.length === 0) return msg("keys.originsNone");
+  if (list.length > MAX_ORIGINS) return msg("keys.originsTooMany");
+  const bad = badOrigins(list);
+  return bad.length > 0 ? msg("keys.originsBad", { list: bad.join(", ") }) : null;
+}
+
+/** Why a key's origins could not change, on the field or for the form. */
+export function originsRefusal(e: ApiError): { field: boolean; message: string } | null {
+  if (e.code !== "invalid_request") return null;
+  if (e.reason === "revoked") return { field: false, message: msg("keys.originsRevoked") };
+  return namedField(e) === "allowed_origins"
+    ? { field: true, message: msg("keys.originsRule") }
+    : null;
 }
 
 export type InviteField = "email" | "role";
