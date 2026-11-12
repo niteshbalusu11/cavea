@@ -148,6 +148,8 @@ function paginate<T>(
 const inBrowser = (): boolean => "window" in globalThis && "document" in globalThis;
 
 const encoder = new TextEncoder();
+/** The longest session token the server takes, in bytes (08 §11). */
+const MAX_SESSION_TOKEN = 1024;
 const base64url = (bytes: Uint8Array): string =>
   btoa(String.fromCharCode(...bytes))
     .replaceAll("+", "-")
@@ -192,8 +194,10 @@ export class Cavea {
           : "secretKey is not a secret key (sk_ and 64 hex digits)",
       );
     }
-    if (adminKey !== undefined && adminKey.length === 0) {
-      throw new TypeError("adminKey is empty");
+    // The server's rule for the admin key (08 §13); anything else could not
+    // be sent in a header, and the platform's error would print it.
+    if (adminKey !== undefined && !/^[\x21-\x7e]{32,512}$/.test(adminKey)) {
+      throw new TypeError("adminKey must be 32 to 512 printable ASCII characters without spaces");
     }
     if (keyId !== undefined && !/^key_[0-9a-f]{32}$/.test(keyId)) {
       throw new TypeError("keyId is not a key id (key_ and 32 hex digits)");
@@ -251,7 +255,14 @@ export class Cavea {
         ["sign"],
       );
       const signature = await crypto.subtle.sign("HMAC", hmac, encoder.encode(`${head}.${body}`));
-      return `${head}.${body}.${base64url(new Uint8Array(signature))}`;
+      const token = `${head}.${body}.${base64url(new Uint8Array(signature))}`;
+      // The server refuses a longer token (08 §11).
+      if (token.length > MAX_SESSION_TOKEN) {
+        throw new TypeError(
+          `the session token would be ${token.length} bytes, over the server's ${MAX_SESSION_TOKEN}: shorten sub, event or channels`,
+        );
+      }
+      return token;
     };
   }
 

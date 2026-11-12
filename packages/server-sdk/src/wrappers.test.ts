@@ -33,7 +33,7 @@ test("every wrapped operation sends its own method and path", async () => {
   const cavea = new Cavea({
     baseUrl: "https://seats.example",
     secretKey: KEY,
-    adminKey: "admin",
+    adminKey: "admin-".padEnd(32, "x"),
     fetch: async (input, init) => {
       seen.push({ method: init.method ?? "GET", path: new URL(input).pathname });
       const page = { data: [], next: null };

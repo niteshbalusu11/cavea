@@ -727,6 +727,8 @@ async function cspCdn(): Promise<void> {
   });
 }
 
+let servers = 0;
+
 /** `cavea-server` on its own database, with a workspace, a published chart, an event and a key. */
 async function caveaServer(): Promise<{
   base: string;
@@ -736,7 +738,8 @@ async function caveaServer(): Promise<{
   admin: string;
 }> {
   const pg = "postgres://cavea:cavea@127.0.0.1:5432";
-  const db = `cavea_compat_${process.pid}`;
+  // One database per call: several checks start a server in one run.
+  const db = `cavea_compat_${process.pid}_${++servers}`;
   await sh(["docker", "compose", "-f", "deploy/compose.yaml", "up", "-d", "--wait"]);
   await sh(["nix", "develop", "-c", "psql", `${pg}/cavea`, "-c", `CREATE DATABASE ${db}`]);
   cleanup.push(async () => {

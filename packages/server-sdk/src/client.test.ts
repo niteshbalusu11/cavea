@@ -131,6 +131,18 @@ describe("credentials", () => {
       expect(message).toMatch(/secret key/);
       expect(message).not.toContain(bad);
     }
+    // An admin key no header can carry is refused before `Headers` would
+    // print it in its own error.
+    for (const bad of [`${ADMIN}\nembedded`, `${ADMIN} spaced`, "short"]) {
+      let message = "";
+      try {
+        expect(new Cavea({ baseUrl: BASE, adminKey: bad })).toBeUndefined();
+      } catch (e) {
+        message = String(e);
+      }
+      expect(message).toMatch(/adminKey must be/);
+      expect(message).not.toContain(ADMIN);
+    }
     expect(() => new Cavea({ baseUrl: "ftp://x", secretKey: KEY })).toThrow(/http/);
     expect(() => new Cavea({ baseUrl: `https://u:p@x`, secretKey: KEY })).toThrow(/credentials/);
     expect(() => new Cavea({ baseUrl: BASE })).toThrow(/secretKey/);
@@ -482,6 +494,8 @@ describe("session tokens", () => {
       { sub: "x".repeat(129), event: "e" },
       { sub: "a", event: "e", ttlSeconds: 0 },
       { sub: "a", event: "e", maxObjects: 1.5 },
+      // Within each claim's limit, over the server's 1,024 bytes in all.
+      { sub: "\u{1F600}".repeat(128), event: "e".repeat(128) },
     ]) {
       expect(await rejection(cavea.signSessionToken(claims))).toBeInstanceOf(TypeError);
     }

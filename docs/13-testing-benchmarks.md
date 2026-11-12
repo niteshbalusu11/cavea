@@ -522,7 +522,7 @@ Browser coverage uses Playwright locally and a device cloud for what it cannot r
 | csp-server, transport `auto` and `sse` | `cavea-server` | Draws, realtime frames arrive (WebSocket; EventSource), and the chart's background image is fetched from `/v1/public/assets/{hash}` under the same `connect-src` with no `img-src` (REN-020); without the server's origin `chart_fetch_failed` or `state_connect_failed`; without its `ws:` origin, EventSource after two refused sockets |
 | csp-cdn | — | Draws from the CDN's files; without `'wasm-unsafe-eval'` or the CDN in `connect-src`, `wasm_unavailable`; a changed WASM on the CDN, `wasm_unavailable` |
 | Trusted Types | — | No violation under `require-trusted-types-for 'script'` in any CSP row |
-| server-sdk | Node 24.21.0 and 22.23.4, TypeScript 5.9.3 | Types resolve; 2,000 free objects walked, 2 booked, the replay the same `seq`, `object_not_free` caught, a three-part session token. Node 20 is not proven: it left nixpkgs at its end of life (2026-04-30) |
+| server-sdk | Node 24.22.2 and 22.23.4, TypeScript 5.9.3 | Types resolve; 2,000 free objects walked, 2 booked, the replay the same `seq`, `object_not_free` caught, a three-part session token. Node 20 is not proven: it left nixpkgs at its end of life (2026-04-30) |
 
 The `csp-server` check found that Chromium fires only `error`, never `close`, on a WebSocket a policy refuses, which left `caveaServer` waiting 60 s for silence before trying again; it now counts the `error` (05 §4.1). These are Chromium results in software rendering on one machine, not other browsers or GPUs.
 
