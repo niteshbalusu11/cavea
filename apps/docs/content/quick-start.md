@@ -144,7 +144,7 @@ A [chart](concepts/charts.md) is a venue's seat map. Start one from the theatre 
 
 Events are sold from a published version of a chart, which never changes once stored. You publish in the designer, where the chart is drawn and edited.
 
-1. Choose **Grand Hall** in the list, then **Open in designer**. The designer opens with a short tour: choose **Skip tour**, or follow it. The canvas shows the theatre: three sections of stalls facing a stage, and the status bar at the bottom reads **561 seats**.
+1. Choose **Grand Hall** in the list, then **Open in designer**. The designer opens with a short tour: choose **Skip tour** (the tour has you draw a block of seats, which would change this chart; see it later in [the designer guide](designer/start.md#the-tour)). The canvas shows the theatre: three sections of stalls facing a stage, and the status bar at the bottom reads **561 seats**.
 2. Choose **Publish** at the top right, then **Publish** in the dialog. It reports **Published version 1: 561 seats.** Choose **Close**.
 
 ![The designer showing the theatre template: three sections of curved rows facing the stage](images/designer.webp)
