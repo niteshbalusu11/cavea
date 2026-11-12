@@ -27,8 +27,11 @@ import {
  * the map's lifetime), with the container's `id`, `className` and `style`.
  */
 export interface SeatMapProps extends Omit<SeatMapOptions, "signal"> {
+  /** The container `<div>`'s `id`. */
   id?: string;
+  /** The container `<div>`'s class names. */
   className?: string;
+  /** The container `<div>`'s style: give it a height, since the map fills it. */
   style?: CSSProperties;
 }
 

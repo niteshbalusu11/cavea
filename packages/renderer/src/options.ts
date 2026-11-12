@@ -32,21 +32,28 @@ export interface SeatObject {
   label: string;
   /** Only seats are selectable today. */
   kind: "seat" | "table" | "booth" | "area";
+  /** Section label; left out when the chart has no sections. */
   section?: string;
+  /** Row label; left out when the object has none. */
   row?: string;
+  /** Seat label within the row; left out when the object has none. */
   seat?: string;
   /** Floor name. */
   floor: string;
+  /** The object's category: its key in the chart and its name. */
   category: { key: string; label: string };
   /** The ticket type chosen in the tooltip, for a selected object whose category has types (default the first). */
   ticketType?: string;
+  /** The seat's flags, as set in the designer. */
   flags: { accessible: boolean; companion: boolean; restrictedView: boolean; aisle: boolean };
   /** From `pricing`, in minor units: the ticket type's price, else the category's. */
   price?: number;
 }
 
 export interface Selection {
+  /** The selected objects, in the order they were selected. */
   objects: SeatObject[];
+  /** The hold token holding them, to book with from the host's backend; `null` while there is none. */
   holdToken: string | null;
   /** The selection meets `selection.min`. */
   valid: boolean;
@@ -122,15 +129,23 @@ export interface SeatMapOptions {
      */
     image?: ImageSource;
   };
+  /** The chart is drawn and the first state applied; just before `createSeatMap` resolves. */
   onReady?: (info: ReadyInfo) => void;
+  /** The selection changed, or the buyer chose another ticket type. */
   onSelectionChange?: (selection: Selection) => void;
+  /** One object was added to the selection. */
   onObjectSelect?: (object: SeatObject) => void;
+  /** One object left the selection. */
   onObjectDeselect?: (object: SeatObject) => void;
   /** `rule` `min`: below the minimum (`objects`: the selection). Otherwise `objects` were refused. */
   onSelectionInvalid?: (rule: string, objects: SeatObject[]) => void;
+  /** The selection meets `selection.min` again. */
   onSelectionValid?: () => void;
+  /** The first of a run of hold requests started: disable checkout until `onHoldSettled`. */
   onHoldPending?: () => void;
+  /** The last hold request of a run was answered. */
   onHoldSettled?: () => void;
+  /** A hold was refused: each object with its reason, such as `not_free`, or the request's code (`hold_limit_exceeded`, `hold_failed`). */
   onHoldFailed?: (failed: Array<{ object: SeatObject; reason: string }>) => void;
   /** The buyer's hold on these selected objects is gone (expired, released elsewhere). */
   onHoldLost?: (objects: SeatObject[]) => void;
@@ -138,13 +153,17 @@ export interface SeatMapOptions {
   onHoldExpiring?: (secondsLeft: number) => void;
   /** The buyer's holds expired; they have left the selection (after `onHoldLost`). */
   onHoldExpired?: () => void;
+  /** A selected object was taken by someone else; it has left the selection. */
   onObjectUnavailable?: (object: SeatObject) => void;
   /** `at`: the object's centre in CSS pixels on the map. */
   onObjectHover?: (object: SeatObject | null, at: [number, number] | null) => void;
+  /** The keyboard focus moved to an object, or was hidden (`null`); `at` as `onObjectHover`'s. */
   onObjectFocus?: (object: SeatObject | null, at: [number, number] | null) => void;
+  /** A pan or zoom settled: the chart point at the centre, the zoom in CSS pixels per chart unit, the level of detail. */
   onCameraChange?: (camera: { centre: [number, number]; zoom: number; level: string }) => void;
   /** Frame statistics and timing marks, at most once a second while frames are drawn (04 §24). */
   onMetrics?: (metrics: Metrics) => void;
+  /** Any error after `createSeatMap` resolved, and a recoverable one before. Given, no development warning is printed for errors. */
   onError?: (error: CaveaError) => void;
 }
 

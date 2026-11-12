@@ -21,6 +21,7 @@ import {
 export interface CaveaServerOptions {
   /** Where `cavea-server` answers, such as `https://tickets.example.com/cavea`. */
   baseUrl: string;
+  /** A publishable key of the event's workspace (`pk_…`). */
   publishableKey: string;
   /** The event key. */
   event: string;
@@ -30,6 +31,7 @@ export interface CaveaServerOptions {
    * `manual`: nothing is held, the host holds at checkout; `none`: state only.
    */
   session?: "start" | "continue" | "manual" | "none";
+  /** The hold token to continue with: required with `session: "continue"`, refused otherwise. */
   holdToken?: string;
   /** Sent as `Cavea-Session`; a function is called at the first hold, and once more when the token expired. */
   sessionToken?: string | (() => Promise<string>);

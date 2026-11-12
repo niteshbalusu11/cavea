@@ -81,12 +81,15 @@ export interface StateAdapter {
   connect(ctx: AdapterContext): Promise<Snapshot>;
   /** Hold-on-select. Without `hold` and `release` the map runs in manual session mode. */
   hold?(labels: string[]): Promise<HoldResult>;
+  /** Release these labels, held by this buyer; with `hold`. */
   release?(labels: string[]): Promise<void>;
   /** The engine saw a gap in the deltas: send a new snapshot through the context. */
   resync?(): void;
-  /** The page was hidden; and shown again. */
+  /** The page was hidden: an adapter may drop its live connection. */
   pause?(): void;
+  /** The page was shown again after `pause`. */
   resume?(): void;
+  /** The map is gone: close every connection. Called once, last. */
   disconnect(): void;
 }
 

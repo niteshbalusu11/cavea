@@ -17,7 +17,8 @@ import { dirname, join, posix, relative } from "node:path";
 import { apiPages, problemCodes, type Doc } from "./api.ts";
 import { compare, parseCatalogue, scanReasons } from "./errors.ts";
 import { layout, type NavSection } from "./layout.ts";
-import { plain, render, substitute, type Heading } from "./markdown.ts";
+import { fences, plain, render, substitute, type Heading } from "./markdown.ts";
+import { expand, settings, sources, themeTokens, unclaimed } from "./reference.ts";
 
 const HERE = join(import.meta.dir, "..");
 const ROOT = join(HERE, "../..");
@@ -143,6 +144,26 @@ export async function build(
   if (missing.length > 0)
     throw new Error(`pages missing from site.json's nav: ${missing.join(", ")}`);
 
+  // What the written pages print from the product's source, and the checks on it.
+  const refs = await sources(ROOT);
+  for (const page of pages) {
+    if (!page.generated) page.source = expand(page.source, page.path, refs);
+  }
+  refs.problems.push(...unclaimed(refs));
+  const written = (path: string): string => byPath.get(path)?.source ?? "";
+  if (byPath.has("renderer/theming.md")) {
+    refs.problems.push(...(await themeTokens(ROOT, written("renderer/theming.md"))));
+  }
+  if (byPath.has("deployment/settings.md")) {
+    refs.problems.push(...(await settings(ROOT, written("deployment/settings.md"))));
+  }
+  for (const page of pages.filter((p) => !p.generated)) {
+    refs.problems.push(...(await sampleMarks(page.path, page.source, vars)));
+  }
+  if (refs.problems.length > 0) {
+    throw new Error(`the pages do not match the product:\n  ${refs.problems.join("\n  ")}`);
+  }
+
   // Render.
   const rendered = new Map<string, ReturnType<typeof render>>();
   for (const page of pages) {
@@ -213,6 +234,49 @@ export async function build(
   return { out, pages: files.size, bytes, ms: performance.now() - started };
 }
 
+/**
+ * Code a reader may copy must be true: a block in one of these languages
+ * says how it is checked, `check=types` (compiled against the packages by
+ * `bun run typecheck` in apps/docs, src/samples.ts), `check=file:<path>` (the
+ * same text as that file of the repository, which its own check runs) or
+ * `check=run:<name>` (run by `apps/docs/<name>/check.ts`, which fails
+ * unless it finds and uses the block), or carries the
+ * quick start's `qs=` mark. Output (`text`), shell commands and JSON are
+ * exempt.
+ */
+const CODE = new Set(["ts", "tsx", "js", "jsx", "html", "yaml", "nginx", "caddyfile"]);
+
+async function sampleMarks(
+  path: string,
+  source: string,
+  vars: Record<string, string>,
+): Promise<string[]> {
+  const problems: string[] = [];
+  for (const f of fences(source)) {
+    const check = f.meta.check;
+    if (f.meta.qs !== undefined) continue;
+    if (check === undefined) {
+      if (CODE.has(f.lang)) {
+        problems.push(`${path}:${f.line}: a ${f.lang} block without check=… says nothing checks it`);
+      }
+      continue;
+    }
+    const where = `${path}:${f.line}: check=${check}`;
+    if (!/^(?:types|file:[\w./-]+|run:[\w-]+)$/.test(check)) {
+      problems.push(`${where} is not types, file:<path> or run:<name>`);
+    } else if (check.startsWith("file:")) {
+      const file = Bun.file(join(ROOT, check.slice("file:".length)));
+      const code = substitute(f.code, vars, path);
+      if (!(await file.exists())) problems.push(`${where}: no such file`);
+      else if ((await file.text()) !== code) problems.push(`${where}: the block differs from the file`);
+    } else if (check.startsWith("run:")) {
+      const script = join(HERE, check.slice("run:".length), "check.ts");
+      if (!(await Bun.file(script).exists())) problems.push(`${where}: no check ${script}`);
+    }
+  }
+  return problems;
+}
+
 /** One search entry per section: the page, its heading, and the section's text. */
 function sections(
   url: string,
@@ -235,6 +299,9 @@ function sections(
       u: id === undefined ? url : `${url}#${id}`,
       x: body.slice(0, 600),
     });
+  }
+  for (const m of html.matchAll(/<tr id="([^"]+)"><td><code>([^<]+)<\/code><\/td>([\s\S]*?)<\/tr>/g)) {
+    out.push({ t: title, s: plain(m[2] ?? ""), u: `${url}#${m[1]}`, x: plain(m[3] ?? "").slice(0, 300) });
   }
   return out;
 }
