@@ -118,10 +118,10 @@ function liveSocket(t: Tab): boolean {
   );
 }
 
-/** A label's row and seat number: `-B-105` is row B, seat 105 (no section). */
+/** A label's row and seat number: `B-105` is row B, seat 105 (no section, so no section part). */
 function place(label: string): [string, string] {
-  const [, row = "", number = ""] = label.match(/^-([A-Z]+)-(\d+)$/) ?? [];
-  check(row !== "", "a label of the form -ROW-NUMBER", label);
+  const [, row = "", number = ""] = label.match(/^([A-Z]+)-(\d+)$/) ?? [];
+  check(row !== "", "a label of the form ROW-NUMBER", label);
   return [row, number];
 }
 
@@ -637,7 +637,7 @@ export const STEPS: Step[] = [
       );
       check(free.data.length === 40, "40 free seats", free.data.length);
       // A seat in the middle of the block: row B, the fifth seat, numbered from 101.
-      seat.label = "-B-105";
+      seat.label = "B-105";
       check(
         free.data.some((o) => o.label === seat.label),
         `${seat.label} among the free seats`,
@@ -766,7 +766,7 @@ export const STEPS: Step[] = [
 
       // Block two free seats behind it: row C, the same two numbers.
       const behind = String.fromCharCode(row.charCodeAt(0) + 1);
-      const blocked = [`-${behind}-${number}`, `-${behind}-${Number(number) + 1}`];
+      const blocked = [`${behind}-${number}`, `${behind}-${Number(number) + 1}`];
       for (const label of blocked) {
         const [rw, n] = place(label);
         await focusSeat(t, canvas, rw, n);

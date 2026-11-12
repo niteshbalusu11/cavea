@@ -11,7 +11,7 @@ An error is a JSON body with the content type `application/problem+json`, always
   "code": "object_not_free",
   "status": 409,
   "message": "At least one object is not free.",
-  "details": { "objects": [{ "label": "-E-10", "oid": 57, "reason": "not_free" }] },
+  "details": { "objects": [{ "label": "E-10", "oid": 57, "reason": "not_free" }] },
   "request_id": "req_6ad9b530f0e172e7214232f15266b459"
 }
 ```

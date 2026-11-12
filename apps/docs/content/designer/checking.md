@@ -124,7 +124,7 @@ Code W108. A piece of text on the chart is too small to read when the whole char
 
 ### Section without a label
 
-Code W109. A section has no **Label**, so its seats' labels start with a dash and buyers cannot tell the section's name. Fix: select the section and type its **Label**.
+Code W109. A section has no **Label**, so its seats' labels have no section part and buyers cannot tell the section's name. Fix: select the section and type its **Label**.
 
 ### Chart very large
 

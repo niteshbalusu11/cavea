@@ -56,6 +56,4 @@ A row or seat that was given a label of its own, outside the pattern, keeps it w
 
 ## The full label
 
-The panel ends with **Full label of the first seat:** and that label, as the ticket shows it. It is made of the section's label, the row and the seat, joined by dashes. The pattern is the chart's **Seat label** setting: select nothing, and the inspector shows it under **Chart settings**, as `{section}-{row}-{seat}`.
-
-> **Warning** A seat that is not in a section gets a label starting with a dash: "-C-12". Put every block in a section with a label ([Sections](arranging.md#sections)), or change **Seat label** to `{row}-{seat}` if your chart has no sections.
+The panel ends with **Full label of the first seat:** and that label, as the ticket shows it. It is made of the section's label, the row and the seat, joined by dashes; a part that is empty is left out with its dash, so a seat in no section is "C-12". The pattern is the chart's **Seat label** setting: select nothing, and the inspector shows it under **Chart settings**, as `{section}-{row}-{seat}`.

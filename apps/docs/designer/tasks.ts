@@ -389,40 +389,17 @@ export const TASKS: Task[] = [
       await t.click({ role: "button", name: /^Zoom to fit/ }, await statusBar(t));
       await Bun.sleep(500);
       await shoot(t, "block", { x: 60, y: 40, width: 1080, height: 830 }, 0.5);
-      // numbering.md's warning: outside a section, labels start with a dash,
-      // and a Seat label without {section} drops it.
-      const first = async (): Promise<string> => {
-        await t.click({ role: "button", name: msg("inspector.numbering") }, await inspector(t));
-        const p = await inspector(t);
-        const text = await until("the numbering panel's full label", async () => {
-          const x = await t.text(p);
-          return x.includes(msg("numbering.fullLabel")) ? x : undefined;
-        });
-        await t.click({ role: "button", name: msg("panel.back") });
-        return text.split(msg("numbering.fullLabel"))[1]?.trim().split(/\s/)[0] ?? "";
-      };
-      const dash = await first();
-      check(dash === "-A-1", `a block outside a section labels its first seat -A-1, not ${dash}`);
-      KNOWN.push("a seat outside a section gets a label starting with a dash");
-      const template = async (value: string): Promise<void> => {
-        await t.call((await canvas(t)).id, "function () { this.focus(); }");
-        await t.key("Escape");
-        await until("the chart settings in the inspector", async () =>
-          (await t.text(await inspector(t))).includes(msg("inspector.settings")),
-        );
-        await field(t, msg("field.labelTemplate"), value);
-        await t.click(
-          { role: "treeitem", name: /^Row block/ },
-          await t.find({ role: "tree", name: msg("layers.label") }),
-        );
-      };
-      await template("{row}-{seat}");
-      const plain = await first();
-      check(
-        plain === "A-1",
-        `with the Seat label {row}-{seat}, the first seat is A-1, not ${plain}`,
-      );
-      await template("{section}-{row}-{seat}");
+      // numbering.md's full label: outside a section the empty part goes
+      // with its dash.
+      await t.click({ role: "button", name: msg("inspector.numbering") }, await inspector(t));
+      const p = await inspector(t);
+      const text = await until("the numbering panel's full label", async () => {
+        const x = await t.text(p);
+        return x.includes(msg("numbering.fullLabel")) ? x : undefined;
+      });
+      await t.click({ role: "button", name: msg("panel.back") });
+      const first = text.split(msg("numbering.fullLabel"))[1]?.trim().split(/\s/)[0] ?? "";
+      check(first === "A-1", `a block outside a section labels its first seat A-1, not ${first}`);
     },
   },
   {
