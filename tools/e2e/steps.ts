@@ -344,11 +344,18 @@ export const STEPS: Step[] = [
       );
       // The first-run tour offers to walk through this; the check does it alone.
       await t.click({ role: "button", name: msg("tour.skip") });
+      // An empty chart offers its starting points (07 §16); this path draws
+      // by hand, and choosing a drawing tool puts them away.
+      const start = await t.find({ role: "region", name: msg("start.title") });
+      for (const id of ["theatre", "arena", "banquet"] as const) {
+        await t.find({ role: "button", name: new RegExp(`^${msg(`template.${id}`)} `) }, start);
+      }
       const bar = await t.find({ role: "contentinfo" });
       // Draw: the row block tool, a press on the canvas and a drag. The
       // readout counts rows and seats live; typing `4x10` and Enter sets them
       // exactly (07 §4, numeric entry), so grid snapping cannot change them.
       await t.click({ role: "button", name: msg("tool.rowBlock") });
+      await t.gone({ role: "region", name: msg("start.title") });
       const [left, top, width, height] = await t.box(canvas);
       const [cx, cy] = [left + width / 2, top + height / 2];
       await t.mouse("mouseMoved", cx - 80, cy - 50);

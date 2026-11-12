@@ -138,8 +138,8 @@ The calls are in the [server API reference](api/index.md): [create a chart](api/
 A [chart](concepts/charts.md) is a venue's seat map. Draw a small one:
 
 1. On **Charts**, choose **New chart**. Enter the name `Grand Hall`; its key fills in as `grand-hall`. Choose **Create chart**.
-2. Choose **Grand Hall** in the list, then **Open in designer**. The designer opens with a short tour: choose **Skip tour**, or follow it.
-3. Choose the **Row block** tool in the toolbar on the left (or press R) and drag across the canvas. A block of rows appears where you drag.
+2. Choose **Grand Hall** in the list, then **Open in designer**. The designer opens with a short tour: choose **Skip tour**, or follow it. Over the empty canvas, **Start your chart** offers templates (a theatre, an arena bowl, a banquet) and a reference image to trace; this guide draws a small chart by hand instead.
+3. Choose the **Row block** tool in the toolbar on the left (or press R), which puts the starting points away, and drag across the canvas. A block of rows appears where you drag.
 4. In the **Inspector** on the right, set **Rows** to `10` and **Seats per row** to `20`, pressing Enter after each. The status bar at the bottom reads **200 seats**.
 
 ![The designer with a block of 10 rows of 20 seats, selected, and its fields in the inspector](images/designer.webp)

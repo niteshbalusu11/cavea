@@ -298,7 +298,10 @@ async function consoleSteps(r: Run, t: Tab): Promise<void> {
     30_000,
   );
   await t.click({ role: "button", name: msg("tour.skip") });
+  // The empty chart's starting points, which the page names, put away by the tool.
+  await t.find({ role: "region", name: msg("start.title") });
   await t.click({ role: "button", name: msg("tool.rowBlock") });
+  await t.gone({ role: "region", name: msg("start.title") });
   const [left, top, width, height] = await t.box(canvas);
   await t.drag(
     [left + width * 0.3, top + height * 0.35],
