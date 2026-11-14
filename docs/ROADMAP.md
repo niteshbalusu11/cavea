@@ -70,7 +70,7 @@ gate: go/no-go                 gate: paying pilot                          order
 
 - [ ] Every renderer budget in `01-architecture.md` §5 is met on the reference devices and recorded.
 - [ ] Payload size gate is in CI and green.
-- [ ] The CCF decoder has run 24 hours of fuzzing without a finding.
+- [ ] The CCF decoder has run 24 hours of fuzzing without a finding. (Run made 2026-11-12 to 13 on `main` at `a024037`: 2,000,227,578 executions in 86,401 s, no finding; `13-testing-benchmarks.md` §5. The box is the owner's to tick.)
 - [ ] A developer can render a chart from a JSON document with a custom state adapter using only the docs draft.
 
 ---
