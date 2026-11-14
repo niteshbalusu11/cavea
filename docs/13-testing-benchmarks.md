@@ -216,11 +216,19 @@ Thirty minutes per target, started 2026-11-11 09:31 UTC on the code as it stood 
 | `wire_decode` | 1,801 s | 306,016,899 | 169,914 | 1,302 → 1,327 | 408 → 473 | The same |
 | `snapshot_apply` | 1,801 s | 936,538 | 520 | 7,263 → 7,421 | 372 → 1,577 | The same |
 
-The `wire_decode` run started before its check on Pong frames was written, so those 30 minutes did not exercise that check. A second run of 90 s per target, on the final code after rebasing onto the renderer and realtime work (from the grown corpora), also ended clean: `ccf_decode` 2,022,999 executions (coverage 2,759), `document_parse` 546,562 (16,481), `wire_decode` 14,730,333 (1,343), `snapshot_apply` 32,575 (7,855; the renderer engine has grown since the long run). On the code as filed (2026-11-12, `main` at #80; #81 to #85 changed none of the crates these targets build), 60 s per target from the seeds alone, one at a time: `ccf_decode` 1,883,668 executions (coverage 2,078 → 2,727), `document_parse` 730,549 (9,730 → 14,281), `wire_decode` 12,230,610 (741 → 1,336), `snapshot_apply` 69,342 (7,692 → 8,223); all clean. They had not built since the renderer's backend trait gained `restore` and image textures; CI now type-checks the crate (D-86). None of this is the 24-hour run of the M1 exit criterion (`ROADMAP.md`), which has not been done. It is one command:
+The `wire_decode` run started before its check on Pong frames was written, so those 30 minutes did not exercise that check. A second run of 90 s per target, on the final code after rebasing onto the renderer and realtime work (from the grown corpora), also ended clean: `ccf_decode` 2,022,999 executions (coverage 2,759), `document_parse` 546,562 (16,481), `wire_decode` 14,730,333 (1,343), `snapshot_apply` 32,575 (7,855; the renderer engine has grown since the long run). On the code as filed (2026-11-12, `main` at #80; #81 to #85 changed none of the crates these targets build), 60 s per target from the seeds alone, one at a time: `ccf_decode` 1,883,668 executions (coverage 2,078 → 2,727), `document_parse` 730,549 (9,730 → 14,281), `wire_decode` 12,230,610 (741 → 1,336), `snapshot_apply` 69,342 (7,692 → 8,223); all clean. They had not built since the renderer's backend trait gained `restore` and image textures; CI now type-checks the crate (D-86). None of this is the 24-hour run of the M1 exit criterion (`ROADMAP.md`), which is recorded below. It is one command:
 
 ```sh
 nix develop .#fuzz -c cargo fuzz run ccf_decode -- -max_total_time=86400 -timeout=10 -print_final_stats=1
 ```
+
+**The 24-hour run** (M1 exit criterion). Started 2026-11-12 07:43 UTC on `main` at `a024037`, on the development machine, one core, as a systemd user service so that it outlived the session that started it. It continued from the corpus that a first attempt had grown: that attempt was interrupted after 88 minutes and 97,117,033 executions, with no finding, when the session that started it ended, and is not counted here.
+
+| Target | Duration | Executions | Executions/s | Coverage, start → end | Corpus, start → end | Result |
+|---|---|---|---|---|---|---|
+| `ccf_decode` | 86,401 s | 2,000,227,578 | 23,150 | 2,748 → 2,778 | 597 → 643 | Ended at its time limit; no crash, panic, timeout, leak or out-of-memory; nothing in `fuzz/artifacts/ccf_decode/` |
+
+Peak memory was 521 MB and the slowest input took under a second. The last new edge was reached about 21 hours in (execution 1,744,861,612); 48 inputs were added to the corpus over the run. The grown corpus is not committed. Between `a024037` and the commit that records this, the only change in `cavea-format` is that composing a full label from its template moved to `cavea-core` (#93); the reader, the writer and the fuzz target are as fuzzed.
 
 ## 6. Renderer
 
